@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-linux-gcc:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release]
+        include:
+          - build_type: Debug
+            extra_flags: -DCMQ_ENABLE_ASAN=ON -DCMQ_ENABLE_UBSAN=ON
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ${{ matrix.extra_flags }}
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure --parallel $(nproc)
+
+  build-linux-clang:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
+      - name: Configure
+        run: CC=clang cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMQ_ENABLE_ASAN=ON
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure --parallel $(nproc)
+
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+      - name: Build
+        run: cmake --build build --parallel $(sysctl -n hw.ncpu)
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+  build-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross-compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMQ_BUILD_EXAMPLES=OFF
+      - name: Build
+        run: cmake --build build --parallel $(nproc)

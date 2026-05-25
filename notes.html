@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CMSGQueue - Development Notes</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; line-height: 1.6; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+h1 { color: #58a6ff; border-bottom: 1px solid #21262d; padding-bottom: 12px; margin-bottom: 20px; font-size: 1.8em; }
+h2 { color: #79c0ff; margin: 24px 0 12px; font-size: 1.4em; }
+h3 { color: #d2a8ff; margin: 16px 0 8px; font-size: 1.1em; }
+.phase { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+.phase-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.phase-title { font-size: 1.2em; font-weight: 600; }
+.status { padding: 4px 12px; border-radius: 12px; font-size: 0.8em; font-weight: 600; }
+.status-done { background: #238636; color: white; }
+.status-wip { background: #9e6a03; color: white; }
+.status-todo { background: #30363d; color: #8b949e; }
+table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #21262d; }
+th { color: #8b949e; font-weight: 600; font-size: 0.85em; text-transform: uppercase; }
+.component { padding: 8px 0; }
+.component-name { color: #58a6ff; font-family: 'Fira Code', monospace; }
+.progress-bar { background: #21262d; border-radius: 4px; height: 8px; overflow: hidden; margin: 8px 0; }
+.progress-fill { height: 100%; border-radius: 4px; }
+.fill-green { background: linear-gradient(90deg, #238636, #3fb950); }
+.fill-yellow { background: linear-gradient(90deg, #9e6a03, #d29922); }
+.fill-gray { background: #30363d; }
+code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; color: #79c0ff; }
+.log-entry { border-left: 3px solid #30363d; padding: 8px 16px; margin: 8px 0; background: #0d1117; }
+.log-entry.success { border-left-color: #3fb950; }
+.log-entry.info { border-left-color: #58a6ff; }
+.log-entry.warn { border-left-color: #d29922; }
+.log-date { color: #8b949e; font-size: 0.85em; }
+.arch-diagram { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 0.85em; overflow-x: auto; white-space: pre; color: #79c0ff; }
+.overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin: 16px 0; }
+.stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; text-align: center; }
+.stat-value { font-size: 2em; font-weight: 700; color: #58a6ff; }
+.stat-label { color: #8b949e; font-size: 0.85em; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>CMSGQueue - Development Notes</h1>
+
+<div class="overview-grid">
+<div class="stat-card"><div class="stat-value">C11</div><div class="stat-label">Language Standard</div></div>
+<div class="stat-card"><div class="stat-value">0.1.0</div><div class="stat-label">Current Version</div></div>
+<div class="stat-card"><div class="stat-value">Binary</div><div class="stat-label">Protocol Type</div></div>
+<div class="stat-card"><div class="stat-value">5</div><div class="stat-label">Total Phases</div></div>
+</div>
+
+<h2>Architecture Overview</h2>
+<div class="arch-diagram">
+  Client ──TCP──→  Acceptor (main thread)
+  Client ──TCP──→       │ dispatch (fd → worker)
+  Client ──TCP──→       ▼
+                  ┌─────────────────────────┐
+                  │   Worker Thread Pool (N)  │
+                  │  ┌───────────────────┐   │
+                  │  │  Event Loop       │   │
+                  │  │  (epoll/kqueue)   │   │
+                  │  │    ↕ coroutine    │   │
+                  │  │  ┌────────────┐   │   │
+                  │  │  │ Protocol   │   │   │
+                  │  │  │ Parser     │   │   │
+                  │  │  └────────────┘   │   │
+                  │  └───────────────────┘   │
+                  └─────────────────────────┘
+                           │
+                  ┌────────┴────────┐
+                  │   Core Engine    │
+                  │  Sublist Trie    │
+                  │  Message Router  │
+                  │  Queue Groups    │
+                  │  Account Manager │
+                  └─────────────────┘
+                           │
+                  ┌────────┴────────┐
+                  │ Infrastructure   │
+                  │  Memory Pool     │
+                  │  Logger          │
+                  │  Config Parser   │
+                  │  Platform Layer  │
+                  └─────────────────┘
+</div>
+
+<h2>Protocol: CMQ Binary v1</h2>
+<div class="arch-diagram">
+  Frame Header (8 bytes):
+  ┌──────┬─────────┬───────┬────────┬──────────────────┐
+  │ 0xCA │ version │ flags │ op_type│ payload_len (BE) │
+  │ 1 by │ 1 by    │ 1 by  │ 1 by   │ 4 bytes          │
+  └──────┴─────────┴───────┴────────┴──────────────────┘
+
+  Operations:
+  0x01 CONNECT    0x02 CONNACK    0x03 PUBLISH    0x04 PUBACK
+  0x05 SUBSCRIBE  0x06 SUBACK    0x07 UNSUBSCRIBE 0x08 UNSUBACK
+  0x09 MESSAGE    0x0A PING      0x0B PONG       0x0C DISCONNECT
+  0x0D ERROR      0x0E INFO
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<h2>Phase 0: Foundation Infrastructure</h2>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">0.1 Project Structure + Build System</span>
+<span class="status status-wip">IN PROGRESS</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CMakeLists.txt</span></td><td>✅</td><td>Top-level + compiler detection</td></tr>
+<tr><td><span class="component-name">cmake/cmq_compiler.cmake</span></td><td>✅</td><td>GCC/Clang/MSVC flags</td></tr>
+<tr><td><span class="component-name">src/include/cmq.h</span></td><td>✅</td><td>Public API</td></tr>
+<tr><td><span class="component-name">.github/workflows/ci.yml</span></td><td>✅</td><td>Linux+macOS+Windows+ARM64</td></tr>
+<tr><td><span class="component-name">notes.html</span></td><td>✅</td><td>This file</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">0.2 Test Framework</span>
+<span class="status status-wip">IN PROGRESS</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">tests/cmq_test.h</span></td><td>⏳</td><td>Minimal test framework</td></tr>
+<tr><td><span class="component-name">tests/CMakeLists.txt</span></td><td>⏳</td><td>CTest integration</td></tr>
+<tr><td><span class="component-name">tests/test_platform.c</span></td><td>⏳</td><td>Platform detection tests</td></tr>
+<tr><td><span class="component-name">tests/test_atomic.c</span></td><td>⏳</td><td>Atomic operations tests</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">0.3 Platform Abstraction</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_platform.h</span></td><td>✅</td><td>OS/Arch/Compiler detection</td></tr>
+<tr><td><span class="component-name">cmq_atomic.h</span></td><td>✅</td><td>C11 atomic wrappers</td></tr>
+<tr><td><span class="component-name">cmq_types.h</span></td><td>✅</td><td>Base types + macros</td></tr>
+<tr><td><span class="component-name">cmq_thread.h</span></td><td>✅</td><td>pthread wrappers</td></tr>
+<tr><td><span class="component-name">cmq_queue.h/c</span></td><td>✅</td><td>Lock-free MPSC queue</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">0.4 Memory Pool</span>
+<span class="status status-wip">IN PROGRESS</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_mpool.h/c</span></td><td>⏳</td><td>Arena allocator</td></tr>
+<tr><td><span class="component-name">cmq_slab.h/c</span></td><td>⏳</td><td>Slab allocator</td></tr>
+<tr><td><span class="component-name">tests/test_mpool.c</span></td><td>⏳</td><td>Memory pool tests</td></tr>
+<tr><td><span class="component-name">tests/test_slab.c</span></td><td>⏳</td><td>Slab allocator tests</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">0.5 Async Logger</span>
+<span class="status status-wip">IN PROGRESS</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_log.h/c</span></td><td>⏳</td><td>Multi-appender logger</td></tr>
+<tr><td><span class="component-name">tests/test_log.c</span></td><td>⏳</td><td>Logger tests</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">0.6 Coroutine Library</span>
+<span class="status status-wip">IN PROGRESS</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_coro.h/c</span></td><td>⏳</td><td>Coroutine API</td></tr>
+<tr><td><span class="component-name">cmq_coro_ctx_x86_64.S</span></td><td>⏳</td><td>x86_64 context switch</td></tr>
+<tr><td><span class="component-name">cmq_coro_ctx_aarch64.S</span></td><td>⏳</td><td>ARM64 context switch</td></tr>
+<tr><td><span class="component-name">tests/test_coro.c</span></td><td>⏳</td><td>Coroutine tests</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">0.7 Event Loop</span>
+<span class="status status-todo">TODO</span>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<h2>Phase 1: Core Protocol Engine</h2>
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Planned Components</span>
+<span class="status status-todo">TODO</span>
+</div>
+<table>
+<tr><th>Component</th><th>Description</th></tr>
+<tr><td>Binary protocol parser</td><td>State machine for CMQ binary frames</td></tr>
+<tr><td>TCP server + acceptor</td><td>Non-blocking accept with dispatch to workers</td></tr>
+<tr><td>Client lifecycle</td><td>CONNECT/DISCONNECT/PING/PONG handling</td></tr>
+<tr><td>Subject trie (sublist)</td><td>Wildcard matching with epoch-based reclamation</td></tr>
+<tr><td>PUB/SUB routing</td><td>Message delivery from publisher to subscribers</td></tr>
+<tr><td>Configuration parser</td><td>Simple config file format</td></tr>
+</table>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<h2>Phase 2-5: Future Phases</h2>
+<div class="phase">
+<table>
+<tr><th>Phase</th><th>Description</th><th>Status</th></tr>
+<tr><td>Phase 2</td><td>Queue Groups, Headers, Auth, Monitoring</td><td><span class="status status-todo">TODO</span></td></tr>
+<tr><td>Phase 3</td><td>Persistence: memstore, filestore, streams</td><td><span class="status status-todo">TODO</span></td></tr>
+<tr><td>Phase 4</td><td>Clustering: routing, gateway, leaf nodes</td><td><span class="status status-todo">TODO</span></td></tr>
+<tr><td>Phase 5</td><td>Enterprise: accounts, TLS, MQTT, WebSocket</td><td><span class="status status-todo">TODO</span></td></tr>
+</table>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<h2>Development Log</h2>
+
+<div class="log-entry info">
+<div class="log-date">2025-05-25</div>
+<strong>Project kickoff.</strong> Analyzed nats-server v2.15.0-dev (~136K LoC). Designed architecture:
+1 acceptor thread, N worker event loops, per-connection coroutines with assembly context switch,
+binary CMQ protocol, arena+slab memory pools. Oracle review incorporated: 8KB default stack with
+dynamic growth, epoch-based reclamation for sublist, work-stealing between workers.
+</div>
+
+<div class="log-entry success">
+<div class="log-date">2025-05-25</div>
+Phase 0 infrastructure setup in progress. Created project structure, CMake build system,
+platform abstraction layer, public API, CI pipeline.
+</div>
+
+</div>
+</body>
+</html>
