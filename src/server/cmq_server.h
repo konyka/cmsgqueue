@@ -10,6 +10,7 @@
 #include "cmq_log.h"
 #include "cmq_account.h"
 #include "cmq_route.h"
+#include "cmq_ws.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -63,6 +64,8 @@ typedef struct cmq_client {
     cmq_sub_entry_t *subs;
     char *username;
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
+    int is_websocket;
+    int ws_upgrade_done;
 
     struct cmq_client *next;
 } cmq_client_t;

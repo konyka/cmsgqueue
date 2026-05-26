@@ -478,6 +478,16 @@ Removed unused strip_whitespace from config parser.
 15 test suites, 140+ tests, 100% passing, 0 warnings.
 </div>
 
+<div class="log-entry success">
+<div class="log-date">2025-05-26</div>
+WebSocket server integration complete.
+Server auto-detects WebSocket upgrade requests (HTTP GET with Upgrade header) on accept.
+WS frames are unwrapped and fed to the CMQ protocol parser for seamless binary-over-WS support.
+Non-WS clients continue using raw CMQ binary protocol as before.
+Client struct extended with is_websocket and ws_upgrade_done flags.
+All 15 test suites passing, 0 warnings.
+</div>
+
 </div>
 
 <h2>Phase 3: Persistence</h2>

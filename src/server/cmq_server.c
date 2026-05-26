@@ -431,6 +431,33 @@ static void client_flush_write(cmq_client_t *c) {
     }
 }
 
+static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len) {
+    if (len < 4) return -1;
+    char req[4096];
+    if (len > sizeof(req) - 1) len = sizeof(req) - 1;
+    memcpy(req, data, len);
+    req[len] = '\0';
+
+    if (strstr(req, "Upgrade: websocket") == NULL &&
+        strstr(req, "Upgrade: WebSocket") == NULL) return -1;
+
+    char ws_key[128] = {0};
+    if (cmq_ws_parse_http_upgrade(req, len, ws_key, sizeof(ws_key)) != 0) return -1;
+
+    char accept_key[64] = {0};
+    if (cmq_ws_accept_key(ws_key, accept_key, sizeof(accept_key)) != 0) return -1;
+
+    char response[512];
+    if (cmq_ws_build_response(accept_key, response, sizeof(response)) != 0) return -1;
+
+    size_t resp_len = strlen(response);
+    cmq_client_send(c, (const uint8_t *)response, resp_len);
+
+    c->is_websocket = 1;
+    c->ws_upgrade_done = 1;
+    return 0;
+}
+
 static void client_read_cb(int fd, int events, void *data) {
     cmq_client_t *c = (cmq_client_t *)data;
     cmq_server_t *srv = c->server;
@@ -451,6 +478,30 @@ static void client_read_cb(int fd, int events, void *data) {
     if (n <= 0) {
         if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
             c->state = CMQ_CLIENT_CLOSED;
+        }
+        return;
+    }
+
+    if (!c->is_websocket && !c->ws_upgrade_done && n > 0 && c->read_buf[0] == 'G') {
+        if (handle_ws_upgrade(c, c->read_buf, (size_t)n) == 0) {
+            return;
+        }
+    }
+
+    if (c->is_websocket && c->ws_upgrade_done) {
+        cmq_ws_frame_t ws_frame;
+        int parsed = cmq_ws_frame_parse(c->read_buf, (size_t)n, &ws_frame);
+        if (parsed > 0 && ws_frame.opcode == CMQ_WS_OPCODE_BINARY && ws_frame.payload_len > 0) {
+            int rc = cmq_parser_feed(c->parser, ws_frame.payload, ws_frame.payload_len);
+            if (rc < 0) { c->state = CMQ_CLIENT_CLOSING; return; }
+            while (rc == 1) {
+                const cmq_frame_t *frame = cmq_parser_frame(c->parser);
+                if (frame) handle_frame(srv, c, frame);
+                if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) break;
+                rc = cmq_parser_next(c->parser);
+            }
+        } else if (parsed > 0 && ws_frame.opcode == CMQ_WS_OPCODE_CLOSE) {
+            c->state = CMQ_CLIENT_CLOSING;
         }
         return;
     }
