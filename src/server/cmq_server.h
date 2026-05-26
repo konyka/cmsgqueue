@@ -13,6 +13,7 @@
 #include "cmq_ws.h"
 
 #include <sys/socket.h>
+#include <sys/eventfd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -67,9 +68,34 @@ typedef struct cmq_client {
     int is_websocket;
     int ws_upgrade_done;
     int info_sent;
+    int worker_id;
 
     struct cmq_client *next;
 } cmq_client_t;
+
+typedef struct cmq_worker_msg {
+    int target_fd;
+    uint8_t *buf;
+    size_t len;
+    struct cmq_worker_msg *next;
+} cmq_worker_msg_t;
+
+typedef struct cmq_worker {
+    cmq_ev_loop_t *ev_loop;
+    cmq_client_t **clients;
+    int clients_count;
+    int clients_cap;
+    cmq_mutex_t clients_lock;
+
+    int wakeup_fd;
+    cmq_thread_t thread;
+    cmq_server_t *server;
+    int worker_id;
+
+    cmq_worker_msg_t *msg_head;
+    cmq_worker_msg_t *msg_tail;
+    cmq_mutex_t msg_lock;
+} cmq_worker_t;
 
 struct cmq_server {
     cmq_config_t config;
@@ -77,8 +103,9 @@ struct cmq_server {
     cmq_atomic_int running;
 
     cmq_ev_loop_t *ev_loop;
-    cmq_thread_t *workers;
+    cmq_worker_t *workers;
     int num_workers;
+    cmq_atomic_u32 next_worker;
 
     cmq_client_t **clients;
     int clients_count;

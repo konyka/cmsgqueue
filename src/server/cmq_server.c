@@ -1,6 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_server.h"
 #include "cmq_platform.h"
+#include <sys/eventfd.h>
+
+static __thread int cmq_current_worker_id = -1;
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -9,6 +12,135 @@ static int set_nonblocking(int fd) {
 }
 
 static void client_read_cb(int fd, int events, void *data);
+static void cmq_client_destroy(cmq_client_t *c);
+static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len);
+static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len);
+
+static void worker_wakeup_cb(int fd, int events, void *data) {
+    cmq_worker_t *w = (cmq_worker_t *)data;
+    uint64_t val;
+    while (read(fd, &val, sizeof(val)) > 0) {}
+
+    cmq_mutex_lock(&w->msg_lock);
+    cmq_worker_msg_t *msg = w->msg_head;
+    w->msg_head = NULL;
+    w->msg_tail = NULL;
+    cmq_mutex_unlock(&w->msg_lock);
+
+    while (msg) {
+        cmq_worker_msg_t *next = msg->next;
+        cmq_mutex_lock(&w->clients_lock);
+        cmq_client_t *target = NULL;
+        for (int i = 0; i < w->clients_count; i++) {
+            if (w->clients[i] && w->clients[i]->fd == msg->target_fd) {
+                target = w->clients[i];
+                break;
+            }
+        }
+        if (target && target->state != CMQ_CLIENT_CLOSED) {
+            cmq_client_send(target, msg->buf, msg->len);
+        }
+        cmq_mutex_unlock(&w->clients_lock);
+        free(msg->buf);
+        free(msg);
+        msg = next;
+    }
+}
+
+static void worker_push_msg(cmq_worker_t *w, int target_fd,
+                             const uint8_t *buf, size_t len) {
+    cmq_worker_msg_t *msg = malloc(sizeof(cmq_worker_msg_t));
+    if (!msg) return;
+    msg->target_fd = target_fd;
+    msg->buf = malloc(len);
+    if (!msg->buf) { free(msg); return; }
+    memcpy(msg->buf, buf, len);
+    msg->len = len;
+    msg->next = NULL;
+
+    cmq_mutex_lock(&w->msg_lock);
+    if (w->msg_tail) {
+        w->msg_tail->next = msg;
+    } else {
+        w->msg_head = msg;
+    }
+    w->msg_tail = msg;
+    cmq_mutex_unlock(&w->msg_lock);
+
+    uint64_t val = 1;
+    write(w->wakeup_fd, &val, sizeof(val));
+}
+
+static void *worker_thread(void *arg) {
+    cmq_worker_t *w = (cmq_worker_t *)arg;
+    cmq_current_worker_id = w->worker_id;
+    cmq_ev_run(w->ev_loop, -1);
+    return NULL;
+}
+
+static cmq_worker_t *cmq_worker_create(cmq_server_t *srv, int id) {
+    cmq_worker_t *w = calloc(1, sizeof(cmq_worker_t));
+    if (!w) return NULL;
+    w->server = srv;
+    w->worker_id = id;
+    w->ev_loop = cmq_ev_loop_create(1024);
+    if (!w->ev_loop) { free(w); return NULL; }
+
+    w->wakeup_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (w->wakeup_fd < 0) {
+        cmq_ev_loop_destroy(w->ev_loop);
+        free(w);
+        return NULL;
+    }
+    cmq_ev_add(w->ev_loop, w->wakeup_fd, CMQ_EV_READ, worker_wakeup_cb, w);
+
+    w->clients_cap = 64;
+    w->clients_count = 0;
+    w->clients = calloc((size_t)w->clients_cap, sizeof(cmq_client_t *));
+    cmq_mutex_init(&w->clients_lock);
+    cmq_mutex_init(&w->msg_lock);
+    w->msg_head = NULL;
+    w->msg_tail = NULL;
+    return w;
+}
+
+static void cmq_worker_destroy(cmq_worker_t *w) {
+    if (!w) return;
+    if (w->clients) {
+        for (int i = 0; i < w->clients_count; i++) {
+            cmq_client_destroy(w->clients[i]);
+        }
+        free(w->clients);
+        w->clients = NULL;
+    }
+    cmq_worker_msg_t *msg = w->msg_head;
+    while (msg) {
+        cmq_worker_msg_t *next = msg->next;
+        free(msg->buf);
+        free(msg);
+        msg = next;
+    }
+    if (w->wakeup_fd >= 0) { close(w->wakeup_fd); w->wakeup_fd = -1; }
+    if (w->ev_loop) { cmq_ev_loop_destroy(w->ev_loop); w->ev_loop = NULL; }
+    cmq_mutex_destroy(&w->clients_lock);
+    cmq_mutex_destroy(&w->msg_lock);
+}
+
+static cmq_worker_t *client_worker(cmq_server_t *srv, cmq_client_t *c) {
+    if (!srv->workers) return NULL;
+    for (int i = 0; i < srv->num_workers; i++) {
+        cmq_worker_t *w = &srv->workers[i];
+        cmq_mutex_lock(&w->clients_lock);
+        for (int j = 0; j < w->clients_count; j++) {
+            if (w->clients[j] == c) {
+                cmq_mutex_unlock(&w->clients_lock);
+                return w;
+            }
+        }
+        cmq_mutex_unlock(&w->clients_lock);
+    }
+    return NULL;
+}
 
 static cmq_client_t *cmq_client_create(int fd, uint32_t id,
                                          cmq_ev_loop_t *loop,
@@ -46,7 +178,7 @@ static void cmq_client_destroy(cmq_client_t *c) {
     free(c);
 }
 
-static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len) {
+static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len) {
     if (!c || c->state == CMQ_CLIENT_CLOSED) return -1;
 
     if (c->write_buf && c->write_pos < c->write_len) {
@@ -71,6 +203,18 @@ static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len) {
     c->write_pos = 0;
 
     cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE, client_read_cb, c);
+    return 0;
+}
+
+static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len) {
+    if (!c || c->state == CMQ_CLIENT_CLOSED) return -1;
+    cmq_server_t *srv = c->server;
+    int cross = srv->workers && c->worker_id >= 0 && c->worker_id != cmq_current_worker_id;
+    if (!cross) {
+        return cmq_client_send_direct(c, data, len);
+    }
+    cmq_worker_t *w = &srv->workers[c->worker_id];
+    worker_push_msg(w, c->fd, data, len);
     return 0;
 }
 
@@ -561,30 +705,58 @@ static void accept_cb(int fd, int events, void *data) {
 
     uint32_t cid = cmq_atomic_fetch_add_u32(&srv->next_client_id, 1,
                                              CMQ_ATOMIC_SEQ_CST);
-    cmq_client_t *client = cmq_client_create(client_fd, cid,
-                                              srv->ev_loop, srv);
-    if (!client) {
-        close(client_fd);
-        return;
-    }
 
-    cmq_mutex_lock(&srv->clients_lock);
-    if (srv->clients_count >= srv->clients_cap) {
-        int new_cap = srv->clients_cap * 2;
-        cmq_client_t **new_arr = realloc(srv->clients,
-                                          (size_t)new_cap * sizeof(cmq_client_t *));
-        if (!new_arr) {
-            cmq_mutex_unlock(&srv->clients_lock);
-            cmq_client_destroy(client);
-            return;
+    if (srv->workers && srv->num_workers > 0) {
+        uint32_t wi = cmq_atomic_fetch_add_u32(&srv->next_worker, 1,
+                                                CMQ_ATOMIC_RELAXED);
+        int idx = (int)(wi % (uint32_t)srv->num_workers);
+        cmq_worker_t *w = &srv->workers[idx];
+        cmq_client_t *client = cmq_client_create(client_fd, cid,
+                                                   w->ev_loop, srv);
+        if (!client) { close(client_fd); return; }
+        client->worker_id = idx;
+
+        cmq_mutex_lock(&w->clients_lock);
+        if (w->clients_count >= w->clients_cap) {
+            int new_cap = w->clients_cap * 2;
+            cmq_client_t **new_arr = realloc(w->clients,
+                                              (size_t)new_cap * sizeof(cmq_client_t *));
+            if (!new_arr) {
+                cmq_mutex_unlock(&w->clients_lock);
+                cmq_client_destroy(client);
+                return;
+            }
+            w->clients = new_arr;
+            w->clients_cap = new_cap;
         }
-        srv->clients = new_arr;
-        srv->clients_cap = new_cap;
-    }
-    srv->clients[srv->clients_count++] = client;
-    cmq_mutex_unlock(&srv->clients_lock);
+        w->clients[w->clients_count++] = client;
+        cmq_mutex_unlock(&w->clients_lock);
 
-    cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb, client);
+        cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb, client);
+    } else {
+        cmq_client_t *client = cmq_client_create(client_fd, cid,
+                                                   srv->ev_loop, srv);
+        if (!client) { close(client_fd); return; }
+        client->worker_id = -1;
+
+        cmq_mutex_lock(&srv->clients_lock);
+        if (srv->clients_count >= srv->clients_cap) {
+            int new_cap = srv->clients_cap * 2;
+            cmq_client_t **new_arr = realloc(srv->clients,
+                                              (size_t)new_cap * sizeof(cmq_client_t *));
+            if (!new_arr) {
+                cmq_mutex_unlock(&srv->clients_lock);
+                cmq_client_destroy(client);
+                return;
+            }
+            srv->clients = new_arr;
+            srv->clients_cap = new_cap;
+        }
+        srv->clients[srv->clients_count++] = client;
+        cmq_mutex_unlock(&srv->clients_lock);
+
+        cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb, client);
+    }
 }
 
 const char *cmq_version(void) {
@@ -680,11 +852,71 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
 
     cmq_ev_add(srv->ev_loop, srv->listen_fd, CMQ_EV_READ, accept_cb, srv);
 
+    int nthreads = srv->config.num_threads;
+    if (nthreads > 1) {
+        srv->num_workers = nthreads;
+        srv->workers = calloc((size_t)nthreads, sizeof(cmq_worker_t));
+        if (!srv->workers) {
+            close(srv->listen_fd);
+            return CMQ_ERR_NO_MEMORY;
+        }
+        for (int i = 0; i < nthreads; i++) {
+            cmq_worker_t *w = &srv->workers[i];
+            memset(w, 0, sizeof(*w));
+            w->server = srv;
+            w->worker_id = i;
+            w->ev_loop = cmq_ev_loop_create(1024);
+            if (!w->ev_loop) {
+                for (int j = 0; j < i; j++) {
+                    cmq_ev_stop(srv->workers[j].ev_loop);
+                    cmq_worker_destroy(&srv->workers[j]);
+                }
+                free(srv->workers);
+                srv->workers = NULL;
+                close(srv->listen_fd);
+                return CMQ_ERR_NO_MEMORY;
+            }
+            w->wakeup_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+            if (w->wakeup_fd < 0) {
+                cmq_ev_loop_destroy(w->ev_loop);
+                for (int j = 0; j < i; j++) {
+                    cmq_ev_stop(srv->workers[j].ev_loop);
+                    cmq_worker_destroy(&srv->workers[j]);
+                }
+                free(srv->workers);
+                srv->workers = NULL;
+                close(srv->listen_fd);
+                return CMQ_ERR_NO_MEMORY;
+            }
+            cmq_ev_add(w->ev_loop, w->wakeup_fd, CMQ_EV_READ, worker_wakeup_cb, w);
+            w->clients_cap = 64;
+            w->clients_count = 0;
+            w->clients = calloc((size_t)w->clients_cap, sizeof(cmq_client_t *));
+            cmq_mutex_init(&w->clients_lock);
+            cmq_mutex_init(&w->msg_lock);
+            w->msg_head = NULL;
+            w->msg_tail = NULL;
+        }
+        for (int i = 0; i < nthreads; i++) {
+            cmq_thread_create(&srv->workers[i].thread, worker_thread, &srv->workers[i]);
+        }
+        cmq_log_info(srv->log, "CMQ server started with %d worker threads", nthreads);
+    }
+
     cmq_atomic_store_int(&srv->running, 1, CMQ_ATOMIC_SEQ_CST);
     cmq_log_info(srv->log, "CMQ server listening on %s:%d",
                  srv->config.host, srv->config.port);
 
     cmq_ev_run(srv->ev_loop, -1);
+
+    if (srv->workers) {
+        for (int i = 0; i < srv->num_workers; i++) {
+            cmq_ev_stop(srv->workers[i].ev_loop);
+        }
+        for (int i = 0; i < srv->num_workers; i++) {
+            cmq_thread_join(srv->workers[i].thread);
+        }
+    }
 
     return CMQ_OK;
 }
@@ -693,10 +925,22 @@ void cmq_server_stop(cmq_server_t *srv) {
     if (!srv) return;
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
     if (srv->ev_loop) cmq_ev_stop(srv->ev_loop);
+    if (srv->workers) {
+        for (int i = 0; i < srv->num_workers; i++) {
+            cmq_ev_stop(srv->workers[i].ev_loop);
+        }
+    }
 }
 
 void cmq_server_destroy(cmq_server_t *srv) {
     if (!srv) return;
+
+    if (srv->workers) {
+        for (int i = 0; i < srv->num_workers; i++) {
+            cmq_worker_destroy(&srv->workers[i]);
+        }
+        free(srv->workers);
+    }
 
     if (srv->clients) {
         for (int i = 0; i < srv->clients_count; i++) {
