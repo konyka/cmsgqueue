@@ -780,6 +780,25 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Coroutine Integration &amp; Cross-Platform Fixes</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">Portable wakeup_fd</span></td><td>✅</td><td>eventfd (Linux) / pipe fallback (macOS, Windows). Removed <code>#include &lt;sys/eventfd.h&gt;</code> from server.h. Wakeup fd abstraction: create, signal, drain, close.</td></tr>
+<tr><td><span class="component-name">Stub cleanup</span></td><td>✅</td><td>Removed empty <code>cmq_thread.c</code>, <code>cmq_client.c</code>, <code>cmq_client.h</code> from CMakeLists and filesystem.</td></tr>
+<tr><td><span class="component-name">cmq_ev post_tick</span></td><td>✅</td><td><code>cmq_ev_set_post_tick()</code> — register a callback invoked after every event loop iteration. Implemented for both epoll (Linux) and kqueue (macOS).</td></tr>
+<tr><td><span class="component-name">Coro scheduler</span></td><td>✅</td><td>Per-worker coroutine pool (256 max). <code>worker_coro_tick()</code> resumes READY/SUSPENDED coroutines, cleans up DONE. Integrated via post_tick.</td></tr>
+<tr><td><span class="component-name">Coro delivery</span></td><td>✅</td><td>High-fanout publishes (&gt;16 subscribers) spawn a delivery coroutine that yields every 16 sends for fairness. Payload/headers copied for coroutine lifetime.</td></tr>
+<tr><td><span class="component-name">test_coro_integration</span></td><td>✅</td><td>2 tests: high_fanout_coro_delivery (20 subs, 1 pub, all receive), multi_publish_fanout (20 subs, 5 pubs, all receive all 5). Multi-worker (2-4 threads).</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>19/19 test suites pass.</strong> Coroutines integrated into server for high-fanout delivery. Cross-platform wakeup_fd. Stub cleanup. 0 warnings.
+</div>
+</div>
+
 </div>
 </body>
 </html>
