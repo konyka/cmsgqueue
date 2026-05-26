@@ -431,6 +431,21 @@ static void client_flush_write(cmq_client_t *c) {
     }
 }
 
+static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
+    uint8_t info_buf[256];
+    uint64_t conns = cmq_atomic_load_u64(&srv->stat_connections, CMQ_ATOMIC_RELAXED);
+    uint64_t subs = cmq_atomic_load_u64(&srv->stat_subscriptions, CMQ_ATOMIC_RELAXED);
+    char info_json[256];
+    int info_len = snprintf(info_json, sizeof(info_json),
+        "{\"version\":\"0.1.0\",\"proto\":1,\"connections\":%llu,\"subscriptions\":%llu,\"auth\":%s}",
+        (unsigned long long)conns, (unsigned long long)subs,
+        srv->config.auth_username ? "true" : "false");
+    size_t len = cmq_frame_encode(info_buf, sizeof(info_buf), CMQ_OP_INFO, 0,
+                                   (const uint8_t *)info_json, (size_t)info_len);
+    if (len > 0) cmq_client_send(c, info_buf, len);
+    c->info_sent = 1;
+}
+
 static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len) {
     if (len < 4) return -1;
     char req[4096];
@@ -451,6 +466,10 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len) {
     if (cmq_ws_build_response(accept_key, response, sizeof(response)) != 0) return -1;
 
     size_t resp_len = strlen(response);
+    free(c->write_buf);
+    c->write_buf = NULL;
+    c->write_len = 0;
+    c->write_pos = 0;
     cmq_client_send(c, (const uint8_t *)response, resp_len);
 
     c->is_websocket = 1;
@@ -486,6 +505,10 @@ static void client_read_cb(int fd, int events, void *data) {
         if (handle_ws_upgrade(c, c->read_buf, (size_t)n) == 0) {
             return;
         }
+    }
+
+    if (!c->info_sent && !c->is_websocket) {
+        send_info_frame(srv, c);
     }
 
     if (c->is_websocket && c->ws_upgrade_done) {
@@ -562,18 +585,6 @@ static void accept_cb(int fd, int events, void *data) {
     cmq_mutex_unlock(&srv->clients_lock);
 
     cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb, client);
-
-    uint8_t info_buf[256];
-    uint64_t conns = cmq_atomic_load_u64(&srv->stat_connections, CMQ_ATOMIC_RELAXED);
-    uint64_t subs = cmq_atomic_load_u64(&srv->stat_subscriptions, CMQ_ATOMIC_RELAXED);
-    char info_json[256];
-    int info_len = snprintf(info_json, sizeof(info_json),
-        "{\"version\":\"0.1.0\",\"proto\":1,\"connections\":%llu,\"subscriptions\":%llu,\"auth\":%s}",
-        (unsigned long long)conns, (unsigned long long)subs,
-        srv->config.auth_username ? "true" : "false");
-    size_t len = cmq_frame_encode(info_buf, sizeof(info_buf), CMQ_OP_INFO, 0,
-                                   (const uint8_t *)info_json, (size_t)info_len);
-    if (len > 0) cmq_client_send(client, info_buf, len);
 }
 
 const char *cmq_version(void) {

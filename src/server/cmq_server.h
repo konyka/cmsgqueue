@@ -66,6 +66,7 @@ typedef struct cmq_client {
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
     int is_websocket;
     int ws_upgrade_done;
+    int info_sent;
 
     struct cmq_client *next;
 } cmq_client_t;
