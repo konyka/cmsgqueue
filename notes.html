@@ -217,8 +217,15 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <div class="phase">
 <div class="phase-header">
 <span class="phase-title">1.2 TCP Server + Client Lifecycle</span>
-<span class="status status-todo">TODO</span>
+<span class="status status-done">DONE</span>
 </div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_server.h</span></td><td>✅</td><td>Server/client structs, state machine, back-reference</td></tr>
+<tr><td><span class="component-name">cmq_server.c</span></td><td>✅</td><td>TCP acceptor, non-blocking I/O, event-driven client handler</td></tr>
+<tr><td><span class="component-name">cmq_ev.c</span></td><td>✅</td><td>Level-triggered epoll, eventfd wakeup for clean shutdown</td></tr>
+<tr><td><span class="component-name">tests/test_server.c</span></td><td>✅</td><td>4 tests: create/destroy, bind/accept/INFO, CONNECT/PING/PONG, PUB/SUB</td></tr>
+</table>
 </div>
 
 <div class="phase">
@@ -230,16 +237,22 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <tr><th>Component</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">cmq_sublist.h</span></td><td>✅</td><td>Sublist API with result type</td></tr>
 <tr><td><span class="component-name">cmq_sublist.c</span></td><td>✅</td><td>Trie with * and > wildcards, rwlock</td></tr>
-<tr><td><span class="component-name">tests/test_sublist.c</span></td><td>✅</td><td>14 tests: insert, match, wildcards, 1K subjects</td></tr>
-</table>
+<tr><td><span class="component-name">tests/test_sublist.c</span></td><td>✅</td><td>14 tests: insert, match, wildcards, 1K subjects, multi-sub</td></tr>
 </table>
 </div>
 
 <div class="phase">
 <div class="phase-header">
 <span class="phase-title">1.4 PUB/SUB Routing</span>
-<span class="status status-todo">TODO</span>
+<span class="status status-done">DONE</span>
 </div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">handle_publish</span></td><td>✅</td><td>Subject parse, sublist match, deliver to all subscribers</td></tr>
+<tr><td><span class="component-name">handle_subscribe</span></td><td>✅</td><td>SubID allocation, sublist insert, SUBACK response</td></tr>
+<tr><td><span class="component-name">handle_unsubscribe</span></td><td>✅</td><td>Client sub cleanup, sublist remove, UNSUBACK</td></tr>
+<tr><td><span class="component-name">cmq_sublist.c</span></td><td>✅</td><td>Multi-subscriber per subject (removed single-sub limit)</td></tr>
+</table>
 </div>
 
 <div class="phase">
@@ -314,6 +327,17 @@ Parser + Sublist complete. 9 test suites (73 total tests) all passing.
 Parser: 11 tests covering byte-by-byte feed, multi-frame, encode, invalid input.
 Sublist: 14 tests covering exact match, * and > wildcards, 1K subjects, validation.
 Next: TCP server acceptor + client lifecycle + PUB/SUB routing.
+</div>
+
+<div class="log-entry success">
+<div class="log-date">2025-05-26</div>
+Phase 1.2 + 1.4 complete. TCP server + PUB/SUB routing working end-to-end.
+Server: non-blocking accept, event-driven client handler, INFO/CONNECT/PING/PONG/DISCONNECT.
+PUB/SUB: subscribe → publish → message delivery verified via integration test.
+Event loop: level-triggered epoll, eventfd wakeup for clean shutdown.
+Sublist: now supports multiple subscribers per subject.
+Bug fix: cmq_frame_hdr_t is 9 bytes (packed), not 8 — caused silent MESSAGE send failure.
+10 test suites (77+ tests) all passing.
 </div>
 
 </div>

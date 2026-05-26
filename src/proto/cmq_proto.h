@@ -6,7 +6,9 @@
 
 #define CMQ_PROTO_MAGIC_0  0xCA
 #define CMQ_PROTO_MAGIC_1  0xFE
+#ifndef CMQ_PROTO_VERSION
 #define CMQ_PROTO_VERSION  0x01
+#endif
 #define CMQ_PROTO_HDR_SIZE 8
 
 #define CMQ_FLAG_COMPRESSED 0x01

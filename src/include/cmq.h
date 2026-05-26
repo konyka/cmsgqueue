@@ -19,8 +19,6 @@ extern "C" {
 #define CMQ_VERSION_PATCH 0
 #define CMQ_VERSION_STRING "0.1.0"
 
-/* Protocol version */
-#define CMQ_PROTO_VERSION 1
 
 /* Default configuration */
 #define CMQ_DEFAULT_PORT     7654

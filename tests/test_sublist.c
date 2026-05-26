@@ -16,12 +16,20 @@ TEST(sublist, insert_basic) {
     cmq_sublist_destroy(sl);
 }
 
-TEST(sublist, insert_duplicate) {
+TEST(sublist, insert_duplicate_subject) {
     cmq_sublist_t *sl = cmq_sublist_create();
     cmq_sublist_insert(sl, "foo.bar", (void *)1);
     int rc = cmq_sublist_insert(sl, "foo.bar", (void *)2);
-    ASSERT(rc != 0);
-    ASSERT_EQ(cmq_sublist_count(sl), (size_t)1);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(cmq_sublist_count(sl), (size_t)2);
+
+    cmq_sublist_result_t result;
+    cmq_sublist_match(sl, "foo.bar", &result);
+    ASSERT_EQ(result.count, (size_t)2);
+    ASSERT_EQ((intptr_t)result.entries[0], (intptr_t)1);
+    ASSERT_EQ((intptr_t)result.entries[1], (intptr_t)2);
+
+    cmq_sublist_result_free(&result);
     cmq_sublist_destroy(sl);
 }
 

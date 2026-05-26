@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
+#include <sys/eventfd.h>
 
 #if CMQ_OS_LINUX
 #include <sys/epoll.h>
@@ -26,6 +27,7 @@ typedef struct {
 
 struct cmq_ev_loop {
     int backend_fd;
+    int wakeup_fd;
     int running;
     int next_timer_id;
     cmq_ev_watcher_t *watchers;
@@ -76,11 +78,21 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
         return NULL;
     }
 
+    loop->wakeup_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (loop->wakeup_fd >= 0) {
+        struct epoll_event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.events = EPOLLIN;
+        ev.data.fd = loop->wakeup_fd;
+        epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, loop->wakeup_fd, &ev);
+    }
+
     return loop;
 }
 
 void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
     if (!loop) return;
+    if (loop->wakeup_fd >= 0) close(loop->wakeup_fd);
     if (loop->backend_fd >= 0) close(loop->backend_fd);
     free(loop->watchers);
     free(loop);
@@ -125,7 +137,7 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
 
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
-    ev.events = (uint32_t)(cmq_to_epoll_events(events) | EPOLLET);
+    ev.events = (uint32_t)cmq_to_epoll_events(events);
     ev.data.fd = fd;
 
     if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0)
@@ -143,7 +155,7 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
 
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
-    ev.events = (uint32_t)(cmq_to_epoll_events(events) | EPOLLET);
+    ev.events = (uint32_t)cmq_to_epoll_events(events);
     ev.data.fd = fd;
 
     if (epoll_ctl(loop->backend_fd, EPOLL_CTL_MOD, fd, &ev) != 0)
@@ -190,6 +202,11 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         for (int i = 0; i < nfds; i++) {
             int fd = events[i].data.fd;
+            if (fd == loop->wakeup_fd) {
+                uint64_t val;
+                read(fd, &val, sizeof(val));
+                continue;
+            }
             if (fd >= 0 && fd < loop->watchers_cap && loop->watchers[fd].cb) {
                 int ev = epoll_to_cmq_events((int)events[i].events);
                 loop->watchers[fd].cb(fd, ev, loop->watchers[fd].data);
@@ -375,7 +392,12 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
 }
 
 void cmq_ev_stop(cmq_ev_loop_t *loop) {
-    if (loop) loop->running = 0;
+    if (!loop) return;
+    loop->running = 0;
+    if (loop->wakeup_fd >= 0) {
+        uint64_t val = 1;
+        write(loop->wakeup_fd, &val, sizeof(val));
+    }
 }
 
 int cmq_ev_fd(cmq_ev_loop_t *loop) {

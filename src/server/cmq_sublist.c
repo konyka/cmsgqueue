@@ -109,7 +109,6 @@ static cmq_sl_node_t *add_child(cmq_sl_node_t *parent, const char *token, int is
 }
 
 static int node_add_sub(cmq_sl_node_t *node, void *data) {
-    if (node->sub_count > 0) return -1;
     if (node->sub_count >= node->sub_cap) {
         size_t new_cap = node->sub_cap == 0 ? 4 : node->sub_cap * 2;
         void **new_subs = realloc(node->subs, new_cap * sizeof(void *));
