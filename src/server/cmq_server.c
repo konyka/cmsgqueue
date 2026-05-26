@@ -707,7 +707,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
 
     if (srv->listen_fd >= 0) close(srv->listen_fd);
     if (srv->ev_loop) cmq_ev_loop_destroy(srv->ev_loop);
-    if (srv->sublist) cmq_sublist_destroy(srv->sublist);
+    if (srv->sublist) {
+        cmq_sublist_free_data(srv->sublist);
+        cmq_sublist_destroy(srv->sublist);
+    }
     if (srv->log) cmq_log_destroy(srv->log);
     if (srv->accounts) cmq_account_manager_destroy(srv->accounts);
     if (srv->routes) cmq_route_pool_destroy(srv->routes);

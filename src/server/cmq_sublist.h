@@ -15,6 +15,7 @@ typedef struct {
 
 cmq_sublist_t *cmq_sublist_create(void);
 void cmq_sublist_destroy(cmq_sublist_t *sl);
+void cmq_sublist_free_data(cmq_sublist_t *sl);
 
 int cmq_sublist_insert(cmq_sublist_t *sl, const char *subject, void *data);
 int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject);

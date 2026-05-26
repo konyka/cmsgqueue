@@ -133,6 +133,23 @@ cmq_sublist_t *cmq_sublist_create(void) {
     return sl;
 }
 
+static void node_free_data(cmq_sl_node_t *node) {
+    if (!node) return;
+    for (size_t i = 0; i < node->sub_count; i++) {
+        free(node->subs[i]);
+    }
+    cmq_sl_node_t *child = node->children;
+    while (child) {
+        node_free_data(child);
+        child = child->next;
+    }
+}
+
+void cmq_sublist_free_data(cmq_sublist_t *sl) {
+    if (!sl) return;
+    node_free_data(&sl->root);
+}
+
 void cmq_sublist_destroy(cmq_sublist_t *sl) {
     if (!sl) return;
     cmq_sl_node_t *child = sl->root.children;
