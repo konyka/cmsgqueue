@@ -740,6 +740,25 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Multi-Worker Server Mode</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_worker_t</span></td><td>✅</td><td>Per-worker event loop, client array, wakeup eventfd, MPSC message queue. Workers created when config.num_threads > 1.</td></tr>
+<tr><td><span class="component-name">Round-robin dispatch</span></td><td>✅</td><td>accept_cb dispatches clients to workers via atomic counter. Each client gets worker_id assigned.</td></tr>
+<tr><td><span class="component-name">Cross-thread messaging</span></td><td>✅</td><td>cmq_client_send detects cross-thread via __thread worker_id. Routes messages through worker MPSC queue + eventfd wakeup.</td></tr>
+<tr><td><span class="component-name">worker_wakeup_cb</span></td><td>✅</td><td>Drains MPSC queue, finds target client by fd, calls cmq_client_send on correct worker thread.</td></tr>
+<tr><td><span class="component-name">Single-thread compat</span></td><td>✅</td><td>When num_threads ≤ 1, exact same code path as before. All 16 existing tests unchanged.</td></tr>
+<tr><td><span class="component-name">test_worker</span></td><td>✅</td><td>cross_thread_pubsub (2 workers, pub on one, sub on other) + multi_pub_single_sub (3 workers, 5 publishers).</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>17/17 test suites pass.</strong> Multi-worker mode with eventfd-based cross-thread pub/sub. ASan clean. 0 warnings.
+</div>
+</div>
+
 </div>
 </body>
 </html>
