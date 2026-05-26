@@ -20,8 +20,9 @@
 #include <stdio.h>
 #include <signal.h>
 
-#define CMQ_CLIENT_BUF_SIZE 4096
-#define CMQ_MAX_SUBJECT 256
+#define CMQ_CLIENT_BUF_SIZE   4096
+#define CMQ_MAX_SUBJECT       256
+#define CMQ_MAX_QUEUE_GROUP   64
 #define CMQ_MAX_SUBS_PER_CLIENT 1024
 
 typedef enum {
@@ -34,6 +35,7 @@ typedef enum {
 typedef struct cmq_sub_entry {
     uint32_t sub_id;
     char subject[CMQ_MAX_SUBJECT];
+    char queue_group[CMQ_MAX_QUEUE_GROUP];
     struct cmq_sub_entry *next;
 } cmq_sub_entry_t;
 
@@ -57,6 +59,7 @@ typedef struct cmq_client {
 
     uint32_t next_sub_id;
     cmq_sub_entry_t *subs;
+    char *username;
 
     struct cmq_client *next;
 } cmq_client_t;
@@ -80,6 +83,13 @@ struct cmq_server {
     cmq_rwlock_t sublist_lock;
 
     cmq_log_t *log;
+
+    cmq_atomic_u64 stat_connections;
+    cmq_atomic_u64 stat_messages_in;
+    cmq_atomic_u64 stat_messages_out;
+    cmq_atomic_u64 stat_bytes_in;
+    cmq_atomic_u64 stat_bytes_out;
+    cmq_atomic_u64 stat_subscriptions;
 };
 
 #endif

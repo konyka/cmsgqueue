@@ -67,6 +67,10 @@ static void parse_key_value(const char *key, const char *value, cmq_config_t *co
         config->log_to_stdout = atoi(value);
     } else if (strcmp(key, "log_to_file") == 0) {
         config->log_to_file = atoi(value);
+    } else if (strcmp(key, "auth_username") == 0) {
+        config->auth_username = strdup(value);
+    } else if (strcmp(key, "auth_password") == 0) {
+        config->auth_password = strdup(value);
     }
 }
 

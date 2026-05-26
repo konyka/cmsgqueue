@@ -267,6 +267,68 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <tr><td><span class="component-name">tests/test_config.c</span></td><td>✅</td><td>10 tests: basic, comments, quotes, logging, validation, edge cases</td></tr>
 </table>
 </div>
+
+</div>
+
+<h2>Phase 2: Queue Groups, Headers, Auth, Monitoring</h2>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">2.1 Queue Groups (Shared Subscriptions)</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_sub_ref_t</span></td><td>✅</td><td>Now carries queue_group name per subscription</td></tr>
+<tr><td><span class="component-name">handle_subscribe</span></td><td>✅</td><td>Parses optional queue_group from sub payload</td></tr>
+<tr><td><span class="component-name">handle_publish</span></td><td>✅</td><td>Round-robin within queue group, fan-out across groups</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">2.2 Message Headers</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CMQ_FLAG_HEADERS</span></td><td>✅</td><td>Flag bit 0x04 signals headers in PUBLISH/MESSAGE</td></tr>
+<tr><td><span class="component-name">handle_publish</span></td><td>✅</td><td>Extracts headers block when flag set</td></tr>
+<tr><td><span class="component-name">cmq_send_message</span></td><td>✅</td><td>Forwards headers + sets flag on MESSAGE frame</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">2.3 Authentication</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_config_t</span></td><td>✅</td><td>auth_username / auth_password fields</td></tr>
+<tr><td><span class="component-name">handle_connect</span></td><td>✅</td><td>Validates credentials before CONNACK</td></tr>
+<tr><td><span class="component-name">cmq_config.c</span></td><td>✅</td><td>Parses auth_username / auth_password from config</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">2.4 Monitoring / Stats</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">stat counters</span></td><td>✅</td><td>Atomic u64: connections, messages_in/out, bytes_in/out, subscriptions</td></tr>
+<tr><td><span class="component-name">INFO frame</span></td><td>✅</td><td>JSON with version, proto, connections, subscriptions, auth status</td></tr>
+</table>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_config.h</span></td><td>✅</td><td>Config load + validate API</td></tr>
+<tr><td><span class="component-name">cmq_config.c</span></td><td>✅</td><td>INI-style parser: key=value, comments, sections, quoted strings</td></tr>
+<tr><td><span class="component-name">tests/test_config.c</span></td><td>✅</td><td>10 tests: basic, comments, quotes, logging, validation, edge cases</td></tr>
+</table>
+</div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -353,6 +415,16 @@ INI-style format: key=value, # comments, [section] headers, quoted strings.
 Supports: host, port, threads, max_clients, max_payload_size, log settings.
 10 tests covering basic, comments, quotes, logging, validation, edge cases.
 11 test suites (87+ tests) all passing.
+</div>
+
+<div class="log-entry success">
+<div class="log-date">2025-05-26</div>
+Phase 2 complete. Queue groups, headers, auth, monitoring.
+Queue groups: shared subscriptions with round-robin delivery within group.
+Headers: CMQ_FLAG_HEADERS bit for PUBLISH→MESSAGE header passthrough.
+Auth: username/password on CONNECT, configurable via config file.
+Monitoring: atomic u64 stat counters, JSON stats in INFO frame.
+12 test suites (92+ tests) all passing.
 </div>
 
 </div>

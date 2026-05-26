@@ -26,6 +26,7 @@ static cmq_client_t *cmq_client_create(int fd, uint32_t id,
     c->write_pos = 0;
     c->next_sub_id = 1;
     c->subs = NULL;
+    c->username = NULL;
     c->next = NULL;
     return c;
 }
@@ -35,6 +36,7 @@ static void cmq_client_destroy(cmq_client_t *c) {
     if (c->fd >= 0) close(c->fd);
     if (c->parser) cmq_parser_destroy(c->parser);
     free(c->write_buf);
+    free(c->username);
     cmq_sub_entry_t *s = c->subs;
     while (s) {
         cmq_sub_entry_t *next = s->next;
@@ -105,9 +107,10 @@ static void cmq_send_error(cmq_client_t *c, const char *msg) {
 
 static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
                               const char *subject,
-                              const uint8_t *payload, size_t payload_len) {
+                              const uint8_t *payload, size_t payload_len,
+                              const uint8_t *headers, size_t headers_len) {
     size_t subject_len = strlen(subject);
-    size_t body_len = 4 + 2 + subject_len + 4 + payload_len;
+    size_t body_len = 4 + 2 + subject_len + 2 + headers_len + 4 + payload_len;
     size_t buf_size = sizeof(cmq_frame_hdr_t) + body_len;
     uint8_t *buf = malloc(buf_size);
     if (!buf) return;
@@ -125,6 +128,14 @@ static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
     memcpy(p, subject, subject_len);
     p += subject_len;
 
+    p[0] = (headers_len >> 8) & 0xFF;
+    p[1] = headers_len & 0xFF;
+    p += 2;
+    if (headers_len > 0 && headers) {
+        memcpy(p, headers, headers_len);
+    }
+    p += headers_len;
+
     p[0] = ((uint32_t)payload_len >> 24) & 0xFF;
     p[1] = ((uint32_t)payload_len >> 16) & 0xFF;
     p[2] = ((uint32_t)payload_len >> 8) & 0xFF;
@@ -132,7 +143,8 @@ static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
     p += 4;
     memcpy(p, payload, payload_len);
 
-    size_t len = cmq_frame_encode(buf, buf_size, CMQ_OP_MESSAGE, 0,
+    uint8_t flags = (headers_len > 0) ? CMQ_FLAG_HEADERS : 0;
+    size_t len = cmq_frame_encode(buf, buf_size, CMQ_OP_MESSAGE, flags,
                                    buf + sizeof(cmq_frame_hdr_t), body_len);
     if (len > 0) {
         cmq_client_send(c, buf, len);
@@ -143,6 +155,7 @@ static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
 typedef struct {
     cmq_client_t *client;
     uint32_t sub_id;
+    char queue_group[CMQ_MAX_QUEUE_GROUP];
 } cmq_sub_ref_t;
 
 static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
@@ -170,17 +183,56 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         offset += 2 + reply_len;
     }
 
+    const uint8_t *headers = NULL;
+    size_t headers_len = 0;
+    if (frame->hdr.flags & CMQ_FLAG_HEADERS) {
+        if (offset + 2 <= frame->payload_len) {
+            headers_len = ((uint16_t)frame->payload[offset] << 8) |
+                           frame->payload[offset + 1];
+            offset += 2;
+            if (offset + headers_len <= frame->payload_len) {
+                headers = frame->payload + offset;
+            }
+            offset += headers_len;
+        }
+    }
+
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
+
+    cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
+    cmq_atomic_fetch_add_u64(&srv->stat_bytes_in, (uint64_t)frame->payload_len,
+                              CMQ_ATOMIC_RELAXED);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     cmq_sublist_match(srv->sublist, subject, &result);
 
+    cmq_sub_ref_t *last_queue_ref = NULL;
+    const char *last_queue_group = "";
     for (size_t i = 0; i < result.count; i++) {
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
+
+        if (ref->queue_group[0] != '\0') {
+            if (strcmp(last_queue_group, ref->queue_group) == 0 &&
+                last_queue_ref != NULL) {
+                continue;
+            }
+            last_queue_ref = ref;
+            last_queue_group = ref->queue_group;
+            cmq_send_message(ref->client, ref->sub_id, subject,
+                              msg_payload, msg_len, headers, headers_len);
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            continue;
+        }
+
+        last_queue_group = "";
+        last_queue_ref = NULL;
         cmq_send_message(ref->client, ref->sub_id, subject,
-                          msg_payload, msg_len);
+                          msg_payload, msg_len, headers, headers_len);
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                  CMQ_ATOMIC_RELAXED);
     }
     cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
@@ -207,6 +259,18 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     memcpy(subject, frame->payload + 6, subject_len);
     subject[subject_len] = '\0';
 
+    char queue_group[CMQ_MAX_QUEUE_GROUP] = {0};
+    size_t qg_offset = 6 + subject_len;
+    if (qg_offset + 2 <= frame->payload_len) {
+        uint16_t qg_len = ((uint16_t)frame->payload[qg_offset] << 8) |
+                           frame->payload[qg_offset + 1];
+        if (qg_len > 0 && qg_len < CMQ_MAX_QUEUE_GROUP &&
+            qg_offset + 2 + qg_len <= frame->payload_len) {
+            memcpy(queue_group, frame->payload + qg_offset + 2, qg_len);
+            queue_group[qg_len] = '\0';
+        }
+    }
+
     cmq_sub_entry_t *entry = malloc(sizeof(cmq_sub_entry_t));
     if (!entry) {
         cmq_send_suback(c, sub_id, 1);
@@ -215,6 +279,8 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     entry->sub_id = sub_id;
     strncpy(entry->subject, subject, CMQ_MAX_SUBJECT - 1);
     entry->subject[CMQ_MAX_SUBJECT - 1] = '\0';
+    strncpy(entry->queue_group, queue_group, CMQ_MAX_QUEUE_GROUP - 1);
+    entry->queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
     entry->next = c->subs;
     c->subs = entry;
 
@@ -225,11 +291,14 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     }
     ref->client = c;
     ref->sub_id = sub_id;
+    strncpy(ref->queue_group, queue_group, CMQ_MAX_QUEUE_GROUP - 1);
+    ref->queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
 
     cmq_rwlock_wrlock(&srv->sublist_lock);
     cmq_sublist_insert(srv->sublist, subject, ref);
     cmq_rwlock_unlock(&srv->sublist_lock);
 
+    cmq_atomic_fetch_add_u64(&srv->stat_subscriptions, 1, CMQ_ATOMIC_RELAXED);
     cmq_send_suback(c, sub_id, 0);
 }
 
@@ -268,7 +337,35 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                           const cmq_frame_t *frame) {
     switch (frame->hdr.op) {
     case CMQ_OP_CONNECT:
+        if (srv->config.auth_username) {
+            if (!frame->payload || frame->payload_len < 4) {
+                cmq_send_connack(c, 1);
+                c->state = CMQ_CLIENT_CLOSING;
+                break;
+            }
+            uint16_t ulen = ((uint16_t)frame->payload[0] << 8) |
+                             frame->payload[1];
+            uint16_t plen = ((uint16_t)frame->payload[2] << 8) |
+                             frame->payload[3];
+            if (4 + ulen + plen > frame->payload_len) {
+                cmq_send_connack(c, 1);
+                c->state = CMQ_CLIENT_CLOSING;
+                break;
+            }
+            char uname[256] = {0};
+            char passwd[256] = {0};
+            if (ulen > 0 && ulen < 256) memcpy(uname, frame->payload + 4, ulen);
+            if (plen > 0 && plen < 256) memcpy(passwd, frame->payload + 4 + ulen, plen);
+            if (strcmp(uname, srv->config.auth_username) != 0 ||
+                strcmp(passwd, srv->config.auth_password ? srv->config.auth_password : "") != 0) {
+                cmq_send_connack(c, 2);
+                c->state = CMQ_CLIENT_CLOSING;
+                break;
+            }
+            c->username = strdup(uname);
+        }
         c->state = CMQ_CLIENT_CONNECTED;
+        cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
         cmq_send_connack(c, 0);
         break;
     case CMQ_OP_PING:
@@ -399,10 +496,16 @@ static void accept_cb(int fd, int events, void *data) {
 
     cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb, client);
 
-    uint8_t info_buf[128];
-    const char *info = "{\"version\":\"0.1.0\",\"proto\":1}";
+    uint8_t info_buf[256];
+    uint64_t conns = cmq_atomic_load_u64(&srv->stat_connections, CMQ_ATOMIC_RELAXED);
+    uint64_t subs = cmq_atomic_load_u64(&srv->stat_subscriptions, CMQ_ATOMIC_RELAXED);
+    char info_json[256];
+    int info_len = snprintf(info_json, sizeof(info_json),
+        "{\"version\":\"0.1.0\",\"proto\":1,\"connections\":%llu,\"subscriptions\":%llu,\"auth\":%s}",
+        (unsigned long long)conns, (unsigned long long)subs,
+        srv->config.auth_username ? "true" : "false");
     size_t len = cmq_frame_encode(info_buf, sizeof(info_buf), CMQ_OP_INFO, 0,
-                                   (const uint8_t *)info, strlen(info));
+                                   (const uint8_t *)info_json, (size_t)info_len);
     if (len > 0) cmq_client_send(client, info_buf, len);
 }
 

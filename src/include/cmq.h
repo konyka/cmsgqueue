@@ -66,6 +66,8 @@ typedef struct cmq_config {
     int log_level;                 /* Log level: 0=trace,1=debug,2=info,3=warn,4=error,5=fatal */
     int log_to_stdout;             /* Log to stdout (default: 1) */
     int log_to_file;               /* Log to file (default: 0) */
+    const char *auth_username;     /* Require auth: username (NULL = no auth) */
+    const char *auth_password;     /* Require auth: password (NULL = no auth) */
 } cmq_config_t;
 
 /**
