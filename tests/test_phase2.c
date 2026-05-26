@@ -42,6 +42,19 @@ static ssize_t send_frame_flags(int fd, cmq_op_t op, uint8_t flags,
 
 static int recv_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
     for (int retry = 0; retry < 50; retry++) {
+        const cmq_frame_t *f = cmq_parser_frame(parser);
+        if (f) {
+            frame->hdr = f->hdr;
+            frame->payload_len = f->payload_len;
+            if (f->payload_len > 0 && f->payload) {
+                frame->payload = malloc(f->payload_len);
+                memcpy(frame->payload, f->payload, f->payload_len);
+            } else {
+                frame->payload = NULL;
+            }
+            cmq_parser_next(parser);
+            return 0;
+        }
         uint8_t buf[4096];
         ssize_t n = read(fd, buf, sizeof(buf));
         if (n <= 0) {
@@ -52,24 +65,7 @@ static int recv_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
             }
             return -1;
         }
-        int rc = cmq_parser_feed(parser, buf, (size_t)n);
-        if (rc != 1) {
-            struct timespec ts = {0, 10000000};
-            nanosleep(&ts, NULL);
-            continue;
-        }
-        const cmq_frame_t *f = cmq_parser_frame(parser);
-        if (!f) return -1;
-        frame->hdr = f->hdr;
-        frame->payload_len = f->payload_len;
-        if (f->payload_len > 0 && f->payload) {
-            frame->payload = malloc(f->payload_len);
-            memcpy(frame->payload, f->payload, f->payload_len);
-        } else {
-            frame->payload = NULL;
-        }
-        cmq_parser_next(parser);
-        return 0;
+        cmq_parser_feed(parser, buf, (size_t)n);
     }
     return -1;
 }
@@ -96,12 +92,14 @@ static void wait_ms(int ms) {
 }
 
 static void do_connect(int fd, cmq_parser_t *parser) {
-    cmq_frame_t frame;
-    recv_frame(fd, &frame, parser);
-    free_frame_payload(&frame);
     send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
     wait_ms(50);
+    cmq_frame_t frame;
     recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
     ASSERT_EQ(frame.hdr.op, CMQ_OP_CONNACK);
     ASSERT_EQ(frame.payload[0], 0);
     free_frame_payload(&frame);
@@ -126,9 +124,6 @@ TEST(phase2, auth_success) {
     wait_server();
 
     cmq_parser_t *parser = cmq_parser_create();
-    cmq_frame_t frame;
-    recv_frame(fd, &frame, parser);
-    free_frame_payload(&frame);
 
     const char *user = "admin";
     const char *pass = "secret";
@@ -145,7 +140,12 @@ TEST(phase2, auth_success) {
     send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
     wait_ms(50);
 
+    cmq_frame_t frame;
     ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
+    }
     ASSERT_EQ(frame.hdr.op, CMQ_OP_CONNACK);
     ASSERT_EQ(frame.payload[0], 0);
     free_frame_payload(&frame);
@@ -176,9 +176,6 @@ TEST(phase2, auth_failure) {
     wait_server();
 
     cmq_parser_t *parser = cmq_parser_create();
-    cmq_frame_t frame;
-    recv_frame(fd, &frame, parser);
-    free_frame_payload(&frame);
 
     const char *user = "admin";
     const char *pass = "wrong";
@@ -195,7 +192,12 @@ TEST(phase2, auth_failure) {
     send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
     wait_ms(50);
 
+    cmq_frame_t frame;
     ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
+    }
     ASSERT_EQ(frame.hdr.op, CMQ_OP_CONNACK);
     ASSERT_EQ(frame.payload[0], 2);
     free_frame_payload(&frame);
@@ -388,6 +390,8 @@ TEST(phase2, info_has_stats) {
     wait_server();
 
     cmq_parser_t *parser = cmq_parser_create();
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_server();
     cmq_frame_t frame;
     ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
     ASSERT_EQ(frame.hdr.op, CMQ_OP_INFO);

@@ -36,6 +36,19 @@ static ssize_t send_frame(int fd, cmq_op_t op, const uint8_t *payload, size_t pl
 
 static int recv_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
     for (int retry = 0; retry < 50; retry++) {
+        const cmq_frame_t *f = cmq_parser_frame(parser);
+        if (f) {
+            frame->hdr = f->hdr;
+            frame->payload_len = f->payload_len;
+            if (f->payload_len > 0 && f->payload) {
+                frame->payload = malloc(f->payload_len);
+                memcpy(frame->payload, f->payload, f->payload_len);
+            } else {
+                frame->payload = NULL;
+            }
+            cmq_parser_next(parser);
+            return 0;
+        }
         uint8_t buf[4096];
         ssize_t n = read(fd, buf, sizeof(buf));
         if (n <= 0) {
@@ -46,24 +59,7 @@ static int recv_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
             }
             return -1;
         }
-        int rc = cmq_parser_feed(parser, buf, (size_t)n);
-        if (rc != 1) {
-            struct timespec ts = {0, 10000000};
-            nanosleep(&ts, NULL);
-            continue;
-        }
-        const cmq_frame_t *f = cmq_parser_frame(parser);
-        if (!f) return -1;
-        frame->hdr = f->hdr;
-        frame->payload_len = f->payload_len;
-        if (f->payload_len > 0 && f->payload) {
-            frame->payload = malloc(f->payload_len);
-            memcpy(frame->payload, f->payload, f->payload_len);
-        } else {
-            frame->payload = NULL;
-        }
-        cmq_parser_next(parser);
-        return 0;
+        cmq_parser_feed(parser, buf, (size_t)n);
     }
     return -1;
 }
@@ -71,6 +67,21 @@ static int recv_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
 static void free_frame_payload(cmq_frame_t *frame) {
     free(frame->payload);
     frame->payload = NULL;
+}
+
+static void do_connect(int fd, cmq_parser_t *parser) {
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    struct timespec ts = {0, 100000000};
+    nanosleep(&ts, NULL);
+    cmq_frame_t frame;
+    ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
+    }
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_CONNACK);
+    ASSERT_EQ(frame.payload[0], 0);
+    free_frame_payload(&frame);
 }
 
 static void *server_thread(void *arg) {
@@ -108,6 +119,8 @@ TEST(server, bind_accept_info) {
     nanosleep(&ts, NULL);
 
     cmq_parser_t *parser = cmq_parser_create();
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    nanosleep(&ts, NULL);
     cmq_frame_t frame;
     ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
     ASSERT_EQ(frame.hdr.op, CMQ_OP_INFO);
@@ -135,29 +148,17 @@ TEST(server, connect_pong) {
 
     int fd = connect_to(18802);
     ASSERT(fd >= 0);
-
     struct timespec ts2 = {0, 100000000};
     nanosleep(&ts2, NULL);
 
     cmq_parser_t *parser = cmq_parser_create();
-    cmq_frame_t frame;
-
-    ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
-    ASSERT_EQ(frame.hdr.op, CMQ_OP_INFO);
-    free_frame_payload(&frame);
-
-    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
-    ts.tv_sec = 0; ts.tv_nsec = 100000000;
-    nanosleep(&ts, NULL);
-
-    ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
-    ASSERT_EQ(frame.hdr.op, CMQ_OP_CONNACK);
-    free_frame_payload(&frame);
+    do_connect(fd, parser);
 
     send_frame(fd, CMQ_OP_PING, NULL, 0);
     ts.tv_sec = 0; ts.tv_nsec = 100000000;
     nanosleep(&ts, NULL);
 
+    cmq_frame_t frame;
     ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
     ASSERT_EQ(frame.hdr.op, CMQ_OP_PONG);
     free_frame_payload(&frame);
@@ -184,22 +185,11 @@ TEST(server, pubsub_basic) {
 
     int sub_fd = connect_to(18803);
     ASSERT(sub_fd >= 0);
+    struct timespec ts2 = {0, 100000000};
+    nanosleep(&ts2, NULL);
     cmq_parser_t *sub_parser = cmq_parser_create();
-    cmq_frame_t frame;
 
-    struct timespec ts3 = {0, 100000000};
-    nanosleep(&ts3, NULL);
-
-    ASSERT_EQ(recv_frame(sub_fd, &frame, sub_parser), 0);
-    ASSERT_EQ(frame.hdr.op, CMQ_OP_INFO);
-    free_frame_payload(&frame);
-
-    send_frame(sub_fd, CMQ_OP_CONNECT, NULL, 0);
-    ts.tv_sec = 0; ts.tv_nsec = 50000000;
-    nanosleep(&ts, NULL);
-    ASSERT_EQ(recv_frame(sub_fd, &frame, sub_parser), 0);
-    ASSERT_EQ(frame.hdr.op, CMQ_OP_CONNACK);
-    free_frame_payload(&frame);
+    do_connect(sub_fd, sub_parser);
 
     const char *subject = "test.topic";
     uint16_t slen = (uint16_t)strlen(subject);
@@ -217,6 +207,7 @@ TEST(server, pubsub_basic) {
     ts.tv_sec = 0; ts.tv_nsec = 50000000;
     nanosleep(&ts, NULL);
 
+    cmq_frame_t frame;
     ASSERT_EQ(recv_frame(sub_fd, &frame, sub_parser), 0);
     ASSERT_EQ(frame.hdr.op, CMQ_OP_SUBACK);
     ASSERT_EQ(frame.payload_len, (size_t)5);
@@ -227,19 +218,7 @@ TEST(server, pubsub_basic) {
     ASSERT(pub_fd >= 0);
     cmq_parser_t *pub_parser = cmq_parser_create();
 
-    struct timespec ts4 = {0, 100000000};
-    nanosleep(&ts4, NULL);
-
-    ASSERT_EQ(recv_frame(pub_fd, &frame, pub_parser), 0);
-    ASSERT_EQ(frame.hdr.op, CMQ_OP_INFO);
-    free_frame_payload(&frame);
-
-    send_frame(pub_fd, CMQ_OP_CONNECT, NULL, 0);
-    ts.tv_sec = 0; ts.tv_nsec = 50000000;
-    nanosleep(&ts, NULL);
-    ASSERT_EQ(recv_frame(pub_fd, &frame, pub_parser), 0);
-    ASSERT_EQ(frame.hdr.op, CMQ_OP_CONNACK);
-    free_frame_payload(&frame);
+    do_connect(pub_fd, pub_parser);
 
     const char *msg = "hello";
     size_t msg_len = strlen(msg);
