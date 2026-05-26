@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_ws.h"
+#include "cmq_types.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -161,7 +162,7 @@ int cmq_ws_send(int fd, const uint8_t *data, size_t len, cmq_ws_opcode_t opcode)
     cmq_ws_frame_t frame = {0};
     frame.fin = 1;
     frame.opcode = opcode;
-    frame.payload = (uint8_t *)data;
+    frame.payload = data;
     frame.payload_len = len;
     frame.masked = 0;
 
@@ -206,7 +207,7 @@ int cmq_ws_accept_key(const char *client_key, char *out_key, size_t out_len) {
     return 0;
 }
 
-int cmq_ws_parse_http_upgrade(const char *req, size_t req_len,
+int cmq_ws_parse_http_upgrade(const char *req, size_t req_len __attribute__((unused)),
                                char *ws_key_out, size_t key_len) {
     if (!req || !ws_key_out) return -1;
     const char *marker = "Sec-WebSocket-Key: ";

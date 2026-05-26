@@ -55,12 +55,13 @@ static int recv_exact(int fd, uint8_t *buf, size_t len) {
 
 static int read_payload(int fd, uint8_t *buf, size_t buf_size,
                          uint8_t *payload_out, size_t *payload_len_out) {
-    uint8_t hdr_buf[8];
-    if (recv_exact(fd, hdr_buf, 8) != 0) return -1;
+    uint8_t hdr_buf[9];
+    if (recv_exact(fd, hdr_buf, sizeof(hdr_buf)) != 0) return -1;
 
     cmq_frame_hdr_t hdr;
     memcpy(&hdr, hdr_buf, sizeof(hdr));
-    uint32_t plen = ntohl(hdr.length);
+    uint32_t plen = (uint32_t)hdr_buf[5] | ((uint32_t)hdr_buf[6] << 8) |
+                    ((uint32_t)hdr_buf[7] << 16) | ((uint32_t)hdr_buf[8] << 24);
 
     if (plen > buf_size) return -1;
     if (plen > 0 && recv_exact(fd, buf, plen) != 0) return -1;

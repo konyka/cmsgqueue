@@ -23,7 +23,7 @@ typedef enum {
 struct cmq_ws_frame {
     cmq_ws_opcode_t opcode;
     int fin;
-    uint8_t *payload;
+    const uint8_t *payload;
     size_t payload_len;
     uint32_t mask_key;
     int masked;

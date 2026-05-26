@@ -466,6 +466,18 @@ Comprehensive README.md with architecture diagram, protocol spec, module referen
 CI covers Linux (gcc/clang), macOS, Windows, ARM64 cross-compile.
 </div>
 
+<div class="log-entry success">
+<div class="log-date">2025-05-26</div>
+Integration and polish pass.
+Fixed all compiler warnings (0 warnings on clean build).
+Fixed CMQ_PROTO_HDR_SIZE: 8 → 9 to match actual packed cmq_frame_hdr_t.
+Integrated accounts into server: per-client account_name, auto-assign "$default",
+per-account message/byte tracking on publish and deliver.
+Integrated cluster route pool into server struct for future route forwarding.
+Removed unused strip_whitespace from config parser.
+15 test suites, 140+ tests, 100% passing, 0 warnings.
+</div>
+
 </div>
 
 <h2>Phase 3: Persistence</h2>

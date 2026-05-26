@@ -167,7 +167,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     }
 
     uint16_t subject_len = ((uint16_t)frame->payload[0] << 8) | frame->payload[1];
-    if (2 + subject_len > frame->payload_len) {
+    if ((size_t)(2 + subject_len) > frame->payload_len) {
         cmq_send_error(c, "subject too long");
         return;
     }
@@ -204,6 +204,9 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     cmq_atomic_fetch_add_u64(&srv->stat_bytes_in, (uint64_t)frame->payload_len,
                               CMQ_ATOMIC_RELAXED);
 
+    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
+    if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
+
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     cmq_sublist_match(srv->sublist, subject, &result);
@@ -224,6 +227,11 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                               msg_payload, msg_len, headers, headers_len);
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                       CMQ_ATOMIC_RELAXED);
+            {
+                cmq_account_t *oacc = cmq_account_get(srv->accounts,
+                                                       ref->client->account_name);
+                if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)msg_len);
+            }
             continue;
         }
 
@@ -233,6 +241,11 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                           msg_payload, msg_len, headers, headers_len);
         cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                   CMQ_ATOMIC_RELAXED);
+        {
+            cmq_account_t *oacc = cmq_account_get(srv->accounts,
+                                                   ref->client->account_name);
+            if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)msg_len);
+        }
     }
     cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
@@ -251,7 +264,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                       (uint32_t)frame->payload[3];
     uint16_t subject_len = ((uint16_t)frame->payload[4] << 8) |
                             frame->payload[5];
-    if (6 + subject_len > frame->payload_len || subject_len >= CMQ_MAX_SUBJECT) {
+    if ((size_t)(6 + subject_len) > frame->payload_len || subject_len >= CMQ_MAX_SUBJECT) {
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -347,7 +360,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                              frame->payload[1];
             uint16_t plen = ((uint16_t)frame->payload[2] << 8) |
                              frame->payload[3];
-            if (4 + ulen + plen > frame->payload_len) {
+            if ((size_t)(4 + ulen + plen) > frame->payload_len) {
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
                 break;
@@ -366,6 +379,9 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         }
         c->state = CMQ_CLIENT_CONNECTED;
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
+        strncpy(c->account_name, "$default", CMQ_ACCOUNT_NAME_SIZE - 1);
+        cmq_account_t *acc = cmq_account_get(srv->accounts, "$default");
+        cmq_account_inc_connections(acc);
         cmq_send_connack(c, 0);
         break;
     case CMQ_OP_PING:
@@ -555,6 +571,11 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->clients_count = 0;
     srv->clients = calloc((size_t)srv->clients_cap, sizeof(cmq_client_t *));
 
+    srv->accounts = cmq_account_manager_create();
+    cmq_account_create(srv->accounts, "$default");
+
+    srv->routes = NULL;
+
     *server = srv;
     return CMQ_OK;
 }
@@ -626,6 +647,8 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->ev_loop) cmq_ev_loop_destroy(srv->ev_loop);
     if (srv->sublist) cmq_sublist_destroy(srv->sublist);
     if (srv->log) cmq_log_destroy(srv->log);
+    if (srv->accounts) cmq_account_manager_destroy(srv->accounts);
+    if (srv->routes) cmq_route_pool_destroy(srv->routes);
     cmq_mutex_destroy(&srv->clients_lock);
     cmq_rwlock_destroy(&srv->sublist_lock);
     free(srv);

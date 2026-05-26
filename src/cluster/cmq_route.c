@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_route.h"
 #include "cmq_thread.h"
+#include "cmq_types.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -138,7 +139,7 @@ int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id) {
     return -1;
 }
 
-int cmq_route_forward(cmq_route_pool_t *pool, const char *subject,
+int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__((unused)),
                        const uint8_t *data, size_t len,
                        const char *exclude_id) {
     if (!pool || !data || len == 0) return -1;

@@ -156,7 +156,16 @@ void cmq_log_write(cmq_log_t *log, cmq_log_level_t level, const char *file, int 
 
     char final_buf[CMQ_LOG_MSG_SIZE];
     const char *lvlstr = level_to_string(level);
-    snprintf(final_buf, sizeof(final_buf), "[%s] [%s] %s:%d: %s\n", lvlstr, timebuf, file, line, user_buf);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+    snprintf(final_buf, sizeof(final_buf), "[%s] [%s] %s:%d: %s",
+             lvlstr, timebuf, file, line, user_buf);
+#pragma GCC diagnostic pop
+    size_t flen = strlen(final_buf);
+    if (flen + 1 < sizeof(final_buf)) {
+        final_buf[flen] = '\n';
+        final_buf[flen + 1] = '\0';
+    }
 
     cmq_dispatch_log(log, final_buf, strlen(final_buf));
 }

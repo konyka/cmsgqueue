@@ -6,17 +6,6 @@
 #include <string.h>
 #include <ctype.h>
 
-static void strip_whitespace(char *s) {
-    char *dst = s;
-    while (*s) {
-        if (!isspace((unsigned char)*s)) {
-            *dst++ = *s;
-        }
-        s++;
-    }
-    *dst = '\0';
-}
-
 static void trim(char *s) {
     char *start = s;
     while (isspace((unsigned char)*start)) start++;
@@ -81,7 +70,7 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
     if (!fp) return CMQ_ERR_IO;
 
     char line[1024];
-    int lineno = 0;
+    int lineno __attribute__((unused)) = 0;
     while (fgets(line, sizeof(line), fp)) {
         lineno++;
         strip_comments(line);

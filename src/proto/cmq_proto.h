@@ -9,7 +9,7 @@
 #ifndef CMQ_PROTO_VERSION
 #define CMQ_PROTO_VERSION  0x01
 #endif
-#define CMQ_PROTO_HDR_SIZE 8
+#define CMQ_PROTO_HDR_SIZE 9
 
 #define CMQ_FLAG_COMPRESSED 0x01
 #define CMQ_FLAG_CHECKSUM   0x02

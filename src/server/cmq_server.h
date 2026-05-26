@@ -8,6 +8,8 @@
 #include "cmq_parser.h"
 #include "cmq_ev.h"
 #include "cmq_log.h"
+#include "cmq_account.h"
+#include "cmq_route.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -60,6 +62,7 @@ typedef struct cmq_client {
     uint32_t next_sub_id;
     cmq_sub_entry_t *subs;
     char *username;
+    char account_name[CMQ_ACCOUNT_NAME_SIZE];
 
     struct cmq_client *next;
 } cmq_client_t;
@@ -83,6 +86,9 @@ struct cmq_server {
     cmq_rwlock_t sublist_lock;
 
     cmq_log_t *log;
+
+    cmq_account_manager_t *accounts;
+    cmq_route_pool_t *routes;
 
     cmq_atomic_u64 stat_connections;
     cmq_atomic_u64 stat_messages_in;
