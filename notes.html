@@ -427,6 +427,58 @@ Monitoring: atomic u64 stat counters, JSON stats in INFO frame.
 12 test suites (92+ tests) all passing.
 </div>
 
+<div class="log-entry success">
+<div class="log-date">2025-05-26</div>
+Phase 3 complete. Persistence layer implemented.
+Memstore: ring buffer with seq addressing, truncate, O(1) put/get.
+Stream: durable named log with consumer tracking, byte-based eviction.
+Filestore: append-only data + offset index, CRC32 verification, crash recovery.
+13 test suites (105+ tests) all passing.
+</div>
+
+</div>
+
+<h2>Phase 3: Persistence</h2>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">3.1 Message Store (Memstore)</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_store.h/c</span></td><td>✅</td><td>Ring buffer with seq-based addressing, mutex-protected</td></tr>
+<tr><td><span class="component-name">cmq_store_put</span></td><td>✅</td><td>Append message, returns assigned sequence number</td></tr>
+<tr><td><span class="component-name">cmq_store_get</span></td><td>✅</td><td>Random access by seq, validates bounds and validity</td></tr>
+<tr><td><span class="component-name">cmq_store_truncate</span></td><td>✅</td><td>Free messages before given seq</td></tr>
+<tr><td><span class="component-name">tests/test_store.c</span></td><td>✅</td><td>13 tests: put/get, ring overwrite, truncate, streams, consumers, filestore</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">3.2 Stream Abstraction</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_stream.h/c</span></td><td>✅</td><td>Durable subject log with named consumers</td></tr>
+<tr><td><span class="component-name">consumer tracking</span></td><td>✅</td><td>Per-consumer ack offset, pending count, next seq</td></tr>
+<tr><td><span class="component-name">byte eviction</span></td><td>✅</td><td>max_bytes limit auto-evicts oldest messages</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">3.3 File-based Persistence</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_filestore.h/c</span></td><td>✅</td><td>Append-only data file + offset index file</td></tr>
+<tr><td><span class="component-name">record format</span></td><td>✅</td><td>Packed header: magic, version, seq, len, CRC32</td></tr>
+<tr><td><span class="component-name">persistence</span></td><td>✅</td><td>Recovery via index scan on reopen, CRC verification</td></tr>
+</table>
 </div>
 </body>
 </html>

@@ -88,6 +88,12 @@ set(CMQ_SERVER_SOURCES
     src/server/cmq_config.c
 )
 
+set(CMQ_STORE_SOURCES
+    src/store/cmq_store.c
+    src/store/cmq_stream.c
+    src/store/cmq_filestore.c
+)
+
 # Collect all sources
 set(CMQ_ALL_SOURCES
     ${CMQ_CORE_SOURCES}
@@ -95,6 +101,7 @@ set(CMQ_ALL_SOURCES
     ${CMQ_NET_SOURCES}
     ${CMQ_PROTO_SOURCES}
     ${CMQ_SERVER_SOURCES}
+    ${CMQ_STORE_SOURCES}
 )
 
 # ---------------------------------------------------------------------------
@@ -114,6 +121,7 @@ target_include_directories(cmsgqueue
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/net>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/proto>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/server>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/store>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
