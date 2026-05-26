@@ -759,6 +759,27 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Stress Tests &amp; Benchmark</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">test_stress</span></td><td>✅</td><td>3 tests: many_clients_single_thread (5 subs + 10 pubs), fanout_multi_worker (4 workers, fan-out wildcard), wildcard_subscriptions (cross-worker wildcard matching)</td></tr>
+<tr><td><span class="component-name">examples/benchmark</span></td><td>✅</td><td>Configurable throughput benchmark: -p port -c clients -n msgs -t threads. Measures publish rate, end-to-end throughput, avg latency.</td></tr>
+</table>
+<table>
+<tr><th>Metric</th><th>Single-thread</th><th>4 Workers</th></tr>
+<tr><td>Publish rate</td><td>1.56M msg/s</td><td>1.45M msg/s</td></tr>
+<tr><td>End-to-end</td><td>113K msg/s</td><td>110K msg/s</td></tr>
+<tr><td>Avg latency</td><td>0.009ms</td><td>0.009ms</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>18/18 test suites pass.</strong> Stress tests verify correctness under load. Benchmark measures 110K+ msg/s end-to-end.
+</div>
+</div>
+
 </div>
 </body>
 </html>
