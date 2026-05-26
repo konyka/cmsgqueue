@@ -258,8 +258,14 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <div class="phase">
 <div class="phase-header">
 <span class="phase-title">1.5 Configuration Parser</span>
-<span class="status status-todo">TODO</span>
+<span class="status status-done">DONE</span>
 </div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_config.h</span></td><td>✅</td><td>Config load + validate API</td></tr>
+<tr><td><span class="component-name">cmq_config.c</span></td><td>✅</td><td>INI-style parser: key=value, comments, sections, quoted strings</td></tr>
+<tr><td><span class="component-name">tests/test_config.c</span></td><td>✅</td><td>10 tests: basic, comments, quotes, logging, validation, edge cases</td></tr>
+</table>
 </div>
 </div>
 
@@ -338,6 +344,15 @@ Event loop: level-triggered epoll, eventfd wakeup for clean shutdown.
 Sublist: now supports multiple subscribers per subject.
 Bug fix: cmq_frame_hdr_t is 9 bytes (packed), not 8 — caused silent MESSAGE send failure.
 10 test suites (77+ tests) all passing.
+</div>
+
+<div class="log-entry success">
+<div class="log-date">2025-05-26</div>
+Phase 1.5 complete. Configuration file parser implemented.
+INI-style format: key=value, # comments, [section] headers, quoted strings.
+Supports: host, port, threads, max_clients, max_payload_size, log settings.
+10 tests covering basic, comments, quotes, logging, validation, edge cases.
+11 test suites (87+ tests) all passing.
 </div>
 
 </div>
