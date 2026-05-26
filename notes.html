@@ -110,7 +110,7 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <div class="phase">
 <div class="phase-header">
 <span class="phase-title">0.1 Project Structure + Build System</span>
-<span class="status status-wip">IN PROGRESS</span>
+<span class="status status-done">DONE</span>
 </div>
 <table>
 <tr><th>Component</th><th>Status</th><th>Notes</th></tr>
@@ -125,7 +125,7 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <div class="phase">
 <div class="phase-header">
 <span class="phase-title">0.2 Test Framework</span>
-<span class="status status-wip">IN PROGRESS</span>
+<span class="status status-done">DONE</span>
 </div>
 <table>
 <tr><th>Component</th><th>Status</th><th>Notes</th></tr>
@@ -154,7 +154,7 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <div class="phase">
 <div class="phase-header">
 <span class="phase-title">0.4 Memory Pool</span>
-<span class="status status-wip">IN PROGRESS</span>
+<span class="status status-done">DONE</span>
 </div>
 <table>
 <tr><th>Component</th><th>Status</th><th>Notes</th></tr>
@@ -168,7 +168,7 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <div class="phase">
 <div class="phase-header">
 <span class="phase-title">0.5 Async Logger</span>
-<span class="status status-wip">IN PROGRESS</span>
+<span class="status status-done">DONE</span>
 </div>
 <table>
 <tr><th>Component</th><th>Status</th><th>Notes</th></tr>
@@ -180,7 +180,7 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <div class="phase">
 <div class="phase-header">
 <span class="phase-title">0.6 Coroutine Library</span>
-<span class="status status-wip">IN PROGRESS</span>
+<span class="status status-done">DONE</span>
 </div>
 <table>
 <tr><th>Component</th><th>Status</th><th>Notes</th></tr>
@@ -194,7 +194,59 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <div class="phase">
 <div class="phase-header">
 <span class="phase-title">0.7 Event Loop</span>
+<span class="status status-done">DONE</span>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+
+<h2>Phase 1: Core Protocol Engine</h2>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">1.1 Binary Protocol Parser</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_parser.h</span></td><td>✅</td><td>Parser API + frame type</td></tr>
+<tr><td><span class="component-name">cmq_parser.c</span></td><td>✅</td><td>State machine, byte-by-byte reassembly</td></tr>
+<tr><td><span class="component-name">tests/test_parser.c</span></td><td>✅</td><td>11 tests: feed, encode, multi-frame, invalid</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">1.2 TCP Server + Client Lifecycle</span>
 <span class="status status-todo">TODO</span>
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">1.3 Subject Trie (Sublist)</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_sublist.h</span></td><td>✅</td><td>Sublist API with result type</td></tr>
+<tr><td><span class="component-name">cmq_sublist.c</span></td><td>✅</td><td>Trie with * and > wildcards, rwlock</td></tr>
+<tr><td><span class="component-name">tests/test_sublist.c</span></td><td>✅</td><td>14 tests: insert, match, wildcards, 1K subjects</td></tr>
+</table>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">1.4 PUB/SUB Routing</span>
+<span class="status status-todo">TODO</span>
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">1.5 Configuration Parser</span>
+<span class="status status-todo">TODO</span>
+</div>
 </div>
 </div>
 
@@ -244,8 +296,24 @@ dynamic growth, epoch-based reclamation for sublist, work-stealing between worke
 
 <div class="log-entry success">
 <div class="log-date">2025-05-25</div>
-Phase 0 infrastructure setup in progress. Created project structure, CMake build system,
-platform abstraction layer, public API, CI pipeline.
+Phase 0 complete. 46 files, 2525 lines. 7 test suites (48 tests) all passing.
+Event loop with epoll/kqueue backends, assembly coroutines (x86_64 + ARM64),
+arena+slab memory pools, multi-appender logger. Pushed to remote.
+</div>
+
+<div class="log-entry info">
+<div class="log-date">2025-05-26</div>
+Phase 1 started. Binary protocol parser + subject trie in parallel.
+Parser: state machine for CMQ binary frames (8-byte header + variable payload).
+Sublist: trie with * and > wildcards, rwlock thread safety.
+</div>
+
+<div class="log-entry success">
+<div class="log-date">2025-05-26</div>
+Parser + Sublist complete. 9 test suites (73 total tests) all passing.
+Parser: 11 tests covering byte-by-byte feed, multi-frame, encode, invalid input.
+Sublist: 14 tests covering exact match, * and > wildcards, 1K subjects, validation.
+Next: TCP server acceptor + client lifecycle + PUB/SUB routing.
 </div>
 
 </div>

@@ -27,7 +27,7 @@ foreach(TEST_SRC ${TEST_SOURCES})
     endif()
   endif()
   # Expose that we are building a shared component
-  target_compile_definitions(${TEST_NAME} PRIVATE CMQ_BUILDING_SHARED)
+  target_compile_definitions(${TEST_NAME} PRIVATE CMQ_BUILDING_SHARED _POSIX_C_SOURCE=200809L)
   # Add asCTest entry
   include(CTest)
   if(TARGET ${TEST_NAME})

@@ -75,11 +75,14 @@ static inline void cmq_test_fail(const char *file, int line, const char *expr) {
 #define TEST_MAIN() \
 int main(void) { \
     cmq_color_enabled = isatty((int)STDOUT_FILENO) ? 1 : 0; \
-    int tests_run = 0; \
-    int tests_failed = 0; \
+    volatile int tests_run = 0; \
+    volatile int tests_failed = 0; \
     clock_t wall_start = clock(); \
     cmq_current_suite = NULL; cmq_current_name = NULL; \
-    for (cmq_test_t *t = cmq_tests_head; t != NULL; t = t->next) { \
+    cmq_test_t *cmq_iter = cmq_tests_head; \
+    while (cmq_iter != NULL) { \
+        cmq_test_t *t = cmq_iter; \
+        cmq_iter = cmq_iter->next; \
         cmq_current_suite = t->suite; \
         cmq_current_name  = t->name; \
         clock_t tstart = clock(); \
@@ -102,8 +105,8 @@ int main(void) { \
         } \
     } \
     double total = (double)(clock() - wall_start) / CLOCKS_PER_SEC; \
-    printf("Total: %d tests, %d failures in %.6fs\n", tests_run, tests_failed, total); \
-    return (tests_failed ? 1 : 0); \
+    printf("Total: %d tests, %d failures in %.6fs\n", (int)tests_run, (int)tests_failed, total); \
+    return ((int)tests_failed ? 1 : 0); \
 }
 
 #endif // CMQ_TEST_H
