@@ -33,6 +33,8 @@ struct cmq_ev_loop {
     cmq_ev_watcher_t *watchers;
     int watchers_cap;
     cmq_ev_timer_t timers[CMQ_EV_MAX_TIMERS];
+    cmq_ev_tick_t post_tick;
+    void *post_tick_data;
 };
 
 static uint64_t cmq_ev_now_ms(void) {
@@ -227,6 +229,8 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             }
         }
 
+        if (loop->post_tick) loop->post_tick(loop->post_tick_data);
+
         if (timeout_ms >= 0) break;
     }
     return 0;
@@ -348,6 +352,8 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             }
         }
 
+        if (loop->post_tick) loop->post_tick(loop->post_tick_data);
+
         if (timeout_ms >= 0) break;
     }
     return 0;
@@ -403,4 +409,10 @@ void cmq_ev_stop(cmq_ev_loop_t *loop) {
 int cmq_ev_fd(cmq_ev_loop_t *loop) {
     if (!loop) return -1;
     return loop->backend_fd;
+}
+
+void cmq_ev_set_post_tick(cmq_ev_loop_t *loop, cmq_ev_tick_t tick, void *data) {
+    if (!loop) return;
+    loop->post_tick = tick;
+    loop->post_tick_data = data;
 }

@@ -1,9 +1,53 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_server.h"
 #include "cmq_platform.h"
+#include "cmq_coro.h"
+#ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
+#endif
 
 static __thread int cmq_current_worker_id = -1;
+
+static int wakeup_fd_create(void) {
+#ifdef CMQ_OS_LINUX
+    return eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+#else
+    int fds[2];
+    if (pipe(fds) != 0) return -1;
+    set_nonblocking(fds[0]);
+    set_nonblocking(fds[1]);
+    return fds[0];
+#endif
+}
+
+static void wakeup_fd_signal(int fd) {
+#ifdef CMQ_OS_LINUX
+    uint64_t val = 1;
+    write(fd, &val, sizeof(val));
+#else
+    char c = 1;
+    write(fd + 1, &c, 1);
+#endif
+}
+
+static void wakeup_fd_drain(int fd) {
+#ifdef CMQ_OS_LINUX
+    uint64_t val;
+    while (read(fd, &val, sizeof(val)) > 0) {}
+#else
+    char buf[64];
+    while (read(fd, buf, sizeof(buf)) > 0) {}
+#endif
+}
+
+static void wakeup_fd_close(int fd) {
+#ifdef CMQ_OS_LINUX
+    close(fd);
+#else
+    close(fd);
+    close(fd + 1);
+#endif
+}
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -17,9 +61,9 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
 static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len);
 
 static void worker_wakeup_cb(int fd, int events, void *data) {
+    (void)events;
     cmq_worker_t *w = (cmq_worker_t *)data;
-    uint64_t val;
-    while (read(fd, &val, sizeof(val)) > 0) {}
+    wakeup_fd_drain(fd);
 
     cmq_mutex_lock(&w->msg_lock);
     cmq_worker_msg_t *msg = w->msg_head;
@@ -67,13 +111,20 @@ static void worker_push_msg(cmq_worker_t *w, int target_fd,
     w->msg_tail = msg;
     cmq_mutex_unlock(&w->msg_lock);
 
-    uint64_t val = 1;
-    write(w->wakeup_fd, &val, sizeof(val));
+    wakeup_fd_signal(w->wakeup_fd);
+}
+
+static void worker_coro_tick(cmq_worker_t *w);
+
+static void worker_post_tick(void *data) {
+    cmq_worker_t *w = (cmq_worker_t *)data;
+    worker_coro_tick(w);
 }
 
 static void *worker_thread(void *arg) {
     cmq_worker_t *w = (cmq_worker_t *)arg;
     cmq_current_worker_id = w->worker_id;
+    cmq_ev_set_post_tick(w->ev_loop, worker_post_tick, w);
     cmq_ev_run(w->ev_loop, -1);
     return NULL;
 }
@@ -86,7 +137,7 @@ static cmq_worker_t *cmq_worker_create(cmq_server_t *srv, int id) {
     w->ev_loop = cmq_ev_loop_create(1024);
     if (!w->ev_loop) { free(w); return NULL; }
 
-    w->wakeup_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    w->wakeup_fd = wakeup_fd_create();
     if (w->wakeup_fd < 0) {
         cmq_ev_loop_destroy(w->ev_loop);
         free(w);
@@ -101,6 +152,10 @@ static cmq_worker_t *cmq_worker_create(cmq_server_t *srv, int id) {
     cmq_mutex_init(&w->msg_lock);
     w->msg_head = NULL;
     w->msg_tail = NULL;
+
+    w->coro_cap = CMQ_CORO_MAX_PER_WORKER;
+    w->coro_count = 0;
+    w->coro_pool = calloc((size_t)w->coro_cap, sizeof(cmq_coro_t *));
     return w;
 }
 
@@ -120,7 +175,14 @@ static void cmq_worker_destroy(cmq_worker_t *w) {
         free(msg);
         msg = next;
     }
-    if (w->wakeup_fd >= 0) { close(w->wakeup_fd); w->wakeup_fd = -1; }
+    if (w->wakeup_fd >= 0) { wakeup_fd_close(w->wakeup_fd); w->wakeup_fd = -1; }
+    if (w->coro_pool) {
+        for (int i = 0; i < w->coro_count; i++) {
+            cmq_coro_destroy(w->coro_pool[i]);
+        }
+        free(w->coro_pool);
+        w->coro_pool = NULL;
+    }
     if (w->ev_loop) { cmq_ev_loop_destroy(w->ev_loop); w->ev_loop = NULL; }
     cmq_mutex_destroy(&w->clients_lock);
     cmq_mutex_destroy(&w->msg_lock);
@@ -302,6 +364,142 @@ typedef struct {
     char queue_group[CMQ_MAX_QUEUE_GROUP];
 } cmq_sub_ref_t;
 
+typedef struct {
+    cmq_server_t *srv;
+    cmq_sublist_result_t result;
+    char subject[CMQ_MAX_SUBJECT];
+    const uint8_t *payload;
+    size_t payload_len;
+    const uint8_t *headers;
+    size_t headers_len;
+    size_t idx;
+    cmq_coro_t *coro;
+} cmq_deliver_ctx_t;
+
+static void deliver_coro_func(void *arg) {
+    cmq_deliver_ctx_t *ctx = (cmq_deliver_ctx_t *)arg;
+    cmq_server_t *srv = ctx->srv;
+    size_t batch_count = 0;
+    cmq_sub_ref_t *last_queue_ref = NULL;
+    char last_queue_group[CMQ_MAX_QUEUE_GROUP] = {0};
+
+    for (size_t i = ctx->idx; i < ctx->result.count; i++) {
+        cmq_sub_ref_t *ref = (cmq_sub_ref_t *)ctx->result.entries[i];
+
+        if (ref->queue_group[0] != '\0') {
+            if (strcmp(last_queue_group, ref->queue_group) == 0 &&
+                last_queue_ref != NULL) {
+                continue;
+            }
+            last_queue_ref = ref;
+            strncpy(last_queue_group, ref->queue_group, CMQ_MAX_QUEUE_GROUP - 1);
+            last_queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
+            cmq_send_message(ref->client, ref->sub_id, ctx->subject,
+                              ctx->payload, ctx->payload_len,
+                              ctx->headers, ctx->headers_len);
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            {
+                cmq_account_t *oacc = cmq_account_get(srv->accounts,
+                                                       ref->client->account_name);
+                if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)ctx->payload_len);
+            }
+            continue;
+        }
+
+        last_queue_group[0] = '\0';
+        last_queue_ref = NULL;
+        cmq_send_message(ref->client, ref->sub_id, ctx->subject,
+                          ctx->payload, ctx->payload_len,
+                          ctx->headers, ctx->headers_len);
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        {
+            cmq_account_t *oacc = cmq_account_get(srv->accounts,
+                                                   ref->client->account_name);
+            if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)ctx->payload_len);
+        }
+
+        batch_count++;
+        if (batch_count >= CMQ_CORO_DELIVER_BATCH) {
+            ctx->idx = i + 1;
+            cmq_coro_yield();
+            batch_count = 0;
+        }
+    }
+    free((void *)ctx->payload);
+    if (ctx->headers) free((void *)ctx->headers);
+}
+
+static void worker_coro_tick(cmq_worker_t *w) {
+    if (!w->coro_pool || w->coro_count == 0) return;
+    int write_idx = 0;
+    for (int i = 0; i < w->coro_count; i++) {
+        cmq_coro_t *coro = w->coro_pool[i];
+        cmq_coro_state_t state = cmq_coro_state(coro);
+        if (state == CMQ_CORO_DONE) {
+            cmq_deliver_ctx_t *ctx = (cmq_deliver_ctx_t *)coro->arg;
+            cmq_sublist_result_free(&ctx->result);
+            free(ctx);
+            cmq_coro_destroy(coro);
+            continue;
+        }
+        if (state == CMQ_CORO_READY || state == CMQ_CORO_SUSPENDED) {
+            cmq_coro_resume(coro);
+        }
+        state = cmq_coro_state(coro);
+        if (state != CMQ_CORO_DONE) {
+            w->coro_pool[write_idx++] = coro;
+        } else {
+            cmq_deliver_ctx_t *ctx = (cmq_deliver_ctx_t *)coro->arg;
+            cmq_sublist_result_free(&ctx->result);
+            free(ctx);
+            cmq_coro_destroy(coro);
+        }
+    }
+    w->coro_count = write_idx;
+}
+
+static void worker_coro_spawn_deliver(cmq_worker_t *w,
+                                       cmq_server_t *srv,
+                                       cmq_sublist_result_t *result,
+                                       const char *subject,
+                                       const uint8_t *payload,
+                                       size_t payload_len,
+                                       const uint8_t *headers,
+                                       size_t headers_len) {
+    cmq_deliver_ctx_t *ctx = calloc(1, sizeof(cmq_deliver_ctx_t));
+    if (!ctx) {
+        cmq_sublist_result_free(result);
+        return;
+    }
+    ctx->srv = srv;
+    ctx->result = *result;
+    strncpy(ctx->subject, subject, CMQ_MAX_SUBJECT - 1);
+    ctx->payload = payload;
+    ctx->payload_len = payload_len;
+    ctx->headers = headers;
+    ctx->headers_len = headers_len;
+    ctx->idx = 0;
+
+    cmq_coro_t *coro = cmq_coro_create(deliver_coro_func, ctx, 32768);
+    if (!coro) {
+        free(ctx);
+        return;
+    }
+    ctx->coro = coro;
+
+    if (w->coro_count < w->coro_cap) {
+        w->coro_pool[w->coro_count++] = coro;
+    } else {
+        cmq_coro_resume(coro);
+        cmq_deliver_ctx_t *dctx = (cmq_deliver_ctx_t *)coro->arg;
+        cmq_sublist_result_free(&dctx->result);
+        free(dctx);
+        cmq_coro_destroy(coro);
+    }
+}
+
 static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                             const cmq_frame_t *frame) {
     (void)c;
@@ -354,6 +552,35 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     cmq_sublist_match(srv->sublist, subject, &result);
+
+    if (result.count == 0) {
+        cmq_sublist_result_free(&result);
+        cmq_rwlock_unlock(&srv->sublist_lock);
+        return;
+    }
+
+    if (result.count > CMQ_CORO_DELIVER_BATCH && srv->num_workers > 0) {
+        cmq_worker_t *w = &srv->workers[cmq_current_worker_id >= 0 ?
+                                         cmq_current_worker_id : 0];
+        uint8_t *coro_payload = malloc(msg_len);
+        uint8_t *coro_headers = NULL;
+        if (!coro_payload) {
+            cmq_sublist_result_free(&result);
+            cmq_rwlock_unlock(&srv->sublist_lock);
+            return;
+        }
+        memcpy(coro_payload, msg_payload, msg_len);
+        if (headers_len > 0 && headers) {
+            coro_headers = malloc(headers_len);
+            if (coro_headers) memcpy(coro_headers, headers, headers_len);
+        }
+        cmq_rwlock_unlock(&srv->sublist_lock);
+
+        worker_coro_spawn_deliver(w, srv, &result, subject,
+                                   coro_payload, msg_len,
+                                   coro_headers, headers_len);
+        return;
+    }
 
     cmq_sub_ref_t *last_queue_ref = NULL;
     const char *last_queue_group = "";
@@ -876,7 +1103,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 close(srv->listen_fd);
                 return CMQ_ERR_NO_MEMORY;
             }
-            w->wakeup_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+            w->wakeup_fd = wakeup_fd_create();
             if (w->wakeup_fd < 0) {
                 cmq_ev_loop_destroy(w->ev_loop);
                 for (int j = 0; j < i; j++) {
@@ -896,6 +1123,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             cmq_mutex_init(&w->msg_lock);
             w->msg_head = NULL;
             w->msg_tail = NULL;
+            w->coro_cap = CMQ_CORO_MAX_PER_WORKER;
+            w->coro_count = 0;
+            w->coro_pool = calloc((size_t)w->coro_cap, sizeof(cmq_coro_t *));
         }
         for (int i = 0; i < nthreads; i++) {
             cmq_thread_create(&srv->workers[i].thread, worker_thread, &srv->workers[i]);

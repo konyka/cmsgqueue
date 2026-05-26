@@ -15,6 +15,7 @@
 typedef struct cmq_ev_loop cmq_ev_loop_t;
 
 typedef void (*cmq_ev_cb_t)(int fd, int events, void *data);
+typedef void (*cmq_ev_tick_t)(void *data);
 
 typedef struct {
     int timer_id;
@@ -38,6 +39,7 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id);
 
 int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms);
 void cmq_ev_stop(cmq_ev_loop_t *loop);
+void cmq_ev_set_post_tick(cmq_ev_loop_t *loop, cmq_ev_tick_t tick, void *data);
 
 int cmq_ev_fd(cmq_ev_loop_t *loop);
 
