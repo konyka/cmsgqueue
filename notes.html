@@ -359,7 +359,7 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <tr><td>Phase 2</td><td>Queue Groups, Headers, Auth, Monitoring</td><td><span class="status status-done">DONE</span></td></tr>
 <tr><td>Phase 3</td><td>Persistence: memstore, filestore, streams</td><td><span class="status status-done">DONE</span></td></tr>
 <tr><td>Phase 4</td><td>Clustering: membership, routing, gateway, leaf nodes</td><td><span class="status status-done">DONE</span></td></tr>
-<tr><td>Phase 5</td><td>Enterprise: accounts, TLS, MQTT, WebSocket</td><td><span class="status status-todo">TODO</span></td></tr>
+<tr><td>Phase 5</td><td>Enterprise: accounts, TLS, MQTT, WebSocket</td><td><span class="status status-done">DONE</span></td></tr>
 </table>
 </div>
 
@@ -445,6 +445,17 @@ Gateway: cross-cluster communication, remote cluster registry, per-cluster conne
 Leaf nodes: lightweight edge connections to hub, local subscription tracking, accept/remove leaf clients.
 Bug fix: filestore tests cleaned stale /tmp data between runs (append mode accumulated state).
 14 test suites (117+ tests) all passing.
+</div>
+
+<div class="log-entry success">
+<div class="log-date">2025-05-26</div>
+Phase 5 complete. Full enterprise feature set implemented.
+Accounts: multi-tenant isolation with per-account stats, export/import permissions with wildcard matching.
+TLS: config-driven TLS layer with cert/key/ca/verify settings, server/client session lifecycle.
+MQTT bridge: topic mapping (MQTT topic ↔ CMQ subject), CONNECT/PUBLISH/SUBSCRIBE/PINGREQ encoding.
+WebSocket: RFC 6455 frame parser/serializer, mask/unmask, HTTP upgrade handshake with SHA-1 accept key.
+OpenSSL linked for WebSocket accept key generation.
+15 test suites (140+ tests) all passing. All 5 phases complete.
 </div>
 
 </div>
@@ -572,5 +583,93 @@ Bug fix: filestore tests cleaned stale /tmp data between runs (append mode accum
 </table>
 </div>
 
+<h2>Phase 5: Enterprise Features</h2>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">5.1 Accounts (Multi-Tenant Isolation)</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_account.h/c</span></td><td>✅</td><td>Account manager with create/delete/get, max 128 accounts</td></tr>
+<tr><td><span class="component-name">per-account stats</span></td><td>✅</td><td>connections, subscriptions, messages_in/out, bytes_in/out</td></tr>
+<tr><td><span class="component-name">export/import</span></td><td>✅</td><td>Per-account export/import tables with wildcard subject matching</td></tr>
+<tr><td><span class="component-name">subject_match</span></td><td>✅</td><td>Supports exact match, ">" catch-all, "prefix.>" prefix wildcard</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">5.2 TLS (Secure Connections)</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_tls.h/c</span></td><td>✅</td><td>TLS config with cert/key/ca/verify/server_name</td></tr>
+<tr><td><span class="component-name">session lifecycle</span></td><td>✅</td><td>Server/client session create, handshake, read/write, destroy</td></tr>
+<tr><td><span class="component-name">cmq_tls_configured</span></td><td>✅</td><td>Checks cert+key both set before allowing sessions</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">5.3 MQTT Bridge</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_mqtt.h/c</span></td><td>✅</td><td>Bridge with topic mapping (MQTT topic ↔ CMQ subject), max 64 mappings</td></tr>
+<tr><td><span class="component-name">protocol encoding</span></td><td>✅</td><td>CONNECT, PUBLISH, SUBSCRIBE, PINGREQ with remaining-length encoding</td></tr>
+<tr><td><span class="component-name">topic conversion</span></td><td>✅</td><td>MQTT "/" separator ↔ CMQ "." separator bidirectional</td></tr>
+<tr><td><span class="component-name">decode</span></td><td>✅</td><td>CONNACK decode, packet type detection</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">5.4 WebSocket Transport</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ws.h/c</span></td><td>✅</td><td>RFC 6455 frame parser/serializer with masked/unmasked support</td></tr>
+<tr><td><span class="component-name">frame parsing</span></td><td>✅</td><td>Handles 7-bit, 16-bit, 64-bit payload lengths, mask key extraction</td></tr>
+<tr><td><span class="component-name">HTTP upgrade</span></td><td>✅</td><td>Parse Sec-WebSocket-Key from HTTP request, generate accept key (SHA-1 + base64)</td></tr>
+<tr><td><span class="component-name">cmq_ws_send</span></td><td>✅</td><td>Send text/binary/close frames with proper header construction</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Phase 5 Tests</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Test</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">account.create_destroy</span></td><td>✅</td><td>Manager lifecycle</td></tr>
+<tr><td><span class="component-name">account.create_delete</span></td><td>✅</td><td>CRUD with idempotent create</td></tr>
+<tr><td><span class="component-name">account.stats</span></td><td>✅</td><td>Connection, subscription, message, byte counters</td></tr>
+<tr><td><span class="component-name">account.exports_imports</span></td><td>✅</td><td>Add/remove/check with wildcard "prefix.>" matching</td></tr>
+<tr><td><span class="component-name">tls.config_create_destroy</span></td><td>✅</td><td>Config lifecycle</td></tr>
+<tr><td><span class="component-name">tls.config_set_fields</span></td><td>✅</td><td>All config fields + configured check</td></tr>
+<tr><td><span class="component-name">tls.session_lifecycle</span></td><td>✅</td><td>Pipe-based session read/write verification</td></tr>
+<tr><td><span class="component-name">mqtt.bridge_create_destroy</span></td><td>✅</td><td>Bridge lifecycle</td></tr>
+<tr><td><span class="component-name">mqtt.mapping</span></td><td>✅</td><td>Add/remove/find with dedup and qos update</td></tr>
+<tr><td><span class="component-name">mqtt.topic_conversion</span></td><td>✅</td><td>MQTT "/" ↔ CMQ "." bidirectional</td></tr>
+<tr><td><span class="component-name">mqtt.encode_*</span></td><td>✅</td><td>CONNECT, PUBLISH, SUBSCRIBE, PINGREQ encoding + type decode</td></tr>
+<tr><td><span class="component-name">mqtt.bridge_info</span></td><td>✅</td><td>Info struct with all fields</td></tr>
+<tr><td><span class="component-name">ws.server_create_destroy</span></td><td>✅</td><td>Server lifecycle</td></tr>
+<tr><td><span class="component-name">ws.frame_parse_small</span></td><td>✅</td><td>Small unmasked text frame</td></tr>
+<tr><td><span class="component-name">ws.frame_parse_masked</span></td><td>✅</td><td>Masked binary frame with mask/unmask roundtrip</td></tr>
+<tr><td><span class="component-name">ws.frame_serialize</span></td><td>✅</td><td>Binary frame serialization</td></tr>
+<tr><td><span class="component-name">ws.mask_unmask</span></td><td>✅</td><td>Mask/unmask XOR roundtrip</td></tr>
+<tr><td><span class="component-name">ws.parse_http_upgrade</span></td><td>✅</td><td>Sec-WebSocket-Key extraction from HTTP request</td></tr>
+<tr><td><span class="component-name">ws.build_response</span></td><td>✅</td><td>101 Switching Protocols response generation</td></tr>
+<tr><td><span class="component-name">ws.parse_medium_frame</span></td><td>✅</td><td>126-byte extended length frame</td></tr>
+</table>
+</div>
+
+</div>
 </body>
 </html>
