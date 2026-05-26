@@ -721,7 +721,22 @@ All 15 test suites passing, 0 warnings.
 <tr><td><span class="component-name">ws_upgrade_detection</span></td><td>✅</td><td>Server auto-detects WebSocket upgrade, returns 101 Switching Protocols</td></tr>
 </table>
 <div class="log-entry success">
-<span class="log-date">Commit (pending)</span> — <strong>16/16 test suites pass, 0 failures.</strong> All integration tests green. Protocol changed to client-speaks-first for clean WebSocket compatibility.
+<span class="log-date">Commit b0280b8 + 3bec5db + 8170334</span> — <strong>16/16 test suites pass, 0 failures.</strong> All integration tests green. Protocol changed to client-speaks-first for clean WebSocket compatibility.
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Memory Leak Fix (ASan Verified)</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_sublist_free_data</span></td><td>✅</td><td>Traverses trie nodes and frees all cmq_sub_ref_t entries before sublist destroy. Keeps cmq_sublist_destroy generic (no ownership of data pointers).</td></tr>
+<tr><td><span class="component-name">ASan clean build</span></td><td>✅</td><td>All 16 test suites pass with -fsanitize=address. Zero memory leaks, zero use-after-free, zero buffer overflows.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>ASan-verified: 16/16 pass, 0 leaks.</strong> cmq_sublist_free_data added to free sub_ref entries on server shutdown.
 </div>
 </div>
 
