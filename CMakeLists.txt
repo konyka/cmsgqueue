@@ -59,7 +59,6 @@ set(CMQ_CORE_SOURCES
     src/core/cmq_mpool.c
     src/core/cmq_slab.c
     src/core/cmq_log.c
-    src/core/cmq_thread.c
     src/core/cmq_queue.c
 )
 
@@ -83,7 +82,6 @@ set(CMQ_PROTO_SOURCES
 
 set(CMQ_SERVER_SOURCES
     src/server/cmq_server.c
-    src/server/cmq_client.c
     src/server/cmq_sublist.c
     src/server/cmq_config.c
 )

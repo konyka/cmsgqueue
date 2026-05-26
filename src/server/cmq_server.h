@@ -11,9 +11,9 @@
 #include "cmq_account.h"
 #include "cmq_route.h"
 #include "cmq_ws.h"
+#include "cmq_coro.h"
 
 #include <sys/socket.h>
-#include <sys/eventfd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -24,10 +24,16 @@
 #include <stdio.h>
 #include <signal.h>
 
+#ifdef CMQ_OS_LINUX
+#include <sys/eventfd.h>
+#endif
+
 #define CMQ_CLIENT_BUF_SIZE   4096
 #define CMQ_MAX_SUBJECT       256
 #define CMQ_MAX_QUEUE_GROUP   64
 #define CMQ_MAX_SUBS_PER_CLIENT 1024
+#define CMQ_CORO_DELIVER_BATCH 16   /* yield every N deliveries for fairness */
+#define CMQ_CORO_MAX_PER_WORKER 256 /* max concurrent coroutines per worker */
 
 typedef enum {
     CMQ_CLIENT_INIT = 0,
@@ -95,6 +101,10 @@ typedef struct cmq_worker {
     cmq_worker_msg_t *msg_head;
     cmq_worker_msg_t *msg_tail;
     cmq_mutex_t msg_lock;
+
+    cmq_coro_t **coro_pool;
+    int coro_count;
+    int coro_cap;
 } cmq_worker_t;
 
 struct cmq_server {
