@@ -89,6 +89,12 @@ cmq_status_t cmq_server_run(cmq_server_t *server);
 void cmq_server_stop(cmq_server_t *server);
 
 /**
+ * Gracefully drain all connections and stop the server.
+ * Sends DISCONNECT to all clients, waits up to drain_timeout_ms for completion.
+ */
+void cmq_server_drain(cmq_server_t *server, int drain_timeout_ms);
+
+/**
  * Destroy the server and free all resources.
  */
 void cmq_server_destroy(cmq_server_t *server);

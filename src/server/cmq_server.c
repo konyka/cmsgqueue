@@ -358,6 +358,51 @@ static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
     free(buf);
 }
 
+static void cmq_send_request_message(cmq_client_t *c, uint32_t sub_id,
+                                       const char *subject,
+                                       const char *reply_to,
+                                       const uint8_t *payload, size_t payload_len) {
+    size_t subject_len = strlen(subject);
+    size_t reply_len = reply_to ? strlen(reply_to) : 0;
+    size_t body_len = 4 + 2 + subject_len + 2 + reply_len + 4 + payload_len;
+    size_t buf_size = sizeof(cmq_frame_hdr_t) + body_len;
+    uint8_t *buf = malloc(buf_size);
+    if (!buf) return;
+
+    uint8_t *p = buf + sizeof(cmq_frame_hdr_t);
+    p[0] = (sub_id >> 24) & 0xFF;
+    p[1] = (sub_id >> 16) & 0xFF;
+    p[2] = (sub_id >> 8) & 0xFF;
+    p[3] = sub_id & 0xFF;
+    p += 4;
+
+    p[0] = (subject_len >> 8) & 0xFF;
+    p[1] = subject_len & 0xFF;
+    p += 2;
+    memcpy(p, subject, subject_len);
+    p += subject_len;
+
+    p[0] = (reply_len >> 8) & 0xFF;
+    p[1] = reply_len & 0xFF;
+    p += 2;
+    if (reply_len > 0) memcpy(p, reply_to, reply_len);
+    p += reply_len;
+
+    p[0] = ((uint32_t)payload_len >> 24) & 0xFF;
+    p[1] = ((uint32_t)payload_len >> 16) & 0xFF;
+    p[2] = ((uint32_t)payload_len >> 8) & 0xFF;
+    p[3] = (uint32_t)payload_len & 0xFF;
+    p += 4;
+    memcpy(p, payload, payload_len);
+
+    size_t len = cmq_frame_encode(buf, buf_size, CMQ_OP_MESSAGE, 0,
+                                    buf + sizeof(cmq_frame_hdr_t), body_len);
+    if (len > 0) {
+        cmq_client_send(c, buf, len);
+    }
+    free(buf);
+}
+
 typedef struct {
     cmq_client_t *client;
     uint32_t sub_id;
@@ -717,6 +762,105 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
     if (len > 0) cmq_client_send(c, ack, len);
 }
 
+static void handle_request(cmq_server_t *srv, cmq_client_t *c,
+                            const cmq_frame_t *frame) {
+    if (!frame->payload || frame->payload_len < 4) {
+        cmq_send_error(c, "invalid request");
+        return;
+    }
+
+    size_t offset = 0;
+    uint16_t subject_len = ((uint16_t)frame->payload[offset] << 8) |
+                            frame->payload[offset + 1];
+    offset += 2;
+    if (offset + subject_len > frame->payload_len) {
+        cmq_send_error(c, "subject too long");
+        return;
+    }
+    char subject[CMQ_MAX_SUBJECT];
+    if (subject_len >= CMQ_MAX_SUBJECT) subject_len = CMQ_MAX_SUBJECT - 1;
+    memcpy(subject, frame->payload + offset, subject_len);
+    subject[subject_len] = '\0';
+    offset += subject_len;
+
+    uint16_t reply_len = 0;
+    char reply_to[CMQ_MAX_SUBJECT] = {0};
+    if (offset + 2 <= frame->payload_len) {
+        reply_len = ((uint16_t)frame->payload[offset] << 8) |
+                     frame->payload[offset + 1];
+        offset += 2;
+        if (reply_len > 0 && offset + reply_len <= frame->payload_len) {
+            if (reply_len >= CMQ_MAX_SUBJECT) reply_len = CMQ_MAX_SUBJECT - 1;
+            memcpy(reply_to, frame->payload + offset, reply_len);
+            reply_to[reply_len] = '\0';
+            offset += reply_len;
+        }
+    }
+
+    const uint8_t *msg_payload = frame->payload + offset;
+    size_t msg_len = frame->payload_len - offset;
+
+    cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
+
+    cmq_rwlock_rdlock(&srv->sublist_lock);
+    cmq_sublist_result_t result;
+    cmq_sublist_match(srv->sublist, subject, &result);
+
+    for (size_t i = 0; i < result.count; i++) {
+        cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
+        if (ref->queue_group[0] != '\0' && i > 0) {
+            cmq_sub_ref_t *prev = (cmq_sub_ref_t *)result.entries[i - 1];
+            if (strcmp(ref->queue_group, prev->queue_group) == 0) continue;
+        }
+        cmq_send_request_message(ref->client, ref->sub_id, subject,
+                                  reply_to, msg_payload, msg_len);
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                  CMQ_ATOMIC_RELAXED);
+    }
+    cmq_sublist_result_free(&result);
+    cmq_rwlock_unlock(&srv->sublist_lock);
+
+    uint8_t ack[4] = {0};
+    size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
+    if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+}
+
+static void handle_response(cmq_server_t *srv, cmq_client_t *c,
+                             const cmq_frame_t *frame) {
+    if (!frame->payload || frame->payload_len < 4) {
+        cmq_send_error(c, "invalid response");
+        return;
+    }
+
+    size_t offset = 0;
+    uint16_t subject_len = ((uint16_t)frame->payload[offset] << 8) |
+                            frame->payload[offset + 1];
+    offset += 2;
+    if (offset + subject_len > frame->payload_len) return;
+    char subject[CMQ_MAX_SUBJECT];
+    if (subject_len >= CMQ_MAX_SUBJECT) subject_len = CMQ_MAX_SUBJECT - 1;
+    memcpy(subject, frame->payload + offset, subject_len);
+    subject[subject_len] = '\0';
+    offset += subject_len;
+
+    const uint8_t *msg_payload = frame->payload + offset;
+    size_t msg_len = frame->payload_len - offset;
+
+    cmq_rwlock_rdlock(&srv->sublist_lock);
+    cmq_sublist_result_t result;
+    cmq_sublist_match(srv->sublist, subject, &result);
+
+    for (size_t i = 0; i < result.count; i++) {
+        cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
+        cmq_send_message(ref->client, ref->sub_id, subject,
+                          msg_payload, msg_len, NULL, 0);
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                  CMQ_ATOMIC_RELAXED);
+    }
+    cmq_sublist_result_free(&result);
+    cmq_rwlock_unlock(&srv->sublist_lock);
+}
+
 static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                           const cmq_frame_t *frame) {
     switch (frame->hdr.op) {
@@ -760,6 +904,12 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         break;
     case CMQ_OP_PUBLISH:
         handle_publish(srv, c, frame);
+        break;
+    case CMQ_OP_REQUEST:
+        handle_request(srv, c, frame);
+        break;
+    case CMQ_OP_RESPONSE:
+        handle_response(srv, c, frame);
         break;
     case CMQ_OP_SUBSCRIBE:
         handle_subscribe(srv, c, frame);
@@ -1149,6 +1299,49 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     }
 
     return CMQ_OK;
+}
+
+void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
+    if (!srv) return;
+
+    if (srv->listen_fd >= 0) {
+        cmq_ev_del(srv->ev_loop, srv->listen_fd);
+        close(srv->listen_fd);
+        srv->listen_fd = -1;
+    }
+
+    uint8_t disc[16];
+    size_t disc_len = cmq_frame_encode(disc, sizeof(disc), CMQ_OP_DISCONNECT, 0, NULL, 0);
+
+    cmq_mutex_lock(&srv->clients_lock);
+    for (int i = 0; i < srv->clients_count; i++) {
+        cmq_client_t *c = srv->clients[i];
+        if (c && c->state == CMQ_CLIENT_CONNECTED) {
+            if (disc_len > 0) cmq_client_send_direct(c, disc, disc_len);
+            c->state = CMQ_CLIENT_CLOSING;
+        }
+    }
+    cmq_mutex_unlock(&srv->clients_lock);
+
+    if (srv->workers) {
+        for (int i = 0; i < srv->num_workers; i++) {
+            cmq_worker_t *w = &srv->workers[i];
+            cmq_mutex_lock(&w->clients_lock);
+            for (int j = 0; j < w->clients_count; j++) {
+                cmq_client_t *c = w->clients[j];
+                if (c && c->state == CMQ_CLIENT_CONNECTED) {
+                    if (disc_len > 0) cmq_client_send_direct(c, disc, disc_len);
+                    c->state = CMQ_CLIENT_CLOSING;
+                }
+            }
+            cmq_mutex_unlock(&w->clients_lock);
+        }
+    }
+
+    struct timespec ts = {0, (long)drain_timeout_ms * 1000000L};
+    nanosleep(&ts, NULL);
+
+    cmq_server_stop(srv);
 }
 
 void cmq_server_stop(cmq_server_t *srv) {
