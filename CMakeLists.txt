@@ -94,6 +94,13 @@ set(CMQ_STORE_SOURCES
     src/store/cmq_filestore.c
 )
 
+set(CMQ_CLUSTER_SOURCES
+    src/cluster/cmq_cluster.c
+    src/cluster/cmq_route.c
+    src/cluster/cmq_gateway.c
+    src/cluster/cmq_leaf.c
+)
+
 # Collect all sources
 set(CMQ_ALL_SOURCES
     ${CMQ_CORE_SOURCES}
@@ -102,6 +109,7 @@ set(CMQ_ALL_SOURCES
     ${CMQ_PROTO_SOURCES}
     ${CMQ_SERVER_SOURCES}
     ${CMQ_STORE_SOURCES}
+    ${CMQ_CLUSTER_SOURCES}
 )
 
 # ---------------------------------------------------------------------------
@@ -122,6 +130,7 @@ target_include_directories(cmsgqueue
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/proto>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/server>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/store>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/cluster>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )

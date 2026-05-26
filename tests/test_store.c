@@ -131,6 +131,8 @@ TEST(stream, max_bytes_eviction) {
 TEST(filestore, create_destroy) {
     const char *dir = "/tmp/cmq_fs_test1";
     mkdir(dir, 0755);
+    remove("/tmp/cmq_fs_test1/test.data");
+    remove("/tmp/cmq_fs_test1/test.idx");
     cmq_filestore_t *fs = cmq_filestore_create(dir, "test");
     ASSERT_NOT_NULL(fs);
     cmq_filestore_destroy(fs);
@@ -139,6 +141,8 @@ TEST(filestore, create_destroy) {
 TEST(filestore, append_read) {
     const char *dir = "/tmp/cmq_fs_test2";
     mkdir(dir, 0755);
+    remove("/tmp/cmq_fs_test2/rw.data");
+    remove("/tmp/cmq_fs_test2/rw.idx");
     cmq_filestore_t *fs = cmq_filestore_create(dir, "rw");
     ASSERT_NOT_NULL(fs);
 
@@ -166,6 +170,8 @@ TEST(filestore, append_read) {
 TEST(filestore, persistence) {
     const char *dir = "/tmp/cmq_fs_test3";
     mkdir(dir, 0755);
+    remove("/tmp/cmq_fs_test3/persist.data");
+    remove("/tmp/cmq_fs_test3/persist.idx");
     {
         cmq_filestore_t *fs = cmq_filestore_create(dir, "persist");
         ASSERT_NOT_NULL(fs);
@@ -190,6 +196,8 @@ TEST(filestore, persistence) {
 TEST(filestore, read_nonexistent) {
     const char *dir = "/tmp/cmq_fs_test4";
     mkdir(dir, 0755);
+    remove("/tmp/cmq_fs_test4/empty.data");
+    remove("/tmp/cmq_fs_test4/empty.idx");
     cmq_filestore_t *fs = cmq_filestore_create(dir, "empty");
     ASSERT_NOT_NULL(fs);
     uint8_t *data = NULL;
