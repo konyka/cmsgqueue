@@ -795,7 +795,24 @@ All 15 test suites passing, 0 warnings.
 <tr><td><span class="component-name">test_coro_integration</span></td><td>✅</td><td>2 tests: high_fanout_coro_delivery (20 subs, 1 pub, all receive), multi_publish_fanout (20 subs, 5 pubs, all receive all 5). Multi-worker (2-4 threads).</td></tr>
 </table>
 <div class="log-entry success">
-<span class="log-date">Commit (pending)</span> — <strong>19/19 test suites pass.</strong> Coroutines integrated into server for high-fanout delivery. Cross-platform wakeup_fd. Stub cleanup. 0 warnings.
+<span class="log-date">Commit 5cda299</span> — <strong>19/19 test suites pass.</strong> Coroutines integrated into server for high-fanout delivery. Cross-platform wakeup_fd. Stub cleanup. 0 warnings.
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Request-Reply &amp; Graceful Shutdown</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CMQ_OP_REQUEST (0x0F)</span></td><td>✅</td><td>Request op: [2B subject_len][subject][2B reply_len][reply_to][payload]. Server matches subscribers, sends MESSAGE with reply_to embedded. Returns PUBACK to requester.</td></tr>
+<tr><td><span class="component-name">CMQ_OP_RESPONSE (0x10)</span></td><td>✅</td><td>Response op: [2B subject_len][subject][payload]. Delivered like PUBLISH to reply_to subscribers. Enables request-reply pattern.</td></tr>
+<tr><td><span class="component-name">cmq_server_drain()</span></td><td>✅</td><td>Graceful shutdown: closes listen socket, sends DISCONNECT to all clients, waits drain_timeout_ms, then stops event loops. Works for both single-thread and multi-worker.</td></tr>
+<tr><td><span class="component-name">test_request_reply</span></td><td>✅</td><td>2 tests: basic_request_response (client→service→reply listener), multi_responder (3 services, 6 requests, fan-out verification).</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>20/20 test suites pass.</strong> Request-reply pattern implemented. Graceful drain/shutdown. 0 warnings.
 </div>
 </div>
 
