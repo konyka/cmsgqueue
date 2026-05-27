@@ -75,6 +75,7 @@ typedef struct cmq_client {
     int ws_upgrade_done;
     int info_sent;
     int worker_id;
+    uint64_t last_activity_ms;
 
     struct cmq_client *next;
 } cmq_client_t;

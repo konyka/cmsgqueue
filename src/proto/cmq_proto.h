@@ -32,7 +32,9 @@ typedef enum {
     CMQ_OP_ERROR       = 0x0D,
     CMQ_OP_INFO        = 0x0E,
     CMQ_OP_REQUEST     = 0x0F,
-    CMQ_OP_RESPONSE    = 0x10
+    CMQ_OP_RESPONSE    = 0x10,
+    CMQ_OP_STATS       = 0x11,
+    CMQ_OP_BATCH       = 0x12
 } cmq_op_t;
 
 typedef struct __attribute__((packed)) {

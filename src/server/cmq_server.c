@@ -8,6 +8,12 @@
 
 static __thread int cmq_current_worker_id = -1;
 
+static uint64_t srv_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
 static int wakeup_fd_create(void) {
 #ifdef CMQ_OS_LINUX
     return eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
@@ -222,6 +228,7 @@ static cmq_client_t *cmq_client_create(int fd, uint32_t id,
     c->subs = NULL;
     c->username = NULL;
     c->next = NULL;
+    c->last_activity_ms = srv_now_ms();
     return c;
 }
 
@@ -861,6 +868,107 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     cmq_rwlock_unlock(&srv->sublist_lock);
 }
 
+static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
+    uint64_t conn = cmq_atomic_load_u64(&srv->stat_connections, CMQ_ATOMIC_RELAXED);
+    uint64_t msg_in = cmq_atomic_load_u64(&srv->stat_messages_in, CMQ_ATOMIC_RELAXED);
+    uint64_t msg_out = cmq_atomic_load_u64(&srv->stat_messages_out, CMQ_ATOMIC_RELAXED);
+    uint64_t bytes_in = cmq_atomic_load_u64(&srv->stat_bytes_in, CMQ_ATOMIC_RELAXED);
+    uint64_t bytes_out = cmq_atomic_load_u64(&srv->stat_bytes_out, CMQ_ATOMIC_RELAXED);
+    uint64_t subs = cmq_atomic_load_u64(&srv->stat_subscriptions, CMQ_ATOMIC_RELAXED);
+
+    int active = 0;
+    cmq_mutex_lock(&srv->clients_lock);
+    active += srv->clients_count;
+    cmq_mutex_unlock(&srv->clients_lock);
+    if (srv->workers) {
+        for (int i = 0; i < srv->num_workers; i++) {
+            cmq_mutex_lock(&srv->workers[i].clients_lock);
+            active += srv->workers[i].clients_count;
+            cmq_mutex_unlock(&srv->workers[i].clients_lock);
+        }
+    }
+
+    uint8_t payload[7 * 8 + 4];
+    size_t off = 0;
+    #define WRITE_U64(v) do { \
+        for (int b = 56; b >= 0; b -= 8) payload[off++] = (uint8_t)((v) >> b); \
+    } while(0)
+    WRITE_U64(conn);
+    WRITE_U64(msg_in);
+    WRITE_U64(msg_out);
+    WRITE_U64(bytes_in);
+    WRITE_U64(bytes_out);
+    WRITE_U64(subs);
+    payload[off++] = (active >> 24) & 0xFF;
+    payload[off++] = (active >> 16) & 0xFF;
+    payload[off++] = (active >> 8) & 0xFF;
+    payload[off++] = active & 0xFF;
+    #undef WRITE_U64
+
+    uint8_t buf[64];
+    size_t len = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_STATS, 0, payload, off);
+    if (len > 0) cmq_client_send(c, buf, len);
+}
+
+static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
+                          const cmq_frame_t *frame) {
+    if (!frame->payload || frame->payload_len < 2) {
+        cmq_send_error(c, "invalid batch");
+        return;
+    }
+    uint16_t count = ((uint16_t)frame->payload[0] << 8) | frame->payload[1];
+    size_t offset = 2;
+
+    for (uint16_t msg = 0; msg < count && offset < frame->payload_len; msg++) {
+        if (offset + 2 > frame->payload_len) break;
+        uint16_t subject_len = ((uint16_t)frame->payload[offset] << 8) |
+                                frame->payload[offset + 1];
+        offset += 2;
+        if (offset + subject_len > frame->payload_len) break;
+        char subject[CMQ_MAX_SUBJECT];
+        if (subject_len >= CMQ_MAX_SUBJECT) subject_len = CMQ_MAX_SUBJECT - 1;
+        memcpy(subject, frame->payload + offset, subject_len);
+        subject[subject_len] = '\0';
+        offset += subject_len;
+
+        if (offset + 2 > frame->payload_len) break;
+        uint16_t reply_len = ((uint16_t)frame->payload[offset] << 8) |
+                              frame->payload[offset + 1];
+        offset += 2 + reply_len;
+
+        if (offset + 4 > frame->payload_len) break;
+        uint32_t payload_len = ((uint32_t)frame->payload[offset] << 24) |
+                                ((uint32_t)frame->payload[offset + 1] << 16) |
+                                ((uint32_t)frame->payload[offset + 2] << 8) |
+                                (uint32_t)frame->payload[offset + 3];
+        offset += 4;
+        if (offset + payload_len > frame->payload_len) {
+            payload_len = (uint32_t)(frame->payload_len - offset);
+        }
+        const uint8_t *msg_payload = frame->payload + offset;
+        offset += payload_len;
+
+        cmq_rwlock_rdlock(&srv->sublist_lock);
+        cmq_sublist_result_t result;
+        cmq_sublist_match(srv->sublist, subject, &result);
+        for (size_t i = 0; i < result.count; i++) {
+            cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
+            if (ref->queue_group[0] != '\0' && i > 0) {
+                cmq_sub_ref_t *prev = (cmq_sub_ref_t *)result.entries[i - 1];
+                if (strcmp(ref->queue_group, prev->queue_group) == 0) continue;
+            }
+            cmq_send_message(ref->client, ref->sub_id, subject,
+                              msg_payload, payload_len, NULL, 0);
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        }
+        cmq_sublist_result_free(&result);
+        cmq_rwlock_unlock(&srv->sublist_lock);
+
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
+    }
+}
+
 static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                           const cmq_frame_t *frame) {
     switch (frame->hdr.op) {
@@ -919,6 +1027,12 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         break;
     case CMQ_OP_DISCONNECT:
         c->state = CMQ_CLIENT_CLOSING;
+        break;
+    case CMQ_OP_STATS:
+        handle_stats(srv, c);
+        break;
+    case CMQ_OP_BATCH:
+        handle_batch(srv, c, frame);
         break;
     default:
         cmq_send_error(c, "unknown op");
@@ -1021,6 +1135,7 @@ static void client_read_cb(int fd, int events, void *data) {
         }
         return;
     }
+    c->last_activity_ms = srv_now_ms();
 
     if (!c->is_websocket && !c->ws_upgrade_done && n > 0 && c->read_buf[0] == 'G') {
         if (handle_ws_upgrade(c, c->read_buf, (size_t)n) == 0) {
@@ -1064,6 +1179,26 @@ static void client_read_cb(int fd, int events, void *data) {
         if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) break;
         rc = cmq_parser_next(c->parser);
     }
+}
+
+static void keepalive_timer_cb(int timer_id, int events, void *data) {
+    (void)timer_id;
+    (void)events;
+    cmq_server_t *srv = (cmq_server_t *)data;
+    int interval = srv->config.ping_interval_ms;
+    if (interval <= 0) return;
+    uint64_t timeout_ms = (uint64_t)interval * 2;
+    uint64_t now = srv_now_ms();
+
+    cmq_mutex_lock(&srv->clients_lock);
+    for (int i = 0; i < srv->clients_count; i++) {
+        cmq_client_t *c = srv->clients[i];
+        if (c && c->state == CMQ_CLIENT_CONNECTED &&
+            (now - c->last_activity_ms) > timeout_ms) {
+            c->state = CMQ_CLIENT_CLOSING;
+        }
+    }
+    cmq_mutex_unlock(&srv->clients_lock);
 }
 
 static void accept_cb(int fd, int events, void *data) {
@@ -1228,6 +1363,12 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     }
 
     cmq_ev_add(srv->ev_loop, srv->listen_fd, CMQ_EV_READ, accept_cb, srv);
+
+    if (srv->config.ping_interval_ms > 0) {
+        cmq_ev_timer_add(srv->ev_loop, (uint64_t)srv->config.ping_interval_ms,
+                          (uint64_t)srv->config.ping_interval_ms,
+                          keepalive_timer_cb, srv);
+    }
 
     int nthreads = srv->config.num_threads;
     if (nthreads > 1) {
