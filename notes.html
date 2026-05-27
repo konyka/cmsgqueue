@@ -829,7 +829,24 @@ All 15 test suites passing, 0 warnings.
 <tr><td><span class="component-name">test_server_ops</span></td><td>✅</td><td>3 tests: stats_query (verify metrics response), batch_publish (2 subjects in 1 frame, both received), keepalive_disconnect (idle client disconnected after timeout).</td></tr>
 </table>
 <div class="log-entry success">
-<span class="log-date">Commit (pending)</span> — <strong>21/21 test suites pass.</strong> Stats API, batch publish, keepalive idle timeout. 0 warnings.
+<span class="log-date">Commit 743b889</span> — <strong>21/21 test suites pass.</strong> Stats API, batch publish, keepalive idle timeout. 0 warnings.
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Cluster Route Forwarding &amp; TLS Integration</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">Route forwarding</span></td><td>✅</td><td>handle_publish broadcasts raw PUBLISH frame to all route connections via cmq_route_broadcast(). Config: cluster_name + cluster_node_id + routes[] array. Connected on server startup.</td></tr>
+<tr><td><span class="component-name">TLS accept</span></td><td>✅</td><td>cmq_tls_server_session + cmq_tls_handshake called in accept_cb for every new client (when config.tls_enabled). cmq_tls_config created on server init. Session destroyed on client destroy.</td></tr>
+<tr><td><span class="component-name">Config additions</span></td><td>✅</td><td>cluster_name, cluster_node_id, routes[8], route_count, tls_enabled, tls_cert, tls_key added to cmq_config_t.</td></tr>
+<tr><td><span class="component-name">examples/request_reply</span></td><td>✅</td><td>Demonstrates REQUEST/RESPONSE ops with service, client, and reply listener. Also queries STATS endpoint.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>21/21 test suites pass.</strong> Route forwarding wired. TLS accept integrated. Request-reply example added. 0 warnings.
 </div>
 </div>
 

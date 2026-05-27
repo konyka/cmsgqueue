@@ -234,6 +234,7 @@ static cmq_client_t *cmq_client_create(int fd, uint32_t id,
 
 static void cmq_client_destroy(cmq_client_t *c) {
     if (!c) return;
+    if (c->tls) cmq_tls_session_destroy(c->tls);
     if (c->fd >= 0) close(c->fd);
     if (c->parser) cmq_parser_destroy(c->parser);
     free(c->write_buf);
@@ -600,6 +601,15 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
     if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
+
+    if (srv->routes) {
+        uint8_t fwd_buf[8192];
+        size_t fwd_len = cmq_frame_encode(fwd_buf, sizeof(fwd_buf), CMQ_OP_PUBLISH, 0,
+                                           frame->payload, frame->payload_len);
+        if (fwd_len > 0) {
+            cmq_route_broadcast(srv->routes, fwd_buf, fwd_len, NULL);
+        }
+    }
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1201,6 +1211,19 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     cmq_mutex_unlock(&srv->clients_lock);
 }
 
+static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
+    if (!srv->tls_config) return 0;
+    cmq_tls_session_t *tls = cmq_tls_server_session(srv->tls_config, client->fd);
+    if (!tls) return -1;
+    int rc = cmq_tls_handshake(tls);
+    if (rc != 0) {
+        cmq_tls_session_destroy(tls);
+        return -1;
+    }
+    client->tls = tls;
+    return 0;
+}
+
 static void accept_cb(int fd, int events, void *data) {
     cmq_server_t *srv = (cmq_server_t *)data;
     if (!(events & CMQ_EV_READ)) return;
@@ -1224,9 +1247,13 @@ static void accept_cb(int fd, int events, void *data) {
         int idx = (int)(wi % (uint32_t)srv->num_workers);
         cmq_worker_t *w = &srv->workers[idx];
         cmq_client_t *client = cmq_client_create(client_fd, cid,
-                                                   w->ev_loop, srv);
+                                                    w->ev_loop, srv);
         if (!client) { close(client_fd); return; }
         client->worker_id = idx;
+        if (client_tls_handshake(srv, client) != 0) {
+            cmq_client_destroy(client);
+            return;
+        }
 
         cmq_mutex_lock(&w->clients_lock);
         if (w->clients_count >= w->clients_cap) {
@@ -1247,9 +1274,13 @@ static void accept_cb(int fd, int events, void *data) {
         cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb, client);
     } else {
         cmq_client_t *client = cmq_client_create(client_fd, cid,
-                                                   srv->ev_loop, srv);
+                                                    srv->ev_loop, srv);
         if (!client) { close(client_fd); return; }
         client->worker_id = -1;
+        if (client_tls_handshake(srv, client) != 0) {
+            cmq_client_destroy(client);
+            return;
+        }
 
         cmq_mutex_lock(&srv->clients_lock);
         if (srv->clients_count >= srv->clients_cap) {
@@ -1321,6 +1352,25 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     cmq_account_create(srv->accounts, "$default");
 
     srv->routes = NULL;
+    srv->cluster = NULL;
+    srv->tls_config = NULL;
+
+    if (srv->config.tls_enabled && srv->config.tls_cert && srv->config.tls_key) {
+        srv->tls_config = cmq_tls_config_create();
+        if (srv->tls_config) {
+            cmq_tls_set_cert(srv->tls_config, srv->config.tls_cert);
+            cmq_tls_set_key(srv->tls_config, srv->config.tls_key);
+            cmq_log_info(srv->log, "TLS enabled: cert=%s", srv->config.tls_cert);
+        }
+    }
+
+    if (srv->config.cluster_name && srv->config.cluster_node_id) {
+        srv->cluster = cmq_cluster_create(srv->config.cluster_name,
+                                           srv->config.cluster_node_id);
+        if (srv->cluster) {
+            srv->routes = cmq_route_pool_create(srv->cluster);
+        }
+    }
 
     *server = srv;
     return CMQ_OK;
@@ -1428,6 +1478,19 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     cmq_log_info(srv->log, "CMQ server listening on %s:%d",
                  srv->config.host, srv->config.port);
 
+    if (srv->routes && srv->config.route_count > 0) {
+        char nid[CMQ_NODE_ID_SIZE];
+        snprintf(nid, sizeof(nid), "node-%d", srv->config.port);
+        for (int i = 0; i < srv->config.route_count; i++) {
+            cmq_route_connect(srv->routes, nid,
+                              srv->config.routes[i].addr,
+                              srv->config.routes[i].port);
+            cmq_log_info(srv->log, "Route connected to %s:%d",
+                         srv->config.routes[i].addr,
+                         srv->config.routes[i].port);
+        }
+    }
+
     cmq_ev_run(srv->ev_loop, -1);
 
     if (srv->workers) {
@@ -1522,6 +1585,8 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->log) cmq_log_destroy(srv->log);
     if (srv->accounts) cmq_account_manager_destroy(srv->accounts);
     if (srv->routes) cmq_route_pool_destroy(srv->routes);
+    if (srv->cluster) cmq_cluster_destroy(srv->cluster);
+    if (srv->tls_config) cmq_tls_config_destroy(srv->tls_config);
     cmq_mutex_destroy(&srv->clients_lock);
     cmq_rwlock_destroy(&srv->sublist_lock);
     free(srv);

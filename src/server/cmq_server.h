@@ -12,6 +12,7 @@
 #include "cmq_route.h"
 #include "cmq_ws.h"
 #include "cmq_coro.h"
+#include "cmq_tls.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -76,6 +77,7 @@ typedef struct cmq_client {
     int info_sent;
     int worker_id;
     uint64_t last_activity_ms;
+    cmq_tls_session_t *tls;
 
     struct cmq_client *next;
 } cmq_client_t;
@@ -131,6 +133,8 @@ struct cmq_server {
 
     cmq_account_manager_t *accounts;
     cmq_route_pool_t *routes;
+    cmq_cluster_t *cluster;
+    cmq_tls_config_t *tls_config;
 
     cmq_atomic_u64 stat_connections;
     cmq_atomic_u64 stat_messages_in;
