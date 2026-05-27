@@ -812,7 +812,24 @@ All 15 test suites passing, 0 warnings.
 <tr><td><span class="component-name">test_request_reply</span></td><td>✅</td><td>2 tests: basic_request_response (client→service→reply listener), multi_responder (3 services, 6 requests, fan-out verification).</td></tr>
 </table>
 <div class="log-entry success">
-<span class="log-date">Commit (pending)</span> — <strong>20/20 test suites pass.</strong> Request-reply pattern implemented. Graceful drain/shutdown. 0 warnings.
+<span class="log-date">Commit c9b983b</span> — <strong>20/20 test suites pass.</strong> Request-reply pattern implemented. Graceful drain/shutdown. 0 warnings.
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Server Operations: Stats, Batch, Keepalive</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CMQ_OP_STATS (0x11)</span></td><td>✅</td><td>Query server metrics: connections, messages_in/out, bytes_in/out, subscriptions, active_clients. Response: 6×8B uint64 + 4B active count = 52B payload.</td></tr>
+<tr><td><span class="component-name">CMQ_OP_BATCH (0x12)</span></td><td>✅</td><td>Batch publish: [2B count][msg1: [2B slen][subj][2B rlen][reply][4B plen][payload]][msg2...] — sends each message to matching subscribers in one frame.</td></tr>
+<tr><td><span class="component-name">Keepalive timer</span></td><td>✅</td><td>config.ping_interval_ms triggers periodic scan. Clients idle &gt; 2× interval auto-disconnected. last_activity_ms updated on every read.</td></tr>
+<tr><td><span class="component-name">test_server_ops</span></td><td>✅</td><td>3 tests: stats_query (verify metrics response), batch_publish (2 subjects in 1 frame, both received), keepalive_disconnect (idle client disconnected after timeout).</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>21/21 test suites pass.</strong> Stats API, batch publish, keepalive idle timeout. 0 warnings.
 </div>
 </div>
 
