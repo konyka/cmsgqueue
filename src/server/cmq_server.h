@@ -71,6 +71,7 @@ typedef struct cmq_client {
 
     uint32_t next_sub_id;
     cmq_sub_entry_t *subs;
+    int sub_count;
     char *username;
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
     int is_websocket;
@@ -143,6 +144,8 @@ struct cmq_server {
     cmq_atomic_u64 stat_bytes_in;
     cmq_atomic_u64 stat_bytes_out;
     cmq_atomic_u64 stat_subscriptions;
+    cmq_atomic_u64 stat_publishes_rejected;
+    cmq_atomic_u64 stat_subscribes_rejected;
 };
 
 #endif

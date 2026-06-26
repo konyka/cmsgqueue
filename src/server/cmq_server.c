@@ -601,6 +601,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
 
     if (srv->config.max_payload_size > 0 &&
         msg_len > (size_t)srv->config.max_payload_size) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "payload too large");
         return;
     }
@@ -727,12 +729,12 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         }
     }
 
-    int sub_count = 0;
-    for (cmq_sub_entry_t *e = c->subs; e; e = e->next) sub_count++;
     int sub_cap = srv->config.max_subs_per_client > 0
                       ? srv->config.max_subs_per_client
                       : CMQ_MAX_SUBS_PER_CLIENT;
-    if (sub_count >= sub_cap) {
+    if (c->sub_count >= sub_cap) {
+        cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -765,6 +767,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     cmq_rwlock_unlock(&srv->sublist_lock);
 
     cmq_atomic_fetch_add_u64(&srv->stat_subscriptions, 1, CMQ_ATOMIC_RELAXED);
+    c->sub_count++;
     cmq_send_suback(c, sub_id, 0);
 }
 
@@ -788,6 +791,7 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
             cmq_rwlock_unlock(&srv->sublist_lock);
 
             free(entry);
+            if (c->sub_count > 0) c->sub_count--;
             break;
         }
         pp = &(*pp)->next;
@@ -839,6 +843,8 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
 
     if (srv->config.max_payload_size > 0 &&
         msg_len > (size_t)srv->config.max_payload_size) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "payload too large");
         return;
     }
@@ -911,6 +917,10 @@ static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
     uint64_t bytes_in = cmq_atomic_load_u64(&srv->stat_bytes_in, CMQ_ATOMIC_RELAXED);
     uint64_t bytes_out = cmq_atomic_load_u64(&srv->stat_bytes_out, CMQ_ATOMIC_RELAXED);
     uint64_t subs = cmq_atomic_load_u64(&srv->stat_subscriptions, CMQ_ATOMIC_RELAXED);
+    uint64_t pub_rej = cmq_atomic_load_u64(&srv->stat_publishes_rejected,
+                                             CMQ_ATOMIC_RELAXED);
+    uint64_t sub_rej = cmq_atomic_load_u64(&srv->stat_subscribes_rejected,
+                                             CMQ_ATOMIC_RELAXED);
 
     int active = 0;
     cmq_mutex_lock(&srv->clients_lock);
@@ -924,7 +934,7 @@ static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
         }
     }
 
-    uint8_t payload[7 * 8 + 4];
+    uint8_t payload[9 * 8 + 4];
     size_t off = 0;
     #define WRITE_U64(v) do { \
         for (int b = 56; b >= 0; b -= 8) payload[off++] = (uint8_t)((v) >> b); \
@@ -939,9 +949,11 @@ static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
     payload[off++] = (active >> 16) & 0xFF;
     payload[off++] = (active >> 8) & 0xFF;
     payload[off++] = active & 0xFF;
+    WRITE_U64(pub_rej);
+    WRITE_U64(sub_rej);
     #undef WRITE_U64
 
-    uint8_t buf[64];
+    uint8_t buf[96];
     size_t len = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_STATS, 0, payload, off);
     if (len > 0) cmq_client_send(c, buf, len);
 }
@@ -983,6 +995,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         }
         if (srv->config.max_payload_size > 0 &&
             payload_len > (uint32_t)srv->config.max_payload_size) {
+            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
             cmq_send_error(c, "payload too large");
             return;
         }
