@@ -917,6 +917,23 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">WebSocket Transport: End-to-End Framing</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">Outbound WS framing</span></td><td>✅</td><td><code>cmq_client_send</code> previously wrote raw CMQ bytes to the socket for every client, so WebSocket clients could complete the HTTP 101 upgrade and send frames but could never decode replies (CONNACK/SUBACK/MESSAGE/PONG/ERROR arrived as unframed bytes). Now, when <code>c-&gt;is_websocket</code> is set, each CMQ frame is wrapped in a single WS binary frame (FIN=1, opcode=<code>CMQ_WS_OPCODE_BINARY</code>, unmasked per RFC 6455 §5.3 server→client rule) via <code>cmq_ws_frame_serialize</code> before buffering/cross-worker dispatch. The HTTP 101 response is written before <code>is_websocket</code> is set, so it is correctly left unwrapped.</td></tr>
+<tr><td><span class="component-name">Inbound WS demasking</span></td><td>✅</td><td><code>cmq_ws_frame_parse</code> read the 4-byte client mask key but never applied it, so RFC 6455-mandated masked client frames (all real browsers/WS clients) were fed still-masked to the CMQ parser — corrupting the magic/opcode. The WS read branch in <code>client_read_cb</code> now calls <code>cmq_ws_mask</code> in place on the payload (which aliases <code>c-&gt;read_buf</code>, refilled next read) when <code>ws_frame.masked</code> is set. Backward-compatible: unmasked frames are untouched.</td></tr>
+<tr><td><span class="component-name">Multi-worker safety</span></td><td>✅</td><td>The WS wrap buffer is heap-allocated (handles up to <code>max_payload_size</code> payloads; stack avoided for large frames) and freed after dispatch. The cross-worker path is safe because <code>worker_push_msg</code> <code>memcpy</code>s its input into the worker message queue before the wrap buffer is freed.</td></tr>
+<tr><td><span class="component-name">test_server_ops / ws_round_trip</span></td><td>✅</td><td>New end-to-end test: performs the WS HTTP upgrade, then sends masked WS binary frames carrying CMQ CONNECT and SUBSCRIBE, asserting the server replies with WS-framed CONNACK and SUBACK. A second raw client then PUBLISHes to the subject and the WS subscriber receives a WS-framed MESSAGE — proving both directions of the transport. Helpers <code>ws_send_cmq</code> (masked client frame builder) and <code>ws_recv_cmq</code> (WS-frame-stripping receiver) added. Suite now 8 tests, was 7. The pre-existing <code>ws.*</code> cases in test_enterprise remain as unit-level coverage of the frame primitives.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit 1930c3b + 1aa409b</span> — <strong>21/21 test suites pass.</strong> WebSocket transport now works end-to-end with conformant (masked) clients; previously only the upgrade handshake + unmasked test clients functioned.
+</div>
+</div>
+
 </div>
 </body>
 </html>
