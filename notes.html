@@ -96,11 +96,12 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
   │ 1 by │ 1 by    │ 1 by  │ 1 by   │ 4 bytes          │
   └──────┴─────────┴───────┴────────┴──────────────────┘
 
-  Operations:
-  0x01 CONNECT    0x02 CONNACK    0x03 PUBLISH    0x04 PUBACK
-  0x05 SUBSCRIBE  0x06 SUBACK    0x07 UNSUBSCRIBE 0x08 UNSUBACK
-  0x09 MESSAGE    0x0A PING      0x0B PONG       0x0C DISCONNECT
-  0x0D ERROR      0x0E INFO
+  Operations (client-speaks-first; server does NOT pre-send INFO):
+  0x01 CONNECT     0x02 CONNACK      0x03 PUBLISH     0x04 PUBACK
+  0x05 SUBSCRIBE   0x06 SUBACK       0x07 UNSUBSCRIBE 0x08 UNSUBACK
+  0x09 MESSAGE     0x0A PING         0x0B PONG        0x0C DISCONNECT
+  0x0D ERROR       0x0E INFO         0x0F REQUEST     0x10 RESPONSE
+  0x11 STATS       0x12 BATCH
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -847,6 +848,54 @@ All 15 test suites passing, 0 warnings.
 </table>
 <div class="log-entry success">
 <span class="log-date">Commit (pending)</span> — <strong>21/21 test suites pass.</strong> Route forwarding wired. TLS accept integrated. Request-reply example added. 0 warnings.
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Backpressure &amp; Connection Limit</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CMQ_WRITE_BUF_LIMIT</span></td><td>✅</td><td>4 MB per-client cap on pending write buffer. <code>cmq_client_send_direct</code> checks remaining+len against the limit; oversize → client marked <code>CMQ_CLIENT_CLOSING</code>, send returns -1. Slow consumers are auto-disconnected instead of growing memory unboundedly.</td></tr>
+<tr><td><span class="component-name">max_clients enforcement</span></td><td>✅</td><td><code>srv->config.max_clients</code> (declared in cmq.h, parsed in cmq_config.c) now enforced in <code>accept_cb</code>. Sums client counts across acceptor and every worker under their respective locks; new connections over the cap are <code>close()</code>d before CONNACK.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit c8b97e9</span> — <strong>21/21 test suites pass.</strong> Slow-consumer backpressure + max_clients accept gate. No new ops; safety limits only.
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">README &amp; Notes Sync</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">README features list</span></td><td>✅</td><td>Replaced aspirational Monitoring/TLS/MQTT/WebSocket-as-future items with what actually shipped: Request-Reply, BATCH, STATS, Keepalive, Backpressure, Connection Limit, Graceful Shutdown, Multi-Worker, integrated coroutines, route forwarding, TLS accept.</td></tr>
+<tr><td><span class="component-name">README opcode table</span></td><td>✅</td><td>Renumbered 0x05-0x12 to include PUBACK/SUBACK/UNSUBACK/ERROR/REQUEST/RESPONSE/STATS/BATCH that earlier commits added.</td></tr>
+<tr><td><span class="component-name">notes.html protocol block</span></td><td>✅</td><td>Fixed stale 0x01-0x0E opcode listing → 0x01-0x12 with correct names.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit 7183aa6</span> — <strong>Docs-only.</strong> README + notes.html synced to the current opcode/feature surface.
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Payload &amp; Subscription Caps</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">max_payload_size enforcement</span></td><td>✅</td><td>Previously declared in <code>cmq_config_t</code> (default 1 MB via <code>CMQ_DEFAULT_MAX_PAYLOAD</code>) but never checked. Now enforced as the message-body length in <code>handle_publish</code>, <code>handle_request</code>, and per-message in <code>handle_batch</code>. Oversize → <code>cmq_send_error(c, "payload too large")</code> and the frame is dropped (no fan-out, no stat bump).</td></tr>
+<tr><td><span class="component-name">max_subs_per_client (runtime)</span></td><td>✅</td><td>Promoted the compile-time <code>CMQ_MAX_SUBS_PER_CLIENT</code> (1024) to a runtime config field on <code>cmq_config_t</code>, parsed from <code>max_subs_per_client =</code> in config files, defaulting to <code>CMQ_DEFAULT_MAX_SUBS_PER_CLIENT</code> when unset. <code>handle_subscribe</code> walks <code>c->subs</code> and rejects with <code>SUBACK code=1</code> once the cap is reached, preventing subscription-storm memory growth.</td></tr>
+<tr><td><span class="component-name">cmq_config_validate</span></td><td>✅</td><td>Rejects negative <code>max_subs_per_client</code>.</td></tr>
+<tr><td><span class="component-name">test_server_ops</span></td><td>✅</td><td>2 new tests: <code>payload_too_large</code> (PUBLISH with 128 B body under a 64-byte cap → expects ERROR frame), <code>subscribe_cap_enforced</code> (<code>max_subs_per_client = 3</code>, 4th SUBSCRIBE → expects SUBACK code=1). Suite now 5 tests, was 3.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>21/21 test suites pass.</strong> Two previously-declared safety limits now actually enforced; subscription cap made runtime-configurable.
 </div>
 </div>
 
