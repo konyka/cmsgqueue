@@ -2,6 +2,7 @@
 #include "cmq_server.h"
 #include "cmq_parser.h"
 #include "cmq_proto.h"
+#include "cmq_ws.h"
 #include "cmq_test.h"
 
 #include <sys/socket.h>
@@ -108,6 +109,61 @@ static int do_subscribe(int fd, cmq_parser_t *parser, const char *subject, uint3
     int ok = (f.hdr.op == CMQ_OP_SUBACK);
     free_frame(&f);
     return ok ? 0 : -1;
+}
+
+static void ws_send_cmq(int fd, cmq_op_t op, const uint8_t *payload, size_t plen) {
+    uint8_t cmq[8192];
+    size_t cmq_len = cmq_frame_encode(cmq, sizeof(cmq), op, 0, payload, plen);
+    if (cmq_len == 0) return;
+    static const uint8_t mk[4] = {0x37, 0xFA, 0x21, 0x3D};
+    size_t hdr = (cmq_len <= 125) ? 2 : (cmq_len <= 65535) ? 4 : 10;
+    uint8_t *buf = malloc(hdr + 4 + cmq_len);
+    buf[0] = 0x82;
+    if (cmq_len <= 125) {
+        buf[1] = (uint8_t)(0x80 | cmq_len);
+    } else if (cmq_len <= 65535) {
+        buf[1] = 0x80 | 126;
+        buf[2] = (uint8_t)(cmq_len >> 8);
+        buf[3] = (uint8_t)cmq_len;
+    } else {
+        buf[1] = 0x80 | 127;
+        for (int i = 0; i < 8; i++) buf[2 + i] = (uint8_t)(cmq_len >> (56 - i * 8));
+    }
+    buf[hdr] = mk[0]; buf[hdr + 1] = mk[1]; buf[hdr + 2] = mk[2]; buf[hdr + 3] = mk[3];
+    for (size_t i = 0; i < cmq_len; i++) buf[hdr + 4 + i] = cmq[i] ^ mk[i % 4];
+    write(fd, buf, hdr + 4 + cmq_len);
+    free(buf);
+}
+
+static int ws_recv_cmq(int fd, cmq_parser_t *parser, cmq_frame_t *out) {
+    for (int retry = 0; retry < 200; retry++) {
+        const cmq_frame_t *f = cmq_parser_frame(parser);
+        if (f) {
+            out->hdr = f->hdr; out->payload_len = f->payload_len;
+            if (f->payload_len > 0 && f->payload) {
+                out->payload = malloc(f->payload_len);
+                memcpy(out->payload, f->payload, f->payload_len);
+            } else { out->payload = NULL; }
+            cmq_parser_next(parser);
+            return 0;
+        }
+        uint8_t buf[8192];
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                struct timespec ts = {0, 10000000};
+                nanosleep(&ts, NULL);
+                continue;
+            }
+            return -1;
+        }
+        cmq_ws_frame_t wf;
+        int parsed = cmq_ws_frame_parse(buf, (size_t)n, &wf);
+        if (parsed <= 0 || wf.opcode != CMQ_WS_OPCODE_BINARY || wf.payload_len == 0)
+            return -1;
+        if (cmq_parser_feed(parser, wf.payload, wf.payload_len) < 0) return -1;
+    }
+    return -1;
 }
 
 TEST(server_ops, stats_query) {
@@ -445,6 +501,84 @@ TEST(server_ops, subscribe_cap_enforced) {
 
     close(fd);
     cmq_parser_destroy(parser);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+TEST(server_ops, ws_round_trip) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 6;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(100);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+
+    const char *upgrade =
+        "GET /ws HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    ASSERT(write(fd, upgrade, strlen(upgrade)) > 0);
+    wait_ms(100);
+
+    char resp[512];
+    ssize_t rn = read(fd, resp, sizeof(resp) - 1);
+    ASSERT(rn > 0);
+    resp[rn] = '\0';
+    ASSERT(strstr(resp, "101") != NULL);
+
+    cmq_parser_t *parser = cmq_parser_create();
+
+    ws_send_cmq(fd, CMQ_OP_CONNECT, NULL, 0);
+    cmq_frame_t f;
+    ASSERT_EQ(ws_recv_cmq(fd, parser, &f), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_CONNACK);
+    free_frame(&f);
+
+    const char *subj = "ws.test";
+    uint16_t slen = (uint16_t)strlen(subj);
+    uint8_t sbuf[64];
+    sbuf[0] = 0; sbuf[1] = 0; sbuf[2] = 0; sbuf[3] = 1;
+    sbuf[4] = (slen >> 8) & 0xFF; sbuf[5] = slen & 0xFF;
+    memcpy(sbuf + 6, subj, slen);
+    ws_send_cmq(fd, CMQ_OP_SUBSCRIBE, sbuf, 6 + slen);
+    ASSERT_EQ(ws_recv_cmq(fd, parser, &f), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_SUBACK);
+    free_frame(&f);
+
+    int pub = connect_to(config.port);
+    ASSERT(pub >= 0);
+    cmq_parser_t *pp = cmq_parser_create();
+    do_connect(pub, pp);
+
+    const char *body = "hello-ws";
+    uint16_t blen = (uint16_t)strlen(body);
+    uint8_t pbuf[128];
+    size_t off = 0;
+    pbuf[off++] = (slen >> 8) & 0xFF; pbuf[off++] = slen & 0xFF;
+    memcpy(pbuf + off, subj, slen); off += slen;
+    pbuf[off++] = 0; pbuf[off++] = 0;
+    memcpy(pbuf + off, body, blen); off += blen;
+    send_frame(pub, CMQ_OP_PUBLISH, pbuf, off);
+    wait_ms(150);
+
+    ASSERT_EQ(ws_recv_cmq(fd, parser, &f), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_MESSAGE);
+    free_frame(&f);
+
+    cmq_parser_destroy(pp);
+    cmq_parser_destroy(parser);
+    close(pub);
+    close(fd);
     cmq_server_stop(srv);
     pthread_join(tid, NULL);
     cmq_server_destroy(srv);
