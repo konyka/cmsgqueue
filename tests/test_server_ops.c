@@ -280,4 +280,103 @@ TEST(server_ops, keepalive_disconnect) {
     cmq_server_destroy(srv);
 }
 
+TEST(server_ops, payload_too_large) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 3;
+    config.log_to_stdout = 0;
+    config.max_payload_size = 64;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(200);
+
+    int fd = connect_to(STATS_PORT + 3);
+    ASSERT(fd >= 0);
+    wait_ms(20);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    /* PUBLISH frame: [2B subject_len][subject][2B reply_len=0][payload] */
+    const char *subject = "cap.test";
+    uint16_t slen = (uint16_t)strlen(subject);
+    size_t big_len = 128; /* exceeds the 64-byte cap */
+    uint8_t buf[512];
+    size_t off = 0;
+    buf[off++] = (slen >> 8) & 0xFF;
+    buf[off++] = slen & 0xFF;
+    memcpy(buf + off, subject, slen); off += slen;
+    buf[off++] = 0; buf[off++] = 0; /* reply_len = 0 */
+    memset(buf + off, 'x', big_len); off += big_len;
+
+    send_frame(fd, CMQ_OP_PUBLISH, buf, off);
+    wait_ms(100);
+
+    cmq_frame_t f;
+    int got_error = 0;
+    for (int attempt = 0; attempt < 5; attempt++) {
+        if (recv_frame(fd, &f, parser) != 0) break;
+        if (f.hdr.op == CMQ_OP_ERROR) { got_error = 1; free_frame(&f); break; }
+        free_frame(&f);
+    }
+    ASSERT(got_error);
+
+    close(fd);
+    cmq_parser_destroy(parser);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+TEST(server_ops, subscribe_cap_enforced) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 4;
+    config.log_to_stdout = 0;
+    config.max_subs_per_client = 3;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(200);
+
+    int fd = connect_to(STATS_PORT + 4);
+    ASSERT(fd >= 0);
+    wait_ms(20);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    ASSERT_EQ(do_subscribe(fd, parser, "cap.s1", 1), 0);
+    ASSERT_EQ(do_subscribe(fd, parser, "cap.s2", 2), 0);
+    ASSERT_EQ(do_subscribe(fd, parser, "cap.s3", 3), 0);
+
+    /* 4th subscribe should be rejected: SUBACK with code=1 */
+    char subj[32];
+    snprintf(subj, sizeof(subj), "cap.s4");
+    uint16_t slen = (uint16_t)strlen(subj);
+    uint8_t sbuf[64];
+    sbuf[0] = 0; sbuf[1] = 0; sbuf[2] = 0; sbuf[3] = 4; /* sub_id = 4 */
+    sbuf[4] = (slen >> 8) & 0xFF;
+    sbuf[5] = slen & 0xFF;
+    memcpy(sbuf + 6, subj, slen);
+    send_frame(fd, CMQ_OP_SUBSCRIBE, sbuf, 6 + slen);
+    wait_ms(100);
+
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_SUBACK);
+    ASSERT(f.payload_len >= 1);
+    ASSERT_EQ(f.payload[0], 1); /* error code */
+    free_frame(&f);
+
+    close(fd);
+    cmq_parser_destroy(parser);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
