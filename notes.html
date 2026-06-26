@@ -895,7 +895,25 @@ All 15 test suites passing, 0 warnings.
 <tr><td><span class="component-name">test_server_ops</span></td><td>✅</td><td>2 new tests: <code>payload_too_large</code> (PUBLISH with 128 B body under a 64-byte cap → expects ERROR frame), <code>subscribe_cap_enforced</code> (<code>max_subs_per_client = 3</code>, 4th SUBSCRIBE → expects SUBACK code=1). Suite now 5 tests, was 3.</td></tr>
 </table>
 <div class="log-entry success">
-<span class="log-date">Commit (pending)</span> — <strong>21/21 test suites pass.</strong> Two previously-declared safety limits now actually enforced; subscription cap made runtime-configurable.
+<span class="log-date">Commit cebc60e + d5c820e</span> — <strong>21/21 test suites pass.</strong> Two previously-declared safety limits now actually enforced; subscription cap made runtime-configurable.
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Rejection Counters &amp; O(1) Subscription Accounting</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">sub_count on cmq_client_t</span></td><td>✅</td><td>Added an <code>int sub_count</code> field to <code>cmq_client_t</code>, maintained on subscribe (<code>++</code>) and unsubscribe (<code>--</code>, guarded <code>&gt; 0</code>). Replaces the O(n) linked-list walk that <code>handle_subscribe</code> previously ran on every SUBSCRIBE to check the per-client cap — the cap check is now O(1).</td></tr>
+<tr><td><span class="component-name">stat_publishes_rejected</span></td><td>✅</td><td>New atomic <code>cmq_atomic_u64</code> on the server. Bumped via <code>cmq_atomic_fetch_add_u64</code> in every payload-size enforcement path: <code>handle_publish</code>, <code>handle_request</code>, and per-message in <code>handle_batch</code>. Gives operators visibility into how many frames the <code>max_payload_size</code> gate is dropping.</td></tr>
+<tr><td><span class="component-name">stat_subscribes_rejected</span></td><td>✅</td><td>New atomic counter, bumped in <code>handle_subscribe</code> right before the <code>SUBACK code=1</code> rejection when <code>c->sub_count &gt;= sub_cap</code>.</td></tr>
+<tr><td><span class="component-name">STATS payload extension</span></td><td>✅</td><td><code>handle_stats</code> frame body grown from 7 to 9 u64 fields: <code>publishes_rejected</code> appended at byte offset 52 and <code>subscribes_rejected</code> at offset 60 (both big-endian). Encode buffer bumped <code>payload[7*8+4] → [9*8+4]</code>, reply buffer <code>buf[64] → [96]</code>. The leading 4-byte active-connection count is unchanged, so the new counters sit after the original 56 bytes (7×8) + 4.</td></tr>
+<tr><td><span class="component-name">test_server_ops</span></td><td>✅</td><td>New test <code>stats_reject_counters</code>: under <code>max_payload_size=64</code> + <code>max_subs_per_client=1</code>, drives a 2nd-subscribe rejection and a 128-byte PUBLISH rejection, then asserts <code>publishes_rejected &gt;= 1</code> and <code>subscribes_rejected &gt;= 1</code> parsed from the STATS frame. Existing <code>stats_query</code> updated: minimum payload <code>52 → 68</code> bytes. Suite now 7 tests, was 6.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit 3d459d3 + 40d26db</span> — <strong>21/21 test suites pass.</strong> Observability for the safety-limit rejections + O(1) subscription-cap check. Wire-incompatible STATS payload bump (added 2 trailing u64 fields).
 </div>
 </div>
 
