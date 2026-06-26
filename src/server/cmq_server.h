@@ -33,8 +33,9 @@
 #define CMQ_MAX_SUBJECT       256
 #define CMQ_MAX_QUEUE_GROUP   64
 #define CMQ_MAX_SUBS_PER_CLIENT 1024
-#define CMQ_CORO_DELIVER_BATCH 16   /* yield every N deliveries for fairness */
-#define CMQ_CORO_MAX_PER_WORKER 256 /* max concurrent coroutines per worker */
+#define CMQ_CORO_DELIVER_BATCH 16
+#define CMQ_CORO_MAX_PER_WORKER 256
+#define CMQ_WRITE_BUF_LIMIT   (4 * 1024 * 1024)
 
 typedef enum {
     CMQ_CLIENT_INIT = 0,

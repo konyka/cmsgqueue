@@ -254,6 +254,10 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
     if (c->write_buf && c->write_pos < c->write_len) {
         size_t remaining = c->write_len - c->write_pos;
         size_t new_len = remaining + len;
+        if (new_len > CMQ_WRITE_BUF_LIMIT) {
+            c->state = CMQ_CLIENT_CLOSING;
+            return -1;
+        }
         uint8_t *new_buf = malloc(new_len);
         if (!new_buf) return -1;
         memcpy(new_buf, c->write_buf + c->write_pos, remaining);
@@ -1236,6 +1240,24 @@ static void accept_cb(int fd, int events, void *data) {
     if (set_nonblocking(client_fd) != 0) {
         close(client_fd);
         return;
+    }
+
+    if (srv->config.max_clients > 0) {
+        int total = 0;
+        cmq_mutex_lock(&srv->clients_lock);
+        total += srv->clients_count;
+        cmq_mutex_unlock(&srv->clients_lock);
+        if (srv->workers) {
+            for (int i = 0; i < srv->num_workers; i++) {
+                cmq_mutex_lock(&srv->workers[i].clients_lock);
+                total += srv->workers[i].clients_count;
+                cmq_mutex_unlock(&srv->workers[i].clients_lock);
+            }
+        }
+        if (total >= srv->config.max_clients) {
+            close(client_fd);
+            return;
+        }
     }
 
     uint32_t cid = cmq_atomic_fetch_add_u32(&srv->next_client_id, 1,
