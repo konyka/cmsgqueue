@@ -6,13 +6,20 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 
 - **Pub/Sub** with subject-based routing and wildcard matching (`*`, `>`)
 - **Queue Groups** with round-robin delivery within shared subscription groups
+- **Request-Reply** pattern via REQUEST/RESPONSE ops with reply-to subjects
 - **Message Headers** passthrough (key-value pairs on PUBLISH/MESSAGE frames)
+- **Batch Publish** send multiple messages in a single frame (CMQ_OP_BATCH)
+- **Server Stats** query connections, messages, bytes, subscriptions via CMQ_OP_STATS
 - **Authentication** username/password on CONNECT, configurable via config file
-- **Monitoring** atomic stat counters exposed in INFO frame (JSON)
+- **Keepalive** automatic disconnect of idle clients (configurable ping_interval_ms)
+- **Backpressure** 4MB write buffer limit per client, slow consumers auto-disconnected
+- **Connection Limit** configurable max_clients enforced on accept
+- **Graceful Shutdown** cmq_server_drain() sends DISCONNECT to all clients before stopping
 - **Persistence** ring buffer memstore, durable streams with consumers, file-based with CRC32
-- **Clustering** node membership, server-to-server routing, cross-cluster gateway, leaf nodes
-- **Enterprise** multi-tenant accounts, TLS, MQTT bridge, WebSocket transport
-- **Assembly Coroutines** x86_64 + ARM64 context switching
+- **Clustering** node membership, server-to-server route forwarding, cross-cluster gateway, leaf nodes
+- **Enterprise** multi-tenant accounts, TLS accept, MQTT bridge, WebSocket transport
+- **Assembly Coroutines** x86_64 + ARM64 context switching, integrated for high-fanout delivery
+- **Multi-Worker** N worker threads with eventfd-based cross-thread messaging, coroutine scheduler
 - **Cross-Platform CI** Linux (gcc/clang), macOS, Windows, ARM64 cross-compile
 
 ## Quick Start
@@ -83,12 +90,20 @@ Offset  Size  Field
 | 0x02 | CONNECT | C→S | Client handshake |
 | 0x03 | CONNACK | S→C | Connection acknowledgment |
 | 0x04 | PUBLISH | C→S | Publish message |
-| 0x05 | MESSAGE | S→C | Deliver message to subscriber |
+| 0x05 | PUBACK | S→C | Publish acknowledgment |
 | 0x06 | SUBSCRIBE | C→S | Subscribe to subject |
-| 0x07 | UNSUBSCRIBE | C→S | Unsubscribe |
-| 0x08 | PING | C→S | Keep-alive |
-| 0x09 | PONG | S→C | Keep-alive response |
-| 0x0A | DISCONNECT | Either | Graceful disconnect |
+| 0x07 | SUBACK | S→C | Subscription acknowledgment |
+| 0x08 | UNSUBSCRIBE | C→S | Unsubscribe |
+| 0x09 | UNSUBACK | S→C | Unsubscribe acknowledgment |
+| 0x0A | MESSAGE | S→C | Deliver message to subscriber |
+| 0x0B | PING | C→S | Keep-alive |
+| 0x0C | PONG | S→C | Keep-alive response |
+| 0x0D | DISCONNECT | Either | Graceful disconnect |
+| 0x0E | ERROR | S→C | Error response |
+| 0x0F | REQUEST | C→S | Request with reply-to subject |
+| 0x10 | RESPONSE | C→S | Response to a request |
+| 0x11 | STATS | C→S / S→C | Query server metrics |
+| 0x12 | BATCH | C→S | Batch publish (multiple messages) |
 
 ### Flags
 
@@ -167,6 +182,8 @@ Client ──TCP──→       ▼
 | `examples/pubsub.c` | Server, publisher, and subscriber modes |
 | `examples/streaming.c` | Memstore, stream with consumers, file persistence |
 | `examples/cluster.c` | Cluster membership, routing, gateway, leaf nodes |
+| `examples/request_reply.c` | Request-reply pattern with service, client, and stats query |
+| `examples/benchmark.c` | Throughput benchmark (configurable clients, messages, threads) |
 
 Build examples:
 ```bash
@@ -175,7 +192,33 @@ cmake --build build --target pubsub streaming cluster
 
 ## Test Suite
 
-15 test suites with 140+ tests:
+21 test suites with 200+ assertions:
+
+| Suite | Tests | Area |
+|-------|-------|------|
+| test_atomic | 2 | Platform atomics |
+| test_mpool | 4 | Memory pool |
+| test_slab | 4 | Slab allocator |
+| test_log | 5 | Logger |
+| test_coro | 5 | Coroutines |
+| test_ev | 4 | Event loop |
+| test_parser | 11 | Protocol parser |
+| test_config | 3 | Config parser |
+| test_platform | 2 | Platform detection |
+| test_store | 2 | Memstore |
+| test_stream | 3 | Streams + consumers |
+| test_filestore | 2 | File persistence |
+| test_sublist | 5 | Subject trie |
+| test_cluster | 2 | Cluster membership |
+| test_enterprise | 5 | Accounts, TLS, MQTT, WS |
+| test_server | 4 | Server lifecycle |
+| test_phase2 | 4 | Queue groups, headers, auth, monitoring |
+| test_integration | 4 | Account stats, WS detection |
+| test_worker | 2 | Multi-worker pub/sub |
+| test_stress | 3 | High-load: many clients, fan-out, wildcards |
+| test_coro_integration | 2 | Coroutine high-fanout delivery |
+| test_request_reply | 2 | Request-reply pattern |
+| test_server_ops | 3 | Stats, batch, keepalive |
 
 | Suite | Tests | Area |
 |-------|-------|------|
