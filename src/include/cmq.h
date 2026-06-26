@@ -26,6 +26,7 @@ extern "C" {
 #define CMQ_DEFAULT_THREADS  0  /* 0 = auto-detect (number of CPU cores) */
 #define CMQ_DEFAULT_MAX_CLIENTS  65536
 #define CMQ_DEFAULT_MAX_PAYLOAD  (1024 * 1024)  /* 1 MB */
+#define CMQ_DEFAULT_MAX_SUBS_PER_CLIENT 1024
 #define CMQ_DEFAULT_PING_INTERVAL 30000  /* 30 seconds */
 #define CMQ_DEFAULT_WRITE_TIMEOUT  5000  /* 5 seconds */
 
@@ -59,6 +60,7 @@ typedef struct cmq_config {
     int num_threads;               /* Worker threads (default: auto) */
     int max_clients;               /* Max concurrent clients */
     int max_payload_size;          /* Max message payload in bytes */
+    int max_subs_per_client;       /* Max subscriptions per client */
     int ping_interval_ms;          /* Ping interval in milliseconds */
     int write_timeout_ms;          /* Write timeout in milliseconds */
     const char *config_file;       /* Path to config file (optional) */

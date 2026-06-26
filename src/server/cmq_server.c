@@ -599,6 +599,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
 
+    if (srv->config.max_payload_size > 0 &&
+        msg_len > (size_t)srv->config.max_payload_size) {
+        cmq_send_error(c, "payload too large");
+        return;
+    }
+
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
     cmq_atomic_fetch_add_u64(&srv->stat_bytes_in, (uint64_t)frame->payload_len,
                               CMQ_ATOMIC_RELAXED);
@@ -721,6 +727,16 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         }
     }
 
+    int sub_count = 0;
+    for (cmq_sub_entry_t *e = c->subs; e; e = e->next) sub_count++;
+    int sub_cap = srv->config.max_subs_per_client > 0
+                      ? srv->config.max_subs_per_client
+                      : CMQ_MAX_SUBS_PER_CLIENT;
+    if (sub_count >= sub_cap) {
+        cmq_send_suback(c, sub_id, 1);
+        return;
+    }
+
     cmq_sub_entry_t *entry = malloc(sizeof(cmq_sub_entry_t));
     if (!entry) {
         cmq_send_suback(c, sub_id, 1);
@@ -820,6 +836,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
 
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
+
+    if (srv->config.max_payload_size > 0 &&
+        msg_len > (size_t)srv->config.max_payload_size) {
+        cmq_send_error(c, "payload too large");
+        return;
+    }
 
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
@@ -958,6 +980,11 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         offset += 4;
         if (offset + payload_len > frame->payload_len) {
             payload_len = (uint32_t)(frame->payload_len - offset);
+        }
+        if (srv->config.max_payload_size > 0 &&
+            payload_len > (uint32_t)srv->config.max_payload_size) {
+            cmq_send_error(c, "payload too large");
+            return;
         }
         const uint8_t *msg_payload = frame->payload + offset;
         offset += payload_len;
@@ -1341,6 +1368,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     if (!srv->config.host) srv->config.host = CMQ_DEFAULT_HOST;
     if (srv->config.max_payload_size == 0)
         srv->config.max_payload_size = CMQ_DEFAULT_MAX_PAYLOAD;
+    if (srv->config.max_subs_per_client == 0)
+        srv->config.max_subs_per_client = CMQ_DEFAULT_MAX_SUBS_PER_CLIENT;
     if (srv->config.ping_interval_ms == 0)
         srv->config.ping_interval_ms = CMQ_DEFAULT_PING_INTERVAL;
 

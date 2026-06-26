@@ -44,6 +44,8 @@ static void parse_key_value(const char *key, const char *value, cmq_config_t *co
         config->max_clients = atoi(value);
     } else if (strcmp(key, "max_payload_size") == 0) {
         config->max_payload_size = atoi(value);
+    } else if (strcmp(key, "max_subs_per_client") == 0) {
+        config->max_subs_per_client = atoi(value);
     } else if (strcmp(key, "ping_interval") == 0 || strcmp(key, "ping_interval_ms") == 0) {
         config->ping_interval_ms = atoi(value);
     } else if (strcmp(key, "write_timeout") == 0 || strcmp(key, "write_timeout_ms") == 0) {
@@ -106,6 +108,7 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (!config) return CMQ_ERR_INVALID_ARG;
     if (config->port < 0 || config->port > 65535) return CMQ_ERR_INVALID_ARG;
     if (config->max_payload_size < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->max_subs_per_client < 0) return CMQ_ERR_INVALID_ARG;
     if (config->ping_interval_ms < 0) return CMQ_ERR_INVALID_ARG;
     if (config->num_threads < 0) return CMQ_ERR_INVALID_ARG;
     return CMQ_OK;
