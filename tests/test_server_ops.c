@@ -136,7 +136,7 @@ TEST(server_ops, stats_query) {
     cmq_frame_t f;
     ASSERT_EQ(recv_frame(fd, &f, parser), 0);
     ASSERT_EQ(f.hdr.op, CMQ_OP_STATS);
-    ASSERT(f.payload_len >= 52);
+    ASSERT(f.payload_len >= 68);
 
     uint64_t conn = 0, msg_in = 0, msg_out = 0;
     for (int b = 0; b < 8; b++) conn = (conn << 8) | f.payload[b];
@@ -322,6 +322,77 @@ TEST(server_ops, payload_too_large) {
         free_frame(&f);
     }
     ASSERT(got_error);
+
+    close(fd);
+    cmq_parser_destroy(parser);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+TEST(server_ops, stats_reject_counters) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 5;
+    config.log_to_stdout = 0;
+    config.max_payload_size = 64;
+    config.max_subs_per_client = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(200);
+
+    int fd = connect_to(STATS_PORT + 5);
+    ASSERT(fd >= 0);
+    wait_ms(20);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    /* First subscribe succeeds (sub_count 0 -> 1). */
+    ASSERT_EQ(do_subscribe(fd, parser, "rej.s1", 1), 0);
+    /* Second subscribe rejected: SUBACK code=1 (sub_count already at cap). */
+    do_subscribe(fd, parser, "rej.s2", 2);
+
+    /* Now trigger a publish rejection: 128-byte body > 64-byte cap. */
+    const char *subject = "rej.test";
+    uint16_t slen = (uint16_t)strlen(subject);
+    uint8_t pbuf[512];
+    size_t poff = 0;
+    pbuf[poff++] = (slen >> 8) & 0xFF;
+    pbuf[poff++] = slen & 0xFF;
+    memcpy(pbuf + poff, subject, slen); poff += slen;
+    pbuf[poff++] = 0; pbuf[poff++] = 0; /* reply_len = 0 */
+    memset(pbuf + poff, 'x', 128); poff += 128;
+    send_frame(fd, CMQ_OP_PUBLISH, pbuf, poff);
+
+    wait_ms(150);
+    /* Drain pending ERROR/SUBACK frames before STATS. */
+    for (int i = 0; i < 4; i++) {
+        cmq_frame_t junk;
+        if (recv_frame(fd, &junk, parser) != 0) break;
+        free_frame(&junk);
+    }
+
+    send_frame(fd, CMQ_OP_STATS, NULL, 0);
+    wait_ms(100);
+
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_STATS);
+    ASSERT(f.payload_len >= 68);
+
+    /* publishes_rejected at offset 52, subscribes_rejected at offset 60 */
+    uint64_t pub_rej = 0, sub_rej = 0;
+    for (int b = 0; b < 8; b++)
+        pub_rej = (pub_rej << 8) | f.payload[52 + b];
+    for (int b = 0; b < 8; b++)
+        sub_rej = (sub_rej << 8) | f.payload[60 + b];
+    free_frame(&f);
+
+    ASSERT(pub_rej >= 1);
+    ASSERT(sub_rej >= 1);
 
     close(fd);
     cmq_parser_destroy(parser);
