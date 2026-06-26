@@ -284,6 +284,39 @@ static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len) {
     if (!c || c->state == CMQ_CLIENT_CLOSED) return -1;
     cmq_server_t *srv = c->server;
     int cross = srv->workers && c->worker_id >= 0 && c->worker_id != cmq_current_worker_id;
+
+    /* WebSocket clients receive CMQ frames wrapped in WS binary frames. Per
+       RFC 6455 server->client frames are unmasked. The HTTP 101 upgrade
+       response is written before c->is_websocket is set, so it is never
+       wrapped. worker_push_msg() copies its input, so freeing wsbuf after
+       dispatch is safe for both the direct and cross-worker paths. */
+    if (c->is_websocket) {
+        size_t hdr_len = (len <= 125) ? 2 : (len <= 65535) ? 4 : 10;
+        size_t total = hdr_len + len;
+        uint8_t *wsbuf = malloc(total);
+        if (!wsbuf) return -1;
+        cmq_ws_frame_t wf;
+        wf.fin = 1;
+        wf.opcode = CMQ_WS_OPCODE_BINARY;
+        wf.payload = data;
+        wf.payload_len = len;
+        wf.mask_key = 0;
+        wf.masked = 0;
+        if (cmq_ws_frame_serialize(&wf, wsbuf, total) < 0) {
+            free(wsbuf);
+            return -1;
+        }
+        int rc;
+        if (!cross) {
+            rc = cmq_client_send_direct(c, wsbuf, total);
+        } else {
+            worker_push_msg(&srv->workers[c->worker_id], c->fd, wsbuf, total);
+            rc = 0;
+        }
+        free(wsbuf);
+        return rc;
+    }
+
     if (!cross) {
         return cmq_client_send_direct(c, data, len);
     }
@@ -1206,6 +1239,13 @@ static void client_read_cb(int fd, int events, void *data) {
         cmq_ws_frame_t ws_frame;
         int parsed = cmq_ws_frame_parse(c->read_buf, (size_t)n, &ws_frame);
         if (parsed > 0 && ws_frame.opcode == CMQ_WS_OPCODE_BINARY && ws_frame.payload_len > 0) {
+            /* RFC 6455 mandates client->server frames are masked; unmask in
+               place before feeding the CMQ parser. The payload aliases
+               c->read_buf, which is refilled on the next read. */
+            if (ws_frame.masked) {
+                cmq_ws_mask((uint8_t *)ws_frame.payload, ws_frame.payload_len,
+                             ws_frame.mask_key);
+            }
             int rc = cmq_parser_feed(c->parser, ws_frame.payload, ws_frame.payload_len);
             if (rc < 0) { c->state = CMQ_CLIENT_CLOSING; return; }
             while (rc == 1) {
