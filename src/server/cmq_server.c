@@ -251,6 +251,7 @@ static void cmq_client_destroy(cmq_client_t *c) {
     if (c->parser) cmq_parser_destroy(c->parser);
     free(c->write_buf);
     free(c->ws_recv_buf);
+    free(c->ws_msg_buf);
     free(c->username);
     /* If teardown already ran, c->subs is NULL. Otherwise (server shutdown)
        remove remaining refs from the sublist so free_data won't double-free. */
@@ -468,15 +469,19 @@ static void cmq_send_error(cmq_client_t *c, const char *msg) {
     if (len > 0) cmq_client_send(c, buf, len);
 }
 
-static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
-                              const char *subject,
-                              const uint8_t *payload, size_t payload_len,
-                              const uint8_t *headers, size_t headers_len) {
+/* Build a complete MESSAGE frame. Returns malloc'd buffer; *out_len set.
+   Returns NULL on OOM or invalid headers. Caller frees. */
+static uint8_t *cmq_build_message_frame(uint32_t sub_id,
+                                         const char *subject,
+                                         const uint8_t *payload, size_t payload_len,
+                                         const uint8_t *headers, size_t headers_len,
+                                         size_t *out_len) {
+    if (headers_len > 0 && !headers) return NULL;
     size_t subject_len = strlen(subject);
     size_t body_len = 4 + 2 + subject_len + 2 + headers_len + 4 + payload_len;
     size_t buf_size = sizeof(cmq_frame_hdr_t) + body_len;
     uint8_t *buf = malloc(buf_size);
-    if (!buf) return;
+    if (!buf) return NULL;
 
     uint8_t *p = buf + sizeof(cmq_frame_hdr_t);
     p[0] = (sub_id >> 24) & 0xFF;
@@ -494,9 +499,7 @@ static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
     p[0] = (headers_len >> 8) & 0xFF;
     p[1] = headers_len & 0xFF;
     p += 2;
-    if (headers_len > 0 && headers) {
-        memcpy(p, headers, headers_len);
-    }
+    if (headers_len > 0) memcpy(p, headers, headers_len);
     p += headers_len;
 
     p[0] = ((uint32_t)payload_len >> 24) & 0xFF;
@@ -504,14 +507,33 @@ static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
     p[2] = ((uint32_t)payload_len >> 8) & 0xFF;
     p[3] = (uint32_t)payload_len & 0xFF;
     p += 4;
-    memcpy(p, payload, payload_len);
+    if (payload_len > 0 && payload) memcpy(p, payload, payload_len);
 
     uint8_t flags = (headers_len > 0) ? CMQ_FLAG_HEADERS : 0;
     size_t len = cmq_frame_encode(buf, buf_size, CMQ_OP_MESSAGE, flags,
                                    buf + sizeof(cmq_frame_hdr_t), body_len);
-    if (len > 0) {
-        cmq_client_send(c, buf, len);
-    }
+    if (len == 0) { free(buf); return NULL; }
+    *out_len = len;
+    return buf;
+}
+
+static void cmq_patch_message_sub_id(uint8_t *buf, uint32_t sub_id) {
+    uint8_t *p = buf + sizeof(cmq_frame_hdr_t);
+    p[0] = (sub_id >> 24) & 0xFF;
+    p[1] = (sub_id >> 16) & 0xFF;
+    p[2] = (sub_id >> 8) & 0xFF;
+    p[3] = sub_id & 0xFF;
+}
+
+static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
+                              const char *subject,
+                              const uint8_t *payload, size_t payload_len,
+                              const uint8_t *headers, size_t headers_len) {
+    size_t len = 0;
+    uint8_t *buf = cmq_build_message_frame(sub_id, subject, payload, payload_len,
+                                            headers, headers_len, &len);
+    if (!buf) return;
+    cmq_client_send(c, buf, len);
     free(buf);
 }
 
@@ -650,11 +672,17 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
 }
 
 /* Sync fan-out. Caller MUST hold srv->sublist_lock as a read lock so
-   teardown (which takes the write lock) cannot free refs mid-delivery. */
+   teardown (which takes the write lock) cannot free refs mid-delivery.
+   Builds the MESSAGE frame once and patches sub_id per subscriber. */
 static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
                             const char *subject,
                             const uint8_t *payload, size_t payload_len,
                             const uint8_t *headers, size_t headers_len) {
+    size_t flen = 0;
+    uint8_t *frame = cmq_build_message_frame(0, subject, payload, payload_len,
+                                              headers, headers_len, &flen);
+    if (!frame) return;
+
     const char *seen_qg[64];
     int nseen = 0;
 
@@ -676,8 +704,8 @@ static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
             if (nseen < 64) seen_qg[nseen++] = ref->queue_group;
         }
 
-        cmq_send_message(ref->client, ref->sub_id, subject,
-                          payload, payload_len, headers, headers_len);
+        cmq_patch_message_sub_id(frame, ref->sub_id);
+        cmq_client_send(ref->client, frame, flen);
         cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
         {
             cmq_account_t *oacc = cmq_account_get(srv->accounts,
@@ -685,6 +713,7 @@ static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
             if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)payload_len);
         }
     }
+    free(frame);
 }
 
 typedef struct {
@@ -696,6 +725,8 @@ typedef struct {
     size_t payload_len;
     const uint8_t *headers;
     size_t headers_len;
+    uint8_t *frame;                 /* MESSAGE template; sub_id patched per target */
+    size_t frame_len;
     size_t idx;
     cmq_coro_t *coro;
 } cmq_deliver_ctx_t;
@@ -705,14 +736,20 @@ static void deliver_coro_func(void *arg) {
     cmq_server_t *srv = ctx->srv;
     size_t batch_count = 0;
 
+    if (!ctx->frame) {
+        ctx->frame = cmq_build_message_frame(0, ctx->subject, ctx->payload,
+                                              ctx->payload_len, ctx->headers,
+                                              ctx->headers_len, &ctx->frame_len);
+        if (!ctx->frame) goto done;
+    }
+
     for (size_t i = ctx->idx; i < ctx->target_count; i++) {
         cmq_deliver_tgt_t *t = &ctx->targets[i];
         cmq_client_t *client = find_live_client(srv, t->client_id, t->worker_id);
         if (!client) continue;
 
-        cmq_send_message(client, t->sub_id, ctx->subject,
-                          ctx->payload, ctx->payload_len,
-                          ctx->headers, ctx->headers_len);
+        cmq_patch_message_sub_id(ctx->frame, t->sub_id);
+        cmq_client_send(client, ctx->frame, ctx->frame_len);
         cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
         {
             cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
@@ -726,6 +763,8 @@ static void deliver_coro_func(void *arg) {
             batch_count = 0;
         }
     }
+
+done:
     /* Ownership transferred to deliver_ctx_free via NULLed fields. */
     free((void *)ctx->payload);
     ctx->payload = NULL;
@@ -735,6 +774,8 @@ static void deliver_coro_func(void *arg) {
     }
     free(ctx->targets);
     ctx->targets = NULL;
+    free(ctx->frame);
+    ctx->frame = NULL;
 }
 
 static void deliver_ctx_free(cmq_deliver_ctx_t *ctx) {
@@ -742,6 +783,7 @@ static void deliver_ctx_free(cmq_deliver_ctx_t *ctx) {
     free((void *)ctx->payload);
     if (ctx->headers) free((void *)ctx->headers);
     free(ctx->targets);
+    free(ctx->frame);
     free(ctx);
 }
 
@@ -915,7 +957,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         if (msg_len > 0) memcpy(coro_payload, msg_payload, msg_len);
         if (headers_len > 0 && headers) {
             coro_headers = malloc(headers_len);
-            if (coro_headers) memcpy(coro_headers, headers, headers_len);
+            if (!coro_headers) {
+                free(coro_payload);
+                free(tgts);
+                return;
+            }
+            memcpy(coro_headers, headers, headers_len);
         }
 
         worker_coro_spawn_deliver(w, srv, tgts, ntgt, subject,
@@ -1513,26 +1560,72 @@ static void client_read_cb(int fd, int events, void *data) {
                 client_teardown(c);
                 return;
             }
-            if (ws_frame.opcode == CMQ_WS_OPCODE_BINARY && ws_frame.payload_len > 0) {
-                if (ws_frame.masked) {
-                    cmq_ws_mask((uint8_t *)ws_frame.payload, ws_frame.payload_len,
-                                 ws_frame.mask_key);
+
+            int is_data = (ws_frame.opcode == CMQ_WS_OPCODE_BINARY ||
+                           ws_frame.opcode == CMQ_WS_OPCODE_TEXT ||
+                           ws_frame.opcode == CMQ_WS_OPCODE_CONTINUATION);
+            if (is_data) {
+                /* Copy+unmask into message assembly buffer (never mutate
+                   ws_recv_buf in place — remaining frames still reference it). */
+                if (ws_frame.opcode == CMQ_WS_OPCODE_CONTINUATION && !c->ws_msg_active) {
+                    client_teardown(c);
+                    return;
                 }
-                int rc = cmq_parser_feed(c->parser, ws_frame.payload,
-                                          ws_frame.payload_len);
-                if (rc < 0) { client_teardown(c); return; }
-                while (rc == 1) {
-                    const cmq_frame_t *frame = cmq_parser_frame(c->parser);
-                    if (frame) handle_frame(srv, c, frame);
-                    if (c->state == CMQ_CLIENT_CLOSING ||
-                        c->state == CMQ_CLIENT_CLOSED) {
-                        client_finish_closing(c);
-                        return;
+                if ((ws_frame.opcode == CMQ_WS_OPCODE_BINARY ||
+                     ws_frame.opcode == CMQ_WS_OPCODE_TEXT) && c->ws_msg_active) {
+                    /* New message while still assembling — protocol error. */
+                    client_teardown(c);
+                    return;
+                }
+                if (ws_frame.opcode != CMQ_WS_OPCODE_CONTINUATION)
+                    c->ws_msg_active = 1;
+
+                if (ws_frame.payload_len > 0) {
+                    size_t need = c->ws_msg_len + ws_frame.payload_len;
+                    if (need > c->ws_msg_cap) {
+                        size_t ncap = c->ws_msg_cap ? c->ws_msg_cap * 2 : 4096;
+                        while (ncap < need) ncap *= 2;
+                        size_t max_pl = (size_t)(srv->config.max_payload_size > 0
+                                                     ? srv->config.max_payload_size
+                                                     : CMQ_CLIENT_BUF_SIZE);
+                        size_t hard = max_pl + 65536;
+                        if (ncap > hard) ncap = hard;
+                        if (need > ncap) { client_teardown(c); return; }
+                        uint8_t *nb = realloc(c->ws_msg_buf, ncap);
+                        if (!nb) { client_teardown(c); return; }
+                        c->ws_msg_buf = nb;
+                        c->ws_msg_cap = ncap;
                     }
-                    rc = cmq_parser_next(c->parser);
+                    memcpy(c->ws_msg_buf + c->ws_msg_len, ws_frame.payload,
+                           ws_frame.payload_len);
+                    if (ws_frame.masked) {
+                        cmq_ws_mask(c->ws_msg_buf + c->ws_msg_len,
+                                     ws_frame.payload_len, ws_frame.mask_key);
+                    }
+                    c->ws_msg_len += ws_frame.payload_len;
+                }
+
+                if (ws_frame.fin) {
+                    if (c->ws_msg_len > 0) {
+                        int rc = cmq_parser_feed(c->parser, c->ws_msg_buf,
+                                                  c->ws_msg_len);
+                        if (rc < 0) { client_teardown(c); return; }
+                        while (rc == 1) {
+                            const cmq_frame_t *frame = cmq_parser_frame(c->parser);
+                            if (frame) handle_frame(srv, c, frame);
+                            if (c->state == CMQ_CLIENT_CLOSING ||
+                                c->state == CMQ_CLIENT_CLOSED) {
+                                client_finish_closing(c);
+                                return;
+                            }
+                            rc = cmq_parser_next(c->parser);
+                        }
+                    }
+                    c->ws_msg_len = 0;
+                    c->ws_msg_active = 0;
                 }
             }
-            /* PING/PONG/TEXT and empty BINARY: consume and ignore for now. */
+            /* PING/PONG: consume and ignore for now. */
             offset += (size_t)parsed;
         }
         if (offset > 0) {

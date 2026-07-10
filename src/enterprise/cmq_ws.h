@@ -13,6 +13,7 @@ typedef struct cmq_ws_frame cmq_ws_frame_t;
 typedef struct cmq_ws_client cmq_ws_client_t;
 
 typedef enum {
+    CMQ_WS_OPCODE_CONTINUATION = 0x00,
     CMQ_WS_OPCODE_TEXT   = 0x01,
     CMQ_WS_OPCODE_BINARY = 0x02,
     CMQ_WS_OPCODE_CLOSE  = 0x08,

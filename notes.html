@@ -992,6 +992,24 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Fan-out Template &amp; WS Message Fragmentation</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_build_message_frame + patch</span></td><td>✅</td><td>Fan-out builds the MESSAGE frame once and patches the 4-byte <code>sub_id</code> per subscriber (<code>deliver_matches</code> / coro). Cuts O(N) malloc+encode to O(1) build + O(N) patch. Defensive: <code>headers_len&gt;0 &amp;&amp; !headers</code> aborts.</td></tr>
+<tr><td><span class="component-name">coro headers OOM abort</span></td><td>✅</td><td>If headers copy fails under the coro path, free targets/payload and skip spawn — no longer delivers MESSAGE frames with uninitialized header holes.</td></tr>
+<tr><td><span class="component-name">WS FIN/CONTINUATION assembly</span></td><td>✅</td><td>Per-client <code>ws_msg_buf</code> reassembles RFC 6455 fragmented messages (<code>BINARY FIN=0</code> + <code>CONTINUATION</code>). Unmask into asm buffer (does not mutate <code>ws_recv_buf</code>). Illegal sequences teardown.</td></tr>
+<tr><td><span class="component-name">CMQ_WS_OPCODE_CONTINUATION</span></td><td>✅</td><td>Added <code>0x00</code> to <code>cmq_ws.h</code>.</td></tr>
+<tr><td><span class="component-name">test_server_ops / ws_fragmented_message</span></td><td>✅</td><td>Sends CONNECT as BINARY(FIN=0)+CONTINUATION(FIN=1); asserts CONNACK. Suite now 9 tests.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>21/21 test suites pass.</strong> Fan-out template reuse + WS message fragmentation.
+</div>
+</div>
+
 </div>
 </body>
 </html>

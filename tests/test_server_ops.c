@@ -664,4 +664,72 @@ TEST(server_ops, ws_partial_frame) {
     cmq_server_destroy(srv);
 }
 
+TEST(server_ops, ws_fragmented_message) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 8;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(100);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+
+    const char *upgrade =
+        "GET /ws HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    ASSERT(write(fd, upgrade, strlen(upgrade)) > 0);
+    wait_ms(80);
+    char resp[512];
+    ssize_t rn = read(fd, resp, sizeof(resp) - 1);
+    ASSERT(rn > 0);
+    resp[rn] = '\0';
+    ASSERT(strstr(resp, "101") != NULL);
+
+    /* Split a CMQ CONNECT across BINARY(FIN=0) + CONTINUATION(FIN=1). */
+    uint8_t cmq[64];
+    size_t cmq_len = cmq_frame_encode(cmq, sizeof(cmq), CMQ_OP_CONNECT, 0, NULL, 0);
+    ASSERT(cmq_len > 4);
+    size_t mid = cmq_len / 2;
+    size_t rest = cmq_len - mid;
+    static const uint8_t mk[4] = {0xAA, 0xBB, 0xCC, 0xDD};
+
+    uint8_t frag1[128];
+    frag1[0] = 0x02; /* FIN=0, BINARY */
+    frag1[1] = (uint8_t)(0x80 | mid);
+    frag1[2] = mk[0]; frag1[3] = mk[1]; frag1[4] = mk[2]; frag1[5] = mk[3];
+    for (size_t i = 0; i < mid; i++)
+        frag1[6 + i] = cmq[i] ^ mk[i % 4];
+    ASSERT(write(fd, frag1, 6 + mid) == (ssize_t)(6 + mid));
+    wait_ms(20);
+
+    uint8_t frag2[128];
+    frag2[0] = 0x80; /* FIN=1, CONTINUATION */
+    frag2[1] = (uint8_t)(0x80 | rest);
+    frag2[2] = mk[0]; frag2[3] = mk[1]; frag2[4] = mk[2]; frag2[5] = mk[3];
+    for (size_t i = 0; i < rest; i++)
+        frag2[6 + i] = cmq[mid + i] ^ mk[i % 4];
+    ASSERT(write(fd, frag2, 6 + rest) == (ssize_t)(6 + rest));
+    wait_ms(80);
+
+    cmq_parser_t *parser = cmq_parser_create();
+    cmq_frame_t f;
+    ASSERT_EQ(ws_recv_cmq(fd, parser, &f), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_CONNACK);
+    free_frame(&f);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

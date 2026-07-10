@@ -88,6 +88,12 @@ typedef struct cmq_client {
     size_t ws_recv_len;
     size_t ws_recv_cap;
 
+    /* WebSocket message-level fragmentation (FIN=0 / CONTINUATION). */
+    uint8_t *ws_msg_buf;
+    size_t ws_msg_len;
+    size_t ws_msg_cap;
+    int ws_msg_active;              /* 1 while assembling a fragmented message */
+
     struct cmq_client *next;
 } cmq_client_t;
 
