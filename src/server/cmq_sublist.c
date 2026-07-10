@@ -225,54 +225,64 @@ int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject, void *data) {
     return rc;
 }
 
-static void result_append(cmq_sublist_result_t *result, void *data) {
+static int result_append(cmq_sublist_result_t *result, void *data) {
     if (result->count >= result->cap) {
         size_t new_cap = result->cap == 0 ? 8 : result->cap * 2;
         void **new_entries = realloc(result->entries, new_cap * sizeof(void *));
-        if (!new_entries) return;
+        if (!new_entries) return -1;
         result->entries = new_entries;
         result->cap = new_cap;
     }
     result->entries[result->count++] = data;
+    return 0;
 }
 
-static void match_recursive(cmq_sl_node_t *node, char tokens[][256], int ntokens, int depth,
+static int match_recursive(cmq_sl_node_t *node, char tokens[][256], int ntokens, int depth,
                             cmq_sublist_result_t *result) {
     if (depth >= ntokens) {
         for (size_t i = 0; i < node->sub_count; i++) {
-            result_append(result, node->subs[i]);
+            if (result_append(result, node->subs[i]) != 0) return -1;
         }
-        return;
+        return 0;
     }
 
     cmq_sl_node_t *child = node->children;
     while (child) {
         if (child->is_fwc) {
             for (size_t i = 0; i < child->sub_count; i++) {
-                result_append(result, child->subs[i]);
+                if (result_append(result, child->subs[i]) != 0) return -1;
             }
         } else if (child->is_pwc) {
             if (depth + 1 <= ntokens) {
-                match_recursive(child, tokens, ntokens, depth + 1, result);
+                if (match_recursive(child, tokens, ntokens, depth + 1, result) != 0)
+                    return -1;
             }
         } else if (child->token && strcmp(child->token, tokens[depth]) == 0) {
-            match_recursive(child, tokens, ntokens, depth + 1, result);
+            if (match_recursive(child, tokens, ntokens, depth + 1, result) != 0)
+                return -1;
         }
         child = child->next;
     }
+    return 0;
 }
 
-void cmq_sublist_match(cmq_sublist_t *sl, const char *subject, cmq_sublist_result_t *result) {
-    if (!sl || !subject || !result) return;
+int cmq_sublist_match(cmq_sublist_t *sl, const char *subject, cmq_sublist_result_t *result) {
+    if (!sl || !subject || !result) return -1;
     memset(result, 0, sizeof(*result));
 
     char tokens[64][256];
     int ntokens;
-    if (tokenize(subject, tokens, &ntokens) != 0) return;
+    if (tokenize(subject, tokens, &ntokens) != 0) return -1;
 
     cmq_rwlock_rdlock(&sl->lock);
-    match_recursive(&sl->root, tokens, ntokens, 0, result);
+    int rc = match_recursive(&sl->root, tokens, ntokens, 0, result);
     cmq_rwlock_unlock(&sl->lock);
+    if (rc != 0) {
+        cmq_sublist_result_free(result);
+        memset(result, 0, sizeof(*result));
+        return -1;
+    }
+    return 0;
 }
 
 void cmq_sublist_result_free(cmq_sublist_result_t *result) {

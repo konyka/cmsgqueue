@@ -947,7 +947,7 @@ All 15 test suites passing, 0 warnings.
 <tr><td><span class="component-name">TLS session destroy</span></td><td>✅</td><td>No longer <code>close()</code>s the fd — client owns the socket once. Eliminates double-close.</td></tr>
 <tr><td><span class="component-name">Backpressure teardown</span></td><td>✅</td><td>Write buffer &gt; 4 MB now calls <code>client_teardown()</code> immediately (was sticky <code>CLOSING</code> without reclaim).</td></tr>
 <tr><td><span class="component-name">active_clients atomic</span></td><td>✅</td><td><code>max_clients</code> gate uses <code>cmq_atomic_fetch_add_u32</code> instead of lock-and-sum TOCTOU across workers.</td></tr>
-<tr><td><span class="component-name">Keepalive covers workers</span></td><td>✅</td><td><code>keepalive_timer_cb</code> snapshots acceptor <em>and</em> every worker client array, then teardowns idle connections.</td></tr>
+<tr><td><span class="component-name">Keepalive covers workers</span></td><td>✅</td><td><code>keepalive_timer_cb</code> teardowns idle acceptor clients in-thread; worker clients are queued via <code>worker_push_teardown</code> (no cross-thread free).</td></tr>
 <tr><td><span class="component-name">Match-then-deliver</span></td><td>✅</td><td>Small fan-out holds <code>sublist_lock</code> read lock through <code>deliver_matches</code> (teardown needs write lock). Large fan-out snapshots targets under the read lock then unlocks before coroutine delivery.</td></tr>
 <tr><td><span class="component-name">Queue-group dedup</span></td><td>✅</td><td><code>deliver_matches</code> tracks seen queue-group names (up to 64) instead of relying on adjacency in the match result — correct under LIFO child insertion.</td></tr>
 <tr><td><span class="component-name">Subscribe rollback</span></td><td>✅</td><td>Allocates entry+ref, inserts into sublist first; only then links into <code>c-&gt;subs</code>. Failure paths free both and leave no orphan list nodes.</td></tr>
@@ -968,7 +968,7 @@ All 15 test suites passing, 0 warnings.
 <tr><th>Component</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">worker_msg target_id</span></td><td>✅</td><td>Cross-worker delivery keys on stable <code>c-&gt;id</code> instead of <code>fd</code>, eliminating misdelivery after fd reuse.</td></tr>
 <tr><td><span class="component-name">sync deliver under rdlock</span></td><td>✅</td><td>Small fan-out holds <code>sublist_lock</code> read lock through <code>deliver_matches</code> so teardown (write lock) cannot free <code>cmq_sub_ref_t</code> mid-send.</td></tr>
-<tr><td><span class="component-name">coro deliver snapshot</span></td><td>✅</td><td>Large fan-out builds <code>cmq_deliver_tgt_t</code> value snapshots (client_id/worker_id/sub_id) under the read lock, then unlocks and resolves live clients via <code>find_live_client</code> — no dangling ref pointers.</td></tr>
+<tr><td><span class="component-name">coro deliver snapshot</span></td><td>✅</td><td>Large fan-out builds <code>cmq_deliver_tgt_t</code> value snapshots under the read lock, then routes by <code>worker_push_msg</code> / locked <code>send_direct</code> — never holds a bare <code>cmq_client_t*</code> across unlock.</td></tr>
 <tr><td><span class="component-name">coro pool-full drain</span></td><td>✅</td><td>When the per-worker coro pool is full, resume until <code>CMQ_CORO_DONE</code> instead of a single resume that truncated fan-out and leaked payload.</td></tr>
 <tr><td><span class="component-name">WS recv reassembly</span></td><td>✅</td><td>Per-client <code>ws_recv_buf</code> accumulates TCP reads; loop-parses complete frames and keeps partials. Fixes silent drop of fragmented / multi-frame WS reads.</td></tr>
 </table>
@@ -1007,6 +1007,23 @@ All 15 test suites passing, 0 warnings.
 </table>
 <div class="log-entry success">
 <span class="log-date">Commit 264689f</span> — <strong>21/21 test suites pass.</strong> Fan-out template reuse + WS message fragmentation.
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Cross-Thread Teardown &amp; Match OOM</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CMQ_WORKER_MSG_TEARDOWN</span></td><td>✅</td><td><code>worker_push_teardown</code> schedules destroy on the owning worker. Keepalive + drain no longer call <code>client_teardown</code> from the acceptor thread on worker clients.</td></tr>
+<tr><td><span class="component-name">coro no bare client*</span></td><td>✅</td><td><code>deliver_coro_func</code> uses <code>worker_push_msg</code> / locked acceptor lookup — removed <code>find_live_client</code> UAF window after unlock.</td></tr>
+<tr><td><span class="component-name">cmq_sublist_match OOM</span></td><td>✅</td><td>Returns <code>int</code> (0/-1); realloc failure clears result. Callers skip fan-out instead of partial delivery.</td></tr>
+<tr><td><span class="component-name">drain via worker queue</span></td><td>✅</td><td><code>cmq_server_drain</code> pushes DISCONNECT + teardown onto each worker queue instead of cross-thread <code>send_direct</code>.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Pending commit</span> — Cross-thread teardown safety + match OOM propagation. <strong>21/21 test suites pass.</strong>
 </div>
 </div>
 

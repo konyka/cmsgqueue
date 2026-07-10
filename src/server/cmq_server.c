@@ -84,6 +84,22 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
 
     while (msg) {
         cmq_worker_msg_t *next = msg->next;
+        if (msg->kind == CMQ_WORKER_MSG_TEARDOWN) {
+            cmq_mutex_lock(&w->clients_lock);
+            cmq_client_t *target = NULL;
+            for (int i = 0; i < w->clients_count; i++) {
+                if (w->clients[i] && w->clients[i]->id == msg->target_id) {
+                    target = w->clients[i];
+                    break;
+                }
+            }
+            cmq_mutex_unlock(&w->clients_lock);
+            if (target) client_teardown(target);
+            free(msg);
+            msg = next;
+            continue;
+        }
+
         cmq_mutex_lock(&w->clients_lock);
         cmq_client_t *target = NULL;
         for (int i = 0; i < w->clients_count; i++) {
@@ -94,7 +110,7 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
         }
         if (target && target->state != CMQ_CLIENT_CLOSED &&
             target->state != CMQ_CLIENT_CLOSING) {
-            cmq_client_send(target, msg->buf, msg->len);
+            cmq_client_send_direct(target, msg->buf, msg->len);
         }
         cmq_mutex_unlock(&w->clients_lock);
         free(msg->buf);
@@ -108,10 +124,33 @@ static void worker_push_msg(cmq_worker_t *w, uint32_t target_id,
     cmq_worker_msg_t *msg = malloc(sizeof(cmq_worker_msg_t));
     if (!msg) return;
     msg->target_id = target_id;
+    msg->kind = CMQ_WORKER_MSG_SEND;
     msg->buf = malloc(len);
     if (!msg->buf) { free(msg); return; }
     memcpy(msg->buf, buf, len);
     msg->len = len;
+    msg->next = NULL;
+
+    cmq_mutex_lock(&w->msg_lock);
+    if (w->msg_tail) {
+        w->msg_tail->next = msg;
+    } else {
+        w->msg_head = msg;
+    }
+    w->msg_tail = msg;
+    cmq_mutex_unlock(&w->msg_lock);
+
+    wakeup_fd_signal(w->wakeup_fd);
+}
+
+/* Schedule client teardown on the owning worker thread (never cross-thread free). */
+static void worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
+    cmq_worker_msg_t *msg = malloc(sizeof(cmq_worker_msg_t));
+    if (!msg) return;
+    msg->target_id = target_id;
+    msg->kind = CMQ_WORKER_MSG_TEARDOWN;
+    msg->buf = NULL;
+    msg->len = 0;
     msg->next = NULL;
 
     cmq_mutex_lock(&w->msg_lock);
@@ -597,37 +636,6 @@ typedef struct {
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
 } cmq_deliver_tgt_t;
 
-/* Resolve a live client by stable id. Caller must not hold clients_lock.
-   Returns NULL if the client is gone or closing. */
-static cmq_client_t *find_live_client(cmq_server_t *srv, uint32_t client_id,
-                                       int worker_id) {
-    if (worker_id >= 0 && srv->workers && worker_id < srv->num_workers) {
-        cmq_worker_t *w = &srv->workers[worker_id];
-        cmq_mutex_lock(&w->clients_lock);
-        for (int i = 0; i < w->clients_count; i++) {
-            cmq_client_t *c = w->clients[i];
-            if (c && c->id == client_id &&
-                (c->state == CMQ_CLIENT_CONNECTED || c->state == CMQ_CLIENT_INIT)) {
-                cmq_mutex_unlock(&w->clients_lock);
-                return c;
-            }
-        }
-        cmq_mutex_unlock(&w->clients_lock);
-        return NULL;
-    }
-    cmq_mutex_lock(&srv->clients_lock);
-    for (int i = 0; i < srv->clients_count; i++) {
-        cmq_client_t *c = srv->clients[i];
-        if (c && c->id == client_id &&
-            (c->state == CMQ_CLIENT_CONNECTED || c->state == CMQ_CLIENT_INIT)) {
-            cmq_mutex_unlock(&srv->clients_lock);
-            return c;
-        }
-    }
-    cmq_mutex_unlock(&srv->clients_lock);
-    return NULL;
-}
-
 /* Build a queue-group-deduped target list from match results.
    Must be called while holding sublist_lock (rd). Returns malloc'd array;
    *out_n set to count. Caller frees. */
@@ -745,11 +753,27 @@ static void deliver_coro_func(void *arg) {
 
     for (size_t i = ctx->idx; i < ctx->target_count; i++) {
         cmq_deliver_tgt_t *t = &ctx->targets[i];
-        cmq_client_t *client = find_live_client(srv, t->client_id, t->worker_id);
-        if (!client) continue;
-
         cmq_patch_message_sub_id(ctx->frame, t->sub_id);
-        cmq_client_send(client, ctx->frame, ctx->frame_len);
+
+        /* Never hold a bare client* across unlock — route by stable id. */
+        if (t->worker_id >= 0 && srv->workers &&
+            t->worker_id < srv->num_workers) {
+            worker_push_msg(&srv->workers[t->worker_id], t->client_id,
+                             ctx->frame, ctx->frame_len);
+        } else {
+            cmq_mutex_lock(&srv->clients_lock);
+            for (int ci = 0; ci < srv->clients_count; ci++) {
+                cmq_client_t *c = srv->clients[ci];
+                if (c && c->id == t->client_id &&
+                    (c->state == CMQ_CLIENT_CONNECTED ||
+                     c->state == CMQ_CLIENT_INIT)) {
+                    cmq_client_send_direct(c, ctx->frame, ctx->frame_len);
+                    break;
+                }
+            }
+            cmq_mutex_unlock(&srv->clients_lock);
+        }
+
         cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
         {
             cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
@@ -927,7 +951,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
-    cmq_sublist_match(srv->sublist, subject, &result);
+    if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
+        cmq_rwlock_unlock(&srv->sublist_lock);
+        return; /* OOM: skip fan-out rather than partial delivery */
+    }
 
     if (result.count == 0) {
         cmq_sublist_result_free(&result);
@@ -1156,7 +1183,10 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
-    cmq_sublist_match(srv->sublist, subject, &result);
+    if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
+        cmq_rwlock_unlock(&srv->sublist_lock);
+        return;
+    }
 
     const char *seen_qg[64];
     int nseen = 0;
@@ -1212,9 +1242,10 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
-    cmq_sublist_match(srv->sublist, subject, &result);
-    deliver_matches(srv, &result, subject, msg_payload, msg_len, NULL, 0);
-    cmq_sublist_result_free(&result);
+    if (cmq_sublist_match(srv->sublist, subject, &result) == 0) {
+        deliver_matches(srv, &result, subject, msg_payload, msg_len, NULL, 0);
+        cmq_sublist_result_free(&result);
+    }
     cmq_rwlock_unlock(&srv->sublist_lock);
 }
 
@@ -1313,9 +1344,10 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
 
         cmq_rwlock_rdlock(&srv->sublist_lock);
         cmq_sublist_result_t result;
-        cmq_sublist_match(srv->sublist, subject, &result);
-        deliver_matches(srv, &result, subject, msg_payload, payload_len, NULL, 0);
-        cmq_sublist_result_free(&result);
+        if (cmq_sublist_match(srv->sublist, subject, &result) == 0) {
+            deliver_matches(srv, &result, subject, msg_payload, payload_len, NULL, 0);
+            cmq_sublist_result_free(&result);
+        }
         cmq_rwlock_unlock(&srv->sublist_lock);
 
         cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
@@ -1659,7 +1691,7 @@ static void client_read_cb(int fd, int events, void *data) {
 
 static void keepalive_scan_clients(cmq_client_t **clients, int count,
                                     uint64_t now, uint64_t timeout_ms) {
-    /* Collect first so teardown (which mutates the array) is safe. */
+    /* Acceptor-thread clients only — teardown is safe on this thread. */
     cmq_client_t *doomed[256];
     int ndoomed = 0;
     for (int i = 0; i < count && ndoomed < 256; i++) {
@@ -1699,17 +1731,19 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     if (srv->workers) {
         for (int wi = 0; wi < srv->num_workers; wi++) {
             cmq_worker_t *w = &srv->workers[wi];
+            uint32_t doomed_ids[256];
+            int ndoomed = 0;
             cmq_mutex_lock(&w->clients_lock);
-            int wn = w->clients_count;
-            cmq_client_t **wsnap = NULL;
-            if (wn > 0) {
-                wsnap = malloc((size_t)wn * sizeof(cmq_client_t *));
-                if (wsnap) memcpy(wsnap, w->clients, (size_t)wn * sizeof(cmq_client_t *));
+            for (int i = 0; i < w->clients_count && ndoomed < 256; i++) {
+                cmq_client_t *c = w->clients[i];
+                if (c && c->state == CMQ_CLIENT_CONNECTED &&
+                    (now - c->last_activity_ms) > timeout_ms) {
+                    doomed_ids[ndoomed++] = c->id;
+                }
             }
             cmq_mutex_unlock(&w->clients_lock);
-            if (wsnap) {
-                keepalive_scan_clients(wsnap, wn, now, timeout_ms);
-                free(wsnap);
+            for (int i = 0; i < ndoomed; i++) {
+                worker_push_teardown(w, doomed_ids[i]);
             }
         }
     }
@@ -2060,15 +2094,21 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
             cmq_worker_t *w = &srv->workers[i];
+            uint32_t ids[256];
+            int nids = 0;
             cmq_mutex_lock(&w->clients_lock);
-            for (int j = 0; j < w->clients_count; j++) {
+            for (int j = 0; j < w->clients_count && nids < 256; j++) {
                 cmq_client_t *c = w->clients[j];
                 if (c && c->state == CMQ_CLIENT_CONNECTED) {
-                    if (disc_len > 0) cmq_client_send_direct(c, disc, disc_len);
-                    c->state = CMQ_CLIENT_CLOSING;
+                    ids[nids++] = c->id;
                 }
             }
             cmq_mutex_unlock(&w->clients_lock);
+            for (int j = 0; j < nids; j++) {
+                if (disc_len > 0)
+                    worker_push_msg(w, ids[j], disc, disc_len);
+                worker_push_teardown(w, ids[j]);
+            }
         }
     }
 

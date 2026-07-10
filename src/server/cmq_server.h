@@ -99,10 +99,14 @@ typedef struct cmq_client {
 
 typedef struct cmq_worker_msg {
     uint32_t target_id;             /* stable client id (not fd — avoids reuse) */
+    int kind;                       /* 0=send data, 1=teardown client */
     uint8_t *buf;
     size_t len;
     struct cmq_worker_msg *next;
 } cmq_worker_msg_t;
+
+#define CMQ_WORKER_MSG_SEND     0
+#define CMQ_WORKER_MSG_TEARDOWN 1
 
 typedef struct cmq_worker {
     cmq_ev_loop_t *ev_loop;
