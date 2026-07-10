@@ -120,10 +120,15 @@ static int node_add_sub(cmq_sl_node_t *node, void *data) {
     return 0;
 }
 
-static int node_remove_any_sub(cmq_sl_node_t *node) {
-    if (node->sub_count == 0) return -1;
-    node->sub_count--;
-    return 0;
+static int node_remove_sub(cmq_sl_node_t *node, void *data) {
+    for (size_t i = 0; i < node->sub_count; i++) {
+        if (node->subs[i] == data) {
+            node->subs[i] = node->subs[node->sub_count - 1];
+            node->sub_count--;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 cmq_sublist_t *cmq_sublist_create(void) {
@@ -193,8 +198,8 @@ int cmq_sublist_insert(cmq_sublist_t *sl, const char *subject, void *data) {
     return rc;
 }
 
-int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject) {
-    if (!sl || validate_subject(subject) != 0) return -1;
+int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject, void *data) {
+    if (!sl || !data || validate_subject(subject) != 0) return -1;
 
     char tokens[64][256];
     int ntokens;
@@ -214,7 +219,7 @@ int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject) {
         current = child;
     }
 
-    int rc = node_remove_any_sub(current);
+    int rc = node_remove_sub(current, data);
     if (rc == 0 && sl->count > 0) sl->count--;
     cmq_rwlock_unlock(&sl->lock);
     return rc;

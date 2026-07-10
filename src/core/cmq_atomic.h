@@ -42,6 +42,14 @@ static cmq_inline cmq_u32_t cmq_atomic_fetch_add_u32(cmq_atomic_u32 *a, cmq_u32_
     return atomic_fetch_add_explicit(a, v, mo);
 }
 
+static cmq_inline cmq_u32_t cmq_atomic_fetch_sub_u32(cmq_atomic_u32 *a, cmq_u32_t v, memory_order mo) {
+    return atomic_fetch_sub_explicit(a, v, mo);
+}
+
+static cmq_inline cmq_u64_t cmq_atomic_fetch_sub_u64(cmq_atomic_u64 *a, cmq_u64_t v, memory_order mo) {
+    return atomic_fetch_sub_explicit(a, v, mo);
+}
+
 static cmq_inline int cmq_atomic_load_int(cmq_atomic_int *a, memory_order mo) {
     return atomic_load_explicit(a, mo);
 }

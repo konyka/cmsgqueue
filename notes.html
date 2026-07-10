@@ -338,7 +338,7 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <div class="phase">
 <div class="phase-header">
 <span class="phase-title">Planned Components</span>
-<span class="status status-todo">TODO</span>
+<span class="status status-done">DONE</span>
 </div>
 <table>
 <tr><th>Component</th><th>Description</th></tr>
@@ -890,7 +890,7 @@ All 15 test suites passing, 0 warnings.
 <table>
 <tr><th>Component</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">max_payload_size enforcement</span></td><td>✅</td><td>Previously declared in <code>cmq_config_t</code> (default 1 MB via <code>CMQ_DEFAULT_MAX_PAYLOAD</code>) but never checked. Now enforced as the message-body length in <code>handle_publish</code>, <code>handle_request</code>, and per-message in <code>handle_batch</code>. Oversize → <code>cmq_send_error(c, "payload too large")</code> and the frame is dropped (no fan-out, no stat bump).</td></tr>
-<tr><td><span class="component-name">max_subs_per_client (runtime)</span></td><td>✅</td><td>Promoted the compile-time <code>CMQ_MAX_SUBS_PER_CLIENT</code> (1024) to a runtime config field on <code>cmq_config_t</code>, parsed from <code>max_subs_per_client =</code> in config files, defaulting to <code>CMQ_DEFAULT_MAX_SUBS_PER_CLIENT</code> when unset. <code>handle_subscribe</code> walks <code>c->subs</code> and rejects with <code>SUBACK code=1</code> once the cap is reached, preventing subscription-storm memory growth.</td></tr>
+<tr><td><span class="component-name">max_subs_per_client (runtime)</span></td><td>✅</td><td>Promoted the compile-time <code>CMQ_MAX_SUBS_PER_CLIENT</code> (1024) to a runtime config field on <code>cmq_config_t</code>, parsed from <code>max_subs_per_client =</code> in config files, defaulting to <code>CMQ_DEFAULT_MAX_SUBS_PER_CLIENT</code> when unset. Cap check is O(1) via <code>c-&gt;sub_count</code> (see Rejection Counters phase); rejects with <code>SUBACK code=1</code> once the cap is reached.</td></tr>
 <tr><td><span class="component-name">cmq_config_validate</span></td><td>✅</td><td>Rejects negative <code>max_subs_per_client</code>.</td></tr>
 <tr><td><span class="component-name">test_server_ops</span></td><td>✅</td><td>2 new tests: <code>payload_too_large</code> (PUBLISH with 128 B body under a 64-byte cap → expects ERROR frame), <code>subscribe_cap_enforced</code> (<code>max_subs_per_client = 3</code>, 4th SUBSCRIBE → expects SUBACK code=1). Suite now 5 tests, was 3.</td></tr>
 </table>
@@ -931,6 +931,31 @@ All 15 test suites passing, 0 warnings.
 </table>
 <div class="log-entry success">
 <span class="log-date">Commit 1930c3b + 1aa409b</span> — <strong>21/21 test suites pass.</strong> WebSocket transport now works end-to-end with conformant (masked) clients; previously only the upgrade handshake + unmasked test clients functioned.
+</div>
+</div>
+
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Client Lifecycle Hardening &amp; Hot-Path Perf</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_sublist_remove(subject, data)</span></td><td>✅</td><td>API now takes the exact <code>void *data</code> pointer and swap-removes it from the node <code>subs[]</code>. Fixes wrong-sub removal / silent leaks when multiple refs share a subject. Caller frees the pointer.</td></tr>
+<tr><td><span class="component-name">client_teardown()</span></td><td>✅</td><td>On disconnect/error/backpressure: exact-remove every sub from the sublist, detach from worker/acceptor array (swap-with-last), <code>cmq_ev_del</code>, decrement <code>active_clients</code> / stats, then destroy. Prevents publish→dead-client UAF and fd-reuse misdelivery.</td></tr>
+<tr><td><span class="component-name">client_finish_closing()</span></td><td>✅</td><td>Drains the write buffer (CONNACK/ERROR) before teardown so auth-failure clients still receive the rejection frame.</td></tr>
+<tr><td><span class="component-name">TLS session destroy</span></td><td>✅</td><td>No longer <code>close()</code>s the fd — client owns the socket once. Eliminates double-close.</td></tr>
+<tr><td><span class="component-name">Backpressure teardown</span></td><td>✅</td><td>Write buffer &gt; 4 MB now calls <code>client_teardown()</code> immediately (was sticky <code>CLOSING</code> without reclaim).</td></tr>
+<tr><td><span class="component-name">active_clients atomic</span></td><td>✅</td><td><code>max_clients</code> gate uses <code>cmq_atomic_fetch_add_u32</code> instead of lock-and-sum TOCTOU across workers.</td></tr>
+<tr><td><span class="component-name">Keepalive covers workers</span></td><td>✅</td><td><code>keepalive_timer_cb</code> snapshots acceptor <em>and</em> every worker client array, then teardowns idle connections.</td></tr>
+<tr><td><span class="component-name">Match-then-deliver</span></td><td>✅</td><td>Publish/request/batch/response release <code>sublist_lock</code> immediately after <code>cmq_sublist_match</code>; fan-out runs unlocked. Cuts lock hold time on the hot path.</td></tr>
+<tr><td><span class="component-name">Queue-group dedup</span></td><td>✅</td><td><code>deliver_matches</code> tracks seen queue-group names (up to 64) instead of relying on adjacency in the match result — correct under LIFO child insertion.</td></tr>
+<tr><td><span class="component-name">Subscribe rollback</span></td><td>✅</td><td>Allocates entry+ref, inserts into sublist first; only then links into <code>c-&gt;subs</code>. Failure paths free both and leave no orphan list nodes.</td></tr>
+<tr><td><span class="component-name">README protocol sync</span></td><td>✅</td><td>Opcode table aligned with <code>cmq_proto.h</code> (CONNECT=0x01 … BATCH=0x12); payload length documented as little-endian; flags corrected to COMPRESSED/CHECKSUM/HEADERS/BATCH. Persistence/TLS/cluster wording clarified as library vs server-wired.</td></tr>
+<tr><td><span class="component-name">test_sublist</span></td><td>✅</td><td>New <code>remove_exact_of_duplicates</code>; all remove call sites pass the data pointer. Suite 15 tests.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>21/21 test suites pass.</strong> Lifecycle UAF/leak fixes + hot-path lock shortening + queue-group correctness. Docs synced.
 </div>
 </div>
 

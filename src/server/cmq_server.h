@@ -48,6 +48,7 @@ typedef struct cmq_sub_entry {
     uint32_t sub_id;
     char subject[CMQ_MAX_SUBJECT];
     char queue_group[CMQ_MAX_QUEUE_GROUP];
+    void *ref;                      /* cmq_sub_ref_t* owned by sublist until removed */
     struct cmq_sub_entry *next;
 } cmq_sub_entry_t;
 
@@ -137,6 +138,8 @@ struct cmq_server {
     cmq_route_pool_t *routes;
     cmq_cluster_t *cluster;
     cmq_tls_config_t *tls_config;
+
+    cmq_atomic_u32 active_clients;  /* accept/teardown gate for max_clients */
 
     cmq_atomic_u64 stat_connections;
     cmq_atomic_u64 stat_messages_in;

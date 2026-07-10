@@ -15,9 +15,9 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Backpressure** 4MB write buffer limit per client, slow consumers auto-disconnected
 - **Connection Limit** configurable max_clients enforced on accept
 - **Graceful Shutdown** cmq_server_drain() sends DISCONNECT to all clients before stopping
-- **Persistence** ring buffer memstore, durable streams with consumers, file-based with CRC32
-- **Clustering** node membership, server-to-server route forwarding, cross-cluster gateway, leaf nodes
-- **Enterprise** multi-tenant accounts, TLS accept, MQTT bridge, WebSocket transport
+- **Persistence** ring buffer memstore, durable streams with consumers, file-based with CRC32 (library APIs; optional server wiring)
+- **Clustering** node membership and outbound route broadcast (gateway/leaf APIs available as libraries)
+- **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired), MQTT bridge library, WebSocket transport
 - **Assembly Coroutines** x86_64 + ARM64 context switching, integrated for high-fanout delivery
 - **Multi-Worker** N worker threads with eventfd-based cross-thread messaging, coroutine scheduler
 - **Cross-Platform CI** Linux (gcc/clang), macOS, Windows, ARM64 cross-compile
@@ -70,7 +70,7 @@ max_payload_size = 1048576
 
 ## Binary Protocol
 
-Custom binary protocol with 9-byte packed header:
+Custom binary protocol with 9-byte packed header (client-speaks-first):
 
 ```
 Offset  Size  Field
@@ -78,7 +78,7 @@ Offset  Size  Field
 2       1     Version (0x01)
 3       1     Flags
 4       1     Opcode
-5       4     Payload length (big-endian uint32)
+5       4     Payload length (little-endian uint32)
 9       ...   Payload
 ```
 
@@ -86,20 +86,20 @@ Offset  Size  Field
 
 | Opcode | Name | Direction | Description |
 |--------|------|-----------|-------------|
-| 0x01 | INFO | S→C | Server info on connect |
-| 0x02 | CONNECT | C→S | Client handshake |
-| 0x03 | CONNACK | S→C | Connection acknowledgment |
-| 0x04 | PUBLISH | C→S | Publish message |
-| 0x05 | PUBACK | S→C | Publish acknowledgment |
-| 0x06 | SUBSCRIBE | C→S | Subscribe to subject |
-| 0x07 | SUBACK | S→C | Subscription acknowledgment |
-| 0x08 | UNSUBSCRIBE | C→S | Unsubscribe |
-| 0x09 | UNSUBACK | S→C | Unsubscribe acknowledgment |
-| 0x0A | MESSAGE | S→C | Deliver message to subscriber |
-| 0x0B | PING | C→S | Keep-alive |
-| 0x0C | PONG | S→C | Keep-alive response |
-| 0x0D | DISCONNECT | Either | Graceful disconnect |
-| 0x0E | ERROR | S→C | Error response |
+| 0x01 | CONNECT | C→S | Client handshake |
+| 0x02 | CONNACK | S→C | Connection acknowledgment |
+| 0x03 | PUBLISH | C→S | Publish message |
+| 0x04 | PUBACK | S→C | Publish acknowledgment |
+| 0x05 | SUBSCRIBE | C→S | Subscribe to subject |
+| 0x06 | SUBACK | S→C | Subscription acknowledgment |
+| 0x07 | UNSUBSCRIBE | C→S | Unsubscribe |
+| 0x08 | UNSUBACK | S→C | Unsubscribe acknowledgment |
+| 0x09 | MESSAGE | S→C | Deliver message to subscriber |
+| 0x0A | PING | C→S | Keep-alive |
+| 0x0B | PONG | S→C | Keep-alive response |
+| 0x0C | DISCONNECT | Either | Graceful disconnect |
+| 0x0D | ERROR | S→C | Error response |
+| 0x0E | INFO | S→C | Server info (sent after first client frame) |
 | 0x0F | REQUEST | C→S | Request with reply-to subject |
 | 0x10 | RESPONSE | C→S | Response to a request |
 | 0x11 | STATS | C→S / S→C | Query server metrics |
@@ -109,9 +109,10 @@ Offset  Size  Field
 
 | Bit | Name | Description |
 |-----|------|-------------|
-| 0x01 | CMQ_FLAG_SUBJECT | Payload starts with subject string |
-| 0x02 | CMQ_FLAG_REPLY | Reply-to subject present |
+| 0x01 | CMQ_FLAG_COMPRESSED | Payload is compressed |
+| 0x02 | CMQ_FLAG_CHECKSUM | Frame carries a checksum |
 | 0x04 | CMQ_FLAG_HEADERS | Headers block present |
+| 0x08 | CMQ_FLAG_BATCH | Batch frame |
 
 ## Architecture
 

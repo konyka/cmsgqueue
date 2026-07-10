@@ -63,8 +63,13 @@ static int set_nonblocking(int fd) {
 
 static void client_read_cb(int fd, int events, void *data);
 static void cmq_client_destroy(cmq_client_t *c);
+static void client_teardown(cmq_client_t *c);
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len);
 static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len);
+static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
+                              const char *subject,
+                              const uint8_t *payload, size_t payload_len,
+                              const uint8_t *headers, size_t headers_len);
 
 static void worker_wakeup_cb(int fd, int events, void *data) {
     (void)events;
@@ -234,28 +239,120 @@ static cmq_client_t *cmq_client_create(int fd, uint32_t id,
 
 static void cmq_client_destroy(cmq_client_t *c) {
     if (!c) return;
-    if (c->tls) cmq_tls_session_destroy(c->tls);
-    if (c->fd >= 0) close(c->fd);
+    if (c->tls) {
+        cmq_tls_session_destroy(c->tls);
+        c->tls = NULL;
+    }
+    if (c->fd >= 0) {
+        close(c->fd);
+        c->fd = -1;
+    }
     if (c->parser) cmq_parser_destroy(c->parser);
     free(c->write_buf);
     free(c->username);
+    /* If teardown already ran, c->subs is NULL. Otherwise (server shutdown)
+       remove remaining refs from the sublist so free_data won't double-free. */
     cmq_sub_entry_t *s = c->subs;
     while (s) {
         cmq_sub_entry_t *next = s->next;
+        if (s->ref && c->server && c->server->sublist) {
+            cmq_rwlock_wrlock(&c->server->sublist_lock);
+            cmq_sublist_remove(c->server->sublist, s->subject, s->ref);
+            cmq_rwlock_unlock(&c->server->sublist_lock);
+            free(s->ref);
+            s->ref = NULL;
+        }
         free(s);
         s = next;
     }
     free(c);
 }
 
+/* Remove client from its owning array, clear subscriptions from the sublist,
+   drop event interest, and destroy. Safe to call once; subsequent calls no-op
+   because state becomes CLOSED and fd is cleared. */
+static void client_teardown(cmq_client_t *c) {
+    if (!c || c->state == CMQ_CLIENT_CLOSED) return;
+    cmq_server_t *srv = c->server;
+    int was_connected = (c->state == CMQ_CLIENT_CONNECTED);
+    c->state = CMQ_CLIENT_CLOSED;
+
+    if (c->ev_loop && c->fd >= 0) {
+        cmq_ev_del(c->ev_loop, c->fd);
+    }
+
+    /* Exact-remove every subscription so publish cannot hit a dead client. */
+    cmq_sub_entry_t *s = c->subs;
+    c->subs = NULL;
+    while (s) {
+        cmq_sub_entry_t *next = s->next;
+        if (s->ref) {
+            cmq_rwlock_wrlock(&srv->sublist_lock);
+            cmq_sublist_remove(srv->sublist, s->subject, s->ref);
+            cmq_rwlock_unlock(&srv->sublist_lock);
+            free(s->ref);
+            s->ref = NULL;
+            uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
+                                                CMQ_ATOMIC_RELAXED);
+            if (cur > 0) {
+                cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            }
+        }
+        free(s);
+        s = next;
+    }
+    c->sub_count = 0;
+
+    /* Detach from worker or acceptor client array (swap-with-last). */
+    if (c->worker_id >= 0 && srv->workers) {
+        cmq_worker_t *w = &srv->workers[c->worker_id];
+        cmq_mutex_lock(&w->clients_lock);
+        for (int i = 0; i < w->clients_count; i++) {
+            if (w->clients[i] == c) {
+                w->clients[i] = w->clients[w->clients_count - 1];
+                w->clients_count--;
+                break;
+            }
+        }
+        cmq_mutex_unlock(&w->clients_lock);
+    } else {
+        cmq_mutex_lock(&srv->clients_lock);
+        for (int i = 0; i < srv->clients_count; i++) {
+            if (srv->clients[i] == c) {
+                srv->clients[i] = srv->clients[srv->clients_count - 1];
+                srv->clients_count--;
+                break;
+            }
+        }
+        cmq_mutex_unlock(&srv->clients_lock);
+    }
+
+    uint32_t active = cmq_atomic_load_u32(&srv->active_clients, CMQ_ATOMIC_RELAXED);
+    if (active > 0) {
+        cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+    }
+    if (was_connected) {
+        uint64_t conns = cmq_atomic_load_u64(&srv->stat_connections, CMQ_ATOMIC_RELAXED);
+        if (conns > 0) {
+            cmq_atomic_fetch_sub_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
+        }
+    }
+
+    cmq_client_destroy(c);
+}
+
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len) {
-    if (!c || c->state == CMQ_CLIENT_CLOSED) return -1;
+    if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
+        return -1;
 
     if (c->write_buf && c->write_pos < c->write_len) {
         size_t remaining = c->write_len - c->write_pos;
         size_t new_len = remaining + len;
         if (new_len > CMQ_WRITE_BUF_LIMIT) {
-            c->state = CMQ_CLIENT_CLOSING;
+            /* Slow consumer: tear down immediately so subscriptions and fd
+               are reclaimed instead of lingering in CLOSING. */
+            client_teardown(c);
             return -1;
         }
         uint8_t *new_buf = malloc(new_len);
@@ -281,7 +378,8 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
 }
 
 static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len) {
-    if (!c || c->state == CMQ_CLIENT_CLOSED) return -1;
+    if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
+        return -1;
     cmq_server_t *srv = c->server;
     int cross = srv->workers && c->worker_id >= 0 && c->worker_id != cmq_current_worker_id;
 
@@ -454,6 +552,44 @@ typedef struct {
     char queue_group[CMQ_MAX_QUEUE_GROUP];
 } cmq_sub_ref_t;
 
+/* Queue-group aware fan-out: at most one delivery per queue group name,
+   regardless of adjacency in the match result. Non-queue subs always deliver. */
+static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
+                            const char *subject,
+                            const uint8_t *payload, size_t payload_len,
+                            const uint8_t *headers, size_t headers_len) {
+    const char *seen_qg[64];
+    int nseen = 0;
+
+    for (size_t i = 0; i < result->count; i++) {
+        cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result->entries[i];
+        if (!ref || !ref->client) continue;
+        if (ref->client->state != CMQ_CLIENT_CONNECTED &&
+            ref->client->state != CMQ_CLIENT_INIT) continue;
+
+        if (ref->queue_group[0] != '\0') {
+            int skip = 0;
+            for (int s = 0; s < nseen; s++) {
+                if (strcmp(seen_qg[s], ref->queue_group) == 0) {
+                    skip = 1;
+                    break;
+                }
+            }
+            if (skip) continue;
+            if (nseen < 64) seen_qg[nseen++] = ref->queue_group;
+        }
+
+        cmq_send_message(ref->client, ref->sub_id, subject,
+                          payload, payload_len, headers, headers_len);
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
+        {
+            cmq_account_t *oacc = cmq_account_get(srv->accounts,
+                                                   ref->client->account_name);
+            if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)payload_len);
+        }
+    }
+}
+
 typedef struct {
     cmq_server_t *srv;
     cmq_sublist_result_t result;
@@ -470,40 +606,31 @@ static void deliver_coro_func(void *arg) {
     cmq_deliver_ctx_t *ctx = (cmq_deliver_ctx_t *)arg;
     cmq_server_t *srv = ctx->srv;
     size_t batch_count = 0;
-    cmq_sub_ref_t *last_queue_ref = NULL;
-    char last_queue_group[CMQ_MAX_QUEUE_GROUP] = {0};
+    const char *seen_qg[64];
+    int nseen = 0;
 
     for (size_t i = ctx->idx; i < ctx->result.count; i++) {
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)ctx->result.entries[i];
+        if (!ref || !ref->client) continue;
+        if (ref->client->state != CMQ_CLIENT_CONNECTED &&
+            ref->client->state != CMQ_CLIENT_INIT) continue;
 
         if (ref->queue_group[0] != '\0') {
-            if (strcmp(last_queue_group, ref->queue_group) == 0 &&
-                last_queue_ref != NULL) {
-                continue;
+            int skip = 0;
+            for (int s = 0; s < nseen; s++) {
+                if (strcmp(seen_qg[s], ref->queue_group) == 0) {
+                    skip = 1;
+                    break;
+                }
             }
-            last_queue_ref = ref;
-            strncpy(last_queue_group, ref->queue_group, CMQ_MAX_QUEUE_GROUP - 1);
-            last_queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
-            cmq_send_message(ref->client, ref->sub_id, ctx->subject,
-                              ctx->payload, ctx->payload_len,
-                              ctx->headers, ctx->headers_len);
-            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                      CMQ_ATOMIC_RELAXED);
-            {
-                cmq_account_t *oacc = cmq_account_get(srv->accounts,
-                                                       ref->client->account_name);
-                if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)ctx->payload_len);
-            }
-            continue;
+            if (skip) continue;
+            if (nseen < 64) seen_qg[nseen++] = ref->queue_group;
         }
 
-        last_queue_group[0] = '\0';
-        last_queue_ref = NULL;
         cmq_send_message(ref->client, ref->sub_id, ctx->subject,
                           ctx->payload, ctx->payload_len,
                           ctx->headers, ctx->headers_len);
-        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                  CMQ_ATOMIC_RELAXED);
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
         {
             cmq_account_t *oacc = cmq_account_get(srv->accounts,
                                                    ref->client->account_name);
@@ -574,6 +701,9 @@ static void worker_coro_spawn_deliver(cmq_worker_t *w,
 
     cmq_coro_t *coro = cmq_coro_create(deliver_coro_func, ctx, 32768);
     if (!coro) {
+        cmq_sublist_result_free(&ctx->result);
+        free((void *)ctx->payload);
+        if (ctx->headers) free((void *)ctx->headers);
         free(ctx);
         return;
     }
@@ -659,10 +789,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     cmq_sublist_match(srv->sublist, subject, &result);
+    cmq_rwlock_unlock(&srv->sublist_lock);
 
     if (result.count == 0) {
         cmq_sublist_result_free(&result);
-        cmq_rwlock_unlock(&srv->sublist_lock);
         return;
     }
 
@@ -673,7 +803,6 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         uint8_t *coro_headers = NULL;
         if (!coro_payload) {
             cmq_sublist_result_free(&result);
-            cmq_rwlock_unlock(&srv->sublist_lock);
             return;
         }
         memcpy(coro_payload, msg_payload, msg_len);
@@ -681,7 +810,6 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             coro_headers = malloc(headers_len);
             if (coro_headers) memcpy(coro_headers, headers, headers_len);
         }
-        cmq_rwlock_unlock(&srv->sublist_lock);
 
         worker_coro_spawn_deliver(w, srv, &result, subject,
                                    coro_payload, msg_len,
@@ -689,44 +817,9 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    cmq_sub_ref_t *last_queue_ref = NULL;
-    const char *last_queue_group = "";
-    for (size_t i = 0; i < result.count; i++) {
-        cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
-
-        if (ref->queue_group[0] != '\0') {
-            if (strcmp(last_queue_group, ref->queue_group) == 0 &&
-                last_queue_ref != NULL) {
-                continue;
-            }
-            last_queue_ref = ref;
-            last_queue_group = ref->queue_group;
-            cmq_send_message(ref->client, ref->sub_id, subject,
-                              msg_payload, msg_len, headers, headers_len);
-            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                      CMQ_ATOMIC_RELAXED);
-            {
-                cmq_account_t *oacc = cmq_account_get(srv->accounts,
-                                                       ref->client->account_name);
-                if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)msg_len);
-            }
-            continue;
-        }
-
-        last_queue_group = "";
-        last_queue_ref = NULL;
-        cmq_send_message(ref->client, ref->sub_id, subject,
-                          msg_payload, msg_len, headers, headers_len);
-        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                  CMQ_ATOMIC_RELAXED);
-        {
-            cmq_account_t *oacc = cmq_account_get(srv->accounts,
-                                                   ref->client->account_name);
-            if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)msg_len);
-        }
-    }
+    deliver_matches(srv, &result, subject, msg_payload, msg_len,
+                    headers, headers_len);
     cmq_sublist_result_free(&result);
-    cmq_rwlock_unlock(&srv->sublist_lock);
 }
 
 static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
@@ -782,11 +875,12 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     entry->subject[CMQ_MAX_SUBJECT - 1] = '\0';
     strncpy(entry->queue_group, queue_group, CMQ_MAX_QUEUE_GROUP - 1);
     entry->queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
-    entry->next = c->subs;
-    c->subs = entry;
+    entry->ref = NULL;
+    entry->next = NULL;
 
     cmq_sub_ref_t *ref = malloc(sizeof(cmq_sub_ref_t));
     if (!ref) {
+        free(entry);
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -796,8 +890,18 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     ref->queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
 
     cmq_rwlock_wrlock(&srv->sublist_lock);
-    cmq_sublist_insert(srv->sublist, subject, ref);
+    int irc = cmq_sublist_insert(srv->sublist, subject, ref);
     cmq_rwlock_unlock(&srv->sublist_lock);
+    if (irc != 0) {
+        free(ref);
+        free(entry);
+        cmq_send_suback(c, sub_id, 1);
+        return;
+    }
+
+    entry->ref = ref;
+    entry->next = c->subs;
+    c->subs = entry;
 
     cmq_atomic_fetch_add_u64(&srv->stat_subscriptions, 1, CMQ_ATOMIC_RELAXED);
     c->sub_count++;
@@ -820,11 +924,21 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
             *pp = entry->next;
 
             cmq_rwlock_wrlock(&srv->sublist_lock);
-            cmq_sublist_remove(srv->sublist, entry->subject);
+            if (entry->ref) {
+                cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
+                free(entry->ref);
+                entry->ref = NULL;
+            }
             cmq_rwlock_unlock(&srv->sublist_lock);
 
             free(entry);
             if (c->sub_count > 0) c->sub_count--;
+            uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
+                                                CMQ_ATOMIC_RELAXED);
+            if (cur > 0) {
+                cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            }
             break;
         }
         pp = &(*pp)->next;
@@ -887,12 +1001,25 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     cmq_sublist_match(srv->sublist, subject, &result);
+    cmq_rwlock_unlock(&srv->sublist_lock);
 
+    const char *seen_qg[64];
+    int nseen = 0;
     for (size_t i = 0; i < result.count; i++) {
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
-        if (ref->queue_group[0] != '\0' && i > 0) {
-            cmq_sub_ref_t *prev = (cmq_sub_ref_t *)result.entries[i - 1];
-            if (strcmp(ref->queue_group, prev->queue_group) == 0) continue;
+        if (!ref || !ref->client) continue;
+        if (ref->client->state != CMQ_CLIENT_CONNECTED &&
+            ref->client->state != CMQ_CLIENT_INIT) continue;
+        if (ref->queue_group[0] != '\0') {
+            int skip = 0;
+            for (int s = 0; s < nseen; s++) {
+                if (strcmp(seen_qg[s], ref->queue_group) == 0) {
+                    skip = 1;
+                    break;
+                }
+            }
+            if (skip) continue;
+            if (nseen < 64) seen_qg[nseen++] = ref->queue_group;
         }
         cmq_send_request_message(ref->client, ref->sub_id, subject,
                                   reply_to, msg_payload, msg_len);
@@ -900,7 +1027,6 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
     }
     cmq_sublist_result_free(&result);
-    cmq_rwlock_unlock(&srv->sublist_lock);
 
     uint8_t ack[4] = {0};
     size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
@@ -931,16 +1057,10 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     cmq_sublist_match(srv->sublist, subject, &result);
-
-    for (size_t i = 0; i < result.count; i++) {
-        cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
-        cmq_send_message(ref->client, ref->sub_id, subject,
-                          msg_payload, msg_len, NULL, 0);
-        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                  CMQ_ATOMIC_RELAXED);
-    }
-    cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
+
+    deliver_matches(srv, &result, subject, msg_payload, msg_len, NULL, 0);
+    cmq_sublist_result_free(&result);
 }
 
 static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
@@ -1039,19 +1159,10 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         cmq_rwlock_rdlock(&srv->sublist_lock);
         cmq_sublist_result_t result;
         cmq_sublist_match(srv->sublist, subject, &result);
-        for (size_t i = 0; i < result.count; i++) {
-            cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
-            if (ref->queue_group[0] != '\0' && i > 0) {
-                cmq_sub_ref_t *prev = (cmq_sub_ref_t *)result.entries[i - 1];
-                if (strcmp(ref->queue_group, prev->queue_group) == 0) continue;
-            }
-            cmq_send_message(ref->client, ref->sub_id, subject,
-                              msg_payload, payload_len, NULL, 0);
-            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                      CMQ_ATOMIC_RELAXED);
-        }
-        cmq_sublist_result_free(&result);
         cmq_rwlock_unlock(&srv->sublist_lock);
+
+        deliver_matches(srv, &result, subject, msg_payload, payload_len, NULL, 0);
+        cmq_sublist_result_free(&result);
 
         cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
     }
@@ -1134,7 +1245,8 @@ static void client_flush_write(cmq_client_t *c) {
         c->write_buf = NULL;
         c->write_len = 0;
         c->write_pos = 0;
-        cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c);
+        if (c->fd >= 0)
+            cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c);
         return;
     }
 
@@ -1142,6 +1254,8 @@ static void client_flush_write(cmq_client_t *c) {
     ssize_t n = write(c->fd, c->write_buf + c->write_pos, remaining);
     if (n > 0) {
         c->write_pos += (size_t)n;
+        cmq_atomic_fetch_add_u64(&c->server->stat_bytes_out, (uint64_t)n,
+                                  CMQ_ATOMIC_RELAXED);
         if (c->write_pos >= c->write_len) {
             free(c->write_buf);
             c->write_buf = NULL;
@@ -1150,7 +1264,7 @@ static void client_flush_write(cmq_client_t *c) {
             cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c);
         }
     } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-        c->state = CMQ_CLIENT_CLOSED;
+        c->state = CMQ_CLIENT_CLOSING;
     }
 }
 
@@ -1200,18 +1314,45 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len) {
     return 0;
 }
 
+static void client_finish_closing(cmq_client_t *c) {
+    if (!c || c->state != CMQ_CLIENT_CLOSING) return;
+    if (c->write_buf && c->write_pos < c->write_len) {
+        client_flush_write(c);
+        if (c->state == CMQ_CLIENT_CLOSED) return; /* hard write error */
+        if (c->write_buf && c->write_pos < c->write_len) {
+            /* Keep socket writable so the final CONNACK/ERROR can drain. */
+            if (c->fd >= 0)
+                cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_WRITE, client_read_cb, c);
+            return;
+        }
+    }
+    client_teardown(c);
+}
+
 static void client_read_cb(int fd, int events, void *data) {
     cmq_client_t *c = (cmq_client_t *)data;
     cmq_server_t *srv = c->server;
 
     if (events & CMQ_EV_ERROR) {
-        c->state = CMQ_CLIENT_CLOSED;
+        client_teardown(c);
         return;
     }
 
     if (events & CMQ_EV_WRITE) {
+        if (c->state == CMQ_CLIENT_CLOSING) {
+            client_finish_closing(c);
+            return;
+        }
         client_flush_write(c);
-        if (c->state == CMQ_CLIENT_CLOSED) return;
+        if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) {
+            client_finish_closing(c);
+            return;
+        }
+    }
+
+    if (c->state == CMQ_CLIENT_CLOSING) {
+        client_finish_closing(c);
+        return;
     }
 
     if (!(events & CMQ_EV_READ)) return;
@@ -1219,7 +1360,7 @@ static void client_read_cb(int fd, int events, void *data) {
     ssize_t n = read(fd, c->read_buf, sizeof(c->read_buf));
     if (n <= 0) {
         if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
-            c->state = CMQ_CLIENT_CLOSED;
+            client_teardown(c);
         }
         return;
     }
@@ -1239,30 +1380,31 @@ static void client_read_cb(int fd, int events, void *data) {
         cmq_ws_frame_t ws_frame;
         int parsed = cmq_ws_frame_parse(c->read_buf, (size_t)n, &ws_frame);
         if (parsed > 0 && ws_frame.opcode == CMQ_WS_OPCODE_BINARY && ws_frame.payload_len > 0) {
-            /* RFC 6455 mandates client->server frames are masked; unmask in
-               place before feeding the CMQ parser. The payload aliases
-               c->read_buf, which is refilled on the next read. */
             if (ws_frame.masked) {
                 cmq_ws_mask((uint8_t *)ws_frame.payload, ws_frame.payload_len,
                              ws_frame.mask_key);
             }
             int rc = cmq_parser_feed(c->parser, ws_frame.payload, ws_frame.payload_len);
-            if (rc < 0) { c->state = CMQ_CLIENT_CLOSING; return; }
+            if (rc < 0) { client_teardown(c); return; }
             while (rc == 1) {
                 const cmq_frame_t *frame = cmq_parser_frame(c->parser);
                 if (frame) handle_frame(srv, c, frame);
-                if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) break;
+                if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) {
+                    client_finish_closing(c);
+                    return;
+                }
                 rc = cmq_parser_next(c->parser);
             }
         } else if (parsed > 0 && ws_frame.opcode == CMQ_WS_OPCODE_CLOSE) {
-            c->state = CMQ_CLIENT_CLOSING;
+            client_teardown(c);
+            return;
         }
         return;
     }
 
     int rc = cmq_parser_feed(c->parser, c->read_buf, (size_t)n);
     if (rc < 0) {
-        c->state = CMQ_CLIENT_CLOSING;
+        client_teardown(c);
         return;
     }
 
@@ -1271,8 +1413,28 @@ static void client_read_cb(int fd, int events, void *data) {
         if (frame) {
             handle_frame(srv, c, frame);
         }
-        if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) break;
+        if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) {
+            client_finish_closing(c);
+            return;
+        }
         rc = cmq_parser_next(c->parser);
+    }
+}
+
+static void keepalive_scan_clients(cmq_client_t **clients, int count,
+                                    uint64_t now, uint64_t timeout_ms) {
+    /* Collect first so teardown (which mutates the array) is safe. */
+    cmq_client_t *doomed[256];
+    int ndoomed = 0;
+    for (int i = 0; i < count && ndoomed < 256; i++) {
+        cmq_client_t *c = clients[i];
+        if (c && c->state == CMQ_CLIENT_CONNECTED &&
+            (now - c->last_activity_ms) > timeout_ms) {
+            doomed[ndoomed++] = c;
+        }
+    }
+    for (int i = 0; i < ndoomed; i++) {
+        client_teardown(doomed[i]);
     }
 }
 
@@ -1286,14 +1448,35 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     uint64_t now = srv_now_ms();
 
     cmq_mutex_lock(&srv->clients_lock);
-    for (int i = 0; i < srv->clients_count; i++) {
-        cmq_client_t *c = srv->clients[i];
-        if (c && c->state == CMQ_CLIENT_CONNECTED &&
-            (now - c->last_activity_ms) > timeout_ms) {
-            c->state = CMQ_CLIENT_CLOSING;
-        }
+    int n = srv->clients_count;
+    cmq_client_t **snap = NULL;
+    if (n > 0) {
+        snap = malloc((size_t)n * sizeof(cmq_client_t *));
+        if (snap) memcpy(snap, srv->clients, (size_t)n * sizeof(cmq_client_t *));
     }
     cmq_mutex_unlock(&srv->clients_lock);
+    if (snap) {
+        keepalive_scan_clients(snap, n, now, timeout_ms);
+        free(snap);
+    }
+
+    if (srv->workers) {
+        for (int wi = 0; wi < srv->num_workers; wi++) {
+            cmq_worker_t *w = &srv->workers[wi];
+            cmq_mutex_lock(&w->clients_lock);
+            int wn = w->clients_count;
+            cmq_client_t **wsnap = NULL;
+            if (wn > 0) {
+                wsnap = malloc((size_t)wn * sizeof(cmq_client_t *));
+                if (wsnap) memcpy(wsnap, w->clients, (size_t)wn * sizeof(cmq_client_t *));
+            }
+            cmq_mutex_unlock(&w->clients_lock);
+            if (wsnap) {
+                keepalive_scan_clients(wsnap, wn, now, timeout_ms);
+                free(wsnap);
+            }
+        }
+    }
 }
 
 static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
@@ -1324,21 +1507,15 @@ static void accept_cb(int fd, int events, void *data) {
     }
 
     if (srv->config.max_clients > 0) {
-        int total = 0;
-        cmq_mutex_lock(&srv->clients_lock);
-        total += srv->clients_count;
-        cmq_mutex_unlock(&srv->clients_lock);
-        if (srv->workers) {
-            for (int i = 0; i < srv->num_workers; i++) {
-                cmq_mutex_lock(&srv->workers[i].clients_lock);
-                total += srv->workers[i].clients_count;
-                cmq_mutex_unlock(&srv->workers[i].clients_lock);
-            }
-        }
-        if (total >= srv->config.max_clients) {
+        uint32_t cur = cmq_atomic_fetch_add_u32(&srv->active_clients, 1,
+                                                 CMQ_ATOMIC_SEQ_CST);
+        if ((int)(cur + 1) > srv->config.max_clients) {
+            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_SEQ_CST);
             close(client_fd);
             return;
         }
+    } else {
+        cmq_atomic_fetch_add_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
     }
 
     uint32_t cid = cmq_atomic_fetch_add_u32(&srv->next_client_id, 1,
@@ -1351,10 +1528,15 @@ static void accept_cb(int fd, int events, void *data) {
         cmq_worker_t *w = &srv->workers[idx];
         cmq_client_t *client = cmq_client_create(client_fd, cid,
                                                     w->ev_loop, srv);
-        if (!client) { close(client_fd); return; }
+        if (!client) {
+            close(client_fd);
+            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+            return;
+        }
         client->worker_id = idx;
         if (client_tls_handshake(srv, client) != 0) {
             cmq_client_destroy(client);
+            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
             return;
         }
 
@@ -1366,6 +1548,7 @@ static void accept_cb(int fd, int events, void *data) {
             if (!new_arr) {
                 cmq_mutex_unlock(&w->clients_lock);
                 cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
                 return;
             }
             w->clients = new_arr;
@@ -1378,10 +1561,15 @@ static void accept_cb(int fd, int events, void *data) {
     } else {
         cmq_client_t *client = cmq_client_create(client_fd, cid,
                                                     srv->ev_loop, srv);
-        if (!client) { close(client_fd); return; }
+        if (!client) {
+            close(client_fd);
+            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+            return;
+        }
         client->worker_id = -1;
         if (client_tls_handshake(srv, client) != 0) {
             cmq_client_destroy(client);
+            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
             return;
         }
 
@@ -1393,6 +1581,7 @@ static void accept_cb(int fd, int events, void *data) {
             if (!new_arr) {
                 cmq_mutex_unlock(&srv->clients_lock);
                 cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
                 return;
             }
             srv->clients = new_arr;

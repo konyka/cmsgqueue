@@ -110,7 +110,8 @@ cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
 
 void cmq_tls_session_destroy(cmq_tls_session_t *session) {
     if (!session) return;
-    if (session->fd >= 0) close(session->fd);
+    /* Session does not own the fd — the client closes it once. */
+    session->fd = -1;
     free(session);
 }
 

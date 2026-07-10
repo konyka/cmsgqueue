@@ -36,15 +36,40 @@ TEST(sublist, insert_duplicate_subject) {
 TEST(sublist, remove_basic) {
     cmq_sublist_t *sl = cmq_sublist_create();
     cmq_sublist_insert(sl, "foo.bar", (void *)1);
-    int rc = cmq_sublist_remove(sl, "foo.bar");
+    int rc = cmq_sublist_remove(sl, "foo.bar", (void *)1);
     ASSERT_EQ(rc, 0);
     ASSERT_EQ(cmq_sublist_count(sl), (size_t)0);
     cmq_sublist_destroy(sl);
 }
 
+TEST(sublist, remove_exact_of_duplicates) {
+    cmq_sublist_t *sl = cmq_sublist_create();
+    cmq_sublist_insert(sl, "foo.bar", (void *)1);
+    cmq_sublist_insert(sl, "foo.bar", (void *)2);
+    cmq_sublist_insert(sl, "foo.bar", (void *)3);
+    ASSERT_EQ(cmq_sublist_remove(sl, "foo.bar", (void *)2), 0);
+    ASSERT_EQ(cmq_sublist_count(sl), (size_t)2);
+
+    cmq_sublist_result_t result;
+    cmq_sublist_match(sl, "foo.bar", &result);
+    ASSERT_EQ(result.count, (size_t)2);
+    int saw1 = 0, saw3 = 0, saw2 = 0;
+    for (size_t i = 0; i < result.count; i++) {
+        intptr_t v = (intptr_t)result.entries[i];
+        if (v == 1) saw1 = 1;
+        if (v == 2) saw2 = 1;
+        if (v == 3) saw3 = 1;
+    }
+    ASSERT_EQ(saw1, 1);
+    ASSERT_EQ(saw3, 1);
+    ASSERT_EQ(saw2, 0);
+    cmq_sublist_result_free(&result);
+    cmq_sublist_destroy(sl);
+}
+
 TEST(sublist, remove_nonexistent) {
     cmq_sublist_t *sl = cmq_sublist_create();
-    int rc = cmq_sublist_remove(sl, "nope");
+    int rc = cmq_sublist_remove(sl, "nope", (void *)1);
     ASSERT(rc != 0);
     cmq_sublist_destroy(sl);
 }
@@ -162,7 +187,7 @@ TEST(sublist, remove_and_match) {
     cmq_sublist_insert(sl, "foo.bar", (void *)1);
     cmq_sublist_insert(sl, "foo.*", (void *)2);
 
-    cmq_sublist_remove(sl, "foo.bar");
+    cmq_sublist_remove(sl, "foo.bar", (void *)1);
 
     cmq_sublist_result_t result;
     cmq_sublist_match(sl, "foo.bar", &result);
