@@ -977,6 +977,21 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Write-Buffer Reuse &amp; WS Partial-Frame Test</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">write_cap reuse</span></td><td>✅</td><td><code>cmq_client_send_direct</code> grows <code>write_buf</code> via <code>ensure_write_cap</code> (power-of-two) and keeps capacity after flush instead of free/malloc per send. Compacts unsent bytes in place when appending.</td></tr>
+<tr><td><span class="component-name">test_server_ops / ws_partial_frame</span></td><td>✅</td><td>Sends a masked WS CONNECT frame split across two TCP writes; asserts CONNACK — covers the <code>ws_recv_buf</code> reassembly path. Suite now 8 tests.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit d625483</span> — <strong>21/21 test suites pass.</strong> Hot-path write-buffer reuse + WS partial-frame coverage.
+</div>
+</div>
+
 </div>
 </body>
 </html>
