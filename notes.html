@@ -959,6 +959,24 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Delivery Safety &amp; WS Reassembly</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">worker_msg target_id</span></td><td>✅</td><td>Cross-worker delivery keys on stable <code>c-&gt;id</code> instead of <code>fd</code>, eliminating misdelivery after fd reuse.</td></tr>
+<tr><td><span class="component-name">sync deliver under rdlock</span></td><td>✅</td><td>Small fan-out holds <code>sublist_lock</code> read lock through <code>deliver_matches</code> so teardown (write lock) cannot free <code>cmq_sub_ref_t</code> mid-send.</td></tr>
+<tr><td><span class="component-name">coro deliver snapshot</span></td><td>✅</td><td>Large fan-out builds <code>cmq_deliver_tgt_t</code> value snapshots (client_id/worker_id/sub_id) under the read lock, then unlocks and resolves live clients via <code>find_live_client</code> — no dangling ref pointers.</td></tr>
+<tr><td><span class="component-name">coro pool-full drain</span></td><td>✅</td><td>When the per-worker coro pool is full, resume until <code>CMQ_CORO_DONE</code> instead of a single resume that truncated fan-out and leaked payload.</td></tr>
+<tr><td><span class="component-name">WS recv reassembly</span></td><td>✅</td><td>Per-client <code>ws_recv_buf</code> accumulates TCP reads; loop-parses complete frames and keeps partials. Fixes silent drop of fragmented / multi-frame WS reads.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Commit (pending)</span> — <strong>21/21 test suites pass.</strong> Cross-worker id routing, UAF-safe delivery, WS reassembly.
+</div>
+</div>
+
 </div>
 </body>
 </html>

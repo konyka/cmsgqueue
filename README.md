@@ -12,14 +12,14 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Server Stats** query connections, messages, bytes, subscriptions via CMQ_OP_STATS
 - **Authentication** username/password on CONNECT, configurable via config file
 - **Keepalive** automatic disconnect of idle clients (configurable ping_interval_ms)
-- **Backpressure** 4MB write buffer limit per client, slow consumers auto-disconnected
-- **Connection Limit** configurable max_clients enforced on accept
+- **Backpressure** 4MB write buffer limit per client; oversize consumers are torn down (subscriptions reclaimed)
+- **Connection Limit** atomic `active_clients` gate on accept (`max_clients`)
 - **Graceful Shutdown** cmq_server_drain() sends DISCONNECT to all clients before stopping
 - **Persistence** ring buffer memstore, durable streams with consumers, file-based with CRC32 (library APIs; optional server wiring)
 - **Clustering** node membership and outbound route broadcast (gateway/leaf APIs available as libraries)
-- **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired), MQTT bridge library, WebSocket transport
-- **Assembly Coroutines** x86_64 + ARM64 context switching, integrated for high-fanout delivery
-- **Multi-Worker** N worker threads with eventfd-based cross-thread messaging, coroutine scheduler
+- **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired), MQTT bridge library, WebSocket transport with frame reassembly
+- **Assembly Coroutines** x86_64 + ARM64 context switching; high-fanout delivery uses value snapshots (no live ref UAF)
+- **Multi-Worker** N worker threads with eventfd cross-thread messaging keyed by stable client id
 - **Cross-Platform CI** Linux (gcc/clang), macOS, Windows, ARM64 cross-compile
 
 ## Quick Start

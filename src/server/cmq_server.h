@@ -69,6 +69,7 @@ typedef struct cmq_client {
     uint8_t *write_buf;
     size_t write_len;
     size_t write_pos;
+    size_t write_cap;               /* allocated capacity of write_buf */
 
     uint32_t next_sub_id;
     cmq_sub_entry_t *subs;
@@ -82,11 +83,16 @@ typedef struct cmq_client {
     uint64_t last_activity_ms;
     cmq_tls_session_t *tls;
 
+    /* WebSocket receive reassembly (partial / multi-frame TCP reads). */
+    uint8_t *ws_recv_buf;
+    size_t ws_recv_len;
+    size_t ws_recv_cap;
+
     struct cmq_client *next;
 } cmq_client_t;
 
 typedef struct cmq_worker_msg {
-    int target_fd;
+    uint32_t target_id;             /* stable client id (not fd — avoids reuse) */
     uint8_t *buf;
     size_t len;
     struct cmq_worker_msg *next;
