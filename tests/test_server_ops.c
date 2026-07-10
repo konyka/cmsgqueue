@@ -584,4 +584,84 @@ TEST(server_ops, ws_round_trip) {
     cmq_server_destroy(srv);
 }
 
+/* Build a masked WS binary frame carrying a CMQ op; return malloc'd buffer. */
+static uint8_t *ws_build_masked(cmq_op_t op, const uint8_t *payload, size_t plen,
+                                 size_t *out_len) {
+    uint8_t cmq[8192];
+    size_t cmq_len = cmq_frame_encode(cmq, sizeof(cmq), op, 0, payload, plen);
+    if (cmq_len == 0) return NULL;
+    static const uint8_t mk[4] = {0x11, 0x22, 0x33, 0x44};
+    size_t hdr = (cmq_len <= 125) ? 2 : 4;
+    size_t total = hdr + 4 + cmq_len;
+    uint8_t *buf = malloc(total);
+    if (!buf) return NULL;
+    buf[0] = 0x82;
+    if (cmq_len <= 125) {
+        buf[1] = (uint8_t)(0x80 | cmq_len);
+    } else {
+        buf[1] = 0x80 | 126;
+        buf[2] = (uint8_t)(cmq_len >> 8);
+        buf[3] = (uint8_t)cmq_len;
+    }
+    buf[hdr] = mk[0]; buf[hdr + 1] = mk[1]; buf[hdr + 2] = mk[2]; buf[hdr + 3] = mk[3];
+    for (size_t i = 0; i < cmq_len; i++)
+        buf[hdr + 4 + i] = cmq[i] ^ mk[i % 4];
+    *out_len = total;
+    return buf;
+}
+
+TEST(server_ops, ws_partial_frame) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 7;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(100);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+
+    const char *upgrade =
+        "GET /ws HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    ASSERT(write(fd, upgrade, strlen(upgrade)) > 0);
+    wait_ms(80);
+    char resp[512];
+    ssize_t rn = read(fd, resp, sizeof(resp) - 1);
+    ASSERT(rn > 0);
+    resp[rn] = '\0';
+    ASSERT(strstr(resp, "101") != NULL);
+
+    /* Send CONNECT as two TCP writes to force WS reassembly. */
+    size_t flen = 0;
+    uint8_t *frame = ws_build_masked(CMQ_OP_CONNECT, NULL, 0, &flen);
+    ASSERT(frame != NULL);
+    ASSERT(flen > 4);
+    size_t mid = flen / 2;
+    ASSERT(write(fd, frame, mid) == (ssize_t)mid);
+    wait_ms(30);
+    ASSERT(write(fd, frame + mid, flen - mid) == (ssize_t)(flen - mid));
+    free(frame);
+    wait_ms(80);
+
+    cmq_parser_t *parser = cmq_parser_create();
+    cmq_frame_t f;
+    ASSERT_EQ(ws_recv_cmq(fd, parser, &f), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_CONNACK);
+    free_frame(&f);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

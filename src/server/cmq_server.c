@@ -344,6 +344,20 @@ static void client_teardown(cmq_client_t *c) {
     cmq_client_destroy(c);
 }
 
+static int ensure_write_cap(cmq_client_t *c, size_t need) {
+    if (need > CMQ_WRITE_BUF_LIMIT) return -1;
+    if (c->write_cap >= need) return 0;
+    size_t ncap = c->write_cap ? c->write_cap * 2 : 256;
+    while (ncap < need) ncap *= 2;
+    if (ncap > CMQ_WRITE_BUF_LIMIT) ncap = CMQ_WRITE_BUF_LIMIT;
+    if (need > ncap) return -1;
+    uint8_t *nb = realloc(c->write_buf, ncap);
+    if (!nb) return -1;
+    c->write_buf = nb;
+    c->write_cap = ncap;
+    return 0;
+}
+
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len) {
     if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
         return -1;
@@ -352,25 +366,23 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
         size_t remaining = c->write_len - c->write_pos;
         size_t new_len = remaining + len;
         if (new_len > CMQ_WRITE_BUF_LIMIT) {
-            /* Slow consumer: tear down immediately so subscriptions and fd
-               are reclaimed instead of lingering in CLOSING. */
             client_teardown(c);
             return -1;
         }
-        uint8_t *new_buf = malloc(new_len);
-        if (!new_buf) return -1;
-        memcpy(new_buf, c->write_buf + c->write_pos, remaining);
-        memcpy(new_buf + remaining, data, len);
-        free(c->write_buf);
-        c->write_buf = new_buf;
+        /* Compact unsent bytes to the front, then grow capacity if needed. */
+        if (c->write_pos > 0) {
+            memmove(c->write_buf, c->write_buf + c->write_pos, remaining);
+            c->write_pos = 0;
+            c->write_len = remaining;
+        }
+        if (ensure_write_cap(c, new_len) != 0) return -1;
+        memcpy(c->write_buf + c->write_len, data, len);
         c->write_len = new_len;
-        c->write_pos = 0;
         return 0;
     }
 
-    free(c->write_buf);
-    c->write_buf = malloc(len);
-    if (!c->write_buf) return -1;
+    /* Buffer empty: reuse existing capacity when possible. */
+    if (ensure_write_cap(c, len) != 0) return -1;
     memcpy(c->write_buf, data, len);
     c->write_len = len;
     c->write_pos = 0;
@@ -1336,10 +1348,9 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
 
 static void client_flush_write(cmq_client_t *c) {
     if (!c->write_buf || c->write_pos >= c->write_len) {
-        free(c->write_buf);
-        c->write_buf = NULL;
         c->write_len = 0;
         c->write_pos = 0;
+        /* Keep write_buf/write_cap for reuse on the next send. */
         if (c->fd >= 0)
             cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c);
         return;
@@ -1352,8 +1363,6 @@ static void client_flush_write(cmq_client_t *c) {
         cmq_atomic_fetch_add_u64(&c->server->stat_bytes_out, (uint64_t)n,
                                   CMQ_ATOMIC_RELAXED);
         if (c->write_pos >= c->write_len) {
-            free(c->write_buf);
-            c->write_buf = NULL;
             c->write_len = 0;
             c->write_pos = 0;
             cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c);
@@ -1400,6 +1409,7 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len) {
     size_t resp_len = strlen(response);
     free(c->write_buf);
     c->write_buf = NULL;
+    c->write_cap = 0;
     c->write_len = 0;
     c->write_pos = 0;
     cmq_client_send(c, (const uint8_t *)response, resp_len);
