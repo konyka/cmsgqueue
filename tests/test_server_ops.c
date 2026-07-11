@@ -1128,6 +1128,10 @@ TEST(server_ops, init_idle_timeout) {
 
     int idle = connect_to(config.port);
     ASSERT(idle >= 0);
+    /* PING before CONNECT must not refresh INIT keepalive. */
+    send_frame(idle, CMQ_OP_PING, NULL, 0);
+    wait_ms(50);
+    send_frame(idle, CMQ_OP_PING, NULL, 0);
     wait_ms(1200); /* > 2 * ping_interval */
 
     /* Slot should be free again for a real CONNECT. */
@@ -1143,6 +1147,44 @@ TEST(server_ops, init_idle_timeout) {
     free_frame(&f);
 
     close(idle);
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+TEST(server_ops, publish_invalid_subject) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 17;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(80);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    const char *bad = "foo..bar";
+    uint16_t slen = (uint16_t)strlen(bad);
+    uint8_t buf[64];
+    size_t off = 0;
+    buf[off++] = (slen >> 8) & 0xFF; buf[off++] = slen & 0xFF;
+    memcpy(buf + off, bad, slen); off += slen;
+    buf[off++] = 0; buf[off++] = 0;
+    buf[off++] = 'x';
+    send_frame(fd, CMQ_OP_PUBLISH, buf, off);
+    wait_ms(80);
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_ERROR);
+    free_frame(&f);
+
     cmq_parser_destroy(parser);
     close(fd);
     cmq_server_stop(srv);

@@ -737,52 +737,60 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
     return tgts;
 }
 
-/* Sync fan-out. Caller MUST hold srv->sublist_lock as a read lock so
-   teardown (which takes the write lock) cannot free refs mid-delivery.
-   Builds the MESSAGE frame once and patches sub_id per subscriber. */
-static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
-                            const char *subject,
-                            const uint8_t *payload, size_t payload_len,
-                            const uint8_t *headers, size_t headers_len) {
+/* Sync fan-out by stable client_id — no sublist lock held (teardown-safe). */
+static void deliver_targets_sync(cmq_server_t *srv,
+                                  cmq_deliver_tgt_t *tgts, size_t ntgt,
+                                  const char *subject,
+                                  const uint8_t *payload, size_t payload_len,
+                                  const uint8_t *headers, size_t headers_len) {
+    if (!tgts || ntgt == 0) return;
     size_t flen = 0;
     uint8_t *frame = cmq_build_message_frame(0, subject, payload, payload_len,
                                               headers, headers_len, &flen);
     if (!frame) return;
 
-    const char **seen_qg = NULL;
-    int nseen = 0;
-    if (result->count > 0) {
-        seen_qg = malloc(result->count * sizeof(const char *));
-        /* On OOM: skip queue-group members (never over-deliver within a group). */
-    }
-
-    for (size_t i = 0; i < result->count; i++) {
-        cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result->entries[i];
-        if (!ref || !ref->client) continue;
-        if (ref->client->state != CMQ_CLIENT_CONNECTED) continue;
-
-        if (ref->queue_group[0] != '\0') {
-            if (!seen_qg) continue;
-            int skip = 0;
-            for (int s = 0; s < nseen; s++) {
-                if (strcmp(seen_qg[s], ref->queue_group) == 0) {
-                    skip = 1;
+    for (size_t i = 0; i < ntgt; i++) {
+        cmq_deliver_tgt_t *t = &tgts[i];
+        cmq_patch_message_sub_id(frame, t->sub_id);
+        int delivered = 0;
+        if (t->worker_id >= 0 && srv->workers &&
+            t->worker_id < srv->num_workers) {
+            if (worker_push_msg(&srv->workers[t->worker_id], t->client_id,
+                                 frame, flen) == 0) {
+                delivered = 1;
+            } else if (cmq_current_worker_id == t->worker_id) {
+                cmq_worker_t *w = &srv->workers[t->worker_id];
+                cmq_mutex_lock(&w->clients_lock);
+                for (int ci = 0; ci < w->clients_count; ci++) {
+                    cmq_client_t *c = w->clients[ci];
+                    if (c && c->id == t->client_id &&
+                        c->state == CMQ_CLIENT_CONNECTED) {
+                        if (cmq_client_send_local(c, frame, flen) == 0)
+                            delivered = 1;
+                        break;
+                    }
+                }
+                cmq_mutex_unlock(&w->clients_lock);
+            }
+        } else {
+            cmq_mutex_lock(&srv->clients_lock);
+            for (int ci = 0; ci < srv->clients_count; ci++) {
+                cmq_client_t *c = srv->clients[ci];
+                if (c && c->id == t->client_id &&
+                    c->state == CMQ_CLIENT_CONNECTED) {
+                    if (cmq_client_send_local(c, frame, flen) == 0)
+                        delivered = 1;
                     break;
                 }
             }
-            if (skip) continue;
-            seen_qg[nseen++] = ref->queue_group;
+            cmq_mutex_unlock(&srv->clients_lock);
         }
-
-        cmq_patch_message_sub_id(frame, ref->sub_id);
-        if (cmq_client_send(ref->client, frame, flen) == 0) {
+        if (delivered) {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
-            cmq_account_t *oacc = cmq_account_get(srv->accounts,
-                                                   ref->client->account_name);
+            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
             if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)payload_len);
         }
     }
-    free(seen_qg);
     free(frame);
 }
 
@@ -986,6 +994,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     char subject[CMQ_MAX_SUBJECT];
     memcpy(subject, frame->payload + 2, subject_len);
     subject[subject_len] = '\0';
+    if (cmq_sublist_subject_valid(subject) != 0) {
+        cmq_send_error(c, "invalid subject");
+        return;
+    }
 
     /* Advance by wire subject_len. */
     size_t offset = 2 + (size_t)subject_len;
@@ -1066,17 +1078,17 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    if (result.count > CMQ_CORO_DELIVER_BATCH && srv->num_workers > 0) {
-        /* Snapshot targets under the read lock, then unlock before async work. */
-        size_t ntgt = 0;
-        cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
-        cmq_sublist_result_free(&result);
-        cmq_rwlock_unlock(&srv->sublist_lock);
-        if (!tgts || ntgt == 0) {
-            free(tgts);
-            return;
-        }
+    /* Always snapshot under the read lock, then unlock before any I/O. */
+    size_t ntgt = 0;
+    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
+    cmq_sublist_result_free(&result);
+    cmq_rwlock_unlock(&srv->sublist_lock);
+    if (!tgts || ntgt == 0) {
+        free(tgts);
+        return;
+    }
 
+    if (ntgt > CMQ_CORO_DELIVER_BATCH && srv->num_workers > 0) {
         cmq_worker_t *w = &srv->workers[cmq_current_worker_id >= 0 ?
                                          cmq_current_worker_id : 0];
         uint8_t *coro_payload = malloc(msg_len ? msg_len : 1);
@@ -1102,11 +1114,9 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    /* Sync path: hold read lock so teardown cannot free refs mid-send. */
-    deliver_matches(srv, &result, subject, msg_payload, msg_len,
-                    headers, headers_len);
-    cmq_sublist_result_free(&result);
-    cmq_rwlock_unlock(&srv->sublist_lock);
+    deliver_targets_sync(srv, tgts, ntgt, subject, msg_payload, msg_len,
+                          headers, headers_len);
+    free(tgts);
 }
 
 static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
@@ -1130,6 +1140,10 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     char subject[CMQ_MAX_SUBJECT];
     memcpy(subject, frame->payload + 6, subject_len);
     subject[subject_len] = '\0';
+    if (cmq_sublist_subject_valid(subject) != 0) {
+        cmq_send_suback(c, sub_id, 1);
+        return;
+    }
 
     char queue_group[CMQ_MAX_QUEUE_GROUP] = {0};
     size_t qg_offset = 6 + subject_len;
@@ -1301,6 +1315,10 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     memcpy(subject, frame->payload + offset, wire_subj);
     subject[wire_subj] = '\0';
     offset += wire_subj;
+    if (cmq_sublist_subject_valid(subject) != 0) {
+        cmq_send_error(c, "invalid subject");
+        return;
+    }
 
     char reply_to[CMQ_MAX_SUBJECT] = {0};
     if (offset + 2 <= frame->payload_len) {
@@ -1401,6 +1419,10 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     memcpy(subject, frame->payload + offset, wire_subj);
     subject[wire_subj] = '\0';
     offset += wire_subj;
+    if (cmq_sublist_subject_valid(subject) != 0) {
+        cmq_send_error(c, "invalid subject");
+        return;
+    }
 
     if (offset > frame->payload_len) {
         cmq_send_error(c, "invalid response");
@@ -1419,11 +1441,17 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
-    if (cmq_sublist_match(srv->sublist, subject, &result) == 0) {
-        deliver_matches(srv, &result, subject, msg_payload, msg_len, NULL, 0);
-        cmq_sublist_result_free(&result);
+    if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
+        cmq_rwlock_unlock(&srv->sublist_lock);
+        return;
     }
+    size_t ntgt = 0;
+    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
+    cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
+    if (tgts && ntgt > 0)
+        deliver_targets_sync(srv, tgts, ntgt, subject, msg_payload, msg_len, NULL, 0);
+    free(tgts);
 }
 
 static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
@@ -1497,6 +1525,15 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_error(c, "invalid batch");
             return;
         }
+        {
+            char subj[CMQ_MAX_SUBJECT];
+            memcpy(subj, frame->payload + offset, subject_len);
+            subj[subject_len] = '\0';
+            if (cmq_sublist_subject_valid(subj) != 0) {
+                cmq_send_error(c, "invalid subject");
+                return;
+            }
+        }
         offset += subject_len;
 
         if (offset + 2 > frame->payload_len) {
@@ -1563,11 +1600,18 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
 
         cmq_rwlock_rdlock(&srv->sublist_lock);
         cmq_sublist_result_t result;
-        if (cmq_sublist_match(srv->sublist, subject, &result) == 0) {
-            deliver_matches(srv, &result, subject, msg_payload, payload_len, NULL, 0);
-            cmq_sublist_result_free(&result);
+        if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
+            cmq_rwlock_unlock(&srv->sublist_lock);
+            continue;
         }
+        size_t ntgt = 0;
+        cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
+        cmq_sublist_result_free(&result);
         cmq_rwlock_unlock(&srv->sublist_lock);
+        if (tgts && ntgt > 0)
+            deliver_targets_sync(srv, tgts, ntgt, subject, msg_payload,
+                                  payload_len, NULL, 0);
+        free(tgts);
 
         cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
     }
@@ -1575,10 +1619,10 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
 
 static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                           const cmq_frame_t *frame) {
-    /* Only CONNECT/PING/DISCONNECT are allowed before authentication completes. */
+    /* Only CONNECT/DISCONNECT before authentication — PING alone must not
+       refresh INIT keepalive (slot-exhaustion DoS). */
     if (c->state != CMQ_CLIENT_CONNECTED &&
         frame->hdr.op != CMQ_OP_CONNECT &&
-        frame->hdr.op != CMQ_OP_PING &&
         frame->hdr.op != CMQ_OP_DISCONNECT) {
         cmq_send_error(c, "not connected");
         return;
@@ -1619,6 +1663,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             c->username = strdup(uname);
         }
         c->state = CMQ_CLIENT_CONNECTED;
+        c->last_activity_ms = srv_now_ms();
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
         strncpy(c->account_name, "$default", CMQ_ACCOUNT_NAME_SIZE - 1);
         c->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
@@ -1800,7 +1845,9 @@ static void client_read_cb(int fd, int events, void *data) {
         }
         return;
     }
-    c->last_activity_ms = srv_now_ms();
+    /* INIT: do not refresh on TCP traffic — PING/junk must not hold slots. */
+    if (c->state == CMQ_CLIENT_CONNECTED)
+        c->last_activity_ms = srv_now_ms();
 
     /* HTTP upgrade may arrive fragmented or pipelined with the first WS frame.
        Accumulate into ws_recv_buf until headers complete, then keep any trailing
@@ -2387,9 +2434,10 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                  srv->config.host, srv->config.port);
 
     if (srv->routes && srv->config.route_count > 0) {
-        char nid[CMQ_NODE_ID_SIZE];
-        snprintf(nid, sizeof(nid), "node-%d", srv->config.port);
         for (int i = 0; i < srv->config.route_count; i++) {
+            /* Unique per peer — shared "node-<port>" skipped all but first. */
+            char nid[CMQ_NODE_ID_SIZE];
+            snprintf(nid, sizeof(nid), "r%d", i);
             cmq_route_connect(srv->routes, nid,
                               srv->config.routes[i].addr,
                               srv->config.routes[i].port);

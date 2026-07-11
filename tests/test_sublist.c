@@ -212,4 +212,12 @@ TEST(sublist, remove_and_match) {
     cmq_sublist_destroy(sl);
 }
 
+TEST(sublist, subject_valid_api) {
+    ASSERT_EQ(cmq_sublist_subject_valid("foo.bar"), 0);
+    ASSERT_EQ(cmq_sublist_subject_valid("foo..bar"), -1);
+    ASSERT_EQ(cmq_sublist_subject_valid(".foo"), -1);
+    ASSERT_EQ(cmq_sublist_subject_valid("foo."), -1);
+    ASSERT_EQ(cmq_sublist_subject_valid(""), -1);
+}
+
 TEST_MAIN()

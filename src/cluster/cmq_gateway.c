@@ -18,6 +18,21 @@ struct cmq_gateway {
     cmq_mutex_t lock;
 };
 
+/* Write the full buffer; never report success on a partial frame. */
+static int write_full(int fd, const uint8_t *data, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, data + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        off += (size_t)n;
+    }
+    return 0;
+}
+
 cmq_gateway_t *cmq_gateway_create(const char *local_cluster) {
     if (!local_cluster) return NULL;
     cmq_gateway_t *gw = calloc(1, sizeof(cmq_gateway_t));
@@ -149,9 +164,8 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (strcmp(gw->conns[i].remote_cluster, target_cluster) == 0 &&
             gw->conns[i].connected) {
-            ssize_t n = write(gw->conns[i].fd, data, len);
-            if (n > 0) sent++;
-            else if (n < 0 && errno != EAGAIN) gw->conns[i].connected = 0;
+            if (write_full(gw->conns[i].fd, data, len) == 0) sent++;
+            else if (errno != EAGAIN) gw->conns[i].connected = 0;
         }
     }
     cmq_mutex_unlock(&gw->lock);
@@ -164,9 +178,8 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len)
     size_t sent = 0;
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (gw->conns[i].connected) {
-            ssize_t n = write(gw->conns[i].fd, data, len);
-            if (n > 0) sent++;
-            else if (n < 0 && errno != EAGAIN) gw->conns[i].connected = 0;
+            if (write_full(gw->conns[i].fd, data, len) == 0) sent++;
+            else if (errno != EAGAIN) gw->conns[i].connected = 0;
         }
     }
     cmq_mutex_unlock(&gw->lock);

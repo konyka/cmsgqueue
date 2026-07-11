@@ -12,6 +12,21 @@
 
 #define CMQ_ROUTE_MAX_CONNS 32
 
+/* Write the full buffer; never report success on a partial frame. */
+static int write_full(int fd, const uint8_t *data, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, data + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        off += (size_t)n;
+    }
+    return 0;
+}
+
 typedef struct {
     char subject[256];
     char dest_id[CMQ_NODE_ID_SIZE];
@@ -149,12 +164,11 @@ int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__(
         cmq_route_conn_t *c = &pool->conns[i];
         if (!c->connected) continue;
         if (exclude_id && strcmp(c->remote_id, exclude_id) == 0) continue;
-        ssize_t n = write(c->fd, data, len);
-        if (n > 0) {
-            c->bytes_sent += (uint64_t)n;
+        if (write_full(c->fd, data, len) == 0) {
+            c->bytes_sent += (uint64_t)len;
             c->msgs_sent++;
             sent++;
-        } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
             c->connected = 0;
         }
     }
@@ -171,12 +185,11 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
         cmq_route_conn_t *c = &pool->conns[i];
         if (!c->connected) continue;
         if (exclude_id && strcmp(c->remote_id, exclude_id) == 0) continue;
-        ssize_t n = write(c->fd, data, len);
-        if (n > 0) {
-            c->bytes_sent += (uint64_t)n;
+        if (write_full(c->fd, data, len) == 0) {
+            c->bytes_sent += (uint64_t)len;
             c->msgs_sent++;
             sent++;
-        } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
             c->connected = 0;
         }
     }

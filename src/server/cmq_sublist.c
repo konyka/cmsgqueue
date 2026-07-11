@@ -90,6 +90,13 @@ static int tokenize(const char *subject, char tokens[][256], int *ntokens) {
     return 0;
 }
 
+int cmq_sublist_subject_valid(const char *subject) {
+    if (validate_subject(subject) != 0) return -1;
+    char tokens[64][256];
+    int ntokens;
+    return tokenize(subject, tokens, &ntokens);
+}
+
 static cmq_sl_node_t *find_child(cmq_sl_node_t *parent, const char *token, int is_pwc, int is_fwc) {
     cmq_sl_node_t *child = parent->children;
     while (child) {
