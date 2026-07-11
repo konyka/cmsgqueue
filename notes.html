@@ -1192,6 +1192,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — Parser inbuf hard cap · write OOM teardown</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">parser inbuf hard cap</span></td><td>✅</td><td><code>cmq_parser_feed</code> rejects when unconsumed+new &gt; <code>hdr + max_payload</code> — stops incomplete-frame memory DoS.</td></tr>
+<tr><td><span class="component-name">write OOM teardown</span></td><td>✅</td><td><code>ensure_write_cap</code> failure bumps <code>stat_messages_dropped</code> and tears down the client; worker wakeup checks send_local result.</td></tr>
+</table>
+</div>
+
+
 
 
 

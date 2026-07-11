@@ -247,4 +247,25 @@ TEST(parser, max_payload_reject) {
     cmq_parser_destroy(p);
 }
 
+/* Incomplete stream must not grow past header + max_payload. */
+TEST(parser, inbuf_hard_cap) {
+    cmq_parser_t *p = cmq_parser_create();
+    cmq_parser_set_max_payload(p, 64);
+    /* Valid header claiming 64-byte payload, but only partial body. */
+    uint8_t hdr[9];
+    memset(hdr, 0, sizeof(hdr));
+    hdr[0] = CMQ_PROTO_MAGIC_0;
+    hdr[1] = CMQ_PROTO_MAGIC_1;
+    hdr[2] = CMQ_PROTO_VERSION;
+    hdr[4] = CMQ_OP_PUBLISH;
+    hdr[5] = 64; /* length LE = 64 */
+    uint8_t body[40];
+    memset(body, 0xAB, sizeof(body));
+    ASSERT(cmq_parser_feed(p, hdr, sizeof(hdr)) >= 0);
+    ASSERT(cmq_parser_feed(p, body, sizeof(body)) >= 0); /* 9+40 < 9+64 */
+    /* Another 40 would make used+len = 89 > hard 73. */
+    ASSERT_EQ(cmq_parser_feed(p, body, sizeof(body)), -1);
+    cmq_parser_destroy(p);
+}
+
 TEST_MAIN()

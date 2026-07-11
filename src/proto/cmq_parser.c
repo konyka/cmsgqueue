@@ -124,6 +124,10 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
 
     /* Compact before append if remaining + new won't fit without sliding. */
     size_t used = p->inbuf_len - p->inbuf_off;
+    /* Hard cap: one max frame + header. Stops incomplete-frame memory DoS. */
+    size_t hard = CMQ_HEADER_LEN + p->max_payload;
+    if (used > hard || len > hard - used)
+        return -1;
     if (p->inbuf_off > 0 && p->inbuf_off + used + len > p->inbuf_cap) {
         if (used > 0)
             memmove(p->inbuf, p->inbuf + p->inbuf_off, used);

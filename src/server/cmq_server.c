@@ -114,7 +114,8 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
         /* Owning worker thread: wrap WS here so coro/drain can push raw CMQ. */
         if (target && target->state != CMQ_CLIENT_CLOSED &&
             target->state != CMQ_CLIENT_CLOSING) {
-            cmq_client_send_local(target, msg->buf, msg->len);
+            /* Drop accounting lives in send_direct / send_local OOM paths. */
+            (void)cmq_client_send_local(target, msg->buf, msg->len);
         }
         cmq_mutex_unlock(&w->clients_lock);
         free(msg->buf);
@@ -477,14 +478,26 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
             c->write_pos = 0;
             c->write_len = remaining;
         }
-        if (ensure_write_cap(c, new_len) != 0) return -1;
+        if (ensure_write_cap(c, new_len) != 0) {
+            if (c->server)
+                cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            client_teardown(c);
+            return -1;
+        }
         memcpy(c->write_buf + c->write_len, data, len);
         c->write_len = new_len;
         return 0;
     }
 
     /* Buffer empty: reuse existing capacity when possible. */
-    if (ensure_write_cap(c, len) != 0) return -1;
+    if (ensure_write_cap(c, len) != 0) {
+        if (c->server)
+            cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        client_teardown(c);
+        return -1;
+    }
     memcpy(c->write_buf, data, len);
     c->write_len = len;
     c->write_pos = 0;
@@ -504,7 +517,12 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
     size_t hdr_len = (len <= 125) ? 2 : (len <= 65535) ? 4 : 10;
     size_t total = hdr_len + len;
     uint8_t *wsbuf = malloc(total);
-    if (!wsbuf) return -1;
+    if (!wsbuf) {
+        if (c->server)
+            cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        return -1;
+    }
     cmq_ws_frame_t wf;
     wf.fin = 1;
     wf.opcode = CMQ_WS_OPCODE_BINARY;
