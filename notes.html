@@ -1726,6 +1726,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — CLOSING RX drain · finish_closing/FORCE_CLOSE ev_mod</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CLOSING discard</span></td><td>✅</td><td>Discard inbound while draining final writes (avoid TCP window stall).</td></tr>
+<tr><td><span class="component-name">finish_closing</span></td><td>✅</td><td>Arms READ|WRITE; mod failure → SHUT_RDWR.</td></tr>
+<tr><td><span class="component-name">FORCE_CLOSE</span></td><td>✅</td><td>ev_mod failure clears write_buf and SHUT_RDWR.</td></tr>
+</table>
+</div>
+
 
 
 

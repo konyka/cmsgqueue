@@ -735,9 +735,14 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
     /* Mark CLOSING without teardown — callers may hold clients_lock. */
     #define CMQ_SEND_FORCE_CLOSE() do { \
         c->state = CMQ_CLIENT_CLOSING; \
-        if (c->ev_loop && c->fd >= 0) \
-            cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE, \
-                       client_read_cb, c); \
+        if (c->ev_loop && c->fd >= 0) { \
+            if (cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE, \
+                           client_read_cb, c) != 0) { \
+                c->write_len = 0; \
+                c->write_pos = 0; \
+                (void)shutdown(c->fd, SHUT_RDWR); \
+            } \
+        } \
     } while (0)
 
     int rc = -1;
@@ -2721,15 +2726,31 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
     return 0;
 }
 
+static void client_closing_discard_inbound(cmq_client_t *c) {
+    if (!c || c->fd < 0) return;
+    uint8_t junk[2048];
+    for (;;) {
+        ssize_t n = client_sock_read(c, junk, sizeof(junk));
+        if (n > 0) continue;
+        break; /* EAGAIN/EWOULDBLOCK, EOF, or hard error */
+    }
+}
+
 static void client_finish_closing(cmq_client_t *c) {
     if (!c || c->state != CMQ_CLIENT_CLOSING) return;
     if (c->write_buf && c->write_pos < c->write_len) {
+        /* Peer may still send; drain RX so our final frames are not blocked
+           by a full TCP receive window (keepalive skips CLOSING). */
+        client_closing_discard_inbound(c);
         client_flush_write(c);
         if (c->state == CMQ_CLIENT_CLOSED) return; /* hard write error */
         if (c->write_buf && c->write_pos < c->write_len) {
-            /* Keep socket writable so the final CONNACK/ERROR can drain. */
-            if (c->fd >= 0)
-                cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_WRITE, client_read_cb, c);
+            /* Keep READ+WRITE so inbound continues to be discarded. */
+            if (c->fd >= 0 &&
+                cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE,
+                           client_read_cb, c) != 0) {
+                (void)shutdown(c->fd, SHUT_RDWR);
+            }
             return;
         }
     }
@@ -2758,6 +2779,8 @@ static void client_read_cb(int fd, int events, void *data) {
     }
 
     if (c->state == CMQ_CLIENT_CLOSING) {
+        if (events & CMQ_EV_READ)
+            client_closing_discard_inbound(c);
         client_finish_closing(c);
         return;
     }
@@ -3654,6 +3677,8 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         if (cmq_thread_create(&srv->route_reconn_thr, route_reconnect_thread,
                                srv) == 0)
             srv->route_reconn_started = 1;
+        else
+            cmq_log_warn(srv->log, "Route reconnect thread failed to start");
     }
 
     cmq_ev_run(srv->ev_loop, -1);
