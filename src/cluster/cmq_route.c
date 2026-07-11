@@ -422,6 +422,18 @@ size_t cmq_route_pool_count(cmq_route_pool_t *pool) {
     return c;
 }
 
+size_t cmq_route_live_count(cmq_route_pool_t *pool) {
+    if (!pool) return 0;
+    cmq_mutex_lock(&pool->lock);
+    size_t n = 0;
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        if (pool->conns[i].connected && pool->conns[i].fd >= 0)
+            n++;
+    }
+    cmq_mutex_unlock(&pool->lock);
+    return n;
+}
+
 cmq_route_conn_t *cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return NULL;
     cmq_mutex_lock(&pool->lock);

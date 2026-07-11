@@ -240,7 +240,8 @@ static int ct_memeq(const void *a, const void *b, size_t n) {
     return diff == 0;
 }
 
-/* True if peer IP matches a configured outbound route address (ingress ACL). */
+/* True if peer IP matches a configured outbound route address (ingress ACL).
+   Source TCP port is ephemeral on inbound peers — do not compare to routes[].port. */
 static int peer_matches_configured_route(cmq_server_t *srv, int fd) {
     if (!srv || fd < 0 || srv->config.route_count <= 0) return 0;
     struct sockaddr_in peer;
@@ -2148,7 +2149,21 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         prep[msg].ntgt = ntgt;
     }
 
-    /* Pass 2b: route + deliver (all snapshots already held). */
+    /* Pass 2b-pre: refuse entire batch before any side effects when an entry
+       has no local targets and cluster peers are configured but none live. */
+    if (srv->routes && !c->is_route && cmq_route_pool_count(srv->routes) > 0 &&
+        cmq_route_live_count(srv->routes) == 0) {
+        for (uint16_t msg = 0; msg < count; msg++) {
+            if (!prep[msg].tgts || prep[msg].ntgt == 0) {
+                for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
+                free(prep);
+                cmq_send_error(c, "route failed");
+                return;
+            }
+        }
+    }
+
+    /* Pass 2b: route + deliver; stop on first failure (no further fan-out). */
     int batch_fail = 0;
     for (uint16_t msg = 0; msg < count; msg++) {
         uint16_t subject_len = prep[msg].subject_len;
@@ -2189,14 +2204,23 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             }
         }
 
-        if (prep[msg].tgts && prep[msg].ntgt > 0) {
+        if (!batch_fail && prep[msg].tgts && prep[msg].ntgt > 0) {
             if (deliver_targets_sync(srv, prep[msg].tgts, prep[msg].ntgt,
                                       prep[msg].subject, c->account_name,
                                       msg_payload, payload_len,
                                       NULL, 0) != 0)
                 batch_fail = 1;
         }
+
         free(prep[msg].tgts);
+        prep[msg].tgts = NULL;
+        if (batch_fail) {
+            for (uint16_t k = (uint16_t)(msg + 1); k < count; k++) {
+                free(prep[k].tgts);
+                prep[k].tgts = NULL;
+            }
+            break;
+        }
         cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
         {
             cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
@@ -2271,7 +2295,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             free(c->username);
             c->username = strdup(uname);
         }
-        /* CMQ_FLAG_ROUTE only trusted for peers in configured routes[]. */
+        /* CMQ_FLAG_ROUTE only trusted for peers whose IP is in routes[].
+           Inbound source ports are ephemeral — IP ACL + optional shared auth. */
         if (frame->hdr.flags & CMQ_FLAG_ROUTE) {
             if (!srv->routes || !peer_matches_configured_route(srv, c->fd)) {
                 cmq_send_connack(c, 1);

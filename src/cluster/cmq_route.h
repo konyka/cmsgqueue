@@ -41,6 +41,8 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
                              size_t *out_eagain);
 
 size_t cmq_route_pool_count(cmq_route_pool_t *pool);
+/* Connected peers with a live fd (excludes placeholders / dead slots). */
+size_t cmq_route_live_count(cmq_route_pool_t *pool);
 cmq_route_conn_t *cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id);
 
 #endif

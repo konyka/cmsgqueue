@@ -1390,6 +1390,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — BATCH stop-on-fail · route live count</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">BATCH preflight</span></td><td>✅</td><td>No live route peers + no local targets → ERROR before any fan-out.</td></tr>
+<tr><td><span class="component-name">BATCH stop-on-fail</span></td><td>✅</td><td>First route/deliver failure frees remaining targets and stops; msgs_in only for succeeded entries.</td></tr>
+<tr><td><span class="component-name">cmq_route_live_count</span></td><td>✅</td><td>Counts connected peers with fd≥0 (excludes placeholders).</td></tr>
+<tr><td><span class="component-name">route ingress ACL</span></td><td>✅</td><td>Documented: inbound source port is ephemeral — match IP only (+ optional auth).</td></tr>
+</table>
+</div>
+
 
 
 
