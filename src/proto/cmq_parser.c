@@ -22,12 +22,15 @@ struct cmq_parser {
     /* queue of parsed frames */
     cmq_frame_node_t *head;
     cmq_frame_node_t *tail;
+    size_t queued;
 };
 
 #define CMQ_MAX_PAYLOAD (16 * 1024 * 1024) /* 16 MB */
 #define CMQ_HEADER_LEN (sizeof(cmq_frame_hdr_t))
+#define CMQ_PARSER_FRAME_QUEUE_MAX 64
 
 static cmq_frame_node_t *cmq_push_frame(cmq_parser_t *p, cmq_frame_t *frame) {
+    if (p->queued >= CMQ_PARSER_FRAME_QUEUE_MAX) return NULL;
     cmq_frame_node_t *node = (cmq_frame_node_t *)malloc(sizeof(*node));
     if (!node) return NULL;
     node->frame = *frame;
@@ -38,6 +41,7 @@ static cmq_frame_node_t *cmq_push_frame(cmq_parser_t *p, cmq_frame_t *frame) {
         p->tail->next = node;
         p->tail = node;
     }
+    p->queued++;
     return node;
 }
 
@@ -62,6 +66,7 @@ void cmq_parser_destroy(cmq_parser_t *p) {
         cur = n;
     }
     p->head = p->tail = NULL;
+    p->queued = 0;
     if (p->inbuf) free(p->inbuf);
     free(p);
 }
@@ -77,6 +82,7 @@ void cmq_parser_reset(cmq_parser_t *p) {
         cur = n;
     }
     p->head = p->tail = NULL;
+    p->queued = 0;
     /* reset inbuf */
     if (p->inbuf) {
         free(p->inbuf);
@@ -190,6 +196,7 @@ int cmq_parser_next(cmq_parser_t *p) {
     cmq_frame_node_t *n = p->head;
     p->head = n->next;
     if (!p->head) p->tail = NULL;
+    if (p->queued > 0) p->queued--;
     if (n->frame.payload) free(n->frame.payload);
     free(n);
     return (p->head != NULL) ? 1 : 0;

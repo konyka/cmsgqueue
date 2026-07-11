@@ -1080,6 +1080,24 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Request Offset &amp; Parser Queue Cap</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">handle_request/response wire lens</span></td><td>✅</td><td>Subject/reply offsets advance by wire lengths (aligned with publish). Truncation only affects local copies.</td></tr>
+<tr><td><span class="component-name">CMQ_PARSER_FRAME_QUEUE_MAX</span></td><td>✅</td><td>64 queued frames per parser; overflow returns -1 → connection teardown. Stops single-feed memory blowups.</td></tr>
+<tr><td><span class="component-name">UNSUBSCRIBE semantics</span></td><td>✅</td><td>Short payload / unknown <code>sub_id</code> → ERROR; success → UNSUBACK.</td></tr>
+<tr><td><span class="component-name">deliver_matches stats</span></td><td>✅</td><td>Increment <code>stat_messages_out</code> only when <code>cmq_client_send</code> succeeds.</td></tr>
+<tr><td><span class="component-name">tests</span></td><td>✅</td><td><code>parser.frame_queue_cap</code>, <code>server_ops.unsubscribe_unknown</code>. <code>test_server_ops</code> now 13 tests.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Pending commit</span> — Request/response wire offsets + parser queue cap + UNSUBSCRIBE errors. <strong>21/21 test suites pass.</strong>
+</div>
+</div>
+
 </div>
 </body>
 </html>

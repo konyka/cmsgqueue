@@ -764,9 +764,8 @@ static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
         }
 
         cmq_patch_message_sub_id(frame, ref->sub_id);
-        cmq_client_send(ref->client, frame, flen);
-        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
-        {
+        if (cmq_client_send(ref->client, frame, flen) == 0) {
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
             cmq_account_t *oacc = cmq_account_get(srv->accounts,
                                                    ref->client->account_name);
             if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)payload_len);
@@ -1211,13 +1210,17 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
 
 static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
                                 const cmq_frame_t *frame) {
-    if (!frame->payload || frame->payload_len < 4) return;
+    if (!frame->payload || frame->payload_len < 4) {
+        cmq_send_error(c, "invalid unsubscribe");
+        return;
+    }
 
     uint32_t sub_id = ((uint32_t)frame->payload[0] << 24) |
                       ((uint32_t)frame->payload[1] << 16) |
                       ((uint32_t)frame->payload[2] << 8) |
                       (uint32_t)frame->payload[3];
 
+    int found = 0;
     cmq_sub_entry_t **pp = &c->subs;
     while (*pp) {
         if ((*pp)->sub_id == sub_id) {
@@ -1240,9 +1243,15 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
                 cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
                                           CMQ_ATOMIC_RELAXED);
             }
+            found = 1;
             break;
         }
         pp = &(*pp)->next;
+    }
+
+    if (!found) {
+        cmq_send_error(c, "unknown subscription");
+        return;
     }
 
     uint8_t ack[16];
@@ -1259,33 +1268,42 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     }
 
     size_t offset = 0;
-    uint16_t subject_len = ((uint16_t)frame->payload[offset] << 8) |
-                            frame->payload[offset + 1];
+    uint16_t wire_subj = ((uint16_t)frame->payload[offset] << 8) |
+                          frame->payload[offset + 1];
     offset += 2;
-    if (offset + subject_len > frame->payload_len) {
+    if (offset + wire_subj > frame->payload_len) {
         cmq_send_error(c, "subject too long");
         return;
     }
     char subject[CMQ_MAX_SUBJECT];
-    if (subject_len >= CMQ_MAX_SUBJECT) subject_len = CMQ_MAX_SUBJECT - 1;
-    memcpy(subject, frame->payload + offset, subject_len);
-    subject[subject_len] = '\0';
-    offset += subject_len;
+    size_t copy_len = wire_subj;
+    if (copy_len >= CMQ_MAX_SUBJECT) copy_len = CMQ_MAX_SUBJECT - 1;
+    memcpy(subject, frame->payload + offset, copy_len);
+    subject[copy_len] = '\0';
+    offset += wire_subj;
 
-    uint16_t reply_len = 0;
     char reply_to[CMQ_MAX_SUBJECT] = {0};
     if (offset + 2 <= frame->payload_len) {
-        reply_len = ((uint16_t)frame->payload[offset] << 8) |
-                     frame->payload[offset + 1];
-        offset += 2;
-        if (reply_len > 0 && offset + reply_len <= frame->payload_len) {
-            if (reply_len >= CMQ_MAX_SUBJECT) reply_len = CMQ_MAX_SUBJECT - 1;
-            memcpy(reply_to, frame->payload + offset, reply_len);
-            reply_to[reply_len] = '\0';
-            offset += reply_len;
+        uint16_t wire_reply = ((uint16_t)frame->payload[offset] << 8) |
+                               frame->payload[offset + 1];
+        if (offset + 2 + (size_t)wire_reply > frame->payload_len) {
+            cmq_send_error(c, "invalid request");
+            return;
         }
+        offset += 2;
+        if (wire_reply > 0) {
+            size_t rcopy = wire_reply;
+            if (rcopy >= CMQ_MAX_SUBJECT) rcopy = CMQ_MAX_SUBJECT - 1;
+            memcpy(reply_to, frame->payload + offset, rcopy);
+            reply_to[rcopy] = '\0';
+        }
+        offset += wire_reply;
     }
 
+    if (offset > frame->payload_len) {
+        cmq_send_error(c, "invalid request");
+        return;
+    }
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
 
@@ -1303,6 +1321,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     cmq_sublist_result_t result;
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
         cmq_rwlock_unlock(&srv->sublist_lock);
+        cmq_send_error(c, "match failed");
         return;
     }
 
@@ -1349,16 +1368,24 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     }
 
     size_t offset = 0;
-    uint16_t subject_len = ((uint16_t)frame->payload[offset] << 8) |
-                            frame->payload[offset + 1];
+    uint16_t wire_subj = ((uint16_t)frame->payload[offset] << 8) |
+                          frame->payload[offset + 1];
     offset += 2;
-    if (offset + subject_len > frame->payload_len) return;
+    if (offset + wire_subj > frame->payload_len) {
+        cmq_send_error(c, "invalid response");
+        return;
+    }
     char subject[CMQ_MAX_SUBJECT];
-    if (subject_len >= CMQ_MAX_SUBJECT) subject_len = CMQ_MAX_SUBJECT - 1;
-    memcpy(subject, frame->payload + offset, subject_len);
-    subject[subject_len] = '\0';
-    offset += subject_len;
+    size_t copy_len = wire_subj;
+    if (copy_len >= CMQ_MAX_SUBJECT) copy_len = CMQ_MAX_SUBJECT - 1;
+    memcpy(subject, frame->payload + offset, copy_len);
+    subject[copy_len] = '\0';
+    offset += wire_subj;
 
+    if (offset > frame->payload_len) {
+        cmq_send_error(c, "invalid response");
+        return;
+    }
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
 

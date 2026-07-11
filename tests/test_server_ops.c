@@ -927,4 +927,35 @@ TEST(server_ops, batch_invalid_rejected) {
     cmq_server_destroy(srv);
 }
 
+TEST(server_ops, unsubscribe_unknown) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 12;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(100);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    uint8_t pl[4] = {0, 0, 0, 99};
+    send_frame(fd, CMQ_OP_UNSUBSCRIBE, pl, 4);
+    wait_ms(80);
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_ERROR);
+    free_frame(&f);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

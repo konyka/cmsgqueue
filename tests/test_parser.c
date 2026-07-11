@@ -129,6 +129,29 @@ TEST(parser, multiple_frames) {
     cmq_parser_destroy(p);
 }
 
+/* More than CMQ_PARSER_FRAME_QUEUE_MAX frames in one feed must fail. */
+TEST(parser, frame_queue_cap) {
+    cmq_parser_t *p = cmq_parser_create();
+    /* 65 zero-payload PING frames (header = 9 bytes typically) */
+    enum { N = 65 };
+    uint8_t buf[N * 16];
+    size_t off = 0;
+    for (int i = 0; i < N; i++) {
+        cmq_frame_hdr_t h;
+        h.magic[0] = CMQ_PROTO_MAGIC_0;
+        h.magic[1] = CMQ_PROTO_MAGIC_1;
+        h.version = CMQ_PROTO_VERSION;
+        h.flags = 0;
+        h.op = CMQ_OP_PING;
+        h.length = 0;
+        memcpy(buf + off, &h, sizeof(h));
+        off += sizeof(h);
+    }
+    int rc = cmq_parser_feed(p, buf, off);
+    ASSERT_EQ(rc, -1);
+    cmq_parser_destroy(p);
+}
+
 TEST(parser, invalid_magic) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[8] = {0xDE, 0xAD, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00};
