@@ -305,8 +305,19 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
             target->state != CMQ_CLIENT_CLOSING) {
             if (msg->require_sub_id == 0 ||
                 client_has_sub(target, msg->require_sub_id)) {
-                (void)cmq_client_send_local(target, msg->buf, msg->len);
+                if (cmq_client_send_local(target, msg->buf, msg->len) != 0 &&
+                    w->server) {
+                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                              CMQ_ATOMIC_RELAXED);
+                }
+            } else if (w->server) {
+                /* Queued while subscribed; drain after unsub — count as drop. */
+                cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                          CMQ_ATOMIC_RELAXED);
             }
+        } else if (w->server) {
+            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
         }
         cmq_mutex_unlock(&w->clients_lock);
         free(msg->buf);

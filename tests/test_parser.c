@@ -181,17 +181,19 @@ TEST(parser, reset) {
 TEST(parser, frame_encode) {
     uint8_t buf[64];
     const char *payload = "test payload";
-    size_t len = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH, 0, (const uint8_t *)payload, strlen(payload));
+    size_t plen = strlen(payload);
+    size_t len = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH, 0, (const uint8_t *)payload, plen);
     ASSERT(len > 0);
-
-    cmq_frame_hdr_t hdr;
-    memcpy(&hdr, buf, sizeof(hdr));
-    ASSERT_EQ(hdr.magic[0], CMQ_PROTO_MAGIC_0);
-    ASSERT_EQ(hdr.magic[1], CMQ_PROTO_MAGIC_1);
-    ASSERT_EQ(hdr.version, CMQ_PROTO_VERSION);
-    ASSERT_EQ(hdr.op, CMQ_OP_PUBLISH);
-    ASSERT_EQ(hdr.length, (cmq_u32_t)strlen(payload));
-    ASSERT(memcmp(buf + sizeof(hdr), payload, strlen(payload)) == 0);
+    ASSERT_EQ(buf[0], CMQ_PROTO_MAGIC_0);
+    ASSERT_EQ(buf[1], CMQ_PROTO_MAGIC_1);
+    ASSERT_EQ(buf[2], CMQ_PROTO_VERSION);
+    ASSERT_EQ(buf[4], (uint8_t)CMQ_OP_PUBLISH);
+    /* length is always little-endian on the wire */
+    ASSERT_EQ(buf[5], (uint8_t)(plen & 0xff));
+    ASSERT_EQ(buf[6], (uint8_t)((plen >> 8) & 0xff));
+    ASSERT_EQ(buf[7], (uint8_t)((plen >> 16) & 0xff));
+    ASSERT_EQ(buf[8], (uint8_t)((plen >> 24) & 0xff));
+    ASSERT(memcmp(buf + CMQ_PROTO_HDR_SIZE, payload, plen) == 0);
 }
 
 TEST(parser, frame_encode_buffer_too_small) {

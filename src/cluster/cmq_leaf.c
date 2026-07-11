@@ -99,7 +99,7 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     if (!leaf) return -1;
     cmq_mutex_lock(&leaf->lock);
 
-    if (leaf->connected) {
+    if (leaf->connected && leaf->hub_fd >= 0) {
         cmq_mutex_unlock(&leaf->lock);
         return 0;
     }

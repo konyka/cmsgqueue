@@ -389,6 +389,9 @@ int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
     cmq_mutex_lock(&g_perms_lock);
 
     cmq_account_perms_t *pub = find_perms(pub_account);
+    cmq_account_perms_t *sub = find_perms(sub_account);
+
+    /* Explicit exports require a matching import on the subscriber (NATS-like). */
     if (pub && pub->export_count > 0) {
         int ok = 0;
         for (size_t i = 0; i < pub->export_count; i++) {
@@ -398,13 +401,12 @@ int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
                 break;
             }
         }
-        if (!ok) {
+        if (!ok || !sub || sub->import_count == 0) {
             cmq_mutex_unlock(&g_perms_lock);
             return 0;
         }
     }
 
-    cmq_account_perms_t *sub = find_perms(sub_account);
     if (sub && sub->import_count > 0) {
         int ok = 0;
         for (size_t i = 0; i < sub->import_count; i++) {

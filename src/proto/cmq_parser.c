@@ -232,17 +232,19 @@ int cmq_parser_next(cmq_parser_t *p) {
 size_t cmq_frame_encode(uint8_t *buf, size_t buf_size, cmq_op_t op, cmq_u8_t flags, const uint8_t *payload, size_t payload_len) {
     size_t needed = sizeof(cmq_frame_hdr_t) + payload_len;
     if (buf_size < needed) return 0;
-    cmq_frame_hdr_t hdr;
-    hdr.magic[0] = CMQ_PROTO_MAGIC_0;
-    hdr.magic[1] = CMQ_PROTO_MAGIC_1;
-    hdr.version = CMQ_PROTO_VERSION;
-    hdr.flags = flags;
-    hdr.op = op;
-    hdr.length = (uint32_t)payload_len; /* store in little-endian memory */
-    /* copy header into buffer directly to preserve memory layout */
-    memcpy(buf, &hdr, sizeof(hdr));
+    buf[0] = CMQ_PROTO_MAGIC_0;
+    buf[1] = CMQ_PROTO_MAGIC_1;
+    buf[2] = CMQ_PROTO_VERSION;
+    buf[3] = flags;
+    buf[4] = (uint8_t)op;
+    /* Wire length is little-endian (matches cmq_parser_feed). */
+    uint32_t le = (uint32_t)payload_len;
+    buf[5] = (uint8_t)(le);
+    buf[6] = (uint8_t)(le >> 8);
+    buf[7] = (uint8_t)(le >> 16);
+    buf[8] = (uint8_t)(le >> 24);
     if (payload_len > 0 && payload) {
-        memcpy(buf + sizeof(hdr), payload, payload_len);
+        memcpy(buf + sizeof(cmq_frame_hdr_t), payload, payload_len);
     }
-    return sizeof(hdr) + payload_len;
+    return sizeof(cmq_frame_hdr_t) + payload_len;
 }

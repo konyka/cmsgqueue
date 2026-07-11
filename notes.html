@@ -1451,6 +1451,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — ACL import required · LE encode · drain drops</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">may_deliver</span></td><td>✅</td><td>Explicit export requires matching import; export-only no longer open-defaults.</td></tr>
+<tr><td><span class="component-name">frame_encode LE</span></td><td>✅</td><td>Write length as little-endian bytes (matches parser feed).</td></tr>
+<tr><td><span class="component-name">worker drain drops</span></td><td>✅</td><td>Unsub/send-fail/gone client on mailbox drain increments <code>stat_messages_dropped</code>.</td></tr>
+<tr><td><span class="component-name">gw/leaf reconnect</span></td><td>✅</td><td>Early-return only when <code>connected &amp;&amp; fd≥0</code>.</td></tr>
+</table>
+</div>
+
 
 
 

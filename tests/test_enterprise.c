@@ -110,6 +110,10 @@ TEST(account, may_deliver_cross_account) {
     ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "globex", "acme.data"), 1);
     ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "other", "acme.data"), 0);
 
+    /* Export without matching import must deny (not open-default). */
+    cmq_account_remove_import(mgr, "globex", "acme.>");
+    ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "globex", "acme.data"), 0);
+
     cmq_account_manager_destroy(mgr);
 }
 

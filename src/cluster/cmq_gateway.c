@@ -110,7 +110,7 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
 
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0) {
-            if (gw->conns[i].connected) {
+            if (gw->conns[i].connected && gw->conns[i].fd >= 0) {
                 cmq_mutex_unlock(&gw->lock);
                 return 0;
             }
