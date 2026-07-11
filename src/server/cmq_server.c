@@ -2718,7 +2718,8 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
     c->write_cap = 0;
     c->write_len = 0;
     c->write_pos = 0;
-    cmq_client_send(c, (const uint8_t *)response, resp_len);
+    if (cmq_client_send(c, (const uint8_t *)response, resp_len) != 0)
+        return -1;
 
     c->is_websocket = 1;
     c->ws_upgrade_done = 1;

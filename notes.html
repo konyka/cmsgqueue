@@ -1736,6 +1736,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS upgrade send · stream bytes · epoll MOD ADD</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">WS 101 send</span></td><td>✅</td><td>Only set is_websocket after successful 101 send.</td></tr>
+<tr><td><span class="component-name">stream evict bytes</span></td><td>✅</td><td>Debit total_bytes only after successful evict_seq.</td></tr>
+<tr><td><span class="component-name">stream wrap debit</span></td><td>✅</td><td>Refuse wrap append when old msg get fails (no silent inflate).</td></tr>
+<tr><td><span class="component-name">epoll MOD</span></td><td>✅</td><td>ENOENT falls back to EPOLL_CTL_ADD.</td></tr>
+</table>
+</div>
+
 
 
 

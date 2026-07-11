@@ -193,8 +193,12 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     ev.events = (uint32_t)cmq_to_epoll_events(events);
     ev.data.fd = fd;
 
-    if (epoll_ctl(loop->backend_fd, EPOLL_CTL_MOD, fd, &ev) != 0)
-        return -1;
+    if (epoll_ctl(loop->backend_fd, EPOLL_CTL_MOD, fd, &ev) != 0) {
+        /* fd may have been dropped from the set; re-ADD once. */
+        if (errno != ENOENT ||
+            epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0)
+            return -1;
+    }
 
     loop->watchers[fd].events = events;
     loop->watchers[fd].cb = cb;
