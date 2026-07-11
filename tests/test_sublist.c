@@ -164,6 +164,20 @@ TEST(sublist, invalid_subject_gt_middle) {
     cmq_sublist_destroy(sl);
 }
 
+TEST(sublist, invalid_subject_too_many_tokens) {
+    cmq_sublist_t *sl = cmq_sublist_create();
+    char subject[512];
+    size_t off = 0;
+    for (int i = 0; i < 65; i++) {
+        if (i) subject[off++] = '.';
+        subject[off++] = 'a';
+    }
+    subject[off] = '\0';
+    int rc = cmq_sublist_insert(sl, subject, (void *)1);
+    ASSERT(rc != 0);
+    cmq_sublist_destroy(sl);
+}
+
 TEST(sublist, many_subjects) {
     cmq_sublist_t *sl = cmq_sublist_create();
     for (int i = 0; i < 1000; i++) {

@@ -85,6 +85,8 @@ static int tokenize(const char *subject, char tokens[][256], int *ntokens) {
         (*ntokens)++;
         if (*p == '.') p++;
     }
+    /* Remaining tokens beyond the 64-token cap are invalid. */
+    if (*p) return -1;
     return 0;
 }
 

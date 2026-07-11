@@ -958,4 +958,87 @@ TEST(server_ops, unsubscribe_unknown) {
     cmq_server_destroy(srv);
 }
 
+/* Ops before CONNECT must be rejected (auth bypass / protocol gate). */
+TEST(server_ops, require_connect_before_ops) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 13;
+    config.log_to_stdout = 0;
+    config.auth_username = "user";
+    config.auth_password = "pass";
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(100);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    cmq_parser_t *parser = cmq_parser_create();
+
+    /* Skip CONNECT; attempt SUBSCRIBE directly. */
+    uint8_t sbuf[32];
+    const char *subj = "noauth";
+    uint16_t slen = (uint16_t)strlen(subj);
+    sbuf[0] = 0; sbuf[1] = 0; sbuf[2] = 0; sbuf[3] = 1;
+    sbuf[4] = (slen >> 8) & 0xFF; sbuf[5] = slen & 0xFF;
+    memcpy(sbuf + 6, subj, slen);
+    send_frame(fd, CMQ_OP_SUBSCRIBE, sbuf, 6 + slen);
+    wait_ms(100);
+
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    /* May receive INFO first (NATS-like), then ERROR. */
+    if (f.hdr.op == CMQ_OP_INFO) {
+        free_frame(&f);
+        ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    }
+    ASSERT_EQ(f.hdr.op, CMQ_OP_ERROR);
+    free_frame(&f);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+/* TCP without CONNECT must be reaped by keepalive (slot exhaustion DoS). */
+TEST(server_ops, init_idle_timeout) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 14;
+    config.log_to_stdout = 0;
+    config.ping_interval_ms = 200;
+    config.max_clients = 2;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(80);
+
+    int idle = connect_to(config.port);
+    ASSERT(idle >= 0);
+    wait_ms(1200); /* > 2 * ping_interval */
+
+    /* Slot should be free again for a real CONNECT. */
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+    send_frame(fd, CMQ_OP_STATS, NULL, 0);
+    wait_ms(80);
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_STATS);
+    free_frame(&f);
+
+    close(idle);
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

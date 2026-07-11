@@ -1098,6 +1098,25 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Connect Gate &amp; Subject Limits</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">pre-CONNECT op gate</span></td><td>✅</td><td>Only CONNECT/PING/DISCONNECT allowed before <code>CONNECTED</code>. Closes auth bypass via PUBLISH/SUBSCRIBE.</td></tr>
+<tr><td><span class="component-name">duplicate CONNECT</span></td><td>✅</td><td>Second CONNECT gets CONNACK error; no double <code>stat_connections</code> / account leak. Teardown calls <code>cmq_account_dec_connections</code>.</td></tr>
+<tr><td><span class="component-name">subject length reject</span></td><td>✅</td><td>PUBLISH/REQUEST/RESPONSE/BATCH reject empty or <code>&gt;= CMQ_MAX_SUBJECT</code> (no silent truncation).</td></tr>
+<tr><td><span class="component-name">tokenize 64-token cap</span></td><td>✅</td><td>Leftover tokens after 64 → insert/match fail (no silent truncate).</td></tr>
+<tr><td><span class="component-name">INIT keepalive</span></td><td>✅</td><td>Idle <code>CMQ_CLIENT_INIT</code> (TCP without CONNECT) is torn down by keepalive — prevents max_clients slot exhaustion DoS.</td></tr>
+<tr><td><span class="component-name">tests</span></td><td>✅</td><td><code>require_connect_before_ops</code>, <code>invalid_subject_too_many_tokens</code>, <code>init_idle_timeout</code>.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Pending commit</span> — Connect gate + subject limits + INIT keepalive. <strong>21/21 test suites pass.</strong>
+</div>
+</div>
+
 </div>
 </body>
 </html>

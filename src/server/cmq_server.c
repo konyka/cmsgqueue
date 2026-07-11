@@ -428,6 +428,10 @@ static void client_teardown(cmq_client_t *c) {
         if (conns > 0) {
             cmq_atomic_fetch_sub_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
         }
+        if (c->account_name[0] != '\0') {
+            cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
+            if (acc) cmq_account_dec_connections(acc);
+        }
     }
 
     cmq_client_destroy(c);
@@ -698,8 +702,7 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
     for (size_t i = 0; i < result->count; i++) {
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result->entries[i];
         if (!ref || !ref->client) continue;
-        if (ref->client->state != CMQ_CLIENT_CONNECTED &&
-            ref->client->state != CMQ_CLIENT_INIT) continue;
+        if (ref->client->state != CMQ_CLIENT_CONNECTED) continue;
 
         if (ref->queue_group[0] != '\0') {
             int skip = 0;
@@ -747,8 +750,7 @@ static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
     for (size_t i = 0; i < result->count; i++) {
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result->entries[i];
         if (!ref || !ref->client) continue;
-        if (ref->client->state != CMQ_CLIENT_CONNECTED &&
-            ref->client->state != CMQ_CLIENT_INIT) continue;
+        if (ref->client->state != CMQ_CLIENT_CONNECTED) continue;
 
         if (ref->queue_group[0] != '\0') {
             if (!seen_qg) continue;
@@ -821,8 +823,7 @@ static void deliver_coro_func(void *arg) {
                 for (int ci = 0; ci < w->clients_count; ci++) {
                     cmq_client_t *c = w->clients[ci];
                     if (c && c->id == t->client_id &&
-                        (c->state == CMQ_CLIENT_CONNECTED ||
-                         c->state == CMQ_CLIENT_INIT)) {
+                        c->state == CMQ_CLIENT_CONNECTED) {
                         if (cmq_client_send_local(c, ctx->frame,
                                                    ctx->frame_len) == 0)
                             delivered = 1;
@@ -836,8 +837,7 @@ static void deliver_coro_func(void *arg) {
             for (int ci = 0; ci < srv->clients_count; ci++) {
                 cmq_client_t *c = srv->clients[ci];
                 if (c && c->id == t->client_id &&
-                    (c->state == CMQ_CLIENT_CONNECTED ||
-                     c->state == CMQ_CLIENT_INIT)) {
+                    c->state == CMQ_CLIENT_CONNECTED) {
                     if (cmq_client_send_local(c, ctx->frame, ctx->frame_len) == 0)
                         delivered = 1;
                     break;
@@ -966,17 +966,19 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     }
 
     uint16_t subject_len = ((uint16_t)frame->payload[0] << 8) | frame->payload[1];
+    if (subject_len == 0 || subject_len >= CMQ_MAX_SUBJECT) {
+        cmq_send_error(c, "invalid subject");
+        return;
+    }
     if ((size_t)(2 + subject_len) > frame->payload_len) {
         cmq_send_error(c, "subject too long");
         return;
     }
     char subject[CMQ_MAX_SUBJECT];
-    size_t copy_len = subject_len;
-    if (copy_len >= CMQ_MAX_SUBJECT) copy_len = CMQ_MAX_SUBJECT - 1;
-    memcpy(subject, frame->payload + 2, copy_len);
-    subject[copy_len] = '\0';
+    memcpy(subject, frame->payload + 2, subject_len);
+    subject[subject_len] = '\0';
 
-    /* Advance by wire subject_len, not the truncated copy length. */
+    /* Advance by wire subject_len. */
     size_t offset = 2 + (size_t)subject_len;
     if (offset + 2 <= frame->payload_len) {
         uint16_t reply_len = ((uint16_t)frame->payload[offset] << 8) |
@@ -1271,15 +1273,14 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     uint16_t wire_subj = ((uint16_t)frame->payload[offset] << 8) |
                           frame->payload[offset + 1];
     offset += 2;
-    if (offset + wire_subj > frame->payload_len) {
-        cmq_send_error(c, "subject too long");
+    if (wire_subj == 0 || wire_subj >= CMQ_MAX_SUBJECT ||
+        offset + wire_subj > frame->payload_len) {
+        cmq_send_error(c, "invalid subject");
         return;
     }
     char subject[CMQ_MAX_SUBJECT];
-    size_t copy_len = wire_subj;
-    if (copy_len >= CMQ_MAX_SUBJECT) copy_len = CMQ_MAX_SUBJECT - 1;
-    memcpy(subject, frame->payload + offset, copy_len);
-    subject[copy_len] = '\0';
+    memcpy(subject, frame->payload + offset, wire_subj);
+    subject[wire_subj] = '\0';
     offset += wire_subj;
 
     char reply_to[CMQ_MAX_SUBJECT] = {0};
@@ -1292,10 +1293,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         }
         offset += 2;
         if (wire_reply > 0) {
-            size_t rcopy = wire_reply;
-            if (rcopy >= CMQ_MAX_SUBJECT) rcopy = CMQ_MAX_SUBJECT - 1;
-            memcpy(reply_to, frame->payload + offset, rcopy);
-            reply_to[rcopy] = '\0';
+            if (wire_reply >= CMQ_MAX_SUBJECT) {
+                cmq_send_error(c, "invalid reply-to");
+                return;
+            }
+            memcpy(reply_to, frame->payload + offset, wire_reply);
+            reply_to[wire_reply] = '\0';
         }
         offset += wire_reply;
     }
@@ -1332,8 +1335,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     for (size_t i = 0; i < result.count; i++) {
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
         if (!ref || !ref->client) continue;
-        if (ref->client->state != CMQ_CLIENT_CONNECTED &&
-            ref->client->state != CMQ_CLIENT_INIT) continue;
+        if (ref->client->state != CMQ_CLIENT_CONNECTED) continue;
         if (ref->queue_group[0] != '\0') {
             if (!seen_qg) continue;
             int skip = 0;
@@ -1371,15 +1373,14 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     uint16_t wire_subj = ((uint16_t)frame->payload[offset] << 8) |
                           frame->payload[offset + 1];
     offset += 2;
-    if (offset + wire_subj > frame->payload_len) {
+    if (wire_subj == 0 || wire_subj >= CMQ_MAX_SUBJECT ||
+        offset + wire_subj > frame->payload_len) {
         cmq_send_error(c, "invalid response");
         return;
     }
     char subject[CMQ_MAX_SUBJECT];
-    size_t copy_len = wire_subj;
-    if (copy_len >= CMQ_MAX_SUBJECT) copy_len = CMQ_MAX_SUBJECT - 1;
-    memcpy(subject, frame->payload + offset, copy_len);
-    subject[copy_len] = '\0';
+    memcpy(subject, frame->payload + offset, wire_subj);
+    subject[wire_subj] = '\0';
     offset += wire_subj;
 
     if (offset > frame->payload_len) {
@@ -1464,7 +1465,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         uint16_t subject_len = ((uint16_t)frame->payload[offset] << 8) |
                                 frame->payload[offset + 1];
         offset += 2;
-        if (offset + subject_len > frame->payload_len) {
+        if (subject_len == 0 || subject_len >= CMQ_MAX_SUBJECT ||
+            offset + subject_len > frame->payload_len) {
             cmq_send_error(c, "invalid batch");
             return;
         }
@@ -1516,10 +1518,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                                 frame->payload[offset + 1];
         offset += 2;
         char subject[CMQ_MAX_SUBJECT];
-        size_t copy_len = subject_len;
-        if (copy_len >= CMQ_MAX_SUBJECT) copy_len = CMQ_MAX_SUBJECT - 1;
-        memcpy(subject, frame->payload + offset, copy_len);
-        subject[copy_len] = '\0';
+        memcpy(subject, frame->payload + offset, subject_len);
+        subject[subject_len] = '\0';
         offset += subject_len;
 
         uint16_t reply_len = ((uint16_t)frame->payload[offset] << 8) |
@@ -1548,8 +1548,21 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
 
 static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                           const cmq_frame_t *frame) {
+    /* Only CONNECT/PING/DISCONNECT are allowed before authentication completes. */
+    if (c->state != CMQ_CLIENT_CONNECTED &&
+        frame->hdr.op != CMQ_OP_CONNECT &&
+        frame->hdr.op != CMQ_OP_PING &&
+        frame->hdr.op != CMQ_OP_DISCONNECT) {
+        cmq_send_error(c, "not connected");
+        return;
+    }
+
     switch (frame->hdr.op) {
     case CMQ_OP_CONNECT:
+        if (c->state == CMQ_CLIENT_CONNECTED) {
+            cmq_send_connack(c, 1);
+            break;
+        }
         if (srv->config.auth_username) {
             if (!frame->payload || frame->payload_len < 4) {
                 cmq_send_connack(c, 1);
@@ -1575,11 +1588,13 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 c->state = CMQ_CLIENT_CLOSING;
                 break;
             }
+            free(c->username);
             c->username = strdup(uname);
         }
         c->state = CMQ_CLIENT_CONNECTED;
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
         strncpy(c->account_name, "$default", CMQ_ACCOUNT_NAME_SIZE - 1);
+        c->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
         cmq_account_t *acc = cmq_account_get(srv->accounts, "$default");
         cmq_account_inc_connections(acc);
         cmq_send_connack(c, 0);
@@ -1946,7 +1961,7 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
     int ndoomed = 0;
     for (int i = 0; i < count; i++) {
         cmq_client_t *c = clients[i];
-        if (c && c->state == CMQ_CLIENT_CONNECTED &&
+        if (c && (c->state == CMQ_CLIENT_CONNECTED || c->state == CMQ_CLIENT_INIT) &&
             (now - c->last_activity_ms) > timeout_ms) {
             doomed[ndoomed++] = c;
         }
@@ -1991,7 +2006,8 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                 if (doomed_ids) {
                     for (int i = 0; i < wn; i++) {
                         cmq_client_t *c = w->clients[i];
-                        if (c && c->state == CMQ_CLIENT_CONNECTED &&
+                        if (c && (c->state == CMQ_CLIENT_CONNECTED ||
+                                   c->state == CMQ_CLIENT_INIT) &&
                             (now - c->last_activity_ms) > timeout_ms) {
                             doomed_ids[ndoomed++] = c->id;
                         }
