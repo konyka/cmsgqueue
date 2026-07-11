@@ -1058,8 +1058,9 @@ static void worker_coro_tick(cmq_worker_t *w) {
 }
 
 /* Spawn coroutine delivery from a pre-built target snapshot (no live refs).
-   Takes ownership of targets/payload/headers on success; frees on failure. */
-static void worker_coro_spawn_deliver(cmq_worker_t *w,
+   Takes ownership of targets/payload/headers on success; frees on failure.
+   Returns 0 on success, -1 on OOM (caller should ERROR / sync-fallback). */
+static int worker_coro_spawn_deliver(cmq_worker_t *w,
                                        cmq_server_t *srv,
                                        cmq_deliver_tgt_t *targets,
                                        size_t target_count,
@@ -1073,7 +1074,7 @@ static void worker_coro_spawn_deliver(cmq_worker_t *w,
         free(targets);
         free((void *)payload);
         if (headers) free((void *)headers);
-        return;
+        return -1;
     }
     ctx->srv = srv;
     ctx->targets = targets;
@@ -1088,7 +1089,7 @@ static void worker_coro_spawn_deliver(cmq_worker_t *w,
     cmq_coro_t *coro = cmq_coro_create(deliver_coro_func, ctx, 32768);
     if (!coro) {
         deliver_ctx_free(ctx);
-        return;
+        return -1;
     }
     ctx->coro = coro;
 
@@ -1102,6 +1103,7 @@ static void worker_coro_spawn_deliver(cmq_worker_t *w,
         deliver_ctx_free(ctx);
         cmq_coro_destroy(coro);
     }
+    return 0;
 }
 
 /* Forward a framed op to cluster routes (heap-sized encode). */
@@ -1245,9 +1247,13 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             memcpy(coro_headers, headers, headers_len);
         }
 
-        worker_coro_spawn_deliver(w, srv, tgts, ntgt, subject,
-                                   coro_payload, msg_len,
-                                   coro_headers, headers_len);
+        if (worker_coro_spawn_deliver(w, srv, tgts, ntgt, subject,
+                                       coro_payload, msg_len,
+                                       coro_headers, headers_len) != 0) {
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_error(c, "delivery failed");
+        }
         return;
     }
 
@@ -1835,11 +1841,16 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
 
     switch (frame->hdr.op) {
     case CMQ_OP_CONNECT:
+        /* Only virgin INIT sockets may CONNECT — CLOSING must not resurrect. */
+        if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) {
+            cmq_send_connack(c, 1);
+            break;
+        }
         if (c->state == CMQ_CLIENT_CONNECTED) {
             cmq_send_connack(c, 1);
             break;
         }
-        if (srv->config.auth_username) {
+        if (srv->config.auth_username || srv->config.auth_password) {
             if (!frame->payload || frame->payload_len < 4) {
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
@@ -1860,7 +1871,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             char expect_p[256] = {0};
             if (ulen > 0 && ulen < 256) memcpy(uname, frame->payload + 4, ulen);
             if (plen > 0 && plen < 256) memcpy(passwd, frame->payload + 4 + ulen, plen);
-            strncpy(expect_u, srv->config.auth_username, sizeof(expect_u) - 1);
+            if (srv->config.auth_username)
+                strncpy(expect_u, srv->config.auth_username, sizeof(expect_u) - 1);
             if (srv->config.auth_password)
                 strncpy(expect_p, srv->config.auth_password, sizeof(expect_p) - 1);
             /* Always compare both fields (no short-circuit) in constant time. */
@@ -1951,7 +1963,7 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
     int info_len = snprintf(info_json, sizeof(info_json),
         "{\"version\":\"0.1.0\",\"proto\":1,\"connections\":%llu,\"subscriptions\":%llu,\"auth\":%s}",
         (unsigned long long)conns, (unsigned long long)subs,
-        srv->config.auth_username ? "true" : "false");
+        srv->config.auth_username || srv->config.auth_password ? "true" : "false");
     size_t len = cmq_frame_encode(info_buf, sizeof(info_buf), CMQ_OP_INFO, 0,
                                    (const uint8_t *)info_json, (size_t)info_len);
     if (len > 0) cmq_client_send(c, info_buf, len);
@@ -2551,6 +2563,13 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->tls_config = NULL;
 
     if (srv->config.tls_enabled && srv->config.tls_cert && srv->config.tls_key) {
+        if (!cmq_tls_backend_secure()) {
+            cmq_log_error(srv->log,
+                "TLS requested but no secure backend linked — refusing plaintext stub");
+            cmq_server_destroy(srv);
+            *server = NULL;
+            return CMQ_ERR_INVALID_ARG;
+        }
         srv->tls_config = cmq_tls_config_create();
         if (srv->tls_config) {
             cmq_tls_set_cert(srv->tls_config, srv->config.tls_cert);

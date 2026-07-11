@@ -107,12 +107,20 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
 
     if (fwrite(&hdr, sizeof(hdr), 1, fs->data_fp) != 1 ||
         fwrite(data, 1, len, fs->data_fp) != len) {
+        /* Best-effort rollback of a partial data write. */
+        fflush(fs->data_fp);
+        if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
+            fseek(fs->data_fp, (long)offset, SEEK_SET);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     fflush(fs->data_fp);
 
     if (fwrite(&offset, sizeof(uint64_t), 1, fs->idx_fp) != 1) {
+        /* Index failed: roll data back so restart scan stays consistent. */
+        fflush(fs->idx_fp);
+        if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
+            fseek(fs->data_fp, (long)offset, SEEK_SET);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }

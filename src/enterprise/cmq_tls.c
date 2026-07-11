@@ -86,6 +86,11 @@ int cmq_tls_configured(cmq_tls_config_t *cfg) {
     return cfg && cfg->has_cert && cfg->has_key;
 }
 
+int cmq_tls_backend_secure(void) {
+    /* This translation unit is a plaintext stub — fail closed at the server. */
+    return 0;
+}
+
 cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
     if (!cfg || fd < 0) return NULL;
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));

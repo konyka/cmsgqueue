@@ -112,6 +112,7 @@ TEST(tls, config_set_fields) {
     ASSERT_EQ(cmq_tls_verify_peer(cfg), 1);
     ASSERT_STR_EQ(cmq_tls_server_name(cfg), "example.com");
     ASSERT_EQ(cmq_tls_configured(cfg), 1);
+    ASSERT_EQ(cmq_tls_backend_secure(), 0);
 
     cmq_tls_config_destroy(cfg);
 }

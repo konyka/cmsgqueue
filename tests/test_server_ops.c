@@ -1241,4 +1241,57 @@ TEST(server_ops, ws_unmasked_rejected) {
     cmq_server_destroy(srv);
 }
 
+/* CONNECT after DISCONNECT must not resurrect a CLOSING client. */
+TEST(server_ops, connect_while_closing_rejected) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 19;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(80);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    send_frame(fd, CMQ_OP_DISCONNECT, NULL, 0);
+    wait_ms(30);
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(80);
+
+    /* Peer should close (or CONNACK fail then close); no successful reconnect. */
+    char junk[8];
+    ssize_t n = read(fd, junk, sizeof(junk));
+    /* Either EOF or a failed CONNACK then teardown — connection must not stay live. */
+    if (n > 0) {
+        wait_ms(80);
+        n = read(fd, junk, sizeof(junk));
+    }
+    ASSERT(n <= 0);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+/* tls_enabled with stub backend must fail closed. */
+TEST(server_ops, tls_stub_refused) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 20;
+    config.log_to_stdout = 0;
+    config.tls_enabled = 1;
+    config.tls_cert = "/tmp/cmq-fake-cert.pem";
+    config.tls_key = "/tmp/cmq-fake-key.pem";
+    cmq_server_t *srv = NULL;
+    ASSERT(cmq_server_create(&srv, &config) != CMQ_OK);
+    ASSERT_NULL(srv);
+}
+
 TEST_MAIN()

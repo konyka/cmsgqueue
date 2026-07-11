@@ -23,6 +23,8 @@ const char *cmq_tls_ca_path(cmq_tls_config_t *cfg);
 int cmq_tls_verify_peer(cmq_tls_config_t *cfg);
 const char *cmq_tls_server_name(cmq_tls_config_t *cfg);
 int cmq_tls_configured(cmq_tls_config_t *cfg);
+/* 1 if linked against a real crypto backend; 0 for the plaintext stub. */
+int cmq_tls_backend_secure(void);
 
 cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd);
 cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd);

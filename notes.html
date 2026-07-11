@@ -1235,6 +1235,20 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — CONNECT CLOSING · coro ERROR · TLS fail-closed · filestore rollback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CONNECT while CLOSING</span></td><td>✅</td><td>Reject CONNECT on CLOSING/CLOSED — no resurrect / connection-count leak.</td></tr>
+<tr><td><span class="component-name">coro spawn OOM</span></td><td>✅</td><td><code>worker_coro_spawn_deliver</code> returns -1; publisher gets ERROR + dropped stat.</td></tr>
+<tr><td><span class="component-name">TLS fail-closed stub</span></td><td>✅</td><td><code>cmq_tls_backend_secure()==0</code> → server create refuses <code>tls_enabled</code> (no plaintext pretend-TLS).</td></tr>
+<tr><td><span class="component-name">filestore idx rollback</span></td><td>✅</td><td>On data/idx write failure, <code>ftruncate</code> data back to pre-append offset.</td></tr>
+<tr><td><span class="component-name">auth password-only</span></td><td>✅</td><td>Auth enabled if username <em>or</em> password configured.</td></tr>
+<tr><td><span class="component-name">stream max_bytes eviction</span></td><td>✅</td><td>Stop eviction if store get fails (no silent total_bytes drift).</td></tr>
+</table>
+</div>
+
+
 
 
 
