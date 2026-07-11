@@ -1492,6 +1492,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — BATCH route_sent · write_timeout default · config cluster</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">BATCH route_sent</span></td><td>✅</td><td>Local deliver fail does not fail the batch when cluster already accepted the entry.</td></tr>
+<tr><td><span class="component-name">write_timeout default</span></td><td>✅</td><td>Unset <code>0</code> becomes <code>CMQ_DEFAULT_WRITE_TIMEOUT</code> (5s) like ping.</td></tr>
+<tr><td><span class="component-name">config cluster/TLS/route</span></td><td>✅</td><td><code>cmq_config_load</code> parses <code>cluster_*</code>, <code>tls_*</code>, and <code>route=host:port</code>.</td></tr>
+</table>
+</div>
+
 
 
 

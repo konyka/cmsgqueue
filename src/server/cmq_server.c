@@ -2235,6 +2235,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         uint16_t reply_len = prep[msg].reply_len;
         uint32_t payload_len = prep[msg].payload_len;
         const uint8_t *msg_payload = prep[msg].msg_payload;
+        size_t route_sent = 0;
 
         if (srv->routes && !c->is_route) {
             size_t pub_len = 2 + subject_len + 2 + reply_len + payload_len;
@@ -2255,7 +2256,6 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 }
                 if (payload_len > 0)
                     memcpy(pub + po, msg_payload, payload_len);
-                size_t route_sent = 0;
                 int route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, 0,
                                                      pub, pub_len, &route_sent);
                 free(pub);
@@ -2273,7 +2273,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             if (deliver_targets_sync(srv, prep[msg].tgts, prep[msg].ntgt,
                                       prep[msg].subject, c->account_name,
                                       msg_payload, payload_len,
-                                      NULL, 0) != 0)
+                                      NULL, 0) != 0 &&
+                route_sent == 0)
                 batch_fail = 1;
         }
 
@@ -3146,6 +3147,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         srv->config.max_subs_per_client = CMQ_DEFAULT_MAX_SUBS_PER_CLIENT;
     if (srv->config.ping_interval_ms == 0)
         srv->config.ping_interval_ms = CMQ_DEFAULT_PING_INTERVAL;
+    if (srv->config.write_timeout_ms == 0)
+        srv->config.write_timeout_ms = CMQ_DEFAULT_WRITE_TIMEOUT;
 
     if (cmq_config_validate(&srv->config) != CMQ_OK) {
         free(srv);

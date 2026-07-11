@@ -142,6 +142,37 @@ TEST(config, load_skip_sections) {
     ASSERT_EQ(config.log_level, 3);
 }
 
+TEST(config, load_cluster_tls_routes) {
+    const char *path = write_test_config(
+        "cluster_name = c1\n"
+        "cluster_node_id = n1\n"
+        "tls_enabled = 1\n"
+        "tls_cert = /tmp/cert.pem\n"
+        "tls_key = /tmp/key.pem\n"
+        "route = 10.0.0.1:7654\n"
+        "route = 10.0.0.2:7655\n"
+    );
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_STR_EQ(config.cluster_name, "c1");
+    ASSERT_STR_EQ(config.cluster_node_id, "n1");
+    ASSERT_EQ(config.tls_enabled, 1);
+    ASSERT_STR_EQ(config.tls_cert, "/tmp/cert.pem");
+    ASSERT_STR_EQ(config.tls_key, "/tmp/key.pem");
+    ASSERT_EQ(config.route_count, 2);
+    ASSERT_STR_EQ(config.routes[0].addr, "10.0.0.1");
+    ASSERT_EQ(config.routes[0].port, 7654);
+    ASSERT_STR_EQ(config.routes[1].addr, "10.0.0.2");
+    ASSERT_EQ(config.routes[1].port, 7655);
+    free((void *)config.cluster_name);
+    free((void *)config.cluster_node_id);
+    free((void *)config.tls_cert);
+    free((void *)config.tls_key);
+    free((void *)config.routes[0].addr);
+    free((void *)config.routes[1].addr);
+}
+
 TEST(config, load_empty_file) {
     const char *path = write_test_config("");
     cmq_config_t config;

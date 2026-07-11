@@ -62,6 +62,33 @@ static void parse_key_value(const char *key, const char *value, cmq_config_t *co
         config->auth_username = strdup(value);
     } else if (strcmp(key, "auth_password") == 0) {
         config->auth_password = strdup(value);
+    } else if (strcmp(key, "cluster_name") == 0) {
+        config->cluster_name = strdup(value);
+    } else if (strcmp(key, "cluster_node_id") == 0) {
+        config->cluster_node_id = strdup(value);
+    } else if (strcmp(key, "tls_enabled") == 0) {
+        config->tls_enabled = atoi(value);
+    } else if (strcmp(key, "tls_cert") == 0) {
+        config->tls_cert = strdup(value);
+    } else if (strcmp(key, "tls_key") == 0) {
+        config->tls_key = strdup(value);
+    } else if (strcmp(key, "route") == 0) {
+        if (config->route_count >= 8) return;
+        char *colon = strrchr(value, ':');
+        if (!colon || colon == value || colon[1] == '\0') return;
+        size_t alen = (size_t)(colon - value);
+        char *addr = malloc(alen + 1);
+        if (!addr) return;
+        memcpy(addr, value, alen);
+        addr[alen] = '\0';
+        int port = atoi(colon + 1);
+        if (port <= 0 || port > 65535) {
+            free(addr);
+            return;
+        }
+        config->routes[config->route_count].addr = addr;
+        config->routes[config->route_count].port = port;
+        config->route_count++;
     }
 }
 
