@@ -30,6 +30,25 @@ static void set_nonblock(int fd) {
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
+/* Close slot fd under io_lock so concurrent write_full cannot race close.
+   Caller must hold gw->lock; this temporarily releases and reacquires it. */
+static void gw_slot_close_fd(cmq_gateway_t *gw, size_t idx) {
+    if (idx >= CMQ_GW_MAX_CONNECTIONS) return;
+    cmq_mutex_unlock(&gw->lock);
+    cmq_mutex_lock(&gw->io_locks[idx]);
+    cmq_mutex_lock(&gw->lock);
+    int fd = -1;
+    if (idx < gw->conn_count) {
+        fd = gw->conns[idx].fd;
+        gw->conns[idx].fd = -1;
+        gw->conns[idx].connected = 0;
+    }
+    cmq_mutex_unlock(&gw->lock);
+    if (fd >= 0) close(fd);
+    cmq_mutex_unlock(&gw->io_locks[idx]);
+    cmq_mutex_lock(&gw->lock);
+}
+
 /* 0 = full write, 1 = EAGAIN zero progress, -1 = hard failure. */
 static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
@@ -128,9 +147,7 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
                 cmq_mutex_unlock(&gw->lock);
                 return 0;
             }
-            if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
-            gw->conns[i].fd = -1;
-            gw->conns[i].connected = 0;
+            gw_slot_close_fd(gw, i);
             char addr_copy[CMQ_NODE_ADDR_SIZE];
             strncpy(addr_copy, addr, sizeof(addr_copy) - 1);
             addr_copy[sizeof(addr_copy) - 1] = '\0';
@@ -155,9 +172,18 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             }
             set_nonblock(fd);
             cmq_mutex_lock(&gw->lock);
+            /* Another thread may have published a live peer meanwhile. */
+            for (size_t j = 0; j < gw->conn_count; j++) {
+                if (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0 &&
+                    gw->conns[j].connected && gw->conns[j].fd >= 0) {
+                    cmq_mutex_unlock(&gw->lock);
+                    close(fd);
+                    return 0;
+                }
+            }
             if (slot < gw->conn_count &&
                 strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0) {
-                if (gw->conns[slot].fd >= 0) close(gw->conns[slot].fd);
+                gw_slot_close_fd(gw, slot);
                 gw->conns[slot].fd = fd;
                 gw->conns[slot].connected = 1;
                 strncpy(gw->conns[slot].remote_addr, addr_copy,
@@ -209,11 +235,19 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
         }
         set_nonblock(fd);
         cmq_mutex_lock(&gw->lock);
+        for (size_t j = 0; j < gw->conn_count; j++) {
+            if (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0 &&
+                gw->conns[j].connected && gw->conns[j].fd >= 0) {
+                cmq_mutex_unlock(&gw->lock);
+                close(fd);
+                return 0;
+            }
+        }
         if ((size_t)slot < gw->conn_count &&
             (!gw->conns[slot].connected ||
              gw->conns[slot].remote_cluster[0] == '\0' ||
              strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0)) {
-            if (gw->conns[slot].fd >= 0) close(gw->conns[slot].fd);
+            gw_slot_close_fd(gw, (size_t)slot);
             memset(&gw->conns[slot], 0, sizeof(gw->conns[slot]));
             strncpy(gw->conns[slot].remote_cluster, cluster_name,
                     sizeof(gw->conns[slot].remote_cluster) - 1);
@@ -256,31 +290,35 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
     set_nonblock(fd);
 
     cmq_mutex_lock(&gw->lock);
-    /* Prefer append; reuse dead/empty if table grew full during connect. */
-    if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {
-        int slot = -1;
-        for (size_t i = 0; i < gw->conn_count; i++) {
-            if (!gw->conns[i].connected ||
-                gw->conns[i].remote_cluster[0] == '\0') {
-                slot = (int)i;
-                break;
-            }
-        }
-        if (slot < 0) {
+    /* Dedup after unlocked connect — avoid duplicate live peers. */
+    for (size_t i = 0; i < gw->conn_count; i++) {
+        if (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0 &&
+            gw->conns[i].connected && gw->conns[i].fd >= 0) {
             cmq_mutex_unlock(&gw->lock);
             close(fd);
-            return -1;
+            return 0;
         }
-        if (gw->conns[slot].fd >= 0) close(gw->conns[slot].fd);
-        memset(&gw->conns[slot], 0, sizeof(gw->conns[slot]));
-        strncpy(gw->conns[slot].remote_cluster, cluster_name,
-                sizeof(gw->conns[slot].remote_cluster) - 1);
-        strncpy(gw->conns[slot].remote_addr, addr_copy, CMQ_NODE_ADDR_SIZE - 1);
-        gw->conns[slot].remote_port = port_copy;
-        gw->conns[slot].fd = fd;
-        gw->conns[slot].connected = 1;
+    }
+    for (size_t i = 0; i < gw->conn_count; i++) {
+        int same = (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0);
+        if (!same && gw->conns[i].connected &&
+            gw->conns[i].remote_cluster[0] != '\0')
+            continue;
+        gw_slot_close_fd(gw, i);
+        memset(&gw->conns[i], 0, sizeof(gw->conns[i]));
+        strncpy(gw->conns[i].remote_cluster, cluster_name,
+                sizeof(gw->conns[i].remote_cluster) - 1);
+        strncpy(gw->conns[i].remote_addr, addr_copy, CMQ_NODE_ADDR_SIZE - 1);
+        gw->conns[i].remote_port = port_copy;
+        gw->conns[i].fd = fd;
+        gw->conns[i].connected = 1;
         cmq_mutex_unlock(&gw->lock);
         return 0;
+    }
+    if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        return -1;
     }
     cmq_gw_conn_t *c = &gw->conns[gw->conn_count++];
     strncpy(c->remote_cluster, cluster_name, sizeof(c->remote_cluster) - 1);
@@ -298,8 +336,7 @@ int cmq_gateway_disconnect(cmq_gateway_t *gw, const char *cluster_name) {
     cmq_mutex_lock(&gw->lock);
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0) {
-            /* Tombstone — keep io_locks[] index-stable (no memmove). */
-            if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
+            gw_slot_close_fd(gw, i);
             memset(&gw->conns[i], 0, sizeof(gw->conns[i]));
             gw->conns[i].fd = -1;
             gw->conns[i].connected = 0;
@@ -354,19 +391,21 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
             continue;
         }
         int wr = write_full(fd, data, len);
-        cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
         if (wr == 0) {
+            cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
             sent++;
         } else if (wr == 1) {
+            cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
             deferred++;
         } else {
             cmq_mutex_lock(&gw->lock);
             if (idxs[j] < gw->conn_count && gw->conns[idxs[j]].fd == fd) {
-                if (gw->conns[idxs[j]].fd >= 0) close(gw->conns[idxs[j]].fd);
                 gw->conns[idxs[j]].fd = -1;
                 gw->conns[idxs[j]].connected = 0;
             }
             cmq_mutex_unlock(&gw->lock);
+            close(fd); /* still holding io_lock */
+            cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
         }
     }
     if (out_eagain) *out_eagain = deferred;
@@ -406,19 +445,21 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
             continue;
         }
         int wr = write_full(fd, data, len);
-        cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
         if (wr == 0) {
+            cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
             sent++;
         } else if (wr == 1) {
+            cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
             deferred++;
         } else {
             cmq_mutex_lock(&gw->lock);
             if (idxs[j] < gw->conn_count && gw->conns[idxs[j]].fd == fd) {
-                if (gw->conns[idxs[j]].fd >= 0) close(gw->conns[idxs[j]].fd);
                 gw->conns[idxs[j]].fd = -1;
                 gw->conns[idxs[j]].connected = 0;
             }
             cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
         }
     }
     if (out_eagain) *out_eagain = deferred;

@@ -1593,6 +1593,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — gateway connect dedup · io_lock close · filestore fflush</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">gateway connect dedup</span></td><td>✅</td><td>After unlocked connect, drop new fd if a live same-cluster peer already exists.</td></tr>
+<tr><td><span class="component-name">gateway io_lock close</span></td><td>✅</td><td>gw_slot_close_fd / write-fail close under per-slot io_lock.</td></tr>
+<tr><td><span class="component-name">filestore fflush</span></td><td>✅</td><td>fflush failures roll back data/idx and return -1 (no false seq).</td></tr>
+</table>
+</div>
+
 
 
 

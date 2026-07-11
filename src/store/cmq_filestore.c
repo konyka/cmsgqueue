@@ -234,10 +234,16 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
-    fflush(fs->data_fp);
+    if (fflush(fs->data_fp) != 0) {
+        if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
+            fseek(fs->data_fp, (long)offset, SEEK_SET);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
 
     uint8_t idxb[8];
     put_le64(idxb, offset);
+    long idx_off = ftell(fs->idx_fp);
     if (fwrite(idxb, sizeof(idxb), 1, fs->idx_fp) != 1) {
         fflush(fs->idx_fp);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
@@ -245,7 +251,14 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
-    fflush(fs->idx_fp);
+    if (fflush(fs->idx_fp) != 0) {
+        if (idx_off >= 0)
+            ftruncate(fileno(fs->idx_fp), (off_t)idx_off);
+        if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
+            fseek(fs->data_fp, (long)offset, SEEK_SET);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
 
     if (out_seq) *out_seq = fs->next_seq;
     fs->next_seq++;
