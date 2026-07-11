@@ -225,4 +225,26 @@ TEST(parser, large_payload) {
     cmq_parser_destroy(p);
 }
 
+/* Declared length above cmq_parser_set_max_payload must fail before alloc. */
+TEST(parser, max_payload_reject) {
+    cmq_parser_t *p = cmq_parser_create();
+    cmq_parser_set_max_payload(p, 100);
+
+    uint8_t body[200];
+    memset(body, 'Y', sizeof(body));
+    uint8_t buf[256];
+    cmq_frame_hdr_t hdr;
+    hdr.magic[0] = CMQ_PROTO_MAGIC_0;
+    hdr.magic[1] = CMQ_PROTO_MAGIC_1;
+    hdr.version = CMQ_PROTO_VERSION;
+    hdr.flags = 0;
+    hdr.op = CMQ_OP_PUBLISH;
+    hdr.length = sizeof(body);
+    memcpy(buf, &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), body, sizeof(body));
+
+    ASSERT_EQ(cmq_parser_feed(p, buf, sizeof(hdr) + sizeof(body)), -1);
+    cmq_parser_destroy(p);
+}
+
 TEST_MAIN()

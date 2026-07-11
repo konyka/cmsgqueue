@@ -313,6 +313,15 @@ static cmq_client_t *cmq_client_create(int fd, uint32_t id,
     c->id = id;
     c->state = CMQ_CLIENT_INIT;
     c->parser = cmq_parser_create();
+    if (!c->parser) { free(c); return NULL; }
+    if (server && server->config.max_payload_size > 0) {
+        /* max_payload_size is message-body; frames also carry subjects/replies
+           and BATCH envelopes. Allow 256 KiB framing headroom (still << 16 MiB
+           hard ceiling) so oversize bodies hit ERROR, not silent teardown. */
+        size_t body = (size_t)server->config.max_payload_size;
+        size_t frame_cap = body + (256 * 1024);
+        cmq_parser_set_max_payload(c->parser, frame_cap);
+    }
     c->ev_loop = loop;
     c->server = server;
     c->write_buf = NULL;
@@ -1108,7 +1117,8 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                       (uint32_t)frame->payload[3];
     uint16_t subject_len = ((uint16_t)frame->payload[4] << 8) |
                             frame->payload[5];
-    if ((size_t)(6 + subject_len) > frame->payload_len || subject_len >= CMQ_MAX_SUBJECT) {
+    if ((size_t)(6 + subject_len) > frame->payload_len ||
+        subject_len == 0 || subject_len >= CMQ_MAX_SUBJECT) {
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -1121,8 +1131,12 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     if (qg_offset + 2 <= frame->payload_len) {
         uint16_t qg_len = ((uint16_t)frame->payload[qg_offset] << 8) |
                            frame->payload[qg_offset + 1];
-        if (qg_len > 0 && qg_len < CMQ_MAX_QUEUE_GROUP &&
-            qg_offset + 2 + qg_len <= frame->payload_len) {
+        if (qg_len > 0) {
+            if (qg_len >= CMQ_MAX_QUEUE_GROUP ||
+                qg_offset + 2 + qg_len > frame->payload_len) {
+                cmq_send_suback(c, sub_id, 1);
+                return;
+            }
             memcpy(queue_group, frame->payload + qg_offset + 2, qg_len);
             queue_group[qg_len] = '\0';
         }
@@ -1389,6 +1403,14 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     }
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
+
+    if (srv->config.max_payload_size > 0 &&
+        msg_len > (size_t)srv->config.max_payload_size) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "payload too large");
+        return;
+    }
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1856,6 +1878,39 @@ static void client_read_cb(int fd, int events, void *data) {
                 return;
             }
 
+            if (ws_frame.opcode == CMQ_WS_OPCODE_PING) {
+                /* RFC 6455: reply with PONG echoing the application data. */
+                if (ws_frame.payload_len > 125) {
+                    client_teardown(c);
+                    return;
+                }
+                uint8_t pong[140];
+                uint8_t unmasked[125];
+                const uint8_t *app = ws_frame.payload;
+                size_t alen = ws_frame.payload_len;
+                if (alen > 0 && ws_frame.masked) {
+                    memcpy(unmasked, ws_frame.payload, alen);
+                    cmq_ws_mask(unmasked, alen, ws_frame.mask_key);
+                    app = unmasked;
+                }
+                cmq_ws_frame_t pf;
+                pf.fin = 1;
+                pf.opcode = CMQ_WS_OPCODE_PONG;
+                pf.payload = app;
+                pf.payload_len = alen;
+                pf.mask_key = 0;
+                pf.masked = 0;
+                int plen = cmq_ws_frame_serialize(&pf, pong, sizeof(pong));
+                if (plen > 0)
+                    cmq_client_send_direct(c, pong, (size_t)plen);
+                offset += (size_t)parsed;
+                continue;
+            }
+            if (ws_frame.opcode == CMQ_WS_OPCODE_PONG) {
+                offset += (size_t)parsed;
+                continue;
+            }
+
             int is_data = (ws_frame.opcode == CMQ_WS_OPCODE_BINARY ||
                            ws_frame.opcode == CMQ_WS_OPCODE_TEXT ||
                            ws_frame.opcode == CMQ_WS_OPCODE_CONTINUATION);
@@ -1920,7 +1975,6 @@ static void client_read_cb(int fd, int events, void *data) {
                     c->ws_msg_active = 0;
                 }
             }
-            /* PING/PONG: consume and ignore for now. */
             offset += (size_t)parsed;
         }
         if (offset > 0) {

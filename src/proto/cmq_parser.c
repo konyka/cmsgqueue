@@ -23,9 +23,11 @@ struct cmq_parser {
     cmq_frame_node_t *head;
     cmq_frame_node_t *tail;
     size_t queued;
+
+    size_t max_payload;             /* per-connection payload cap */
 };
 
-#define CMQ_MAX_PAYLOAD (16 * 1024 * 1024) /* 16 MB */
+#define CMQ_MAX_PAYLOAD (16 * 1024 * 1024) /* 16 MB hard ceiling */
 #define CMQ_HEADER_LEN (sizeof(cmq_frame_hdr_t))
 #define CMQ_PARSER_FRAME_QUEUE_MAX 64
 
@@ -52,7 +54,16 @@ cmq_parser_t *cmq_parser_create(void) {
     p->inbuf = (uint8_t *)malloc(p->inbuf_cap);
     p->inbuf_len = 0;
     p->head = p->tail = NULL;
+    p->max_payload = CMQ_MAX_PAYLOAD;
     return p;
+}
+
+void cmq_parser_set_max_payload(cmq_parser_t *p, size_t max_payload) {
+    if (!p) return;
+    if (max_payload == 0 || max_payload > CMQ_MAX_PAYLOAD)
+        p->max_payload = CMQ_MAX_PAYLOAD;
+    else
+        p->max_payload = max_payload;
 }
 
 void cmq_parser_destroy(cmq_parser_t *p) {
@@ -143,7 +154,7 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
         uint32_t payload_len = (uint32_t)hb[5] | ((uint32_t)hb[6] << 8) |
                                ((uint32_t)hb[7] << 16) | ((uint32_t)hb[8] << 24);
 
-        if (payload_len > CMQ_MAX_PAYLOAD) {
+        if (payload_len > p->max_payload) {
             return -1;
         }
 

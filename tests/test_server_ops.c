@@ -1003,6 +1003,115 @@ TEST(server_ops, require_connect_before_ops) {
     cmq_server_destroy(srv);
 }
 
+/* Overlong queue group must SUBACK fail (not silent empty qg). */
+TEST(server_ops, queue_group_too_long) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 15;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(80);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    const char *subj = "qg.long";
+    uint16_t slen = (uint16_t)strlen(subj);
+    uint16_t qglen = 64; /* == CMQ_MAX_QUEUE_GROUP → reject */
+    uint8_t buf[256];
+    size_t off = 0;
+    buf[off++] = 0; buf[off++] = 0; buf[off++] = 0; buf[off++] = 1; /* sub_id */
+    buf[off++] = (slen >> 8) & 0xFF; buf[off++] = slen & 0xFF;
+    memcpy(buf + off, subj, slen); off += slen;
+    buf[off++] = (qglen >> 8) & 0xFF; buf[off++] = qglen & 0xFF;
+    memset(buf + off, 'q', qglen); off += qglen;
+
+    send_frame(fd, CMQ_OP_SUBSCRIBE, buf, off);
+    wait_ms(80);
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_SUBACK);
+    ASSERT(f.payload_len >= 1);
+    ASSERT_EQ(f.payload[0], 1); /* code=1 failure */
+    free_frame(&f);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+/* RFC 6455: server must answer WS PING with unmasked PONG echoing payload. */
+TEST(server_ops, ws_ping_pong) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 16;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(80);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    wait_ms(20);
+    const char *upgrade =
+        "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+        "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    ASSERT(write(fd, upgrade, strlen(upgrade)) > 0);
+    wait_ms(100);
+    char resp[512];
+    ssize_t rn = read(fd, resp, sizeof(resp) - 1);
+    ASSERT(rn > 0);
+    resp[rn] = '\0';
+    ASSERT(strstr(resp, "101") != NULL);
+
+    /* Masked WS PING with 4-byte app data. */
+    static const uint8_t mk[4] = {0x01, 0x02, 0x03, 0x04};
+    static const uint8_t app[4] = {'p', 'i', 'n', 'g'};
+    uint8_t ping[2 + 4 + 4];
+    ping[0] = 0x89; /* FIN + PING */
+    ping[1] = 0x80 | 4;
+    ping[2] = mk[0]; ping[3] = mk[1]; ping[4] = mk[2]; ping[5] = mk[3];
+    for (int i = 0; i < 4; i++) ping[6 + i] = app[i] ^ mk[i];
+    ASSERT(write(fd, ping, sizeof(ping)) == (ssize_t)sizeof(ping));
+    wait_ms(100);
+
+    int got_pong = 0;
+    for (int attempt = 0; attempt < 50 && !got_pong; attempt++) {
+        uint8_t rbuf[64];
+        ssize_t n = read(fd, rbuf, sizeof(rbuf));
+        if (n <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                wait_ms(20);
+                continue;
+            }
+            break;
+        }
+        cmq_ws_frame_t wf;
+        int parsed = cmq_ws_frame_parse(rbuf, (size_t)n, &wf);
+        if (parsed > 0 && wf.opcode == CMQ_WS_OPCODE_PONG &&
+            wf.payload_len == 4 && !wf.masked &&
+            memcmp(wf.payload, app, 4) == 0) {
+            got_pong = 1;
+        }
+    }
+    ASSERT(got_pong);
+
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 /* TCP without CONNECT must be reaped by keepalive (slot exhaustion DoS). */
 TEST(server_ops, init_idle_timeout) {
     cmq_config_t config = {0};
