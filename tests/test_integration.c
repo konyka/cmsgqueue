@@ -191,6 +191,7 @@ TEST(integration, account_stats_on_pubsub) {
     cmq_account_t *acc = cmq_account_get(srv->accounts, "$default");
     ASSERT_NOT_NULL(acc);
     ASSERT(acc->messages_in >= 1);
+    ASSERT(acc->subscriptions >= 1);
 
     cmq_frame_t msg_frame;
     ASSERT_EQ(recv_frame(sub_fd, &msg_frame, sub_parser), 0);

@@ -116,6 +116,17 @@ TEST(config, validate_bad_port) {
     ASSERT(rc != CMQ_OK);
 }
 
+TEST(config, validate_negative_limits) {
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.port = 7654;
+    config.max_clients = -1;
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+    config.max_clients = 0;
+    config.write_timeout_ms = -1;
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+}
+
 TEST(config, load_skip_sections) {
     const char *path = write_test_config(
         "[server]\n"

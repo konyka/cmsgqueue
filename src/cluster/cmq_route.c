@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_route.h"
+#include "cmq_parser.h"
+#include "cmq_proto.h"
 #include "cmq_thread.h"
 #include "cmq_types.h"
 #include <stdlib.h>
@@ -10,12 +12,97 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 
 #define CMQ_ROUTE_MAX_CONNS 32
+#define CMQ_ROUTE_HANDSHAKE_MS 3000
 
 static void set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+/* Blocking CONNECT + CONNACK so the peer accepts subsequent PUBLISH frames.
+   Must run before set_nonblock. Skips INFO (sent before CONNACK). */
+static int route_handshake(int fd, const char *auth_user, const char *auth_pass) {
+    uint8_t payload[520];
+    uint16_t ulen = 0, pwen = 0;
+    if (auth_user) {
+        size_t n = strlen(auth_user);
+        ulen = (uint16_t)(n > 255 ? 255 : n);
+    }
+    if (auth_pass) {
+        size_t n = strlen(auth_pass);
+        pwen = (uint16_t)(n > 255 ? 255 : n);
+    }
+    payload[0] = (uint8_t)(ulen >> 8);
+    payload[1] = (uint8_t)ulen;
+    payload[2] = (uint8_t)(pwen >> 8);
+    payload[3] = (uint8_t)pwen;
+    if (ulen) memcpy(payload + 4, auth_user, ulen);
+    if (pwen) memcpy(payload + 4 + ulen, auth_pass, pwen);
+    size_t plen = 4 + (size_t)ulen + (size_t)pwen;
+
+    uint8_t buf[600];
+    size_t len = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_CONNECT, 0,
+                                   payload, plen);
+    if (len == 0) return -1;
+
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        off += (size_t)n;
+    }
+
+    uint8_t rbuf[2048];
+    size_t rlen = 0;
+    int waited_ms = 0;
+    while (waited_ms < CMQ_ROUTE_HANDSHAKE_MS) {
+        while (rlen >= sizeof(cmq_frame_hdr_t)) {
+            cmq_frame_hdr_t hdr;
+            memcpy(&hdr, rbuf, sizeof(hdr));
+            if (hdr.magic[0] != CMQ_PROTO_MAGIC_0 ||
+                hdr.magic[1] != CMQ_PROTO_MAGIC_1)
+                return -1;
+            uint32_t plen_f = hdr.length;
+            size_t need = sizeof(cmq_frame_hdr_t) + (size_t)plen_f;
+            if (need > sizeof(rbuf)) return -1;
+            if (rlen < need) break;
+
+            if (hdr.op == (uint8_t)CMQ_OP_CONNACK) {
+                if (plen_f < 1) return -1;
+                return rbuf[sizeof(cmq_frame_hdr_t)] == 0 ? 0 : -1;
+            }
+            /* Skip INFO (and any other pre-CONNACK frames). */
+            memmove(rbuf, rbuf + need, rlen - need);
+            rlen -= need;
+        }
+
+        struct pollfd pfd = {.fd = fd, .events = POLLIN};
+        int pr = poll(&pfd, 1, 100);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (pr == 0) {
+            waited_ms += 100;
+            continue;
+        }
+        if (rlen >= sizeof(rbuf)) return -1;
+        ssize_t n = read(fd, rbuf + rlen, sizeof(rbuf) - rlen);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        rlen += (size_t)n;
+    }
+    return -1;
 }
 
 /* 0 = full write, 1 = EAGAIN with zero progress (keep fd), -1 = hard/partial
@@ -81,7 +168,8 @@ void cmq_route_pool_destroy(cmq_route_pool_t *pool) {
 }
 
 int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
-                       const char *addr, int port) {
+                       const char *addr, int port,
+                       const char *auth_user, const char *auth_pass) {
     if (!pool || !node_id || !addr) return -1;
     cmq_mutex_lock(&pool->lock);
 
@@ -103,6 +191,12 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
             sa.sin_port = htons((uint16_t)port);
             inet_pton(AF_INET, addr, &sa.sin_addr);
             if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+                close(fd);
+                pool->conns[i].fd = -1;
+                cmq_mutex_unlock(&pool->lock);
+                return -1;
+            }
+            if (route_handshake(fd, auth_user, auth_pass) != 0) {
                 close(fd);
                 pool->conns[i].fd = -1;
                 cmq_mutex_unlock(&pool->lock);
@@ -133,6 +227,11 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
     inet_pton(AF_INET, addr, &sa.sin_addr);
 
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        close(fd);
+        cmq_mutex_unlock(&pool->lock);
+        return -1;
+    }
+    if (route_handshake(fd, auth_user, auth_pass) != 0) {
         close(fd);
         cmq_mutex_unlock(&pool->lock);
         return -1;

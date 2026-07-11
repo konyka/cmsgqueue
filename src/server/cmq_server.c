@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_server.h"
+#include "cmq_config.h"
 #include "cmq_platform.h"
 #include "cmq_coro.h"
 #ifdef CMQ_OS_LINUX
@@ -445,6 +446,10 @@ static void client_teardown(cmq_client_t *c) {
             if (cur > 0) {
                 cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
                                           CMQ_ATOMIC_RELAXED);
+            }
+            {
+                cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
+                if (a) cmq_account_dec_subscriptions(a);
             }
         }
         free(s);
@@ -1122,17 +1127,29 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
     return 0;
 }
 
-/* Forward a framed op to cluster routes (heap-sized encode). */
-static void cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
-                                  const uint8_t *payload, size_t payload_len) {
-    if (!srv || !srv->routes || !payload) return;
+/* Forward a framed op to cluster routes (heap-sized encode).
+   Returns 0 on success (or no routes), -1 on OOM / encode failure. */
+static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
+                                 const uint8_t *payload, size_t payload_len) {
+    if (!srv || !srv->routes || !payload) return 0;
     size_t need = sizeof(cmq_frame_hdr_t) + payload_len;
     uint8_t *fwd = malloc(need);
-    if (!fwd) return;
+    if (!fwd) {
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        return -1;
+    }
     size_t fwd_len = cmq_frame_encode(fwd, need, op, flags, payload, payload_len);
     if (fwd_len > 0)
         cmq_route_broadcast(srv->routes, fwd, fwd_len, NULL);
+    else {
+        free(fwd);
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        return -1;
+    }
     free(fwd);
+    return 0;
 }
 
 static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
@@ -1367,6 +1384,10 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                 cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
                                           CMQ_ATOMIC_RELAXED);
             }
+            {
+                cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
+                if (a) cmq_account_dec_subscriptions(a);
+            }
             replacing = 1;
             break;
         }
@@ -1420,6 +1441,10 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_atomic_fetch_add_u64(&srv->stat_subscriptions, 1, CMQ_ATOMIC_RELAXED);
     c->sub_count++;
+    {
+        cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
+        if (a) cmq_account_inc_subscriptions(a);
+    }
     cmq_send_suback(c, sub_id, 0);
 }
 
@@ -1457,6 +1482,10 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
             if (cur > 0) {
                 cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
                                           CMQ_ATOMIC_RELAXED);
+            }
+            {
+                cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
+                if (a) cmq_account_dec_subscriptions(a);
             }
             found = 1;
             break;
@@ -1881,6 +1910,9 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                     memcpy(pub + po, msg_payload, payload_len);
                 cmq_route_forward_op(srv, CMQ_OP_PUBLISH, 0, pub, pub_len);
                 free(pub);
+            } else {
+                cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                                          CMQ_ATOMIC_RELAXED);
             }
         }
 
@@ -1959,9 +1991,16 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         c->state = CMQ_CLIENT_CONNECTED;
         c->last_activity_ms = srv_now_ms();
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
-        strncpy(c->account_name, "$default", CMQ_ACCOUNT_NAME_SIZE - 1);
-        c->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
-        cmq_account_t *acc = cmq_account_get(srv->accounts, "$default");
+        /* Map authenticated username → account; anonymous stays $default. */
+        if (c->username && c->username[0] != '\0') {
+            strncpy(c->account_name, c->username, CMQ_ACCOUNT_NAME_SIZE - 1);
+            c->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+            cmq_account_create(srv->accounts, c->account_name);
+        } else {
+            strncpy(c->account_name, "$default", CMQ_ACCOUNT_NAME_SIZE - 1);
+            c->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+        }
+        cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
         cmq_account_inc_connections(acc);
         /* INFO only after successful CONNECT (never on INIT). */
         if (!c->is_websocket)
@@ -2681,6 +2720,11 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     if (srv->config.ping_interval_ms == 0)
         srv->config.ping_interval_ms = CMQ_DEFAULT_PING_INTERVAL;
 
+    if (cmq_config_validate(&srv->config) != CMQ_OK) {
+        free(srv);
+        return CMQ_ERR_INVALID_ARG;
+    }
+
     srv->listen_fd = -1;
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
 
@@ -2851,7 +2895,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             snprintf(nid, sizeof(nid), "r%d", i);
             cmq_route_connect(srv->routes, nid,
                               srv->config.routes[i].addr,
-                              srv->config.routes[i].port);
+                              srv->config.routes[i].port,
+                              srv->config.auth_username,
+                              srv->config.auth_password);
             cmq_log_info(srv->log, "Route connected to %s:%d",
                          srv->config.routes[i].addr,
                          srv->config.routes[i].port);

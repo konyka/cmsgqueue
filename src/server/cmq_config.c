@@ -110,6 +110,8 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->max_payload_size < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_subs_per_client < 0) return CMQ_ERR_INVALID_ARG;
     if (config->ping_interval_ms < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->write_timeout_ms < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->max_clients < 0) return CMQ_ERR_INVALID_ARG;
     if (config->num_threads < 0) return CMQ_ERR_INVALID_ARG;
     return CMQ_OK;
 }

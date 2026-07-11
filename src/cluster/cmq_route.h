@@ -20,8 +20,11 @@ typedef struct {
 cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster);
 void cmq_route_pool_destroy(cmq_route_pool_t *pool);
 
+/* auth_user/auth_pass may be NULL when the peer has no auth configured.
+   Sends CONNECT and waits for CONNACK before returning (blocking handshake). */
 int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
-                       const char *addr, int port);
+                       const char *addr, int port,
+                       const char *auth_user, const char *auth_pass);
 int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd);
 int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id);
 
