@@ -2,6 +2,8 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <stddef.h>
 
 #include "cmq_platform.h"
 #include "cmq_types.h"
@@ -53,6 +55,10 @@ cmq_parser_t *cmq_parser_create(void) {
     if (!p) return NULL;
     p->inbuf_cap = 1024;
     p->inbuf = (uint8_t *)malloc(p->inbuf_cap);
+    if (!p->inbuf) {
+        free(p);
+        return NULL;
+    }
     p->inbuf_len = 0;
     p->inbuf_off = 0;
     p->head = p->tail = NULL;
@@ -111,8 +117,11 @@ void cmq_parser_reset(cmq_parser_t *p) {
 
 static int ensure_inbuf(cmq_parser_t *p, size_t need) {
     if (need <= p->inbuf_cap) return 0;
-    size_t newcap = p->inbuf_cap;
-    while (newcap < need) newcap <<= 1;
+    size_t newcap = p->inbuf_cap ? p->inbuf_cap : 1024;
+    while (newcap < need) {
+        if (newcap > SIZE_MAX / 2) return -1;
+        newcap <<= 1;
+    }
     uint8_t *nb = (uint8_t *)realloc(p->inbuf, newcap);
     if (!nb) return -1;
     p->inbuf = nb;
@@ -124,6 +133,8 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
     if (!p || !data || len == 0) {
         return 0;
     }
+    if (!p->inbuf || p->inbuf_cap == 0)
+        return -1;
 
     /* Compact before append if remaining + new won't fit without sliding. */
     size_t used = p->inbuf_len - p->inbuf_off;

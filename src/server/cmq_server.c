@@ -9,6 +9,14 @@
 
 static __thread int cmq_current_worker_id = -1;
 
+/* Non-empty username or password enables auth (empty strdup "" is not). */
+static int auth_configured(const cmq_server_t *srv) {
+    if (!srv) return 0;
+    const char *u = srv->config.auth_username;
+    const char *p = srv->config.auth_password;
+    return (u && u[0] != '\0') || (p && p[0] != '\0');
+}
+
 static uint64_t srv_now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -2220,8 +2228,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
 
 static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
     /* When auth is configured, only authenticated clients may read stats. */
-    if ((srv->config.auth_username || srv->config.auth_password) &&
-        !c->username) {
+    if (auth_configured(srv) && !c->username) {
         cmq_send_error(c, "unauthorized");
         return;
     }
@@ -2548,7 +2555,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_connack(c, 1);
             break;
         }
-        if (srv->config.auth_username || srv->config.auth_password) {
+        if (auth_configured(srv)) {
             if (!frame->payload || frame->payload_len < 4) {
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
@@ -2569,9 +2576,9 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             char expect_p[256] = {0};
             if (ulen > 0 && ulen < 256) memcpy(uname, frame->payload + 4, ulen);
             if (plen > 0 && plen < 256) memcpy(passwd, frame->payload + 4 + ulen, plen);
-            if (srv->config.auth_username)
+            if (srv->config.auth_username && srv->config.auth_username[0])
                 strncpy(expect_u, srv->config.auth_username, sizeof(expect_u) - 1);
-            if (srv->config.auth_password)
+            if (srv->config.auth_password && srv->config.auth_password[0])
                 strncpy(expect_p, srv->config.auth_password, sizeof(expect_p) - 1);
             /* Always compare both fields (no short-circuit) in constant time. */
             int bad = !ct_memeq(uname, expect_u, sizeof(uname)) |
@@ -2737,7 +2744,7 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
     int info_len = snprintf(info_json, sizeof(info_json),
         "{\"version\":\"0.1.0\",\"proto\":1,\"connections\":%llu,\"subscriptions\":%llu,\"auth\":%s}",
         (unsigned long long)conns, (unsigned long long)subs,
-        srv->config.auth_username || srv->config.auth_password ? "true" : "false");
+        auth_configured(srv) ? "true" : "false");
     size_t len = cmq_frame_encode(info_buf, sizeof(info_buf), CMQ_OP_INFO, 0,
                                    (const uint8_t *)info_json, (size_t)info_len);
     if (len > 0) cmq_client_send(c, info_buf, len);
@@ -3926,13 +3933,23 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
     cmq_client_t **acc_snap = NULL;
     if (nacc > 0) {
         acc_snap = malloc((size_t)nacc * sizeof(cmq_client_t *));
-        if (acc_snap)
+        if (acc_snap) {
             memcpy(acc_snap, srv->clients, (size_t)nacc * sizeof(cmq_client_t *));
-        for (int i = 0; i < nacc; i++) {
-            cmq_client_t *c = srv->clients[i];
-            if (c && c->state == CMQ_CLIENT_CONNECTED) {
-                if (disc_len > 0) cmq_client_send_local(c, disc, disc_len);
-                c->state = CMQ_CLIENT_CLOSING;
+            for (int i = 0; i < nacc; i++) {
+                cmq_client_t *c = srv->clients[i];
+                if (c && c->state == CMQ_CLIENT_CONNECTED) {
+                    if (disc_len > 0) cmq_client_send_local(c, disc, disc_len);
+                    c->state = CMQ_CLIENT_CLOSING;
+                }
+            }
+        } else {
+            /* OOM: do not leave CLOSING without finish — force EOF instead. */
+            for (int i = 0; i < nacc; i++) {
+                cmq_client_t *c = srv->clients[i];
+                if (c && c->state == CMQ_CLIENT_CONNECTED && c->fd >= 0) {
+                    if (disc_len > 0) cmq_client_send_local(c, disc, disc_len);
+                    shutdown(c->fd, SHUT_RDWR);
+                }
             }
         }
     }
@@ -3961,6 +3978,12 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
                         if (c && c->state == CMQ_CLIENT_CONNECTED) {
                             ids[nids++] = c->id;
                         }
+                    }
+                } else {
+                    for (int j = 0; j < wn; j++) {
+                        cmq_client_t *c = w->clients[j];
+                        if (c && c->state == CMQ_CLIENT_CONNECTED && c->fd >= 0)
+                            shutdown(c->fd, SHUT_RDWR);
                     }
                 }
             }

@@ -1866,6 +1866,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — parser OOM · auth nonempty · drain OOM fallback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">parser create/feed</span></td><td>✅</td><td>Fail create if inbuf malloc fails; feed rejects null/zero-cap; grow from 1024 if reset left cap=0.</td></tr>
+<tr><td><span class="component-name">auth_configured</span></td><td>✅</td><td>Require non-empty username/password; validate rejects empty strings.</td></tr>
+<tr><td><span class="component-name">drain OOM</span></td><td>✅</td><td>Snapshot fail uses <code>SHUT_RDWR</code> instead of stranded <code>CLOSING</code>.</td></tr>
+</table>
+</div>
+
 
 
 

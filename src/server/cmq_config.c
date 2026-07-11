@@ -183,6 +183,11 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->max_clients < 0) return CMQ_ERR_INVALID_ARG;
     if (config->num_threads < 0 || config->num_threads > 64)
         return CMQ_ERR_INVALID_ARG;
+    /* Empty auth strings would enable a zero-credential bypass; reject. */
+    if (config->auth_username && config->auth_username[0] == '\0')
+        return CMQ_ERR_INVALID_ARG;
+    if (config->auth_password && config->auth_password[0] == '\0')
+        return CMQ_ERR_INVALID_ARG;
     {
         const char *host = config->host ? config->host : CMQ_DEFAULT_HOST;
         struct in_addr ha;
