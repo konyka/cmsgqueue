@@ -15,6 +15,7 @@
 #define CMQ_FLAG_CHECKSUM   0x02
 #define CMQ_FLAG_HEADERS    0x04
 #define CMQ_FLAG_BATCH      0x08
+#define CMQ_FLAG_ROUTE      0x10  /* CONNECT: peer is a cluster route */
 
 typedef enum {
     CMQ_OP_CONNECT     = 0x01,

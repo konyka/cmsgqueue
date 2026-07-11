@@ -881,6 +881,9 @@ static int deliver_targets_sync(cmq_server_t *srv,
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
             cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
             if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)payload_len);
+        } else {
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
         }
     }
     free(frame);
@@ -1019,6 +1022,9 @@ static void deliver_coro_func(void *arg) {
                                       CMQ_ATOMIC_RELAXED);
             cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
             if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)ctx->payload_len);
+        } else {
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
         }
 
         batch_count++;
@@ -1128,7 +1134,8 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
 }
 
 /* Forward a framed op to cluster routes (heap-sized encode).
-   Returns 0 on success (or no routes), -1 on OOM / encode failure. */
+   Returns 0 on success (or no routes), -1 on OOM / encode failure.
+   EAGAIN peer skips bump stat_messages_dropped. */
 static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
                                  const uint8_t *payload, size_t payload_len) {
     if (!srv || !srv->routes || !payload) return 0;
@@ -1140,15 +1147,19 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
         return -1;
     }
     size_t fwd_len = cmq_frame_encode(fwd, need, op, flags, payload, payload_len);
-    if (fwd_len > 0)
-        cmq_route_broadcast(srv->routes, fwd, fwd_len, NULL);
-    else {
+    if (fwd_len == 0) {
         free(fwd);
         cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                   CMQ_ATOMIC_RELAXED);
         return -1;
     }
+    size_t eagain = 0;
+    cmq_route_broadcast(srv->routes, fwd, fwd_len, NULL, &eagain);
     free(fwd);
+    if (eagain > 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, (uint64_t)eagain,
+                                  CMQ_ATOMIC_RELAXED);
+    }
     return 0;
 }
 
@@ -1234,8 +1245,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
     if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
 
-    cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
-                          frame->payload, frame->payload_len);
+    /* Route ingress: local deliver only — never re-broadcast (loop/dup). */
+    if (!c->is_route)
+        cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
+                              frame->payload, frame->payload_len);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1573,8 +1586,9 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
-    cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
-                          frame->payload, frame->payload_len);
+    if (!c->is_route)
+        cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
+                              frame->payload, frame->payload_len);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1656,8 +1670,9 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    cmq_route_forward_op(srv, CMQ_OP_RESPONSE, frame->hdr.flags,
-                          frame->payload, frame->payload_len);
+    if (!c->is_route)
+        cmq_route_forward_op(srv, CMQ_OP_RESPONSE, frame->hdr.flags,
+                              frame->payload, frame->payload_len);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1883,13 +1898,14 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
     }
 
     /* Pass 2b: route + deliver (all snapshots already held). */
+    int batch_fail = 0;
     for (uint16_t msg = 0; msg < count; msg++) {
         uint16_t subject_len = prep[msg].subject_len;
         uint16_t reply_len = prep[msg].reply_len;
         uint32_t payload_len = prep[msg].payload_len;
         const uint8_t *msg_payload = prep[msg].msg_payload;
 
-        if (srv->routes) {
+        if (srv->routes && !c->is_route) {
             size_t pub_len = 2 + subject_len + 2 + reply_len + payload_len;
             uint8_t *pub = malloc(pub_len);
             if (pub) {
@@ -1913,17 +1929,22 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             } else {
                 cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
+                batch_fail = 1;
             }
         }
 
-        if (prep[msg].tgts && prep[msg].ntgt > 0)
-            deliver_targets_sync(srv, prep[msg].tgts, prep[msg].ntgt,
-                                  prep[msg].subject, msg_payload, payload_len,
-                                  NULL, 0);
+        if (prep[msg].tgts && prep[msg].ntgt > 0) {
+            if (deliver_targets_sync(srv, prep[msg].tgts, prep[msg].ntgt,
+                                      prep[msg].subject, msg_payload, payload_len,
+                                      NULL, 0) != 0)
+                batch_fail = 1;
+        }
         free(prep[msg].tgts);
         cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
     }
     free(prep);
+    if (batch_fail)
+        cmq_send_error(c, "batch delivery failed");
 }
 
 static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
@@ -1988,6 +2009,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             free(c->username);
             c->username = strdup(uname);
         }
+        if (frame->hdr.flags & CMQ_FLAG_ROUTE)
+            c->is_route = 1;
         c->state = CMQ_CLIENT_CONNECTED;
         c->last_activity_ms = srv_now_ms();
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);

@@ -44,8 +44,8 @@ static int route_handshake(int fd, const char *auth_user, const char *auth_pass)
     size_t plen = 4 + (size_t)ulen + (size_t)pwen;
 
     uint8_t buf[600];
-    size_t len = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_CONNECT, 0,
-                                   payload, plen);
+    size_t len = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_CONNECT,
+                                   CMQ_FLAG_ROUTE, payload, plen);
     if (len == 0) return -1;
 
     size_t off = 0;
@@ -308,44 +308,17 @@ int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__(
                        const uint8_t *data, size_t len,
                        const char *exclude_id) {
     if (!pool || !data || len == 0) return -1;
-    int fds[CMQ_ROUTE_MAX_CONNS];
-    size_t idxs[CMQ_ROUTE_MAX_CONNS];
-    size_t n = 0;
-    cmq_mutex_lock(&pool->lock);
-    for (size_t i = 0; i < pool->conn_count; i++) {
-        cmq_route_conn_t *c = &pool->conns[i];
-        if (!c->connected) continue;
-        if (exclude_id && strcmp(c->remote_id, exclude_id) == 0) continue;
-        fds[n] = c->fd;
-        idxs[n] = i;
-        n++;
-    }
-    cmq_mutex_unlock(&pool->lock);
-
-    int sent = 0;
-    for (size_t j = 0; j < n; j++) {
-        int wr = write_full(fds[j], data, len);
-        if (wr == 0) {
-            cmq_mutex_lock(&pool->lock);
-            if (idxs[j] < pool->conn_count &&
-                pool->conns[idxs[j]].fd == fds[j] &&
-                pool->conns[idxs[j]].connected) {
-                pool->conns[idxs[j]].bytes_sent += (uint64_t)len;
-                pool->conns[idxs[j]].msgs_sent++;
-            }
-            cmq_mutex_unlock(&pool->lock);
-            sent++;
-        } else if (wr == 1) {
-            continue; /* zero-progress backpressure: keep connection */
-        } else {
-            mark_conn_dead(pool, idxs[j], fds[j]);
-        }
-    }
+    size_t eagain = 0;
+    size_t sent = cmq_route_broadcast(pool, data, len, exclude_id, &eagain);
+    (void)eagain;
     return sent > 0 ? 0 : -1;
 }
 
+/* Returns peers written. If out_eagain non-NULL, set to peers skipped on EAGAIN. */
 size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
-                             size_t len, const char *exclude_id) {
+                             size_t len, const char *exclude_id,
+                             size_t *out_eagain) {
+    if (out_eagain) *out_eagain = 0;
     if (!pool || !data || len == 0) return 0;
     int fds[CMQ_ROUTE_MAX_CONNS];
     size_t idxs[CMQ_ROUTE_MAX_CONNS];
@@ -362,6 +335,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
     cmq_mutex_unlock(&pool->lock);
 
     size_t sent = 0;
+    size_t deferred = 0;
     for (size_t j = 0; j < n; j++) {
         int wr = write_full(fds[j], data, len);
         if (wr == 0) {
@@ -375,11 +349,12 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
             cmq_mutex_unlock(&pool->lock);
             sent++;
         } else if (wr == 1) {
-            continue;
+            deferred++;
         } else {
             mark_conn_dead(pool, idxs[j], fds[j]);
         }
     }
+    if (out_eagain) *out_eagain = deferred;
     return sent;
 }
 
