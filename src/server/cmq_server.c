@@ -1460,10 +1460,11 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
 }
 
 /* True when configured cluster peers should have received this forward but
-   none did — includes "routes configured but all dead" (align with BATCH). */
+   none did — includes "routes configured but all dead" (align with BATCH).
+   Partial fan-out (route_sent > 0 with some EAGAIN) is not a total miss. */
 static int cmq_route_forward_missed(cmq_server_t *srv, int route_rc,
                                     size_t route_sent) {
-    if (route_rc != 0) return 1;
+    if (route_rc != 0 && route_sent == 0) return 1;
     if (!srv || !srv->routes) return 0;
     size_t named = cmq_route_pool_count(srv->routes);
     size_t live = cmq_route_live_count(srv->routes);
@@ -3189,7 +3190,21 @@ static void accept_cb(int fd, int events, void *data) {
         }
         cmq_mutex_unlock(&w->clients_lock);
 
-        cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb, client);
+        if (cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
+                       client) != 0) {
+            cmq_mutex_lock(&w->clients_lock);
+            for (int i = w->clients_count - 1; i >= 0; i--) {
+                if (w->clients[i] == client) {
+                    w->clients[i] = w->clients[--w->clients_count];
+                    break;
+                }
+            }
+            cmq_idmap_del(w->idmap, client->id);
+            cmq_mutex_unlock(&w->clients_lock);
+            cmq_client_destroy(client);
+            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+            return;
+        }
     } else {
         cmq_client_t *client = cmq_client_create(client_fd, cid,
                                                     srv->ev_loop, srv);
@@ -3229,7 +3244,21 @@ static void accept_cb(int fd, int events, void *data) {
         }
         cmq_mutex_unlock(&srv->clients_lock);
 
-        cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb, client);
+        if (cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
+                       client) != 0) {
+            cmq_mutex_lock(&srv->clients_lock);
+            for (int i = srv->clients_count - 1; i >= 0; i--) {
+                if (srv->clients[i] == client) {
+                    srv->clients[i] = srv->clients[--srv->clients_count];
+                    break;
+                }
+            }
+            cmq_idmap_del(srv->idmap, client->id);
+            cmq_mutex_unlock(&srv->clients_lock);
+            cmq_client_destroy(client);
+            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+            return;
+        }
     }
 }
 

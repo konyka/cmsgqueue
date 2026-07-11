@@ -6,10 +6,11 @@
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
-#include <sys/eventfd.h>
+#include <fcntl.h>
 
 #if CMQ_OS_LINUX
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #elif CMQ_OS_MACOS || CMQ_OS_FREEBSD || CMQ_OS_OPENBSD || CMQ_OS_NETBSD
 #include <sys/event.h>
 #endif
@@ -27,7 +28,8 @@ typedef struct {
 
 struct cmq_ev_loop {
     int backend_fd;
-    int wakeup_fd;
+    int wakeup_fd;   /* eventfd, or pipe read end */
+    int wakeup_wfd;  /* write end; same as wakeup_fd for eventfd */
     int running;
     int next_timer_id;
     cmq_ev_watcher_t *watchers;
@@ -80,14 +82,43 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
         return NULL;
     }
 
+    loop->wakeup_fd = -1;
+    loop->wakeup_wfd = -1;
+
+#if CMQ_OS_LINUX
     loop->wakeup_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (loop->wakeup_fd >= 0) {
         struct epoll_event ev;
         memset(&ev, 0, sizeof(ev));
         ev.events = EPOLLIN;
         ev.data.fd = loop->wakeup_fd;
-        epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, loop->wakeup_fd, &ev);
+        if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, loop->wakeup_fd, &ev) != 0) {
+            close(loop->wakeup_fd);
+            loop->wakeup_fd = -1;
+        } else {
+            loop->wakeup_wfd = loop->wakeup_fd;
+        }
     }
+#elif CMQ_OS_MACOS || CMQ_OS_FREEBSD || CMQ_OS_OPENBSD || CMQ_OS_NETBSD
+    {
+        int fds[2];
+        if (pipe(fds) == 0) {
+            int flags0 = fcntl(fds[0], F_GETFL, 0);
+            int flags1 = fcntl(fds[1], F_GETFL, 0);
+            if (flags0 >= 0) fcntl(fds[0], F_SETFL, flags0 | O_NONBLOCK);
+            if (flags1 >= 0) fcntl(fds[1], F_SETFL, flags1 | O_NONBLOCK);
+            struct kevent kev;
+            EV_SET(&kev, (uintptr_t)fds[0], EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+            if (kevent(loop->backend_fd, &kev, 1, NULL, 0, NULL) != 0) {
+                close(fds[0]);
+                close(fds[1]);
+            } else {
+                loop->wakeup_fd = fds[0];
+                loop->wakeup_wfd = fds[1];
+            }
+        }
+    }
+#endif
 
     return loop;
 }
@@ -95,6 +126,8 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
 void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
     if (!loop) return;
     if (loop->wakeup_fd >= 0) close(loop->wakeup_fd);
+    if (loop->wakeup_wfd >= 0 && loop->wakeup_wfd != loop->wakeup_fd)
+        close(loop->wakeup_wfd);
     if (loop->backend_fd >= 0) close(loop->backend_fd);
     free(loop->watchers);
     free(loop);
@@ -332,6 +365,11 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         for (int i = 0; i < nfds; i++) {
             int fd = (int)events[i].ident;
+            if (fd == loop->wakeup_fd) {
+                char buf[64];
+                while (read(fd, buf, sizeof(buf)) > 0) { }
+                continue;
+            }
             if (fd >= 0 && fd < loop->watchers_cap && loop->watchers[fd].cb) {
                 int ev = kqueue_to_cmq_events(events[i].filter, (int)events[i].flags);
                 loop->watchers[fd].cb(fd, ev, loop->watchers[fd].data);
@@ -400,9 +438,9 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
 void cmq_ev_stop(cmq_ev_loop_t *loop) {
     if (!loop) return;
     loop->running = 0;
-    if (loop->wakeup_fd >= 0) {
+    if (loop->wakeup_wfd >= 0) {
         uint64_t val = 1;
-        write(loop->wakeup_fd, &val, sizeof(val));
+        (void)write(loop->wakeup_wfd, &val, sizeof(val));
     }
 }
 
