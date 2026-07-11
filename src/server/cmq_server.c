@@ -1023,15 +1023,14 @@ static void worker_coro_spawn_deliver(cmq_worker_t *w,
     }
 }
 
-/* Forward a PUBLISH-shaped payload to cluster routes (heap-sized encode). */
-static void cmq_route_forward_raw(cmq_server_t *srv, uint8_t flags,
-                                   const uint8_t *payload, size_t payload_len) {
+/* Forward a framed op to cluster routes (heap-sized encode). */
+static void cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
+                                  const uint8_t *payload, size_t payload_len) {
     if (!srv || !srv->routes || !payload) return;
     size_t need = sizeof(cmq_frame_hdr_t) + payload_len;
     uint8_t *fwd = malloc(need);
     if (!fwd) return;
-    size_t fwd_len = cmq_frame_encode(fwd, need, CMQ_OP_PUBLISH, flags,
-                                       payload, payload_len);
+    size_t fwd_len = cmq_frame_encode(fwd, need, op, flags, payload, payload_len);
     if (fwd_len > 0)
         cmq_route_broadcast(srv->routes, fwd, fwd_len, NULL);
     free(fwd);
@@ -1114,13 +1113,15 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
     if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
 
-    cmq_route_forward_raw(srv, frame->hdr.flags, frame->payload, frame->payload_len);
+    cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
+                          frame->payload, frame->payload_len);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
         cmq_rwlock_unlock(&srv->sublist_lock);
-        return; /* OOM: skip fan-out rather than partial delivery */
+        cmq_send_error(c, "delivery failed");
+        return; /* OOM after validation — surface error, no silent drop */
     }
 
     if (result.count == 0) {
@@ -1408,11 +1409,14 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
+    cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
+                          frame->payload, frame->payload_len);
+
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
         cmq_rwlock_unlock(&srv->sublist_lock);
-        cmq_send_error(c, "match failed");
+        cmq_send_error(c, "delivery failed");
         return;
     }
     size_t ntgt = 0;
@@ -1470,10 +1474,14 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    cmq_route_forward_op(srv, CMQ_OP_RESPONSE, frame->hdr.flags,
+                          frame->payload, frame->payload_len);
+
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
         cmq_rwlock_unlock(&srv->sublist_lock);
+        cmq_send_error(c, "delivery failed");
         return;
     }
     size_t ntgt = 0;
@@ -1653,7 +1661,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 }
                 if (payload_len > 0)
                     memcpy(pub + po, msg_payload, payload_len);
-                cmq_route_forward_raw(srv, 0, pub, pub_len);
+                cmq_route_forward_op(srv, CMQ_OP_PUBLISH, 0, pub, pub_len);
                 free(pub);
             }
         }
@@ -1662,7 +1670,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         cmq_sublist_result_t result;
         if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
             cmq_rwlock_unlock(&srv->sublist_lock);
-            continue;
+            cmq_send_error(c, "delivery failed");
+            return;
         }
         size_t ntgt = 0;
         cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);

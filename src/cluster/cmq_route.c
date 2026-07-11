@@ -145,6 +145,11 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd) {
 
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
+            if (pool->conns[i].fd >= 0 && pool->conns[i].fd != fd)
+                close(pool->conns[i].fd);
+            if (fd >= 0) set_nonblock(fd);
+            pool->conns[i].fd = fd;
+            pool->conns[i].connected = 1;
             cmq_mutex_unlock(&pool->lock);
             return 0;
         }
@@ -155,6 +160,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd) {
         return -1;
     }
 
+    if (fd >= 0) set_nonblock(fd);
     cmq_route_conn_t *c = &pool->conns[pool->conn_count++];
     strncpy(c->remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
     c->fd = fd;
@@ -216,6 +222,9 @@ int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__(
             cmq_mutex_unlock(&pool->lock);
             sent++;
         } else {
+            int err = errno;
+            if (err == EAGAIN || err == EWOULDBLOCK)
+                continue; /* backpressure: keep connection */
             cmq_mutex_lock(&pool->lock);
             if (idxs[j] < pool->conn_count &&
                 pool->conns[idxs[j]].fd == fds[j])
@@ -256,6 +265,9 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
             cmq_mutex_unlock(&pool->lock);
             sent++;
         } else {
+            int err = errno;
+            if (err == EAGAIN || err == EWOULDBLOCK)
+                continue; /* backpressure: keep connection */
             cmq_mutex_lock(&pool->lock);
             if (idxs[j] < pool->conn_count &&
                 pool->conns[idxs[j]].fd == fds[j])

@@ -1172,6 +1172,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — EAGAIN keep route · REQ/RESP route · OOM ERROR · add_conn refresh</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">EAGAIN keep route</span></td><td>✅</td><td>Nonblocking route write: <code>EAGAIN</code> keeps the connection (drop frame only); hard errors still mark disconnected.</td></tr>
+<tr><td><span class="component-name">REQUEST/RESPONSE route</span></td><td>✅</td><td><code>cmq_route_forward_op</code> forwards REQUEST/RESPONSE like PUBLISH/BATCH.</td></tr>
+<tr><td><span class="component-name">match OOM → ERROR</span></td><td>✅</td><td>PUBLISH/REQUEST/RESPONSE/BATCH surface <code>delivery failed</code> instead of silent skip.</td></tr>
+<tr><td><span class="component-name">add_conn refresh</span></td><td>✅</td><td>Duplicate <code>node_id</code> replaces fd + <code>O_NONBLOCK</code> (aligned with connect stale-slot).</td></tr>
+</table>
+</div>
+
+
 
 
 
