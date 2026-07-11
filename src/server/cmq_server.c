@@ -3442,6 +3442,13 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             srv->routes = cmq_route_pool_create(srv->cluster);
         }
     }
+    /* Configured routes without a pool would silently no-op all cluster
+       forwards (forward_op/missed treat NULL routes as success). */
+    if (srv->config.route_count > 0 && !srv->routes) {
+        cmq_server_destroy(srv);
+        *server = NULL;
+        return CMQ_ERR_NO_MEMORY;
+    }
 
     *server = srv;
     return CMQ_OK;

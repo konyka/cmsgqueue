@@ -1703,6 +1703,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — kqueue timer wait · routes OOM fail · gateway slot clear</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">kqueue timers</span></td><td>✅</td><td>kevent wait uses nearest timer (align with epoll) — keepalive works idle.</td></tr>
+<tr><td><span class="component-name">routes create</span></td><td>✅</td><td>route_count&gt;0 and pool NULL → CMQ_ERR_NO_MEMORY (no silent no-op fan-out).</td></tr>
+<tr><td><span class="component-name">gateway fail clear</span></td><td>✅</td><td>Hard-fail closes fd under io_lock; slot metadata cleared under gw→io.</td></tr>
+<tr><td><span class="component-name">cmq_queue OOM</span></td><td>✅</td><td>init/push null-check malloc (no NULL deref).</td></tr>
+</table>
+</div>
+
 
 
 

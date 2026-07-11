@@ -6,6 +6,10 @@
 
 void cmq_queue_init(cmq_queue_t *q) {
     q->stub = malloc(sizeof(cmq_queue_node_t));
+    if (!q->stub) {
+        q->head = q->tail = NULL;
+        return;
+    }
     q->stub->next = NULL;
     q->stub->data = NULL;
     q->head = q->stub;
@@ -13,6 +17,7 @@ void cmq_queue_init(cmq_queue_t *q) {
 }
 
 void cmq_queue_destroy(cmq_queue_t *q) {
+    if (!q || !q->stub) return;
     while (cmq_queue_pop(q) != NULL) {}
     free(q->stub);
     q->stub = NULL;
@@ -21,7 +26,9 @@ void cmq_queue_destroy(cmq_queue_t *q) {
 }
 
 void cmq_queue_push(cmq_queue_t *q, void *data) {
+    if (!q || !q->tail) return;
     cmq_queue_node_t *node = malloc(sizeof(cmq_queue_node_t));
+    if (!node) return;
     node->data = data;
     node->next = NULL;
 
@@ -30,6 +37,7 @@ void cmq_queue_push(cmq_queue_t *q, void *data) {
 }
 
 void *cmq_queue_pop(cmq_queue_t *q) {
+    if (!q || !q->head) return NULL;
     cmq_queue_node_t *head = q->head;
     cmq_queue_node_t *next = __atomic_load_n(&head->next, __ATOMIC_ACQUIRE);
 

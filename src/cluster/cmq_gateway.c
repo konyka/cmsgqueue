@@ -406,12 +406,18 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
             cmq_mutex_unlock(&gw->io_locks[idx]);
             deferred++;
         } else {
+            /* Close under io_lock; clear slot metadata under gw→io (no AB-BA
+               with paths that nest io under gw->lock). */
+            close(fd);
+            cmq_mutex_unlock(&gw->io_locks[idx]);
+            cmq_mutex_lock(&gw->lock);
+            cmq_mutex_lock(&gw->io_locks[idx]);
             if (idx < gw->conn_count && gw->conns[idx].fd == fd) {
                 gw->conns[idx].fd = -1;
                 gw->conns[idx].connected = 0;
             }
-            close(fd);
             cmq_mutex_unlock(&gw->io_locks[idx]);
+            cmq_mutex_unlock(&gw->lock);
         }
     }
     if (out_eagain) *out_eagain = deferred;
@@ -458,12 +464,16 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
             cmq_mutex_unlock(&gw->io_locks[idx]);
             deferred++;
         } else {
+            close(fd);
+            cmq_mutex_unlock(&gw->io_locks[idx]);
+            cmq_mutex_lock(&gw->lock);
+            cmq_mutex_lock(&gw->io_locks[idx]);
             if (idx < gw->conn_count && gw->conns[idx].fd == fd) {
                 gw->conns[idx].fd = -1;
                 gw->conns[idx].connected = 0;
             }
-            close(fd);
             cmq_mutex_unlock(&gw->io_locks[idx]);
+            cmq_mutex_unlock(&gw->lock);
         }
     }
     if (out_eagain) *out_eagain = deferred;

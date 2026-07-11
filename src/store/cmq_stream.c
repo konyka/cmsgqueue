@@ -225,6 +225,9 @@ int cmq_stream_consumer_ack(cmq_stream_t *stream, const char *consumer_name,
     }
     for (size_t i = 0; i < stream->consumer_count; i++) {
         if (strcmp(stream->consumers[i].name, consumer_name) == 0) {
+            /* Cumulative ack (JetStream-style): seq advances watermark up to
+               last; gap-ack of unread seqs is intentional API. Beyond-last
+               rejected above so retain_floor cannot jump past store end. */
             if (seq > stream->consumers[i].acked_seq)
                 stream->consumers[i].acked_seq = seq;
             found = 0;
