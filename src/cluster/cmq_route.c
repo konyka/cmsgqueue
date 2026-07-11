@@ -204,7 +204,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
 
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
-            if (pool->conns[i].connected) {
+            if (pool->conns[i].connected && pool->conns[i].fd >= 0) {
                 cmq_mutex_unlock(&pool->lock);
                 return 0;
             }

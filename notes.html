@@ -1440,6 +1440,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — forward_missed live · EAGAIN fail · worker retry</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">forward_missed</span></td><td>✅</td><td>Uses <code>live_count</code> (not pool_count) so dead/placeholder slots do not false-fail pubs.</td></tr>
+<tr><td><span class="component-name">route connect live</span></td><td>✅</td><td>Early-return only when <code>connected &amp;&amp; fd≥0</code>; placeholders reconnect.</td></tr>
+<tr><td><span class="component-name">all-EAGAIN forward</span></td><td>✅</td><td><code>sent==0 &amp;&amp; eagain&gt;0</code> returns failure (no silent OK).</td></tr>
+<tr><td><span class="component-name">cross-worker retry</span></td><td>✅</td><td>Mailbox full: yield/nanosleep up to 4 attempts before drop.</td></tr>
+</table>
+</div>
+
 
 
 

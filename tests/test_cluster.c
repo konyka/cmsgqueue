@@ -169,6 +169,22 @@ TEST(route, attach_inbound_borrow) {
     cmq_cluster_destroy(c);
 }
 
+/* Placeholder slots (fd=-1, connected=1) must not block reconnect. */
+TEST(route, connect_replaces_placeholder) {
+    cmq_cluster_t *c = cmq_cluster_create("c1", "n1");
+    cmq_route_pool_t *rp = cmq_route_pool_create(c);
+    ASSERT_EQ(cmq_route_add_conn(rp, "r0", -1, NULL, NULL), 0);
+    cmq_route_conn_t *conn = cmq_route_get_conn(rp, "r0");
+    ASSERT_NOT_NULL(conn);
+    ASSERT_EQ(conn->connected, 1);
+    ASSERT_EQ(conn->fd, -1);
+    ASSERT_EQ(cmq_route_live_count(rp), (size_t)0);
+    /* Unreachable peer: must attempt connect (not early-return success). */
+    ASSERT_EQ(cmq_route_connect(rp, "r0", "127.0.0.1", 1, NULL, NULL), -1);
+    cmq_route_pool_destroy(rp);
+    cmq_cluster_destroy(c);
+}
+
 TEST(gateway, create_destroy) {
     cmq_gateway_t *gw = cmq_gateway_create("local-cluster");
     ASSERT_NOT_NULL(gw);

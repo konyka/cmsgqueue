@@ -1042,6 +1042,31 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
     return ok;
 }
 
+/* Queue to worker mailbox; same-worker falls back to send_local. Cross-worker
+   briefly yields and retries so a full queue can drain without silent drop. */
+static int deliver_via_worker(cmq_server_t *srv, int worker_id,
+                               uint32_t client_id, uint32_t sub_id,
+                               const uint8_t *frame, size_t flen,
+                               int coro_ok) {
+    cmq_worker_t *w = &srv->workers[worker_id];
+    for (int attempt = 0; attempt < 4; attempt++) {
+        if (worker_push_msg(w, client_id, frame, flen, sub_id) == 0)
+            return 1;
+        if (cmq_current_worker_id == worker_id)
+            return client_send_by_id(srv, worker_id, client_id, sub_id,
+                                     frame, flen);
+        if (attempt + 1 >= 4)
+            break;
+        if (coro_ok)
+            cmq_coro_yield();
+        else {
+            struct timespec ts = {0, 50000L}; /* 50µs */
+            nanosleep(&ts, NULL);
+        }
+    }
+    return 0;
+}
+
 /* Sync fan-out by stable client_id — no sublist lock held (teardown-safe).
    Returns 0 if at least one delivery was queued/sent, -1 on total failure. */
 static int deliver_targets_sync(cmq_server_t *srv,
@@ -1066,13 +1091,8 @@ static int deliver_targets_sync(cmq_server_t *srv,
         int delivered = 0;
         if (t->worker_id >= 0 && srv->workers &&
             t->worker_id < srv->num_workers) {
-            if (worker_push_msg(&srv->workers[t->worker_id], t->client_id,
-                                 frame, flen, t->sub_id) == 0) {
-                delivered = 1;
-            } else if (cmq_current_worker_id == t->worker_id) {
-                delivered = client_send_by_id(srv, t->worker_id, t->client_id,
-                                               t->sub_id, frame, flen);
-            }
+            delivered = deliver_via_worker(srv, t->worker_id, t->client_id,
+                                            t->sub_id, frame, flen, 0);
         } else {
             delivered = client_send_by_id(srv, -1, t->client_id, t->sub_id,
                                            frame, flen);
@@ -1187,14 +1207,9 @@ static void deliver_coro_func(void *arg) {
            Queue raw CMQ; owning thread wraps WS in send_local. */
         if (t->worker_id >= 0 && srv->workers &&
             t->worker_id < srv->num_workers) {
-            if (worker_push_msg(&srv->workers[t->worker_id], t->client_id,
-                                 ctx->frame, ctx->frame_len, t->sub_id) == 0) {
-                delivered = 1;
-            } else if (cmq_current_worker_id == t->worker_id) {
-                delivered = client_send_by_id(srv, t->worker_id, t->client_id,
-                                               t->sub_id, ctx->frame,
-                                               ctx->frame_len);
-            }
+            delivered = deliver_via_worker(srv, t->worker_id, t->client_id,
+                                            t->sub_id, ctx->frame,
+                                            ctx->frame_len, 1);
         } else {
             delivered = client_send_by_id(srv, -1, t->client_id, t->sub_id,
                                            ctx->frame, ctx->frame_len);
@@ -1373,15 +1388,18 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
         cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, (uint64_t)eagain,
                                   CMQ_ATOMIC_RELAXED);
     }
+    /* All live peers back-pressured: treat as forward failure (no silent OK). */
+    if (sent == 0 && eagain > 0)
+        return -1;
     return 0;
 }
 
-/* True when cluster peers are configured but none accepted this forward. */
+/* True when live cluster peers exist but none accepted this forward. */
 static int cmq_route_forward_missed(cmq_server_t *srv, int route_rc,
                                     size_t route_sent) {
     if (route_rc != 0) return 1;
     if (!srv || !srv->routes) return 0;
-    if (cmq_route_pool_count(srv->routes) == 0) return 0;
+    if (cmq_route_live_count(srv->routes) == 0) return 0;
     return route_sent == 0;
 }
 
