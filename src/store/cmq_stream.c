@@ -67,6 +67,10 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
             cmq_store_truncate(stream->store, first + 1);
             first++;
         }
+        if (stream->total_bytes + len > stream->max_bytes) {
+            cmq_mutex_unlock(&stream->lock);
+            return 0; /* refuse append — do not exceed max_bytes */
+        }
     }
 
     uint64_t seq = cmq_store_put(stream->store, data, len);

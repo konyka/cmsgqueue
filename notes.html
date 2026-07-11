@@ -1272,6 +1272,19 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — RESPONSE ACL · honest PUBACK · filestore/stream caps</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">RESPONSE export ACL</span></td><td>✅</td><td>Same <code>can_export</code> gate as PUBLISH — blocks forged inbox replies.</td></tr>
+<tr><td><span class="component-name">REQUEST delivered PUBACK</span></td><td>✅</td><td>PUBACK only when ≥1 delivery succeeds; else ERROR.</td></tr>
+<tr><td><span class="component-name">publish sync delivery ERROR</span></td><td>✅</td><td><code>deliver_targets_sync</code> returns failure on OOM/total miss → publisher ERROR.</td></tr>
+<tr><td><span class="component-name">filestore len cap</span></td><td>✅</td><td>Append/read reject payloads &gt; 16 MiB.</td></tr>
+<tr><td><span class="component-name">stream max_bytes refuse</span></td><td>✅</td><td>If eviction cannot free space, append returns 0 (no fail-open).</td></tr>
+</table>
+</div>
+
+
 
 
 

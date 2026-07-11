@@ -93,7 +93,7 @@ void cmq_filestore_destroy(cmq_filestore_t *fs) {
 
 int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
                           uint64_t *out_seq) {
-    if (!fs || !data || len == 0) return -1;
+    if (!fs || !data || len == 0 || len > (16u * 1024 * 1024)) return -1;
     cmq_mutex_lock(&fs->lock);
 
     cmq_fs_record_hdr_t hdr;
@@ -169,6 +169,11 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
     }
 
     if (hdr.magic != CMQ_FS_MAGIC || hdr.seq != seq) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+
+    if (hdr.len == 0 || hdr.len > (16u * 1024 * 1024)) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }

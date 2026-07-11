@@ -713,7 +713,7 @@ static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
     free(buf);
 }
 
-static void cmq_send_request_message(cmq_client_t *c, uint32_t sub_id,
+static int cmq_send_request_message(cmq_client_t *c, uint32_t sub_id,
                                        const char *subject,
                                        const char *reply_to,
                                        const uint8_t *payload, size_t payload_len) {
@@ -722,7 +722,7 @@ static void cmq_send_request_message(cmq_client_t *c, uint32_t sub_id,
     size_t body_len = 4 + 2 + subject_len + 2 + reply_len + 4 + payload_len;
     size_t buf_size = sizeof(cmq_frame_hdr_t) + body_len;
     uint8_t *buf = malloc(buf_size);
-    if (!buf) return;
+    if (!buf) return -1;
 
     uint8_t *p = buf + sizeof(cmq_frame_hdr_t);
     p[0] = (sub_id >> 24) & 0xFF;
@@ -752,10 +752,11 @@ static void cmq_send_request_message(cmq_client_t *c, uint32_t sub_id,
 
     size_t len = cmq_frame_encode(buf, buf_size, CMQ_OP_MESSAGE, 0,
                                     buf + sizeof(cmq_frame_hdr_t), body_len);
-    if (len > 0) {
-        cmq_client_send_checked(c, buf, len, sub_id);
-    }
+    int rc = -1;
+    if (len > 0)
+        rc = cmq_client_send_checked(c, buf, len, sub_id);
     free(buf);
+    return rc;
 }
 
 typedef struct {
@@ -818,18 +819,20 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
     return tgts;
 }
 
-/* Sync fan-out by stable client_id — no sublist lock held (teardown-safe). */
-static void deliver_targets_sync(cmq_server_t *srv,
+/* Sync fan-out by stable client_id — no sublist lock held (teardown-safe).
+   Returns 0 if at least one delivery was queued/sent, -1 on total failure. */
+static int deliver_targets_sync(cmq_server_t *srv,
                                   cmq_deliver_tgt_t *tgts, size_t ntgt,
                                   const char *subject,
                                   const uint8_t *payload, size_t payload_len,
                                   const uint8_t *headers, size_t headers_len) {
-    if (!tgts || ntgt == 0) return;
+    if (!tgts || ntgt == 0) return -1;
     size_t flen = 0;
     uint8_t *frame = cmq_build_message_frame(0, subject, payload, payload_len,
                                               headers, headers_len, &flen);
-    if (!frame) return;
+    if (!frame) return -1;
 
+    int any = 0;
     for (size_t i = 0; i < ntgt; i++) {
         cmq_deliver_tgt_t *t = &tgts[i];
         cmq_patch_message_sub_id(frame, t->sub_id);
@@ -869,20 +872,24 @@ static void deliver_targets_sync(cmq_server_t *srv,
             cmq_mutex_unlock(&srv->clients_lock);
         }
         if (delivered) {
+            any = 1;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
             cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
             if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)payload_len);
         }
     }
     free(frame);
+    return any ? 0 : -1;
 }
 
-/* REQUEST fan-out by client_id after sublist unlock (same safety as publish). */
-static void deliver_request_targets(cmq_server_t *srv,
+/* REQUEST fan-out by client_id after sublist unlock (same safety as publish).
+   Returns number of successful deliveries. */
+static size_t deliver_request_targets(cmq_server_t *srv,
                                      cmq_deliver_tgt_t *tgts, size_t ntgt,
                                      const char *subject, const char *reply_to,
                                      const uint8_t *payload, size_t payload_len) {
-    if (!tgts || ntgt == 0) return;
+    if (!tgts || ntgt == 0) return 0;
+    size_t delivered_n = 0;
     for (size_t i = 0; i < ntgt; i++) {
         cmq_deliver_tgt_t *t = &tgts[i];
         cmq_client_t *target = NULL;
@@ -899,9 +906,10 @@ static void deliver_request_targets(cmq_server_t *srv,
                     break;
                 }
             }
-            if (target) {
+            if (target &&
                 cmq_send_request_message(target, t->sub_id, subject,
-                                          reply_to, payload, payload_len);
+                                          reply_to, payload, payload_len) == 0) {
+                delivered_n++;
                 cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                           CMQ_ATOMIC_RELAXED);
             }
@@ -917,15 +925,17 @@ static void deliver_request_targets(cmq_server_t *srv,
                     break;
                 }
             }
-            if (target) {
+            if (target &&
                 cmq_send_request_message(target, t->sub_id, subject,
-                                          reply_to, payload, payload_len);
+                                          reply_to, payload, payload_len) == 0) {
+                delivered_n++;
                 cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                           CMQ_ATOMIC_RELAXED);
             }
             cmq_mutex_unlock(&srv->clients_lock);
         }
     }
+    return delivered_n;
 }
 
 typedef struct {
@@ -1270,8 +1280,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    deliver_targets_sync(srv, tgts, ntgt, subject, msg_payload, msg_len,
-                          headers, headers_len);
+    if (deliver_targets_sync(srv, tgts, ntgt, subject, msg_payload, msg_len,
+                              headers, headers_len) != 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "delivery failed");
+    }
     free(tgts);
 }
 
@@ -1550,12 +1564,16 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
     if (tgts && ntgt > 0) {
-        deliver_request_targets(srv, tgts, ntgt, subject, reply_to,
-                                 msg_payload, msg_len);
+        size_t n = deliver_request_targets(srv, tgts, ntgt, subject, reply_to,
+                                            msg_payload, msg_len);
         free(tgts);
-        uint8_t ack[4] = {0};
-        size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
-        if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+        if (n > 0) {
+            uint8_t ack[4] = {0};
+            size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
+            if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+        } else {
+            cmq_send_error(c, "delivery failed");
+        }
     } else {
         free(tgts);
         cmq_send_error(c, "no responders");
@@ -1599,6 +1617,13 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "payload too large");
+        return;
+    }
+
+    if (!cmq_account_can_export(srv->accounts, c->account_name, subject)) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "permission denied");
         return;
     }
 
