@@ -127,9 +127,61 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     }
     leaf->hub_fd = fd;
     leaf->connected = 1;
-    leaf->next_sub_id = 1;
-
+    /* Keep next_sub_id; replay existing interest to the new hub. */
+    size_t n = leaf->sub_count;
+    char **subjects = NULL;
+    uint32_t *ids = NULL;
+    if (n > 0) {
+        subjects = malloc(n * sizeof(char *));
+        ids = malloc(n * sizeof(uint32_t));
+        if (!subjects || !ids) {
+            free(subjects);
+            free(ids);
+            leaf->hub_fd = -1;
+            leaf->connected = 0;
+            close(fd);
+            cmq_mutex_unlock(&leaf->lock);
+            return -1;
+        }
+        for (size_t i = 0; i < n; i++) {
+            subjects[i] = leaf->subs[i];
+            ids[i] = leaf->sub_ids[i];
+        }
+    }
     cmq_mutex_unlock(&leaf->lock);
+
+    for (size_t i = 0; i < n; i++) {
+        const char *subject = subjects[i];
+        size_t slen = strlen(subject);
+        uint32_t sub_id = ids[i];
+        uint8_t payload[8 + 256];
+        size_t po = 0;
+        payload[po++] = (uint8_t)(sub_id >> 24);
+        payload[po++] = (uint8_t)(sub_id >> 16);
+        payload[po++] = (uint8_t)(sub_id >> 8);
+        payload[po++] = (uint8_t)sub_id;
+        payload[po++] = (uint8_t)(slen >> 8);
+        payload[po++] = (uint8_t)slen;
+        memcpy(payload + po, subject, slen);
+        po += slen;
+        uint8_t frame[16 + 256];
+        size_t flen = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_SUBSCRIBE,
+                                        0, payload, po);
+        if (flen == 0 || write_all(fd, frame, flen) != 0) {
+            free(subjects);
+            free(ids);
+            cmq_mutex_lock(&leaf->lock);
+            if (leaf->hub_fd == fd) {
+                close(fd);
+                leaf->hub_fd = -1;
+                leaf->connected = 0;
+            }
+            cmq_mutex_unlock(&leaf->lock);
+            return -1;
+        }
+    }
+    free(subjects);
+    free(ids);
     return 0;
 }
 

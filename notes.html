@@ -1341,6 +1341,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf resync · stream ring byte accounting</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf connect resubscribe</span></td><td>✅</td><td>Reconnect replays SUBSCRIBE for local interest; no next_sub_id reset.</td></tr>
+<tr><td><span class="component-name">stream ring wrap bytes</span></td><td>✅</td><td>Before put when full, subtract oldest message length from total_bytes.</td></tr>
+</table>
+</div>
+
 
 
 

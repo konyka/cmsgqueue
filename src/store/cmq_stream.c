@@ -74,6 +74,19 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
         }
     }
 
+    /* Ring wrap overwrites oldest slot — keep total_bytes honest. */
+    if (cmq_store_count(stream->store) >= stream->max_msgs) {
+        uint64_t first = cmq_store_first_seq(stream->store);
+        cmq_store_msg_t old;
+        if (cmq_store_get(stream->store, first, &old) == 0) {
+            if (stream->total_bytes >= old.len)
+                stream->total_bytes -= old.len;
+            else
+                stream->total_bytes = 0;
+            cmq_store_msg_release(&old);
+        }
+    }
+
     uint64_t seq = cmq_store_put(stream->store, data, len);
     if (seq > 0) {
         stream->total_bytes += len;
