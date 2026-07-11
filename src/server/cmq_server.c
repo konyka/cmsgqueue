@@ -65,6 +65,7 @@ static void client_read_cb(int fd, int events, void *data);
 static void cmq_client_destroy(cmq_client_t *c);
 static void client_teardown(cmq_client_t *c);
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len);
+static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t len);
 static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len);
 static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
                               const char *subject,
@@ -108,9 +109,10 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                 break;
             }
         }
+        /* Owning worker thread: wrap WS here so coro/drain can push raw CMQ. */
         if (target && target->state != CMQ_CLIENT_CLOSED &&
             target->state != CMQ_CLIENT_CLOSING) {
-            cmq_client_send_direct(target, msg->buf, msg->len);
+            cmq_client_send_local(target, msg->buf, msg->len);
         }
         cmq_mutex_unlock(&w->clients_lock);
         free(msg->buf);
@@ -119,14 +121,15 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
     }
 }
 
-static void worker_push_msg(cmq_worker_t *w, uint32_t target_id,
+/* Returns 0 on success, -1 on OOM (message dropped). */
+static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
                              const uint8_t *buf, size_t len) {
     cmq_worker_msg_t *msg = malloc(sizeof(cmq_worker_msg_t));
-    if (!msg) return;
+    if (!msg) return -1;
     msg->target_id = target_id;
     msg->kind = CMQ_WORKER_MSG_SEND;
     msg->buf = malloc(len);
-    if (!msg->buf) { free(msg); return; }
+    if (!msg->buf) { free(msg); return -1; }
     memcpy(msg->buf, buf, len);
     msg->len = len;
     msg->next = NULL;
@@ -141,12 +144,14 @@ static void worker_push_msg(cmq_worker_t *w, uint32_t target_id,
     cmq_mutex_unlock(&w->msg_lock);
 
     wakeup_fd_signal(w->wakeup_fd);
+    return 0;
 }
 
-/* Schedule client teardown on the owning worker thread (never cross-thread free). */
-static void worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
+/* Schedule client teardown on the owning worker thread (never cross-thread free).
+   Returns 0 on success, -1 on OOM. */
+static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
     cmq_worker_msg_t *msg = malloc(sizeof(cmq_worker_msg_t));
-    if (!msg) return;
+    if (!msg) return -1;
     msg->target_id = target_id;
     msg->kind = CMQ_WORKER_MSG_TEARDOWN;
     msg->buf = NULL;
@@ -163,6 +168,7 @@ static void worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
     cmq_mutex_unlock(&w->msg_lock);
 
     wakeup_fd_signal(w->wakeup_fd);
+    return 0;
 }
 
 static void worker_coro_tick(cmq_worker_t *w);
@@ -431,50 +437,48 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
     return 0;
 }
 
+/* Owning-thread send of a raw CMQ frame. Wraps WebSocket binary if needed.
+   Cross-thread callers must use cmq_client_send() / worker_push_msg() instead. */
+static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t len) {
+    if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
+        return -1;
+    if (!c->is_websocket)
+        return cmq_client_send_direct(c, data, len);
+
+    size_t hdr_len = (len <= 125) ? 2 : (len <= 65535) ? 4 : 10;
+    size_t total = hdr_len + len;
+    uint8_t *wsbuf = malloc(total);
+    if (!wsbuf) return -1;
+    cmq_ws_frame_t wf;
+    wf.fin = 1;
+    wf.opcode = CMQ_WS_OPCODE_BINARY;
+    wf.payload = data;
+    wf.payload_len = len;
+    wf.mask_key = 0;
+    wf.masked = 0;
+    if (cmq_ws_frame_serialize(&wf, wsbuf, total) < 0) {
+        free(wsbuf);
+        return -1;
+    }
+    int rc = cmq_client_send_direct(c, wsbuf, total);
+    free(wsbuf);
+    return rc;
+}
+
 static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len) {
     if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
         return -1;
     cmq_server_t *srv = c->server;
     int cross = srv->workers && c->worker_id >= 0 && c->worker_id != cmq_current_worker_id;
 
-    /* WebSocket clients receive CMQ frames wrapped in WS binary frames. Per
-       RFC 6455 server->client frames are unmasked. The HTTP 101 upgrade
-       response is written before c->is_websocket is set, so it is never
-       wrapped. worker_push_msg() copies its input, so freeing wsbuf after
-       dispatch is safe for both the direct and cross-worker paths. */
-    if (c->is_websocket) {
-        size_t hdr_len = (len <= 125) ? 2 : (len <= 65535) ? 4 : 10;
-        size_t total = hdr_len + len;
-        uint8_t *wsbuf = malloc(total);
-        if (!wsbuf) return -1;
-        cmq_ws_frame_t wf;
-        wf.fin = 1;
-        wf.opcode = CMQ_WS_OPCODE_BINARY;
-        wf.payload = data;
-        wf.payload_len = len;
-        wf.mask_key = 0;
-        wf.masked = 0;
-        if (cmq_ws_frame_serialize(&wf, wsbuf, total) < 0) {
-            free(wsbuf);
-            return -1;
-        }
-        int rc;
-        if (!cross) {
-            rc = cmq_client_send_direct(c, wsbuf, total);
-        } else {
-            worker_push_msg(&srv->workers[c->worker_id], c->id, wsbuf, total);
-            rc = 0;
-        }
-        free(wsbuf);
-        return rc;
+    /* Always queue raw CMQ frames across workers; the owning worker wraps WS
+       in worker_wakeup_cb via cmq_client_send_local. Avoids double-wrap and
+       lets coro fan-out share one MESSAGE template. HTTP 101 is written before
+       is_websocket is set, so it is never wrapped. */
+    if (cross) {
+        return worker_push_msg(&srv->workers[c->worker_id], c->id, data, len);
     }
-
-    if (!cross) {
-        return cmq_client_send_direct(c, data, len);
-    }
-    cmq_worker_t *w = &srv->workers[c->worker_id];
-    worker_push_msg(w, c->id, data, len);
-    return 0;
+    return cmq_client_send_local(c, data, len);
 }
 
 static void cmq_send_pong(cmq_client_t *c) {
@@ -755,11 +759,27 @@ static void deliver_coro_func(void *arg) {
         cmq_deliver_tgt_t *t = &ctx->targets[i];
         cmq_patch_message_sub_id(ctx->frame, t->sub_id);
 
-        /* Never hold a bare client* across unlock — route by stable id. */
+        /* Never hold a bare client* across unlock — route by stable id.
+           Queue raw CMQ; owning thread wraps WS in send_local. */
         if (t->worker_id >= 0 && srv->workers &&
             t->worker_id < srv->num_workers) {
-            worker_push_msg(&srv->workers[t->worker_id], t->client_id,
-                             ctx->frame, ctx->frame_len);
+            if (worker_push_msg(&srv->workers[t->worker_id], t->client_id,
+                                 ctx->frame, ctx->frame_len) != 0) {
+                /* OOM fallback: resolve under lock and send locally if we own it. */
+                cmq_worker_t *w = &srv->workers[t->worker_id];
+                cmq_mutex_lock(&w->clients_lock);
+                for (int ci = 0; ci < w->clients_count; ci++) {
+                    cmq_client_t *c = w->clients[ci];
+                    if (c && c->id == t->client_id &&
+                        (c->state == CMQ_CLIENT_CONNECTED ||
+                         c->state == CMQ_CLIENT_INIT) &&
+                        cmq_current_worker_id == t->worker_id) {
+                        cmq_client_send_local(c, ctx->frame, ctx->frame_len);
+                        break;
+                    }
+                }
+                cmq_mutex_unlock(&w->clients_lock);
+            }
         } else {
             cmq_mutex_lock(&srv->clients_lock);
             for (int ci = 0; ci < srv->clients_count; ci++) {
@@ -767,7 +787,7 @@ static void deliver_coro_func(void *arg) {
                 if (c && c->id == t->client_id &&
                     (c->state == CMQ_CLIENT_CONNECTED ||
                      c->state == CMQ_CLIENT_INIT)) {
-                    cmq_client_send_direct(c, ctx->frame, ctx->frame_len);
+                    cmq_client_send_local(c, ctx->frame, ctx->frame_len);
                     break;
                 }
             }
@@ -1466,24 +1486,41 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
     c->info_sent = 1;
 }
 
-static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len) {
-    if (len < 4) return -1;
+static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
+                              size_t *consumed) {
+    if (consumed) *consumed = 0;
+    if (len < 4) return 1; /* need more data */
+
+    size_t hdr_end = 0;
+    for (size_t i = 0; i + 3 < len; i++) {
+        if (data[i] == '\r' && data[i + 1] == '\n' &&
+            data[i + 2] == '\r' && data[i + 3] == '\n') {
+            hdr_end = i + 4;
+            break;
+        }
+    }
+    if (hdr_end == 0) return 1; /* incomplete HTTP headers */
+
     char req[4096];
-    if (len > sizeof(req) - 1) len = sizeof(req) - 1;
-    memcpy(req, data, len);
-    req[len] = '\0';
+    size_t copy = hdr_end;
+    if (copy > sizeof(req) - 1) copy = sizeof(req) - 1;
+    memcpy(req, data, copy);
+    req[copy] = '\0';
 
     if (strstr(req, "Upgrade: websocket") == NULL &&
         strstr(req, "Upgrade: WebSocket") == NULL) return -1;
 
     char ws_key[128] = {0};
-    if (cmq_ws_parse_http_upgrade(req, len, ws_key, sizeof(ws_key)) != 0) return -1;
+    if (cmq_ws_parse_http_upgrade(req, copy, ws_key, sizeof(ws_key)) != 0)
+        return -1;
 
     char accept_key[64] = {0};
-    if (cmq_ws_accept_key(ws_key, accept_key, sizeof(accept_key)) != 0) return -1;
+    if (cmq_ws_accept_key(ws_key, accept_key, sizeof(accept_key)) != 0)
+        return -1;
 
     char response[512];
-    if (cmq_ws_build_response(accept_key, response, sizeof(response)) != 0) return -1;
+    if (cmq_ws_build_response(accept_key, response, sizeof(response)) != 0)
+        return -1;
 
     size_t resp_len = strlen(response);
     free(c->write_buf);
@@ -1495,6 +1532,7 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len) {
 
     c->is_websocket = 1;
     c->ws_upgrade_done = 1;
+    if (consumed) *consumed = hdr_end;
     return 0;
 }
 
@@ -1550,28 +1588,16 @@ static void client_read_cb(int fd, int events, void *data) {
     }
     c->last_activity_ms = srv_now_ms();
 
-    if (!c->is_websocket && !c->ws_upgrade_done && n > 0 && c->read_buf[0] == 'G') {
-        if (handle_ws_upgrade(c, c->read_buf, (size_t)n) == 0) {
-            return;
-        }
-    }
-
-    if (!c->info_sent && !c->is_websocket) {
-        send_info_frame(srv, c);
-    }
-
-    if (c->is_websocket && c->ws_upgrade_done) {
-        /* Append into reassembly buffer, then drain complete WS frames. */
+    /* HTTP upgrade may arrive fragmented or pipelined with the first WS frame.
+       Accumulate into ws_recv_buf until headers complete, then keep any trailing
+       bytes for the WS frame parser below. */
+    if (!c->is_websocket && !c->ws_upgrade_done &&
+        (c->ws_recv_len > 0 || (n > 0 && c->read_buf[0] == 'G'))) {
         size_t need = c->ws_recv_len + (size_t)n;
         if (need > c->ws_recv_cap) {
             size_t ncap = c->ws_recv_cap ? c->ws_recv_cap * 2 : 4096;
             while (ncap < need) ncap *= 2;
-            /* Cap at max_payload_size + WS header overhead (~14) + slack. */
-            size_t max_pl = (size_t)(srv->config.max_payload_size > 0
-                                         ? srv->config.max_payload_size
-                                         : CMQ_CLIENT_BUF_SIZE);
-            size_t hard = max_pl + 64 + 65536; /* allow large CMQ frames */
-            if (ncap > hard) ncap = hard;
+            if (ncap > 65536) ncap = 65536;
             if (need > ncap) { client_teardown(c); return; }
             uint8_t *nb = realloc(c->ws_recv_buf, ncap);
             if (!nb) { client_teardown(c); return; }
@@ -1580,6 +1606,56 @@ static void client_read_cb(int fd, int events, void *data) {
         }
         memcpy(c->ws_recv_buf + c->ws_recv_len, c->read_buf, (size_t)n);
         c->ws_recv_len += (size_t)n;
+        n = 0; /* consumed into ws_recv_buf */
+
+        size_t consumed = 0;
+        int urc = handle_ws_upgrade(c, c->ws_recv_buf, c->ws_recv_len, &consumed);
+        if (urc == 1) return; /* incomplete HTTP — wait for more */
+        if (urc != 0) {
+            /* Not a valid WS upgrade; fall through to CMQ if buffer looks binary,
+               otherwise tear down. */
+            if (c->ws_recv_buf[0] == 'G') {
+                client_teardown(c);
+                return;
+            }
+        } else {
+            /* Drop HTTP headers; keep any pipelined WS bytes in ws_recv_buf. */
+            if (consumed < c->ws_recv_len) {
+                size_t rest = c->ws_recv_len - consumed;
+                memmove(c->ws_recv_buf, c->ws_recv_buf + consumed, rest);
+                c->ws_recv_len = rest;
+            } else {
+                c->ws_recv_len = 0;
+            }
+        }
+    }
+
+    if (!c->info_sent && !c->is_websocket) {
+        send_info_frame(srv, c);
+    }
+
+    if (c->is_websocket && c->ws_upgrade_done) {
+        /* Append any fresh TCP bytes into reassembly buffer. */
+        if (n > 0) {
+            size_t need = c->ws_recv_len + (size_t)n;
+            if (need > c->ws_recv_cap) {
+                size_t ncap = c->ws_recv_cap ? c->ws_recv_cap * 2 : 4096;
+                while (ncap < need) ncap *= 2;
+                /* Cap at max_payload_size + WS header overhead (~14) + slack. */
+                size_t max_pl = (size_t)(srv->config.max_payload_size > 0
+                                             ? srv->config.max_payload_size
+                                             : CMQ_CLIENT_BUF_SIZE);
+                size_t hard = max_pl + 64 + 65536; /* allow large CMQ frames */
+                if (ncap > hard) ncap = hard;
+                if (need > ncap) { client_teardown(c); return; }
+                uint8_t *nb = realloc(c->ws_recv_buf, ncap);
+                if (!nb) { client_teardown(c); return; }
+                c->ws_recv_buf = nb;
+                c->ws_recv_cap = ncap;
+            }
+            memcpy(c->ws_recv_buf + c->ws_recv_len, c->read_buf, (size_t)n);
+            c->ws_recv_len += (size_t)n;
+        }
 
         size_t offset = 0;
         while (offset < c->ws_recv_len) {
@@ -1692,9 +1768,11 @@ static void client_read_cb(int fd, int events, void *data) {
 static void keepalive_scan_clients(cmq_client_t **clients, int count,
                                     uint64_t now, uint64_t timeout_ms) {
     /* Acceptor-thread clients only — teardown is safe on this thread. */
-    cmq_client_t *doomed[256];
+    if (count <= 0) return;
+    cmq_client_t **doomed = malloc((size_t)count * sizeof(cmq_client_t *));
+    if (!doomed) return;
     int ndoomed = 0;
-    for (int i = 0; i < count && ndoomed < 256; i++) {
+    for (int i = 0; i < count; i++) {
         cmq_client_t *c = clients[i];
         if (c && c->state == CMQ_CLIENT_CONNECTED &&
             (now - c->last_activity_ms) > timeout_ms) {
@@ -1704,6 +1782,7 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
     for (int i = 0; i < ndoomed; i++) {
         client_teardown(doomed[i]);
     }
+    free(doomed);
 }
 
 static void keepalive_timer_cb(int timer_id, int events, void *data) {
@@ -1731,20 +1810,38 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     if (srv->workers) {
         for (int wi = 0; wi < srv->num_workers; wi++) {
             cmq_worker_t *w = &srv->workers[wi];
-            uint32_t doomed_ids[256];
-            int ndoomed = 0;
             cmq_mutex_lock(&w->clients_lock);
-            for (int i = 0; i < w->clients_count && ndoomed < 256; i++) {
-                cmq_client_t *c = w->clients[i];
-                if (c && c->state == CMQ_CLIENT_CONNECTED &&
-                    (now - c->last_activity_ms) > timeout_ms) {
-                    doomed_ids[ndoomed++] = c->id;
+            int wn = w->clients_count;
+            uint32_t *doomed_ids = NULL;
+            int ndoomed = 0;
+            if (wn > 0) {
+                doomed_ids = malloc((size_t)wn * sizeof(uint32_t));
+                if (doomed_ids) {
+                    for (int i = 0; i < wn; i++) {
+                        cmq_client_t *c = w->clients[i];
+                        if (c && c->state == CMQ_CLIENT_CONNECTED &&
+                            (now - c->last_activity_ms) > timeout_ms) {
+                            doomed_ids[ndoomed++] = c->id;
+                        }
+                    }
                 }
             }
             cmq_mutex_unlock(&w->clients_lock);
             for (int i = 0; i < ndoomed; i++) {
-                worker_push_teardown(w, doomed_ids[i]);
+                if (worker_push_teardown(w, doomed_ids[i]) != 0) {
+                    /* OOM: force-close fd so the worker notices EOF. */
+                    cmq_mutex_lock(&w->clients_lock);
+                    for (int j = 0; j < w->clients_count; j++) {
+                        cmq_client_t *c = w->clients[j];
+                        if (c && c->id == doomed_ids[i] && c->fd >= 0) {
+                            shutdown(c->fd, SHUT_RDWR);
+                            break;
+                        }
+                    }
+                    cmq_mutex_unlock(&w->clients_lock);
+                }
             }
+            free(doomed_ids);
         }
     }
 }
@@ -2085,7 +2182,7 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
     for (int i = 0; i < srv->clients_count; i++) {
         cmq_client_t *c = srv->clients[i];
         if (c && c->state == CMQ_CLIENT_CONNECTED) {
-            if (disc_len > 0) cmq_client_send_direct(c, disc, disc_len);
+            if (disc_len > 0) cmq_client_send_local(c, disc, disc_len);
             c->state = CMQ_CLIENT_CLOSING;
         }
     }
@@ -2094,13 +2191,19 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
             cmq_worker_t *w = &srv->workers[i];
-            uint32_t ids[256];
-            int nids = 0;
             cmq_mutex_lock(&w->clients_lock);
-            for (int j = 0; j < w->clients_count && nids < 256; j++) {
-                cmq_client_t *c = w->clients[j];
-                if (c && c->state == CMQ_CLIENT_CONNECTED) {
-                    ids[nids++] = c->id;
+            int wn = w->clients_count;
+            uint32_t *ids = NULL;
+            int nids = 0;
+            if (wn > 0) {
+                ids = malloc((size_t)wn * sizeof(uint32_t));
+                if (ids) {
+                    for (int j = 0; j < wn; j++) {
+                        cmq_client_t *c = w->clients[j];
+                        if (c && c->state == CMQ_CLIENT_CONNECTED) {
+                            ids[nids++] = c->id;
+                        }
+                    }
                 }
             }
             cmq_mutex_unlock(&w->clients_lock);
@@ -2109,6 +2212,7 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
                     worker_push_msg(w, ids[j], disc, disc_len);
                 worker_push_teardown(w, ids[j]);
             }
+            free(ids);
         }
     }
 

@@ -1027,6 +1027,24 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">WS Local Wrap &amp; Pipelined Upgrade</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_client_send_local</span></td><td>✅</td><td>Owning-thread send wraps WS binary. Cross-worker queues always carry raw CMQ; <code>worker_wakeup_cb</code> wraps once — fixes coro fan-out skipping WS encapsulation and avoids double-wrap.</td></tr>
+<tr><td><span class="component-name">Pipelined HTTP upgrade</span></td><td>✅</td><td>Accumulate HTTP in <code>ws_recv_buf</code> until <code>\r\n\r\n</code>; keep trailing bytes for WS parse. Incomplete headers wait; no silent drop of same-segment CONNECT.</td></tr>
+<tr><td><span class="component-name">worker_push OOM</span></td><td>✅</td><td><code>worker_push_msg</code>/<code>teardown</code> return <code>int</code>. Coro falls back to same-worker <code>send_local</code>; keepalive teardown OOM force-<code>shutdown</code>s the fd.</td></tr>
+<tr><td><span class="component-name">drain/keepalive caps</span></td><td>✅</td><td>Dynamic id snapshots sized to <code>clients_count</code> — removed hard 256 limit. Drain uses <code>send_local</code> for acceptor WS clients.</td></tr>
+<tr><td><span class="component-name">test_server_ops / ws_pipelined_upgrade</span></td><td>✅</td><td>HTTP 101 + masked CONNECT in one write; asserts CONNACK. Suite now 10 tests.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Pending commit</span> — WS local wrap + pipelined upgrade + drain/keepalive scaling. <strong>21/21 test suites pass.</strong>
+</div>
+</div>
+
 </div>
 </body>
 </html>

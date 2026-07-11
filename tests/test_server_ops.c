@@ -732,4 +732,81 @@ TEST(server_ops, ws_fragmented_message) {
     cmq_server_destroy(srv);
 }
 
+/* HTTP upgrade + first WS frame in one TCP write — trailing bytes must not be dropped. */
+TEST(server_ops, ws_pipelined_upgrade) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 9;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(100);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+
+    const char *upgrade =
+        "GET /ws HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    size_t flen = 0;
+    uint8_t *frame = ws_build_masked(CMQ_OP_CONNECT, NULL, 0, &flen);
+    ASSERT(frame != NULL);
+
+    size_t ulen = strlen(upgrade);
+    uint8_t *combo = malloc(ulen + flen);
+    ASSERT(combo != NULL);
+    memcpy(combo, upgrade, ulen);
+    memcpy(combo + ulen, frame, flen);
+    ASSERT(write(fd, combo, ulen + flen) == (ssize_t)(ulen + flen));
+    free(combo);
+    free(frame);
+    wait_ms(120);
+
+    char resp[512];
+    ssize_t rn = read(fd, resp, sizeof(resp) - 1);
+    ASSERT(rn > 0);
+    resp[rn] = '\0';
+    ASSERT(strstr(resp, "101") != NULL);
+
+    /* CONNACK may already be in the same TCP read after 101, or arrive next. */
+    cmq_parser_t *parser = cmq_parser_create();
+    cmq_frame_t f;
+    /* Scan remaining bytes in resp for a WS binary frame, else ws_recv_cmq. */
+    int got = 0;
+    for (ssize_t i = 0; i + 2 < rn; i++) {
+        if ((uint8_t)resp[i] == 0x82) {
+            cmq_ws_frame_t wf;
+            int parsed = cmq_ws_frame_parse((const uint8_t *)resp + i,
+                                             (size_t)(rn - i), &wf);
+            if (parsed > 0 && wf.opcode == CMQ_WS_OPCODE_BINARY &&
+                wf.payload_len > 0) {
+                if (cmq_parser_feed(parser, wf.payload, wf.payload_len) == 1) {
+                    const cmq_frame_t *pf = cmq_parser_frame(parser);
+                    if (pf && pf->hdr.op == CMQ_OP_CONNACK) {
+                        got = 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (!got) {
+        ASSERT_EQ(ws_recv_cmq(fd, parser, &f), 0);
+        ASSERT_EQ(f.hdr.op, CMQ_OP_CONNACK);
+        free_frame(&f);
+    }
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
