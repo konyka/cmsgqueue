@@ -1462,6 +1462,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — partial-write poll · late consumer · handshake LE</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/gw write_full</span></td><td>✅</td><td>Partial + EAGAIN polls POLLOUT (leaf-style) instead of closing mid-frame.</td></tr>
+<tr><td><span class="component-name">late stream consumer</span></td><td>✅</td><td><code>add_consumer</code> sets acked to first_seq−1; next/pending clamp to retained range.</td></tr>
+<tr><td><span class="component-name">peer handshake LE</span></td><td>✅</td><td>Decode CONNACK/INFO length from wire bytes (not native endian).</td></tr>
+</table>
+</div>
+
 
 
 

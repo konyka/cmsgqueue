@@ -88,17 +88,17 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass) {
     int waited_ms = 0;
     while (waited_ms < CMQ_ROUTE_HANDSHAKE_MS) {
         while (rlen >= sizeof(cmq_frame_hdr_t)) {
-            cmq_frame_hdr_t hdr;
-            memcpy(&hdr, rbuf, sizeof(hdr));
-            if (hdr.magic[0] != CMQ_PROTO_MAGIC_0 ||
-                hdr.magic[1] != CMQ_PROTO_MAGIC_1)
+            const uint8_t *hb = rbuf;
+            if (hb[0] != CMQ_PROTO_MAGIC_0 || hb[1] != CMQ_PROTO_MAGIC_1)
                 return -1;
-            uint32_t plen_f = hdr.length;
+            uint8_t op = hb[4];
+            uint32_t plen_f = (uint32_t)hb[5] | ((uint32_t)hb[6] << 8) |
+                               ((uint32_t)hb[7] << 16) | ((uint32_t)hb[8] << 24);
             size_t need = sizeof(cmq_frame_hdr_t) + (size_t)plen_f;
             if (need > sizeof(rbuf)) return -1;
             if (rlen < need) break;
 
-            if (hdr.op == (uint8_t)CMQ_OP_CONNACK) {
+            if (op == (uint8_t)CMQ_OP_CONNACK) {
                 if (plen_f < 1) return -1;
                 return rbuf[sizeof(cmq_frame_hdr_t)] == 0 ? 0 : -1;
             }
@@ -129,16 +129,22 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass) {
     return -1;
 }
 
-/* 0 = full write, 1 = EAGAIN with zero progress (keep fd), -1 = hard/partial
-   failure (caller must close — stream may already contain a truncated frame). */
+/* 0 = full write, 1 = EAGAIN with zero progress (keep fd), -1 = hard failure.
+   Partial progress + EAGAIN polls POLLOUT rather than closing (avoids truncating
+   a frame on the peer). */
 static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
     while (off < len) {
         ssize_t n = write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
-            if ((errno == EAGAIN || errno == EWOULDBLOCK) && off == 0)
-                return 1;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (off == 0) return 1;
+                struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+                if (poll(&pfd, 1, CMQ_ROUTE_HANDSHAKE_MS) <= 0)
+                    return -1;
+                continue;
+            }
             return -1;
         }
         if (n == 0) return -1;

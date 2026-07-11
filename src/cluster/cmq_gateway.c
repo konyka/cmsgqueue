@@ -10,6 +10,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 
 struct cmq_gateway {
     char local_cluster[64];
@@ -20,20 +21,27 @@ struct cmq_gateway {
     cmq_mutex_t lock;
 };
 
+#define CMQ_GW_WRITE_MS 3000
+
 static void set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
-/* 0 = ok, 1 = EAGAIN zero progress, -1 = hard/partial (close fd). */
+/* 0 = full write, 1 = EAGAIN zero progress, -1 = hard failure. */
 static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
     while (off < len) {
         ssize_t n = write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
-            if ((errno == EAGAIN || errno == EWOULDBLOCK) && off == 0)
-                return 1;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (off == 0) return 1;
+                struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+                if (poll(&pfd, 1, CMQ_GW_WRITE_MS) <= 0)
+                    return -1;
+                continue;
+            }
             return -1;
         }
         if (n == 0) return -1;

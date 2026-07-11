@@ -144,6 +144,23 @@ TEST(stream, max_bytes_eviction) {
     cmq_stream_destroy(st);
 }
 
+/* Late join after eviction must start at first retained seq, not seq 1. */
+TEST(stream, late_consumer_skips_evicted) {
+    cmq_stream_t *st = cmq_stream_create("late", 100, 10);
+    cmq_stream_append(st, (const uint8_t *)"12345", 5);
+    cmq_stream_append(st, (const uint8_t *)"67890", 5);
+    cmq_stream_append(st, (const uint8_t *)"abcdefgh", 8);
+    ASSERT_EQ(cmq_stream_first_seq(st), (uint64_t)3);
+    ASSERT_EQ(cmq_stream_add_consumer(st, "w"), 0);
+    ASSERT_EQ(cmq_stream_consumer_next(st, "w"), (uint64_t)3);
+    cmq_stream_consumer_t state = cmq_stream_consumer_state(st, "w");
+    ASSERT_EQ(state.pending_count, (uint32_t)1);
+    cmq_stream_msg_t msg;
+    ASSERT_EQ(cmq_stream_read(st, 3, &msg), 0);
+    cmq_stream_msg_release(&msg);
+    cmq_stream_destroy(st);
+}
+
 TEST(stream, retain_unacked_on_pressure) {
     cmq_stream_t *st = cmq_stream_create("retain", 100, 10);
     ASSERT_EQ(cmq_stream_add_consumer(st, "slow"), 0);

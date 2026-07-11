@@ -148,7 +148,11 @@ int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name) {
     cmq_consumer_entry_t *c = &stream->consumers[stream->consumer_count++];
     strncpy(c->name, consumer_name, CMQ_MAX_NAME - 1);
     c->name[CMQ_MAX_NAME - 1] = '\0';
+    /* Start at the oldest retained seq (evictions before join are skipped). */
     c->acked_seq = 0;
+    uint64_t first = cmq_store_first_seq(stream->store);
+    if (first > 0)
+        c->acked_seq = first - 1;
     cmq_mutex_unlock(&stream->lock);
     return 0;
 }
@@ -161,10 +165,13 @@ cmq_stream_consumer_t cmq_stream_consumer_state(cmq_stream_t *stream,
     for (size_t i = 0; i < stream->consumer_count; i++) {
         if (strcmp(stream->consumers[i].name, consumer_name) == 0) {
             state.consumer_seq = stream->consumers[i].acked_seq;
+            uint64_t first = cmq_store_first_seq(stream->store);
             uint64_t last = cmq_store_last_seq(stream->store);
-            if (last > state.consumer_seq) {
-                state.pending_count = (uint32_t)(last - state.consumer_seq);
-            }
+            uint64_t base = state.consumer_seq;
+            if (first > 0 && base + 1 < first)
+                base = first - 1;
+            if (last > base)
+                state.pending_count = (uint32_t)(last - base);
             break;
         }
     }
@@ -179,6 +186,12 @@ uint64_t cmq_stream_consumer_next(cmq_stream_t *stream, const char *consumer_nam
     for (size_t i = 0; i < stream->consumer_count; i++) {
         if (strcmp(stream->consumers[i].name, consumer_name) == 0) {
             next = stream->consumers[i].acked_seq + 1;
+            uint64_t first = cmq_store_first_seq(stream->store);
+            uint64_t last = cmq_store_last_seq(stream->store);
+            if (first > 0 && next < first)
+                next = first;
+            if (last == 0 || next > last)
+                next = 0;
             break;
         }
     }
