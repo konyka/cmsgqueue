@@ -196,13 +196,15 @@ int cmq_mqtt_encode_connect(uint8_t *buf, size_t len, const char *client_id,
                              int keepalive, int clean_session) {
     if (!buf || len < 20 || !client_id) return -1;
     size_t id_len = strlen(client_id);
+    if (id_len > 0xFFFFu || id_len > SIZE_MAX - 10) return -1;
     size_t var_len = 10 + id_len;
-    if (14 + var_len > len) return -1;
+    if (var_len > 0x0FFFFFFFu || len < 5 || var_len > len - 5) return -1;
 
     buf[0] = CMQ_MQTT_CONNECT;
     int rl = encode_remaining_length(buf, 1, len, (uint32_t)var_len);
     if (rl < 0) return -1;
     size_t pos = (size_t)(1 + rl);
+    if (pos > len || len - pos < 10 + id_len) return -1;
 
     buf[pos++] = 0x00; buf[pos++] = 0x04;
     buf[pos++] = 'M';  buf[pos++] = 'Q';
@@ -221,14 +223,21 @@ int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
                              const uint8_t *payload, size_t payload_len, int qos) {
     if (!buf || !topic || !payload) return -1;
     size_t topic_len = strlen(topic);
-    size_t var_len = 2 + topic_len + payload_len;
-    if (qos > 0) var_len += 2;
-    if (4 + var_len > len) return -1;
+    if (topic_len > 0xFFFFu || topic_len > SIZE_MAX - 2) return -1;
+    size_t var_len = 2 + topic_len;
+    if (payload_len > SIZE_MAX - var_len) return -1;
+    var_len += payload_len;
+    if (qos > 0) {
+        if (var_len > SIZE_MAX - 2) return -1;
+        var_len += 2;
+    }
+    if (var_len > 0x0FFFFFFFu || len < 5 || var_len > len - 5) return -1;
 
     buf[0] = CMQ_MQTT_PUBLISH | (uint8_t)((qos & 0x03) << 1);
     int rl = encode_remaining_length(buf, 1, len, (uint32_t)var_len);
     if (rl < 0) return -1;
     size_t pos = (size_t)(1 + rl);
+    if (pos > len || len - pos < var_len) return -1;
 
     buf[pos++] = (uint8_t)((topic_len >> 8) & 0xFF);
     buf[pos++] = (uint8_t)(topic_len & 0xFF);
@@ -247,13 +256,15 @@ int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
 int cmq_mqtt_encode_subscribe(uint8_t *buf, size_t len, const char *topic, int qos) {
     if (!buf || !topic) return -1;
     size_t topic_len = strlen(topic);
+    if (topic_len > 0xFFFFu || topic_len > SIZE_MAX - 5) return -1;
     size_t var_len = 2 + 2 + topic_len + 1;
-    if (4 + var_len > len) return -1;
+    if (var_len > 0x0FFFFFFFu || len < 5 || var_len > len - 5) return -1;
 
     buf[0] = CMQ_MQTT_SUBSCRIBE | 0x02;
     int rl = encode_remaining_length(buf, 1, len, (uint32_t)var_len);
     if (rl < 0) return -1;
     size_t pos = (size_t)(1 + rl);
+    if (pos > len || len - pos < var_len) return -1;
 
     buf[pos++] = 0x00; buf[pos++] = 0x01;
     buf[pos++] = (uint8_t)((topic_len >> 8) & 0xFF);

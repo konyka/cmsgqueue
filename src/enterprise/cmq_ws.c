@@ -5,6 +5,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <errno.h>
+#include <poll.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <stdint.h>
@@ -171,6 +173,36 @@ void cmq_ws_mask(uint8_t *data, size_t len, uint32_t mask_key) {
         data[i] ^= mk[i % 4];
 }
 
+static int ws_write_all(int fd, const uint8_t *data, size_t len) {
+    size_t off = 0;
+    int stall_rounds = 0;
+    while (off < len) {
+        ssize_t n = write(fd, data + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+                for (;;) {
+                    int pr = poll(&pfd, 1, 50);
+                    if (pr > 0) {
+                        stall_rounds = 0;
+                        break;
+                    }
+                    if (pr < 0 && errno == EINTR) continue;
+                    if (pr == 0 && ++stall_rounds < 4)
+                        continue;
+                    return -1;
+                }
+                continue;
+            }
+            return -1;
+        }
+        if (n == 0) return -1;
+        off += (size_t)n;
+    }
+    return 0;
+}
+
 int cmq_ws_send(int fd, const uint8_t *data, size_t len, cmq_ws_opcode_t opcode) {
     if (fd < 0 || (!data && len > 0)) return -1;
 
@@ -186,8 +218,8 @@ int cmq_ws_send(int fd, const uint8_t *data, size_t len, cmq_ws_opcode_t opcode)
     if (total < 0) return -1;
 
     size_t hdr_len = (size_t)total - len;
-    if (write(fd, hdr, hdr_len) < 0) return -1;
-    if (len > 0 && write(fd, data, len) < 0) return -1;
+    if (ws_write_all(fd, hdr, hdr_len) != 0) return -1;
+    if (len > 0 && ws_write_all(fd, data, len) != 0) return -1;
     return 0;
 }
 

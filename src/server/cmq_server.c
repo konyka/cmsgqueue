@@ -1582,7 +1582,8 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
                                  const uint8_t *payload, size_t payload_len,
                                  size_t *out_sent) {
     if (out_sent) *out_sent = 0;
-    if (!srv || !srv->routes || !payload) return 0;
+    if (!srv || !srv->routes) return 0;
+    if (payload_len > 0 && !payload) return 0;
     size_t need = sizeof(cmq_frame_hdr_t) + payload_len;
     uint8_t *fwd = malloc(need);
     if (!fwd) {

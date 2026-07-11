@@ -233,6 +233,8 @@ int cmq_parser_next(cmq_parser_t *p) {
 }
 
 size_t cmq_frame_encode(uint8_t *buf, size_t buf_size, cmq_op_t op, cmq_u8_t flags, const uint8_t *payload, size_t payload_len) {
+    if (payload_len > UINT32_MAX) return 0;
+    if (payload_len > SIZE_MAX - sizeof(cmq_frame_hdr_t)) return 0;
     size_t needed = sizeof(cmq_frame_hdr_t) + payload_len;
     if (buf_size < needed) return 0;
     buf[0] = CMQ_PROTO_MAGIC_0;

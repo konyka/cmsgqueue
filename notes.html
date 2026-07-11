@@ -1843,6 +1843,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — handshake version · MQTT size · WS write_all · frame encode</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">peer handshake</span></td><td>✅</td><td>Require <code>CMQ_PROTO_VERSION</code>; only INFO may precede CONNACK.</td></tr>
+<tr><td><span class="component-name">MQTT encode</span></td><td>✅</td><td>Reject length wrap / oversize topic+payload before memcpy.</td></tr>
+<tr><td><span class="component-name">cmq_ws_send</span></td><td>✅</td><td>Full-write loop with EINTR/EAGAIN poll (no truncated frames).</td></tr>
+<tr><td><span class="component-name">frame_encode</span></td><td>✅</td><td>Reject <code>payload_len &gt; UINT32_MAX</code> / size wrap.</td></tr>
+<tr><td><span class="component-name">route empty body</span></td><td>✅</td><td>Allow <code>payload==NULL</code> with zero length for empty forwards.</td></tr>
+</table>
+</div>
+
 
 
 
