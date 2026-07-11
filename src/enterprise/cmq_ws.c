@@ -73,7 +73,8 @@ void cmq_ws_server_set_callback(cmq_ws_server_t *srv,
 
 int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
                         cmq_ws_frame_t *out_frame) {
-    if (!buf || !out_frame || buf_len < 2) return -1;
+    if (!buf || !out_frame) return -1;
+    if (buf_len < 2) return 0; /* need more */
 
     out_frame->fin = (buf[0] >> 7) & 0x01;
     out_frame->opcode = (cmq_ws_opcode_t)(buf[0] & 0x0F);
@@ -83,11 +84,11 @@ int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
     size_t header_len = 2;
 
     if (payload_len == 126) {
-        if (buf_len < 4) return -1;
+        if (buf_len < 4) return 0;
         payload_len = ((uint64_t)buf[2] << 8) | buf[3];
         header_len = 4;
     } else if (payload_len == 127) {
-        if (buf_len < 10) return -1;
+        if (buf_len < 10) return 0;
         /* RFC 6455: most significant bit of 64-bit length MUST be 0. */
         if (buf[2] & 0x80) return -1;
         payload_len = 0;
@@ -102,7 +103,7 @@ int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
         return -1;
 
     if (out_frame->masked) {
-        if (buf_len < header_len + 4) return -1;
+        if (buf_len < header_len + 4) return 0;
         out_frame->mask_key = ((uint32_t)buf[header_len] << 24) |
                               ((uint32_t)buf[header_len + 1] << 16) |
                               ((uint32_t)buf[header_len + 2] << 8) |
@@ -110,7 +111,7 @@ int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
         header_len += 4;
     }
 
-    if (buf_len < header_len + (size_t)payload_len) return -1;
+    if (buf_len < header_len + (size_t)payload_len) return 0; /* need more */
 
     out_frame->payload_len = (size_t)payload_len;
     out_frame->payload = (uint8_t *)&buf[header_len];

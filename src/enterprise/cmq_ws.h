@@ -44,6 +44,7 @@ size_t cmq_ws_server_client_count(cmq_ws_server_t *srv);
 void cmq_ws_server_set_callback(cmq_ws_server_t *srv,
                                  cmq_ws_on_message_cb cb, void *ctx);
 
+/* Returns: >0 bytes consumed, 0 need more data, -1 fatal protocol error. */
 int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
                         cmq_ws_frame_t *out_frame);
 int cmq_ws_frame_serialize(const cmq_ws_frame_t *frame, uint8_t *buf,

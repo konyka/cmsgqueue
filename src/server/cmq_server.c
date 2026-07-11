@@ -1023,6 +1023,20 @@ static void worker_coro_spawn_deliver(cmq_worker_t *w,
     }
 }
 
+/* Forward a PUBLISH-shaped payload to cluster routes (heap-sized encode). */
+static void cmq_route_forward_raw(cmq_server_t *srv, uint8_t flags,
+                                   const uint8_t *payload, size_t payload_len) {
+    if (!srv || !srv->routes || !payload) return;
+    size_t need = sizeof(cmq_frame_hdr_t) + payload_len;
+    uint8_t *fwd = malloc(need);
+    if (!fwd) return;
+    size_t fwd_len = cmq_frame_encode(fwd, need, CMQ_OP_PUBLISH, flags,
+                                       payload, payload_len);
+    if (fwd_len > 0)
+        cmq_route_broadcast(srv->routes, fwd, fwd_len, NULL);
+    free(fwd);
+}
+
 static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                             const cmq_frame_t *frame) {
     (void)c;
@@ -1100,19 +1114,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
     if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
 
-    if (srv->routes) {
-        /* Heap-size to the frame — stack 8 KiB silently dropped large pubs. */
-        size_t need = sizeof(cmq_frame_hdr_t) + frame->payload_len;
-        uint8_t *fwd = malloc(need);
-        if (fwd) {
-            size_t fwd_len = cmq_frame_encode(fwd, need, CMQ_OP_PUBLISH,
-                                               frame->hdr.flags,
-                                               frame->payload, frame->payload_len);
-            if (fwd_len > 0)
-                cmq_route_broadcast(srv->routes, fwd, fwd_len, NULL);
-            free(fwd);
-        }
-    }
+    cmq_route_forward_raw(srv, frame->hdr.flags, frame->payload, frame->payload_len);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1608,7 +1610,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    /* Pass 2: deliver. */
+    /* Pass 2: deliver (+ cluster route, same as PUBLISH). */
     offset = 2;
     for (uint16_t msg = 0; msg < count; msg++) {
         uint16_t subject_len = ((uint16_t)frame->payload[offset] << 8) |
@@ -1621,6 +1623,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
 
         uint16_t reply_len = ((uint16_t)frame->payload[offset] << 8) |
                               frame->payload[offset + 1];
+        size_t entry_start = offset - 2 - subject_len; /* start of slen field */
         offset += 2 + (size_t)reply_len;
 
         uint32_t payload_len = ((uint32_t)frame->payload[offset] << 24) |
@@ -1630,6 +1633,30 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         offset += 4;
         const uint8_t *msg_payload = frame->payload + offset;
         offset += payload_len;
+
+        /* Rebuild PUBLISH wire body: [slen][subj][rlen][reply][body] (no 4B plen). */
+        if (srv->routes) {
+            size_t pub_len = 2 + subject_len + 2 + reply_len + payload_len;
+            uint8_t *pub = malloc(pub_len);
+            if (pub) {
+                size_t po = 0;
+                pub[po++] = (subject_len >> 8) & 0xFF;
+                pub[po++] = subject_len & 0xFF;
+                memcpy(pub + po, subject, subject_len); po += subject_len;
+                pub[po++] = (reply_len >> 8) & 0xFF;
+                pub[po++] = reply_len & 0xFF;
+                if (reply_len > 0) {
+                    memcpy(pub + po,
+                           frame->payload + entry_start + 2 + subject_len + 2,
+                           reply_len);
+                    po += reply_len;
+                }
+                if (payload_len > 0)
+                    memcpy(pub + po, msg_payload, payload_len);
+                cmq_route_forward_raw(srv, 0, pub, pub_len);
+                free(pub);
+            }
+        }
 
         cmq_rwlock_rdlock(&srv->sublist_lock);
         cmq_sublist_result_t result;
@@ -1956,7 +1983,11 @@ static void client_read_cb(int fd, int events, void *data) {
             cmq_ws_frame_t ws_frame;
             int parsed = cmq_ws_frame_parse(c->ws_recv_buf + offset,
                                              c->ws_recv_len - offset, &ws_frame);
-            if (parsed < 0) break; /* need more data */
+            if (parsed < 0) {
+                client_teardown(c); /* fatal WS framing */
+                return;
+            }
+            if (parsed == 0) break; /* need more data */
 
             if (ws_frame.opcode == CMQ_WS_OPCODE_CLOSE) {
                 client_teardown(c);

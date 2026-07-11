@@ -1162,6 +1162,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS fatal teardown · route nonblock · BATCH route</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">WS fatal teardown</span></td><td>✅</td><td><code>cmq_ws_frame_parse</code>: 0=need-more, &gt;0=ok, -1=fatal. Server tears down on fatal (no slot DoS via bad headers + keepalive bytes).</td></tr>
+<tr><td><span class="component-name">route nonblock + unlock write</span></td><td>✅</td><td>Connect sets <code>O_NONBLOCK</code>; broadcast/forward snapshot fds then write outside the pool lock.</td></tr>
+<tr><td><span class="component-name">BATCH cluster route</span></td><td>✅</td><td>Each batch entry rebuilt as PUBLISH wire body and forwarded via <code>cmq_route_forward_raw</code> (aligned with PUBLISH).</td></tr>
+</table>
+</div>
+
+
 
 
 </div>

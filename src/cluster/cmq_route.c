@@ -9,8 +9,14 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #define CMQ_ROUTE_MAX_CONNS 32
+
+static void set_nonblock(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
 
 /* Write the full buffer; never report success on a partial frame. */
 static int write_full(int fd, const uint8_t *data, size_t len) {
@@ -89,6 +95,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                 cmq_mutex_unlock(&pool->lock);
                 return -1;
             }
+            set_nonblock(fd);
             pool->conns[i].fd = fd;
             pool->conns[i].connected = 1;
             cmq_mutex_unlock(&pool->lock);
@@ -117,6 +124,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         cmq_mutex_unlock(&pool->lock);
         return -1;
     }
+    set_nonblock(fd);
 
     cmq_route_conn_t *c = &pool->conns[pool->conn_count++];
     strncpy(c->remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
@@ -181,42 +189,80 @@ int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__(
                        const uint8_t *data, size_t len,
                        const char *exclude_id) {
     if (!pool || !data || len == 0) return -1;
+    int fds[CMQ_ROUTE_MAX_CONNS];
+    size_t idxs[CMQ_ROUTE_MAX_CONNS];
+    size_t n = 0;
     cmq_mutex_lock(&pool->lock);
-    int sent = 0;
     for (size_t i = 0; i < pool->conn_count; i++) {
         cmq_route_conn_t *c = &pool->conns[i];
         if (!c->connected) continue;
         if (exclude_id && strcmp(c->remote_id, exclude_id) == 0) continue;
-        if (write_full(c->fd, data, len) == 0) {
-            c->bytes_sent += (uint64_t)len;
-            c->msgs_sent++;
-            sent++;
-        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            c->connected = 0;
-        }
+        fds[n] = c->fd;
+        idxs[n] = i;
+        n++;
     }
     cmq_mutex_unlock(&pool->lock);
+
+    int sent = 0;
+    for (size_t j = 0; j < n; j++) {
+        if (write_full(fds[j], data, len) == 0) {
+            cmq_mutex_lock(&pool->lock);
+            if (idxs[j] < pool->conn_count &&
+                pool->conns[idxs[j]].fd == fds[j] &&
+                pool->conns[idxs[j]].connected) {
+                pool->conns[idxs[j]].bytes_sent += (uint64_t)len;
+                pool->conns[idxs[j]].msgs_sent++;
+            }
+            cmq_mutex_unlock(&pool->lock);
+            sent++;
+        } else {
+            cmq_mutex_lock(&pool->lock);
+            if (idxs[j] < pool->conn_count &&
+                pool->conns[idxs[j]].fd == fds[j])
+                pool->conns[idxs[j]].connected = 0;
+            cmq_mutex_unlock(&pool->lock);
+        }
+    }
     return sent > 0 ? 0 : -1;
 }
 
 size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
                              size_t len, const char *exclude_id) {
     if (!pool || !data || len == 0) return 0;
+    int fds[CMQ_ROUTE_MAX_CONNS];
+    size_t idxs[CMQ_ROUTE_MAX_CONNS];
+    size_t n = 0;
     cmq_mutex_lock(&pool->lock);
-    size_t sent = 0;
     for (size_t i = 0; i < pool->conn_count; i++) {
         cmq_route_conn_t *c = &pool->conns[i];
         if (!c->connected) continue;
         if (exclude_id && strcmp(c->remote_id, exclude_id) == 0) continue;
-        if (write_full(c->fd, data, len) == 0) {
-            c->bytes_sent += (uint64_t)len;
-            c->msgs_sent++;
-            sent++;
-        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            c->connected = 0;
-        }
+        fds[n] = c->fd;
+        idxs[n] = i;
+        n++;
     }
     cmq_mutex_unlock(&pool->lock);
+
+    size_t sent = 0;
+    for (size_t j = 0; j < n; j++) {
+        if (write_full(fds[j], data, len) == 0) {
+            cmq_mutex_lock(&pool->lock);
+            if (idxs[j] < pool->conn_count &&
+                pool->conns[idxs[j]].fd == fds[j] &&
+                pool->conns[idxs[j]].connected) {
+                pool->conns[idxs[j]].bytes_sent += (uint64_t)len;
+                pool->conns[idxs[j]].msgs_sent++;
+            }
+            cmq_mutex_unlock(&pool->lock);
+            sent++;
+        } else {
+            cmq_mutex_lock(&pool->lock);
+            if (idxs[j] < pool->conn_count &&
+                pool->conns[idxs[j]].fd == fds[j])
+                pool->conns[idxs[j]].connected = 0;
+            cmq_mutex_unlock(&pool->lock);
+        }
+    }
     return sent;
 }
 

@@ -319,4 +319,14 @@ TEST(ws, parse_medium_frame) {
     ASSERT_EQ(frame.opcode, CMQ_WS_OPCODE_BINARY);
 }
 
+TEST(ws, parse_need_more_vs_fatal) {
+    uint8_t partial[] = {0x82, 0x05}; /* header only, need payload */
+    cmq_ws_frame_t frame = {0};
+    ASSERT_EQ(cmq_ws_frame_parse(partial, sizeof(partial), &frame), 0);
+
+    /* 127-length with MSB set — fatal */
+    uint8_t bad[10] = {0x82, 0x7F, 0x80, 0, 0, 0, 0, 0, 0, 1};
+    ASSERT_EQ(cmq_ws_frame_parse(bad, sizeof(bad), &frame), -1);
+}
+
 TEST_MAIN()
