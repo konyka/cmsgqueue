@@ -1472,6 +1472,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — filestore LE · SEEK_END · request drops</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">filestore LE</span></td><td>✅</td><td>Record header + idx offsets written/read as little-endian.</td></tr>
+<tr><td><span class="component-name">append SEEK_END</span></td><td>✅</td><td>data/idx seek EOF before append (safe after mid-file read).</td></tr>
+<tr><td><span class="component-name">request drops</span></td><td>✅</td><td><code>deliver_request_targets</code> increments <code>stat_messages_dropped</code> on send miss.</td></tr>
+</table>
+</div>
+
 
 
 

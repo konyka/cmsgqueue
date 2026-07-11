@@ -11,16 +11,9 @@
 #include <unistd.h>
 #include <errno.h>
 
-#define CMQ_FS_MAGIC   0xCF510
+#define CMQ_FS_MAGIC   0xCF510u
 #define CMQ_FS_VERSION 1
-
-typedef struct __attribute__((packed)) {
-    uint32_t magic;
-    uint16_t version;
-    uint64_t seq;
-    uint32_t len;
-    uint32_t crc32;
-} cmq_fs_record_hdr_t;
+#define CMQ_FS_HDR_SIZE 22  /* magic32 + ver16 + seq64 + len32 + crc32, LE */
 
 struct cmq_filestore {
     char dir[512];
@@ -44,6 +37,36 @@ static uint32_t crc32_compute(const uint8_t *data, size_t len) {
     return ~crc;
 }
 
+static void put_le16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void put_le32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+static void put_le64(uint8_t *p, uint64_t v) {
+    put_le32(p, (uint32_t)v);
+    put_le32(p + 4, (uint32_t)(v >> 32));
+}
+
+static uint16_t get_le16(const uint8_t *p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static uint32_t get_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint64_t get_le64(const uint8_t *p) {
+    return (uint64_t)get_le32(p) | ((uint64_t)get_le32(p + 4) << 32);
+}
+
 static void build_paths(cmq_filestore_t *fs) {
     snprintf(fs->data_path, sizeof(fs->data_path), "%s/%s.data", fs->dir, fs->prefix);
     snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx", fs->dir, fs->prefix);
@@ -52,13 +75,14 @@ static void build_paths(cmq_filestore_t *fs) {
 static uint64_t scan_last_seq(const char *idx_path) {
     FILE *fp = fopen(idx_path, "rb");
     if (!fp) return 0;
-    uint64_t last = 0;
-    uint64_t offset;
-    while (fread(&offset, sizeof(uint64_t), 1, fp) == 1) {
-        last++;
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return 0;
     }
+    long sz = ftell(fp);
     fclose(fp);
-    return last;
+    if (sz < 0) return 0;
+    return (uint64_t)sz / 8u;
 }
 
 cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
@@ -96,18 +120,28 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     if (!fs || !data || len == 0 || len > (16u * 1024 * 1024)) return -1;
     cmq_mutex_lock(&fs->lock);
 
-    cmq_fs_record_hdr_t hdr;
-    hdr.magic = CMQ_FS_MAGIC;
-    hdr.version = CMQ_FS_VERSION;
-    hdr.seq = fs->next_seq;
-    hdr.len = (uint32_t)len;
-    hdr.crc32 = crc32_compute(data, len);
+    /* Always append at EOF — read() leaves the stream mid-file. */
+    if (fseek(fs->data_fp, 0, SEEK_END) != 0 ||
+        fseek(fs->idx_fp, 0, SEEK_END) != 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    long off_l = ftell(fs->data_fp);
+    if (off_l < 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    uint64_t offset = (uint64_t)off_l;
 
-    uint64_t offset = (uint64_t)ftell(fs->data_fp);
+    uint8_t hdr[CMQ_FS_HDR_SIZE];
+    put_le32(hdr + 0, CMQ_FS_MAGIC);
+    put_le16(hdr + 4, (uint16_t)CMQ_FS_VERSION);
+    put_le64(hdr + 6, fs->next_seq);
+    put_le32(hdr + 14, (uint32_t)len);
+    put_le32(hdr + 18, crc32_compute(data, len));
 
-    if (fwrite(&hdr, sizeof(hdr), 1, fs->data_fp) != 1 ||
+    if (fwrite(hdr, sizeof(hdr), 1, fs->data_fp) != 1 ||
         fwrite(data, 1, len, fs->data_fp) != len) {
-        /* Best-effort rollback of a partial data write. */
         fflush(fs->data_fp);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fseek(fs->data_fp, (long)offset, SEEK_SET);
@@ -116,8 +150,9 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     }
     fflush(fs->data_fp);
 
-    if (fwrite(&offset, sizeof(uint64_t), 1, fs->idx_fp) != 1) {
-        /* Index failed: roll data back so restart scan stays consistent. */
+    uint8_t idxb[8];
+    put_le64(idxb, offset);
+    if (fwrite(idxb, sizeof(idxb), 1, fs->idx_fp) != 1) {
         fflush(fs->idx_fp);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fseek(fs->data_fp, (long)offset, SEEK_SET);
@@ -144,61 +179,67 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
     }
 
     uint64_t target_idx = seq - 1;
-    long idx_pos = (long)(target_idx * sizeof(uint64_t));
+    long idx_pos = (long)(target_idx * 8u);
 
     if (fseek(fs->idx_fp, idx_pos, SEEK_SET) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
-    uint64_t data_offset;
-    if (fread(&data_offset, sizeof(uint64_t), 1, fs->idx_fp) != 1) {
+    uint8_t idxb[8];
+    if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
+    uint64_t data_offset = get_le64(idxb);
 
     if (fseek(fs->data_fp, (long)data_offset, SEEK_SET) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
-    cmq_fs_record_hdr_t hdr;
-    if (fread(&hdr, sizeof(hdr), 1, fs->data_fp) != 1) {
+    uint8_t hdr[CMQ_FS_HDR_SIZE];
+    if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
-    if (hdr.magic != CMQ_FS_MAGIC || hdr.seq != seq) {
+    uint32_t magic = get_le32(hdr + 0);
+    uint16_t version = get_le16(hdr + 4);
+    uint64_t hseq = get_le64(hdr + 6);
+    uint32_t hlen = get_le32(hdr + 14);
+    uint32_t hcrc = get_le32(hdr + 18);
+
+    if (magic != CMQ_FS_MAGIC || version != CMQ_FS_VERSION || hseq != seq) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
-    if (hdr.len == 0 || hdr.len > (16u * 1024 * 1024)) {
+    if (hlen == 0 || hlen > (16u * 1024 * 1024)) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
-    uint8_t *buf = malloc(hdr.len);
+    uint8_t *buf = malloc(hlen);
     if (!buf) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
-    if (fread(buf, 1, hdr.len, fs->data_fp) != hdr.len) {
+    if (fread(buf, 1, hlen, fs->data_fp) != hlen) {
         free(buf);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
-    uint32_t crc = crc32_compute(buf, hdr.len);
-    if (crc != hdr.crc32) {
+    if (crc32_compute(buf, hlen) != hcrc) {
         free(buf);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     *out_data = buf;
-    *out_len = hdr.len;
+    *out_len = hlen;
 
     cmq_mutex_unlock(&fs->lock);
     return 0;

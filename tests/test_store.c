@@ -227,6 +227,17 @@ TEST(filestore, append_read) {
     ASSERT(memcmp(data, "world", 5) == 0);
     free(data);
 
+    /* read() leaves FILE mid-stream — append must still go to EOF. */
+    uint64_t seq3 = 0;
+    ASSERT_EQ(cmq_filestore_append(fs, (const uint8_t *)"again", 5, &seq3), 0);
+    ASSERT_EQ(seq3, (uint64_t)3);
+    ASSERT_EQ(cmq_filestore_read(fs, 1, &data, &len), 0);
+    ASSERT(memcmp(data, "hello", 5) == 0);
+    free(data);
+    ASSERT_EQ(cmq_filestore_read(fs, 3, &data, &len), 0);
+    ASSERT(memcmp(data, "again", 5) == 0);
+    free(data);
+
     cmq_filestore_destroy(fs);
 }
 

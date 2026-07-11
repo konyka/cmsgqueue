@@ -1137,6 +1137,7 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                                       t->account_name, subject))
             continue;
         cmq_client_t *target = NULL;
+        int ok = 0;
         if (t->worker_id >= 0 && srv->workers &&
             t->worker_id < srv->num_workers) {
             cmq_worker_t *w = &srv->workers[t->worker_id];
@@ -1148,11 +1149,8 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                 target = NULL;
             if (target &&
                 cmq_send_request_message(target, t->sub_id, subject,
-                                          reply_to, payload, payload_len) == 0) {
-                delivered_n++;
-                cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                          CMQ_ATOMIC_RELAXED);
-            }
+                                          reply_to, payload, payload_len) == 0)
+                ok = 1;
             cmq_mutex_unlock(&w->clients_lock);
         } else {
             cmq_mutex_lock(&srv->clients_lock);
@@ -1163,12 +1161,17 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                 target = NULL;
             if (target &&
                 cmq_send_request_message(target, t->sub_id, subject,
-                                          reply_to, payload, payload_len) == 0) {
-                delivered_n++;
-                cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                          CMQ_ATOMIC_RELAXED);
-            }
+                                          reply_to, payload, payload_len) == 0)
+                ok = 1;
             cmq_mutex_unlock(&srv->clients_lock);
+        }
+        if (ok) {
+            delivered_n++;
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        } else {
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
         }
     }
     return delivered_n;
