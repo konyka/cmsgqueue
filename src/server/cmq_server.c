@@ -428,7 +428,34 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
     w->msg_pending++;
     cmq_mutex_unlock(&w->msg_lock);
 
-    wakeup_fd_signal(w->wakeup_fd);
+    if (wakeup_fd_signal(w->wakeup_fd) == 0)
+        return 0;
+
+    /* Wakeup failed — undo enqueue if still at tail so callers can retry. */
+    cmq_mutex_lock(&w->msg_lock);
+    if (w->msg_tail == msg) {
+        if (w->msg_head == msg) {
+            w->msg_head = NULL;
+            w->msg_tail = NULL;
+        } else {
+            cmq_worker_msg_t *p = w->msg_head;
+            while (p && p->next != msg) p = p->next;
+            if (p) {
+                p->next = NULL;
+                w->msg_tail = p;
+            }
+        }
+        if (w->msg_pending > 0) w->msg_pending--;
+        cmq_mutex_unlock(&w->msg_lock);
+        free(msg->buf);
+        free(msg);
+        if (w->server) {
+            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        }
+        return -1;
+    }
+    cmq_mutex_unlock(&w->msg_lock);
     return 0;
 }
 
@@ -481,7 +508,28 @@ static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
     w->msg_pending++;
     cmq_mutex_unlock(&w->msg_lock);
 
-    wakeup_fd_signal(w->wakeup_fd);
+    if (wakeup_fd_signal(w->wakeup_fd) == 0)
+        return 0;
+
+    cmq_mutex_lock(&w->msg_lock);
+    if (w->msg_tail == msg) {
+        if (w->msg_head == msg) {
+            w->msg_head = NULL;
+            w->msg_tail = NULL;
+        } else {
+            cmq_worker_msg_t *p = w->msg_head;
+            while (p && p->next != msg) p = p->next;
+            if (p) {
+                p->next = NULL;
+                w->msg_tail = p;
+            }
+        }
+        if (w->msg_pending > 0) w->msg_pending--;
+        cmq_mutex_unlock(&w->msg_lock);
+        free(msg);
+        return -1;
+    }
+    cmq_mutex_unlock(&w->msg_lock);
     return 0;
 }
 
@@ -662,6 +710,15 @@ static void cmq_client_destroy(cmq_client_t *c) {
     free(c);
 }
 
+/* Detach borrowed/owned route fd under io_lock (same contract as broadcast). */
+static void route_detach_under_io_lock(cmq_server_t *srv, int fd) {
+    if (!srv || !srv->routes || fd < 0) return;
+    int ridx = cmq_route_io_lock_fd(srv->routes, fd);
+    cmq_route_detach_fd(srv->routes, fd);
+    if (ridx >= 0)
+        cmq_route_io_unlock_idx(srv->routes, ridx);
+}
+
 /* Remove client from its owning array, clear subscriptions from the sublist,
    drop event interest, and destroy. Safe to call once; subsequent calls no-op
    because state becomes CLOSED and fd is cleared. */
@@ -671,13 +728,8 @@ static void client_teardown(cmq_client_t *c) {
     int was_connected = (c->state == CMQ_CLIENT_CONNECTED);
     c->state = CMQ_CLIENT_CLOSED;
 
-    if (c->is_route && srv && srv->routes && c->fd >= 0) {
-        /* Serialize with route broadcast writes (io_lock) before detach/close. */
-        int ridx = cmq_route_io_lock_fd(srv->routes, c->fd);
-        cmq_route_detach_fd(srv->routes, c->fd);
-        if (ridx >= 0)
-            cmq_route_io_unlock_idx(srv->routes, ridx);
-    }
+    if (c->is_route && srv && c->fd >= 0)
+        route_detach_under_io_lock(srv, c->fd);
 
     if (c->ev_loop && c->fd >= 0) {
         cmq_ev_del(c->ev_loop, c->fd);
@@ -2538,7 +2590,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             c->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
             if (cmq_account_create(srv->accounts, c->account_name) != 0) {
                 if (c->is_route && srv->routes)
-                    cmq_route_detach_fd(srv->routes, c->fd);
+                    route_detach_under_io_lock(srv, c->fd);
                 c->is_route = 0;
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;

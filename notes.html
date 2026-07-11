@@ -1769,6 +1769,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — CONNECT detach io_lock · push wakeup undo · filestore sync</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CONNECT detach</span></td><td>✅</td><td>Account-fail route rollback uses route_detach_under_io_lock.</td></tr>
+<tr><td><span class="component-name">push wakeup</span></td><td>✅</td><td>Failed wakeup undoes enqueue so deliver retries without duplicates.</td></tr>
+<tr><td><span class="component-name">filestore sync</span></td><td>✅</td><td>fflush failures propagate; null-safe fsync.</td></tr>
+</table>
+</div>
+
 
 
 
