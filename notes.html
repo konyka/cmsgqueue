@@ -148,7 +148,7 @@ code { background: #1c2128; padding: 2px 6px; border-radius: 4px; font-size: 0.9
 <tr><td><span class="component-name">cmq_atomic.h</span></td><td>✅</td><td>C11 atomic wrappers</td></tr>
 <tr><td><span class="component-name">cmq_types.h</span></td><td>✅</td><td>Base types + macros</td></tr>
 <tr><td><span class="component-name">cmq_thread.h</span></td><td>✅</td><td>pthread wrappers</td></tr>
-<tr><td><span class="component-name">cmq_queue.h/c</span></td><td>✅</td><td>Lock-free MPSC queue</td></tr>
+<tr><td><span class="component-name">cmq_queue.h/c</span></td><td>✅</td><td>Lock-free MPSC queue (single consumer)</td></tr>
 </table>
 </div>
 
@@ -1683,12 +1683,12 @@ All 15 test suites passing, 0 warnings.
 </div>
 
 <div class="phase">
-<h2>Phase — partial route miss · accept ev_add rollback · kqueue wakeup</h2>
+<h2>Phase — route/gateway lock order · ev_mod hang</h2>
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
-<tr><td><span class="component-name">forward_missed</span></td><td>✅</td><td>route_rc≠0 only counts as miss when route_sent==0 (partial EAGAIN is not a total miss).</td></tr>
-<tr><td><span class="component-name">accept ev_add</span></td><td>✅</td><td>Failed cmq_ev_add rolls back clients[]/idmap and destroys client (no zombie sockets).</td></tr>
-<tr><td><span class="component-name">kqueue wakeup</span></td><td>✅</td><td>BSD/macOS uses self-pipe + EVFILT_READ; drain in kevent loop; Linux keeps eventfd.</td></tr>
+<tr><td><span class="component-name">route broadcast</span></td><td>✅</td><td>No pool-&gt;lock under io_lock; validate/drop under io_lock only (avoids AB-BA).</td></tr>
+<tr><td><span class="component-name">gateway forward</span></td><td>✅</td><td>Same; gw_slot_close_fd nests io under gw-&gt;lock (fixed order).</td></tr>
+<tr><td><span class="component-name">ev_mod fail</span></td><td>✅</td><td>Arm WRITE failure tries one-shot drain then SHUT_RDWR (no stuck write_buf).</td></tr>
 </table>
 </div>
 

@@ -777,7 +777,32 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
     c->write_pos = 0;
     c->last_write_progress_ms = srv_now_ms();
 
-    cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE, client_read_cb, c);
+    if (cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE,
+                   client_read_cb, c) != 0) {
+        /* WRITE arm failed — try one-shot drain; else force close so we do not
+           leave a forever-stuck write_buf with only READ interest. */
+        size_t rem = c->write_len - c->write_pos;
+        ssize_t n = client_sock_write(c, c->write_buf + c->write_pos, rem);
+        if (n > 0) {
+            c->write_pos += (size_t)n;
+            if (c->server)
+                cmq_atomic_fetch_add_u64(&c->server->stat_bytes_out, (uint64_t)n,
+                                          CMQ_ATOMIC_RELAXED);
+            if (c->write_pos >= c->write_len) {
+                c->write_len = 0;
+                c->write_pos = 0;
+                rc = 0;
+                goto out;
+            }
+        }
+        c->write_len = 0;
+        c->write_pos = 0;
+        c->state = CMQ_CLIENT_CLOSING;
+        if (c->fd >= 0)
+            (void)shutdown(c->fd, SHUT_RDWR);
+        rc = -1;
+        goto out;
+    }
     rc = 0;
 out:
 #undef CMQ_SEND_FORCE_CLOSE

@@ -1,6 +1,9 @@
 #include "cmq_queue.h"
 #include <stdlib.h>
 
+/* Lock-free MPSC queue (multiple producers, single consumer).
+   Consumer must be a single thread — head is not CAS-protected. */
+
 void cmq_queue_init(cmq_queue_t *q) {
     q->stub = malloc(sizeof(cmq_queue_node_t));
     q->stub->next = NULL;

@@ -515,44 +515,37 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
     size_t sent = 0;
     size_t deferred = 0;
     for (size_t j = 0; j < n; j++) {
-        cmq_mutex_lock(&pool->io_locks[idxs[j]]);
-        /* Re-check fd under io_lock: reconnect may have replaced the slot. */
-        cmq_mutex_lock(&pool->lock);
+        size_t idx = idxs[j];
+        int expect_fd = fds[j];
+        cmq_mutex_lock(&pool->io_locks[idx]);
+        /* Validate under io_lock only — never nest pool->lock here (AB-BA with
+           connect/disconnect holding pool->lock then taking io_lock). */
         int fd = -1;
-        if (idxs[j] < pool->conn_count &&
-            pool->conns[idxs[j]].connected &&
-            pool->conns[idxs[j]].fd >= 0 &&
-            pool->conns[idxs[j]].fd == fds[j]) {
-            fd = fds[j];
+        if (idx < pool->conn_count &&
+            pool->conns[idx].connected &&
+            pool->conns[idx].fd == expect_fd) {
+            fd = expect_fd;
         }
-        cmq_mutex_unlock(&pool->lock);
         if (fd < 0) {
-            cmq_mutex_unlock(&pool->io_locks[idxs[j]]);
+            cmq_mutex_unlock(&pool->io_locks[idx]);
             continue;
         }
         int wr = write_full(fd, data, len);
         if (wr == 0) {
-            cmq_mutex_lock(&pool->lock);
-            if (idxs[j] < pool->conn_count &&
-                pool->conns[idxs[j]].fd == fd &&
-                pool->conns[idxs[j]].connected) {
-                pool->conns[idxs[j]].bytes_sent += (uint64_t)len;
-                pool->conns[idxs[j]].msgs_sent++;
+            if (idx < pool->conn_count && pool->conns[idx].fd == fd) {
+                pool->conns[idx].bytes_sent += (uint64_t)len;
+                pool->conns[idx].msgs_sent++;
             }
-            cmq_mutex_unlock(&pool->lock);
-            cmq_mutex_unlock(&pool->io_locks[idxs[j]]);
+            cmq_mutex_unlock(&pool->io_locks[idx]);
             sent++;
         } else if (wr == 1) {
-            cmq_mutex_unlock(&pool->io_locks[idxs[j]]);
+            cmq_mutex_unlock(&pool->io_locks[idx]);
             deferred++;
         } else {
-            /* Drop under io_lock (align with gateway) so other writers cannot
-               race close/shutdown on this fd. */
-            cmq_mutex_lock(&pool->lock);
-            if (idxs[j] < pool->conn_count && pool->conns[idxs[j]].fd == fd)
-                conn_drop_fd_dead(&pool->conns[idxs[j]]);
-            cmq_mutex_unlock(&pool->lock);
-            cmq_mutex_unlock(&pool->io_locks[idxs[j]]);
+            /* Drop under io_lock so other writers cannot race close/shutdown. */
+            if (idx < pool->conn_count && pool->conns[idx].fd == fd)
+                conn_drop_fd_dead(&pool->conns[idx]);
+            cmq_mutex_unlock(&pool->io_locks[idx]);
         }
     }
     if (out_eagain) *out_eagain = deferred;
@@ -624,13 +617,11 @@ int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd) {
     cmq_mutex_unlock(&pool->lock);
     if (idx < 0) return -1;
     cmq_mutex_lock(&pool->io_locks[idx]);
-    cmq_mutex_lock(&pool->lock);
+    /* Recheck without nesting pool->lock under io_lock. */
     if ((size_t)idx >= pool->conn_count || pool->conns[idx].fd != fd) {
-        cmq_mutex_unlock(&pool->lock);
         cmq_mutex_unlock(&pool->io_locks[idx]);
         return -1;
     }
-    cmq_mutex_unlock(&pool->lock);
     return idx;
 }
 
