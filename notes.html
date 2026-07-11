@@ -1351,6 +1351,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — queue-group subject key · route/RESPONSE honesty</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">qg dedup (subject,qg)</span></td><td>✅</td><td><code>cmq_sub_ref_t</code>/<code>cmq_deliver_tgt_t</code> store subject; snapshot skip only on same subject+queue_group.</td></tr>
+<tr><td><span class="component-name">route forward miss → ERROR</span></td><td>✅</td><td>No local targets + configured routes with sent==0/OOM → <code>route failed</code> (PUBLISH/REQUEST/BATCH).</td></tr>
+<tr><td><span class="component-name">RESPONSE no subscribers</span></td><td>✅</td><td>Client RESPONSE with no local delivery and no successful route → ERROR.</td></tr>
+</table>
+</div>
 
 
 

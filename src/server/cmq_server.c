@@ -784,6 +784,7 @@ static int cmq_send_request_message(cmq_client_t *c, uint32_t sub_id,
 typedef struct {
     cmq_client_t *client;
     uint32_t sub_id;
+    char subject[CMQ_MAX_SUBJECT];
     char queue_group[CMQ_MAX_QUEUE_GROUP];
 } cmq_sub_ref_t;
 
@@ -792,6 +793,7 @@ typedef struct {
     uint32_t client_id;
     int worker_id;
     uint32_t sub_id;
+    char subject[CMQ_MAX_SUBJECT];
     char queue_group[CMQ_MAX_QUEUE_GROUP];
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
 } cmq_deliver_tgt_t;
@@ -820,8 +822,10 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
         if (ref->queue_group[0] != '\0') {
             int skip = 0;
             for (size_t s = 0; s < n; s++) {
+                /* Queue groups are scoped per subscription subject. */
                 if (tgts[s].queue_group[0] != '\0' &&
-                    strcmp(tgts[s].queue_group, ref->queue_group) == 0) {
+                    strcmp(tgts[s].queue_group, ref->queue_group) == 0 &&
+                    strcmp(tgts[s].subject, ref->subject) == 0) {
                     skip = 1;
                     break;
                 }
@@ -832,6 +836,7 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
         tgts[n].client_id = ref->client->id;
         tgts[n].worker_id = ref->client->worker_id;
         tgts[n].sub_id = ref->sub_id;
+        memcpy(tgts[n].subject, ref->subject, CMQ_MAX_SUBJECT);
         memcpy(tgts[n].queue_group, ref->queue_group, CMQ_MAX_QUEUE_GROUP);
         memcpy(tgts[n].account_name, ref->client->account_name,
                CMQ_ACCOUNT_NAME_SIZE);
@@ -1166,10 +1171,13 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
 }
 
 /* Forward a framed op to cluster routes (heap-sized encode).
-   Returns 0 on success (or no routes), -1 on OOM / encode failure.
-   EAGAIN peer skips bump stat_messages_dropped. */
+   Returns 0 on encode+broadcast attempt, -1 on OOM / encode failure.
+   *out_sent (optional) receives peers that accepted the full write.
+   EAGAIN peers bump stat_messages_dropped and do not count as sent. */
 static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
-                                 const uint8_t *payload, size_t payload_len) {
+                                 const uint8_t *payload, size_t payload_len,
+                                 size_t *out_sent) {
+    if (out_sent) *out_sent = 0;
     if (!srv || !srv->routes || !payload) return 0;
     size_t need = sizeof(cmq_frame_hdr_t) + payload_len;
     uint8_t *fwd = malloc(need);
@@ -1186,13 +1194,23 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
         return -1;
     }
     size_t eagain = 0;
-    cmq_route_broadcast(srv->routes, fwd, fwd_len, NULL, &eagain);
+    size_t sent = cmq_route_broadcast(srv->routes, fwd, fwd_len, NULL, &eagain);
     free(fwd);
+    if (out_sent) *out_sent = sent;
     if (eagain > 0) {
         cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, (uint64_t)eagain,
                                   CMQ_ATOMIC_RELAXED);
     }
     return 0;
+}
+
+/* True when cluster peers are configured but none accepted this forward. */
+static int cmq_route_forward_missed(cmq_server_t *srv, int route_rc,
+                                    size_t route_sent) {
+    if (route_rc != 0) return 1;
+    if (!srv || !srv->routes) return 0;
+    if (cmq_route_pool_count(srv->routes) == 0) return 0;
+    return route_sent == 0;
 }
 
 static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
@@ -1277,10 +1295,13 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
     if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
 
+    size_t route_sent = 0;
+    int route_rc = 0;
     /* Route ingress: local deliver only — never re-broadcast (loop/dup). */
     if (!c->is_route)
-        cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
-                              frame->payload, frame->payload_len);
+        route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
+                                         frame->payload, frame->payload_len,
+                                         &route_sent);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1293,6 +1314,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     if (result.count == 0) {
         cmq_sublist_result_free(&result);
         cmq_rwlock_unlock(&srv->sublist_lock);
+        if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent))
+            cmq_send_error(c, "route failed");
         return;
     }
 
@@ -1307,6 +1330,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     }
     if (!tgts || ntgt == 0) {
         free(tgts);
+        if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent))
+            cmq_send_error(c, "route failed");
         return;
     }
 
@@ -1469,6 +1494,8 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     }
     ref->client = c;
     ref->sub_id = sub_id;
+    strncpy(ref->subject, subject, CMQ_MAX_SUBJECT - 1);
+    ref->subject[CMQ_MAX_SUBJECT - 1] = '\0';
     strncpy(ref->queue_group, queue_group, CMQ_MAX_QUEUE_GROUP - 1);
     ref->queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
 
@@ -1620,9 +1647,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
+    size_t route_sent = 0;
+    int route_rc = 0;
     if (!c->is_route)
-        cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
-                              frame->payload, frame->payload_len);
+        route_rc = cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
+                                         frame->payload, frame->payload_len,
+                                         &route_sent);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1654,7 +1684,15 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         }
     } else {
         free(tgts);
-        cmq_send_error(c, "no responders");
+        if (!c->is_route && route_sent > 0) {
+            uint8_t ack[4] = {0};
+            size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
+            if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+        } else if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent)) {
+            cmq_send_error(c, "route failed");
+        } else if (!c->is_route) {
+            cmq_send_error(c, "no responders");
+        }
     }
 }
 
@@ -1705,9 +1743,12 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    size_t route_sent = 0;
+    int route_rc = 0;
     if (!c->is_route)
-        cmq_route_forward_op(srv, CMQ_OP_RESPONSE, frame->hdr.flags,
-                              frame->payload, frame->payload_len);
+        route_rc = cmq_route_forward_op(srv, CMQ_OP_RESPONSE, frame->hdr.flags,
+                                         frame->payload, frame->payload_len,
+                                         &route_sent);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1728,6 +1769,13 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         if (deliver_targets_sync(srv, tgts, ntgt, subject, c->account_name,
                                   msg_payload, msg_len, NULL, 0) != 0)
             cmq_send_error(c, "delivery failed");
+    } else if (!c->is_route) {
+        if (route_sent == 0) {
+            if (cmq_route_forward_missed(srv, route_rc, route_sent))
+                cmq_send_error(c, "route failed");
+            else
+                cmq_send_error(c, "no subscribers");
+        }
     }
     free(tgts);
 }
@@ -1962,8 +2010,13 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 }
                 if (payload_len > 0)
                     memcpy(pub + po, msg_payload, payload_len);
-                cmq_route_forward_op(srv, CMQ_OP_PUBLISH, 0, pub, pub_len);
+                size_t route_sent = 0;
+                int route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, 0,
+                                                     pub, pub_len, &route_sent);
                 free(pub);
+                if ((!prep[msg].tgts || prep[msg].ntgt == 0) &&
+                    cmq_route_forward_missed(srv, route_rc, route_sent))
+                    batch_fail = 1;
             } else {
                 cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
