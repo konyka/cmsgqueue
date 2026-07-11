@@ -1747,6 +1747,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — CONNECT account fail · teardown cap · keepalive OOM</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CONNECT strdup</span></td><td>✅</td><td>username strdup OOM → CONNACK fail (no $default fallthrough).</td></tr>
+<tr><td><span class="component-name">account_create</span></td><td>✅</td><td>Table-full rejects CONNECT before CONNECTED; detaches route.</td></tr>
+<tr><td><span class="component-name">teardown queue</span></td><td>✅</td><td>Dedup + same queue cap as SEND; callers SHUT_RDWR on -1.</td></tr>
+<tr><td><span class="component-name">keepalive OOM</span></td><td>✅</td><td>Heapless scan / SHUT_RDWR fallback when snapshot malloc fails.</td></tr>
+</table>
+</div>
+
 
 
 
