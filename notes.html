@@ -1552,6 +1552,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route fd recheck · inbound attach reject · gateway io_lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route broadcast recheck</span></td><td>✅</td><td>Under io_lock, re-validate slot fd before write — avoids stale-fd write after reconnect.</td></tr>
+<tr><td><span class="component-name">inbound attach reject</span></td><td>✅</td><td>attach_inbound failure → CONNACK 1 + CLOSING (no one-way route peer).</td></tr>
+<tr><td><span class="component-name">gateway io_lock</span></td><td>✅</td><td>Per-slot write lock + fd recheck on forward/broadcast.</td></tr>
+</table>
+</div>
+
 
 
 

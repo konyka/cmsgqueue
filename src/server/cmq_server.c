@@ -2405,7 +2405,13 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             /* Borrow fd into route pool for egress (same nid as outbound rN). */
             char nid[CMQ_NODE_ID_SIZE];
             snprintf(nid, sizeof(nid), "r%d", ri);
-            (void)cmq_route_attach_inbound(srv->routes, nid, c->fd);
+            if (cmq_route_attach_inbound(srv->routes, nid, c->fd) != 0) {
+                /* Pool full — reject rather than accept a one-way route peer. */
+                c->is_route = 0;
+                cmq_send_connack(c, 1);
+                c->state = CMQ_CLIENT_CLOSING;
+                break;
+            }
         }
         c->state = CMQ_CLIENT_CONNECTED;
         c->last_activity_ms = srv_now_ms();

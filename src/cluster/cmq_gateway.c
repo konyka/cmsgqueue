@@ -19,6 +19,7 @@ struct cmq_gateway {
     cmq_gw_cluster_info_t clusters[CMQ_GW_MAX_CLUSTERS];
     size_t cluster_count;
     cmq_mutex_t lock;
+    cmq_mutex_t io_locks[CMQ_GW_MAX_CONNECTIONS]; /* per-slot write serialization */
 };
 
 #define CMQ_GW_WRITE_MS 3000
@@ -57,6 +58,8 @@ cmq_gateway_t *cmq_gateway_create(const char *local_cluster) {
     if (!gw) return NULL;
     strncpy(gw->local_cluster, local_cluster, sizeof(gw->local_cluster) - 1);
     cmq_mutex_init(&gw->lock);
+    for (size_t i = 0; i < CMQ_GW_MAX_CONNECTIONS; i++)
+        cmq_mutex_init(&gw->io_locks[i]);
     return gw;
 }
 
@@ -65,6 +68,8 @@ void cmq_gateway_destroy(cmq_gateway_t *gw) {
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
     }
+    for (size_t i = 0; i < CMQ_GW_MAX_CONNECTIONS; i++)
+        cmq_mutex_destroy(&gw->io_locks[i]);
     cmq_mutex_destroy(&gw->lock);
     free(gw);
 }
@@ -254,14 +259,28 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
     size_t sent = 0;
     size_t deferred = 0;
     for (size_t j = 0; j < n; j++) {
-        int wr = write_full(fds[j], data, len);
+        cmq_mutex_lock(&gw->io_locks[idxs[j]]);
+        cmq_mutex_lock(&gw->lock);
+        int fd = -1;
+        if (idxs[j] < gw->conn_count &&
+            gw->conns[idxs[j]].connected &&
+            gw->conns[idxs[j]].fd == fds[j]) {
+            fd = fds[j];
+        }
+        cmq_mutex_unlock(&gw->lock);
+        if (fd < 0) {
+            cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
+            continue;
+        }
+        int wr = write_full(fd, data, len);
+        cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
         if (wr == 0) {
             sent++;
         } else if (wr == 1) {
             deferred++;
         } else {
             cmq_mutex_lock(&gw->lock);
-            if (idxs[j] < gw->conn_count && gw->conns[idxs[j]].fd == fds[j]) {
+            if (idxs[j] < gw->conn_count && gw->conns[idxs[j]].fd == fd) {
                 if (gw->conns[idxs[j]].fd >= 0) close(gw->conns[idxs[j]].fd);
                 gw->conns[idxs[j]].fd = -1;
                 gw->conns[idxs[j]].connected = 0;
@@ -292,14 +311,28 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
     size_t sent = 0;
     size_t deferred = 0;
     for (size_t j = 0; j < n; j++) {
-        int wr = write_full(fds[j], data, len);
+        cmq_mutex_lock(&gw->io_locks[idxs[j]]);
+        cmq_mutex_lock(&gw->lock);
+        int fd = -1;
+        if (idxs[j] < gw->conn_count &&
+            gw->conns[idxs[j]].connected &&
+            gw->conns[idxs[j]].fd == fds[j]) {
+            fd = fds[j];
+        }
+        cmq_mutex_unlock(&gw->lock);
+        if (fd < 0) {
+            cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
+            continue;
+        }
+        int wr = write_full(fd, data, len);
+        cmq_mutex_unlock(&gw->io_locks[idxs[j]]);
         if (wr == 0) {
             sent++;
         } else if (wr == 1) {
             deferred++;
         } else {
             cmq_mutex_lock(&gw->lock);
-            if (idxs[j] < gw->conn_count && gw->conns[idxs[j]].fd == fds[j]) {
+            if (idxs[j] < gw->conn_count && gw->conns[idxs[j]].fd == fd) {
                 if (gw->conns[idxs[j]].fd >= 0) close(gw->conns[idxs[j]].fd);
                 gw->conns[idxs[j]].fd = -1;
                 gw->conns[idxs[j]].connected = 0;
