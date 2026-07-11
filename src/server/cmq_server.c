@@ -259,13 +259,21 @@ static int peer_route_index(cmq_server_t *srv, int fd) {
 }
 
 static ssize_t client_sock_read(cmq_client_t *c, uint8_t *buf, size_t len) {
-    if (c->tls) return cmq_tls_read(c->tls, buf, len);
-    return read(c->fd, buf, len);
+    for (;;) {
+        ssize_t n = c->tls ? cmq_tls_read(c->tls, buf, len)
+                           : read(c->fd, buf, len);
+        if (n < 0 && errno == EINTR) continue;
+        return n;
+    }
 }
 
 static ssize_t client_sock_write(cmq_client_t *c, const uint8_t *buf, size_t len) {
-    if (c->tls) return cmq_tls_write(c->tls, buf, len);
-    return write(c->fd, buf, len);
+    for (;;) {
+        ssize_t n = c->tls ? cmq_tls_write(c->tls, buf, len)
+                           : write(c->fd, buf, len);
+        if (n < 0 && errno == EINTR) continue;
+        return n;
+    }
 }
 
 #define CMQ_WORKER_WAKE_BATCH 64
@@ -2317,18 +2325,13 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             }
         }
 
-        if (batch_fail) {
-            for (uint16_t k = 0; k < count; k++) {
-                free(prep[k].tgts);
-                prep[k].tgts = NULL;
-            }
-            free(prep);
-            cmq_send_error(c, "batch delivery failed");
-            return;
-        }
+        if (batch_fail)
+            break; /* stop further cluster forwards; still run local pass 2c */
     }
 
-    /* Pass 2c: local deliver only after cluster forwards for remote-only OK. */
+    /* Pass 2c: always attempt local delivers — even after a remote-only cluster
+       failure — so subscribers are not starved when earlier entries already
+       reached the cluster (align with single-PUBLISH local-after-route). */
     for (uint16_t msg = 0; msg < count; msg++) {
         const uint8_t *msg_payload = prep[msg].msg_payload;
         uint32_t payload_len = prep[msg].payload_len;
@@ -2338,26 +2341,27 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                                       msg_payload, payload_len,
                                       NULL, 0) != 0)
                 batch_fail = 1;
-        }
-        free(prep[msg].tgts);
-        prep[msg].tgts = NULL;
-        if (batch_fail) {
-            for (uint16_t k = (uint16_t)(msg + 1); k < count; k++) {
-                free(prep[k].tgts);
-                prep[k].tgts = NULL;
+            else {
+                cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_account_t *acc =
+                    cmq_account_get(srv->accounts, c->account_name);
+                if (acc)
+                    cmq_account_inc_msgs_in(acc, (uint64_t)payload_len);
             }
-            free(prep);
-            cmq_send_error(c, "batch delivery failed");
-            return;
-        }
-        cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
-        {
+        } else if (!batch_fail) {
+            /* Remote-only success path: count ingress when cluster pass OK. */
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
             cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
             if (acc)
                 cmq_account_inc_msgs_in(acc, (uint64_t)payload_len);
         }
+        free(prep[msg].tgts);
+        prep[msg].tgts = NULL;
     }
     free(prep);
+    if (batch_fail)
+        cmq_send_error(c, "batch delivery failed");
 }
 
 static void handle_frame(cmq_server_t *srv, cmq_client_t *c,

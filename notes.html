@@ -1644,6 +1644,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — EINTR soft · BATCH local after cluster fail</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">EINTR</span></td><td>✅</td><td>client_sock_read/write retry on EINTR (no false teardown).</td></tr>
+<tr><td><span class="component-name">BATCH 2b/2c</span></td><td>✅</td><td>Cluster fail stops further forwards but still runs local delivers; 2c attempts all locals then ERROR.</td></tr>
+</table>
+</div>
+
 
 
 
