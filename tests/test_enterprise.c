@@ -85,6 +85,12 @@ TEST(account, exports_imports) {
     ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.>"), 0);
     ASSERT_EQ(cmq_account_export_count(mgr, "acme"), (size_t)0);
 
+    /* Token wildcard * */
+    ASSERT_EQ(cmq_account_add_export(mgr, "acme", "acme.*.events", "globex"), 0);
+    ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.prod.events"), 1);
+    ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.prod.other"), 0);
+    ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.*.events"), 0);
+
     ASSERT_EQ(cmq_account_remove_import(mgr, "globex", "acme.>"), 0);
     ASSERT_EQ(cmq_account_import_count(mgr, "globex"), (size_t)0);
 

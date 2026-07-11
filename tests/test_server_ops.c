@@ -1370,4 +1370,88 @@ TEST(server_ops, ws_origin_mismatch_rejected) {
     cmq_server_destroy(srv);
 }
 
+/* sub_id 0 must SUBACK-fail (require_sub_id treats 0 as "no check"). */
+TEST(server_ops, subscribe_sub_id_zero_rejected) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 23;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(80);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    const char *subject = "zero.sub";
+    uint16_t slen = (uint16_t)strlen(subject);
+    uint8_t buf[64];
+    memset(buf, 0, 4); /* sub_id = 0 */
+    buf[4] = (slen >> 8) & 0xFF;
+    buf[5] = slen & 0xFF;
+    memcpy(buf + 6, subject, slen);
+    send_frame(fd, CMQ_OP_SUBSCRIBE, buf, 6 + slen);
+    wait_ms(50);
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_SUBACK);
+    ASSERT(f.payload_len >= 1);
+    ASSERT(f.payload[0] != 0); /* failure code */
+    free_frame(&f);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+/* REQUEST with no subscribers must ERROR, not PUBACK. */
+TEST(server_ops, request_no_responders) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 24;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(80);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    const char *subj = "nobody.home";
+    const char *reply = "_INBOX.x";
+    uint16_t slen = (uint16_t)strlen(subj);
+    uint16_t rlen = (uint16_t)strlen(reply);
+    uint8_t buf[128];
+    size_t off = 0;
+    buf[off++] = (slen >> 8) & 0xFF;
+    buf[off++] = slen & 0xFF;
+    memcpy(buf + off, subj, slen); off += slen;
+    buf[off++] = (rlen >> 8) & 0xFF;
+    buf[off++] = rlen & 0xFF;
+    memcpy(buf + off, reply, rlen); off += rlen;
+    buf[off++] = 'q';
+    send_frame(fd, CMQ_OP_REQUEST, buf, off);
+    wait_ms(80);
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_ERROR);
+    free_frame(&f);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

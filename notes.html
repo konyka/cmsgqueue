@@ -1260,6 +1260,19 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — ACL · store OOM · INFO after CONNECT · sub_id 0 · no responders</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">account ACL enforce</span></td><td>✅</td><td>PUBLISH/REQUEST/BATCH/SUBSCRIBE check export/import; empty ACL = allow; <code>*</code> token match supported.</td></tr>
+<tr><td><span class="component-name">store put OOM-safe</span></td><td>✅</td><td>Allocate new buffer before freeing the ring slot — no NULL+valid crash.</td></tr>
+<tr><td><span class="component-name">INFO after CONNECT</span></td><td>✅</td><td>INFO only sent after successful CONNECT (not on INIT first-read).</td></tr>
+<tr><td><span class="component-name">sub_id zero rejected</span></td><td>✅</td><td>SUBSCRIBE with sub_id=0 gets SUBACK failure.</td></tr>
+<tr><td><span class="component-name">REQUEST no responders</span></td><td>✅</td><td>ERROR instead of PUBACK when no matching subscribers.</td></tr>
+</table>
+</div>
+
+
 
 
 

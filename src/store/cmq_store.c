@@ -55,14 +55,14 @@ uint64_t cmq_store_put(cmq_store_t *store, const uint8_t *data, size_t len) {
     cmq_mutex_lock(&store->lock);
 
     size_t idx = (size_t)(store->head_seq - 1) % store->cap;
-    free(store->ring[idx].data);
-
-    store->ring[idx].data = malloc(len);
-    if (!store->ring[idx].data) {
+    uint8_t *nd = malloc(len);
+    if (!nd) {
         cmq_mutex_unlock(&store->lock);
         return 0;
     }
-    memcpy(store->ring[idx].data, data, len);
+    memcpy(nd, data, len);
+    free(store->ring[idx].data);
+    store->ring[idx].data = nd;
     store->ring[idx].seq = store->head_seq;
     store->ring[idx].len = len;
     store->ring[idx].timestamp_ms = now_ms();

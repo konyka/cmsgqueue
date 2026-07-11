@@ -257,15 +257,22 @@ size_t cmq_account_import_count(cmq_account_manager_t *mgr, const char *account)
 static int subject_match(const char *pattern, const char *subject) {
     if (strcmp(pattern, ">") == 0) return 1;
     if (strcmp(pattern, subject) == 0) return 1;
-    size_t plen = strlen(pattern);
-    if (plen > 1 && pattern[plen - 1] == '>') {
-        size_t prefix_len = plen - 1;
-        if (prefix_len > 0 && pattern[prefix_len - 1] == '.')
-            prefix_len--;
-        return strncmp(pattern, subject, prefix_len) == 0 &&
-               (subject[prefix_len] == '.' || subject[prefix_len] == '\0');
+    /* Token-wise: '*' matches one token; '>' matches rest (NATS-like). */
+    const char *p = pattern, *s = subject;
+    while (*p && *s) {
+        if (*p == '>') return 1;
+        const char *pe = p, *se = s;
+        while (*pe && *pe != '.') pe++;
+        while (*se && *se != '.') se++;
+        size_t plen = (size_t)(pe - p), slen = (size_t)(se - s);
+        int is_star = (plen == 1 && p[0] == '*');
+        if (!is_star && (plen != slen || memcmp(p, s, plen) != 0))
+            return 0;
+        p = *pe ? pe + 1 : pe;
+        s = *se ? se + 1 : se;
     }
-    return 0;
+    if (*p == '>') return 1;
+    return *p == '\0' && *s == '\0';
 }
 
 int cmq_account_can_import(cmq_account_manager_t *mgr, const char *account,
@@ -275,8 +282,10 @@ int cmq_account_can_import(cmq_account_manager_t *mgr, const char *account,
     ensure_perms_init();
     cmq_mutex_lock(&g_perms_lock);
     cmq_account_perms_t *p = find_perms(account);
-    int ok = 0;
-    if (p) {
+    /* No ACL entry or empty import list → allow (open default). */
+    int ok = 1;
+    if (p && p->import_count > 0) {
+        ok = 0;
         for (size_t i = 0; i < p->import_count; i++) {
             if (subject_match(p->imports[i].subject, subject)) {
                 ok = 1;
@@ -295,8 +304,9 @@ int cmq_account_can_export(cmq_account_manager_t *mgr, const char *account,
     ensure_perms_init();
     cmq_mutex_lock(&g_perms_lock);
     cmq_account_perms_t *p = find_perms(account);
-    int ok = 0;
-    if (p) {
+    int ok = 1;
+    if (p && p->export_count > 0) {
+        ok = 0;
         for (size_t i = 0; i < p->export_count; i++) {
             if (subject_match(p->exports[i].subject, subject)) {
                 ok = 1;

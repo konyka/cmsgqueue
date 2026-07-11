@@ -66,6 +66,7 @@ static void cmq_client_destroy(cmq_client_t *c);
 static void client_teardown(cmq_client_t *c);
 static void client_finish_closing(cmq_client_t *c);
 static int client_has_sub(const cmq_client_t *c, uint32_t sub_id);
+static void send_info_frame(cmq_server_t *srv, cmq_client_t *c);
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len);
 static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t len);
 static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len);
@@ -1194,6 +1195,13 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    if (!cmq_account_can_export(srv->accounts, c->account_name, subject)) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "permission denied");
+        return;
+    }
+
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
@@ -1278,6 +1286,10 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                       ((uint32_t)frame->payload[1] << 16) |
                       ((uint32_t)frame->payload[2] << 8) |
                       (uint32_t)frame->payload[3];
+    if (sub_id == 0) {
+        cmq_send_suback(c, 0, 1);
+        return;
+    }
     uint16_t subject_len = ((uint16_t)frame->payload[4] << 8) |
                             frame->payload[5];
     if ((size_t)(6 + subject_len) > frame->payload_len ||
@@ -1289,6 +1301,12 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     memcpy(subject, frame->payload + 6, subject_len);
     subject[subject_len] = '\0';
     if (cmq_sublist_subject_valid(subject) != 0) {
+        cmq_send_suback(c, sub_id, 1);
+        return;
+    }
+    if (!cmq_account_can_import(srv->accounts, c->account_name, subject)) {
+        cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -1503,6 +1521,13 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    if (!cmq_account_can_export(srv->accounts, c->account_name, subject)) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "permission denied");
+        return;
+    }
+
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
     cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
@@ -1524,14 +1549,17 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "delivery failed");
         return;
     }
-    if (tgts && ntgt > 0)
+    if (tgts && ntgt > 0) {
         deliver_request_targets(srv, tgts, ntgt, subject, reply_to,
                                  msg_payload, msg_len);
-    free(tgts);
-
-    uint8_t ack[4] = {0};
-    size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
-    if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+        free(tgts);
+        uint8_t ack[4] = {0};
+        size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
+        if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+    } else {
+        free(tgts);
+        cmq_send_error(c, "no responders");
+    }
 }
 
 static void handle_response(cmq_server_t *srv, cmq_client_t *c,
@@ -1684,6 +1712,12 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             subj[subject_len] = '\0';
             if (cmq_sublist_publish_subject_valid(subj) != 0) {
                 cmq_send_error(c, "invalid subject");
+                return;
+            }
+            if (!cmq_account_can_export(srv->accounts, c->account_name, subj)) {
+                cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_send_error(c, "permission denied");
                 return;
             }
         }
@@ -1904,6 +1938,9 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         c->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
         cmq_account_t *acc = cmq_account_get(srv->accounts, "$default");
         cmq_account_inc_connections(acc);
+        /* INFO only after successful CONNECT (never on INIT). */
+        if (!c->is_websocket)
+            send_info_frame(srv, c);
         cmq_send_connack(c, 0);
         break;
     case CMQ_OP_PING:
@@ -2192,10 +2229,6 @@ static void client_read_cb(int fd, int events, void *data) {
                 c->ws_recv_len = 0;
             }
         }
-    }
-
-    if (!c->info_sent && !c->is_websocket) {
-        send_info_frame(srv, c);
     }
 
     if (c->is_websocket && c->ws_upgrade_done) {
