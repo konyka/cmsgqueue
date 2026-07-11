@@ -237,17 +237,19 @@ int cmq_account_remove_export(cmq_account_manager_t *mgr, const char *account,
     cmq_mutex_lock(&g_perms_lock);
     cmq_account_perms_t *p = find_perms(account);
     if (!p) { cmq_mutex_unlock(&g_perms_lock); return -1; }
-    for (size_t i = 0; i < p->export_count; i++) {
+    int removed = 0;
+    for (size_t i = 0; i < p->export_count; ) {
         if (strcmp(p->exports[i].subject, subject) == 0) {
             memmove(&p->exports[i], &p->exports[i + 1],
                     (p->export_count - i - 1) * sizeof(cmq_account_export_t));
             p->export_count--;
-            cmq_mutex_unlock(&g_perms_lock);
-            return 0;
+            removed = 1;
+        } else {
+            i++;
         }
     }
     cmq_mutex_unlock(&g_perms_lock);
-    return -1;
+    return removed ? 0 : -1;
 }
 
 size_t cmq_account_export_count(cmq_account_manager_t *mgr, const char *account) {
@@ -296,17 +298,19 @@ int cmq_account_remove_import(cmq_account_manager_t *mgr, const char *account,
     cmq_mutex_lock(&g_perms_lock);
     cmq_account_perms_t *p = find_perms(account);
     if (!p) { cmq_mutex_unlock(&g_perms_lock); return -1; }
-    for (size_t i = 0; i < p->import_count; i++) {
+    int removed = 0;
+    for (size_t i = 0; i < p->import_count; ) {
         if (strcmp(p->imports[i].subject, subject) == 0) {
             memmove(&p->imports[i], &p->imports[i + 1],
                     (p->import_count - i - 1) * sizeof(cmq_account_import_t));
             p->import_count--;
-            cmq_mutex_unlock(&g_perms_lock);
-            return 0;
+            removed = 1;
+        } else {
+            i++;
         }
     }
     cmq_mutex_unlock(&g_perms_lock);
-    return -1;
+    return removed ? 0 : -1;
 }
 
 size_t cmq_account_import_count(cmq_account_manager_t *mgr, const char *account) {
@@ -341,14 +345,18 @@ static int subject_match(const char *pattern, const char *subject) {
     return *p == '\0' && *s == '\0';
 }
 
+static int acct_eq_or_star(const char *rule, const char *actual) {
+    return strcmp(rule, "*") == 0 || strcmp(rule, actual) == 0;
+}
+
 int cmq_account_can_import(cmq_account_manager_t *mgr, const char *account,
                             const char *subject) {
-    (void)mgr;
     if (!account || !subject) return 0;
+    /* Soft-deleted / unknown accounts cannot subscribe. */
+    if (mgr && !cmq_account_get(mgr, account)) return 0;
     ensure_perms_init();
     cmq_mutex_lock(&g_perms_lock);
     cmq_account_perms_t *p = find_perms(account);
-    /* No ACL entry or empty import list → allow (open default). */
     int ok = 1;
     if (p && p->import_count > 0) {
         ok = 0;
@@ -358,15 +366,29 @@ int cmq_account_can_import(cmq_account_manager_t *mgr, const char *account,
                 break;
             }
         }
+    } else {
+        /* No imports: allow unless another account exports this subject to us
+           (would be undeliverable without a matching import — ghost sub). */
+        for (size_t i = 0; i < g_perms_count; i++) {
+            if (strcmp(g_perms[i].account, account) == 0) continue;
+            for (size_t j = 0; j < g_perms[i].export_count; j++) {
+                if (subject_match(g_perms[i].exports[j].subject, subject) &&
+                    acct_eq_or_star(g_perms[i].exports[j].dest_account, account)) {
+                    ok = 0;
+                    goto out;
+                }
+            }
+        }
     }
+out:
     cmq_mutex_unlock(&g_perms_lock);
     return ok;
 }
 
 int cmq_account_can_export(cmq_account_manager_t *mgr, const char *account,
                             const char *subject) {
-    (void)mgr;
     if (!account || !subject) return 0;
+    if (mgr && !cmq_account_get(mgr, account)) return 0;
     ensure_perms_init();
     cmq_mutex_lock(&g_perms_lock);
     cmq_account_perms_t *p = find_perms(account);
@@ -384,14 +406,14 @@ int cmq_account_can_export(cmq_account_manager_t *mgr, const char *account,
     return ok;
 }
 
-static int acct_eq_or_star(const char *rule, const char *actual) {
-    return strcmp(rule, "*") == 0 || strcmp(rule, actual) == 0;
-}
-
 int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
                              const char *sub_account, const char *subject) {
-    (void)mgr;
     if (!pub_account || !sub_account || !subject) return 0;
+    if (mgr) {
+        if (!cmq_account_get(mgr, pub_account) ||
+            !cmq_account_get(mgr, sub_account))
+            return 0;
+    }
     if (strcmp(pub_account, sub_account) == 0) return 1;
 
     ensure_perms_init();

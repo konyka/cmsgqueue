@@ -1898,6 +1898,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — deleted account deny · password-only multi-tenant · ACL remove all</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">inactive account</span></td><td>✅</td><td><code>can_*</code>/<code>may_deliver</code> require active account (no open ACL after delete).</td></tr>
+<tr><td><span class="component-name">password-only CONNECT</span></td><td>✅</td><td>Without auth_username, CONNECT username selects account.</td></tr>
+<tr><td><span class="component-name">remove_export/import</span></td><td>✅</td><td>Delete all rules for a subject (multi-dest).</td></tr>
+<tr><td><span class="component-name">ghost subscribe</span></td><td>✅</td><td><code>can_import</code> denies when peer export exists but no import.</td></tr>
+</table>
+</div>
+
 
 
 

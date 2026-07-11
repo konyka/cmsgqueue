@@ -2592,9 +2592,21 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 strncpy(expect_u, srv->config.auth_username, sizeof(expect_u) - 1);
             if (srv->config.auth_password && srv->config.auth_password[0])
                 strncpy(expect_p, srv->config.auth_password, sizeof(expect_p) - 1);
-            /* Always compare both fields (no short-circuit) in constant time. */
-            int bad = !ct_memeq(uname, expect_u, sizeof(uname)) |
-                      !ct_memeq(passwd, expect_p, sizeof(passwd));
+            /* Password-only auth: any CONNECT username selects the account.
+               Username+password: both must match (shared single-tenant creds). */
+            int need_user = (srv->config.auth_username &&
+                             srv->config.auth_username[0]);
+            int need_pass = (srv->config.auth_password &&
+                             srv->config.auth_password[0]);
+            int bad = 0;
+            if (need_user)
+                bad |= !ct_memeq(uname, expect_u, sizeof(uname));
+            else
+                bad |= !ct_memeq(uname, uname, sizeof(uname)); /* timing pad */
+            if (need_pass)
+                bad |= !ct_memeq(passwd, expect_p, sizeof(passwd));
+            else
+                bad |= !ct_memeq(passwd, passwd, sizeof(passwd));
             if (bad) {
                 cmq_send_connack(c, 2);
                 c->state = CMQ_CLIENT_CLOSING;

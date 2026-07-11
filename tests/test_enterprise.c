@@ -94,6 +94,18 @@ TEST(account, exports_imports) {
     ASSERT_EQ(cmq_account_remove_import(mgr, "globex", "acme.>"), 0);
     ASSERT_EQ(cmq_account_import_count(mgr, "globex"), (size_t)0);
 
+    /* Export without import → can_import denies (no ghost subscribe). */
+    ASSERT_EQ(cmq_account_add_export(mgr, "acme", "acme.>", "globex"), 0);
+    ASSERT_EQ(cmq_account_can_import(mgr, "globex", "acme.data"), 0);
+    ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.>"), 0);
+
+    /* remove_export deletes all dests for the same subject. */
+    ASSERT_EQ(cmq_account_add_export(mgr, "acme", "shared.>", "globex"), 0);
+    ASSERT_EQ(cmq_account_add_export(mgr, "acme", "shared.>", "other"), 0);
+    ASSERT_EQ(cmq_account_export_count(mgr, "acme"), (size_t)2);
+    ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "shared.>"), 0);
+    ASSERT_EQ(cmq_account_export_count(mgr, "acme"), (size_t)0);
+
     cmq_account_manager_destroy(mgr);
 }
 
@@ -115,6 +127,11 @@ TEST(account, may_deliver_cross_account) {
     /* Export without matching import must deny (not open-default). */
     cmq_account_remove_import(mgr, "globex", "acme.>");
     ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "globex", "acme.data"), 0);
+
+    /* Soft-deleted accounts cannot deliver or ACL-check. */
+    ASSERT_EQ(cmq_account_delete(mgr, "acme"), 0);
+    ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "globex", "acme.data"), 0);
+    ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.data"), 0);
 
     cmq_account_manager_destroy(mgr);
 }
