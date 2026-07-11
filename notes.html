@@ -1429,6 +1429,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — inbound route pool attach</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">fd_owned</span></td><td>✅</td><td>Pool closes only owned fds; inbound borrows client fd.</td></tr>
+<tr><td><span class="component-name">attach_inbound</span></td><td>✅</td><td>CONNECT+ROUTE registers peer into route pool as <code>rN</code>; keeps live egress if present.</td></tr>
+<tr><td><span class="component-name">detach on teardown</span></td><td>✅</td><td><code>client_teardown</code> detaches before close — avoids double-close / dangling pool fd.</td></tr>
+<tr><td><span class="component-name">tests</span></td><td>✅</td><td><code>route.attach_inbound_borrow</code>.</td></tr>
+</table>
+</div>
+
 
 
 

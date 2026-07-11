@@ -11,6 +11,7 @@ typedef struct {
     char remote_id[CMQ_NODE_ID_SIZE];
     int fd;
     int connected;
+    int fd_owned;                   /* 1 = pool closes fd; 0 = inbound borrow */
     uint64_t msgs_sent;
     uint64_t msgs_recv;
     uint64_t bytes_sent;
@@ -31,6 +32,11 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
 /* fd < 0: placeholder slot (connected=1, no I/O). fd >= 0: handshake then nonblock. */
 int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                         const char *auth_user, const char *auth_pass);
+/* Register an already-handshaken inbound route fd (pool does not own/close it).
+   If a live egress already exists for node_id, leaves it unchanged (returns 0). */
+int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd);
+/* Drop pool reference to fd without closing (client still owns the socket). */
+void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd);
 int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id);
 
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject,

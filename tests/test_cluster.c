@@ -133,6 +133,42 @@ TEST(route, add_conn_pool_full_closes_fd) {
     cmq_cluster_destroy(c);
 }
 
+/* Inbound route fd is borrowed: destroy/detach must not close it. */
+TEST(route, attach_inbound_borrow) {
+    cmq_cluster_t *c = cmq_cluster_create("c1", "n1");
+    cmq_route_pool_t *rp = cmq_route_pool_create(c);
+    int a[2], b[2];
+    ASSERT_EQ(pipe(a), 0);
+    ASSERT_EQ(pipe(b), 0);
+
+    ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", a[1]), 0);
+    ASSERT_EQ(cmq_route_live_count(rp), (size_t)1);
+    cmq_route_conn_t *conn = cmq_route_get_conn(rp, "r0");
+    ASSERT_NOT_NULL(conn);
+    ASSERT_EQ(conn->fd, a[1]);
+    ASSERT_EQ(conn->fd_owned, 0);
+
+    /* Prefer existing live peer — do not replace with another inbound fd. */
+    ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", b[1]), 0);
+    conn = cmq_route_get_conn(rp, "r0");
+    ASSERT_NOT_NULL(conn);
+    ASSERT_EQ(conn->fd, a[1]);
+
+    cmq_route_detach_fd(rp, a[1]);
+    ASSERT_EQ(cmq_route_live_count(rp), (size_t)0);
+
+    /* Re-attach after detach, then destroy must not close borrowed fd. */
+    ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", a[1]), 0);
+    cmq_route_pool_destroy(rp);
+    errno = 0;
+    ASSERT_EQ(write(a[1], "x", 1), 1);
+    close(a[0]);
+    close(a[1]);
+    close(b[0]);
+    close(b[1]);
+    cmq_cluster_destroy(c);
+}
+
 TEST(gateway, create_destroy) {
     cmq_gateway_t *gw = cmq_gateway_create("local-cluster");
     ASSERT_NOT_NULL(gw);

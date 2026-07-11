@@ -240,22 +240,22 @@ static int ct_memeq(const void *a, const void *b, size_t n) {
     return diff == 0;
 }
 
-/* True if peer IP matches a configured outbound route address (ingress ACL).
+/* Match peer IP to configured routes[]. Returns route index or -1.
    Source TCP port is ephemeral on inbound peers — do not compare to routes[].port. */
-static int peer_matches_configured_route(cmq_server_t *srv, int fd) {
-    if (!srv || fd < 0 || srv->config.route_count <= 0) return 0;
+static int peer_route_index(cmq_server_t *srv, int fd) {
+    if (!srv || fd < 0 || srv->config.route_count <= 0) return -1;
     struct sockaddr_in peer;
     socklen_t plen = sizeof(peer);
-    if (getpeername(fd, (struct sockaddr *)&peer, &plen) != 0) return 0;
+    if (getpeername(fd, (struct sockaddr *)&peer, &plen) != 0) return -1;
     for (int i = 0; i < srv->config.route_count; i++) {
         if (!srv->config.routes[i].addr) continue;
         struct in_addr expect;
         if (inet_pton(AF_INET, srv->config.routes[i].addr, &expect) != 1)
             continue;
         if (expect.s_addr == peer.sin_addr.s_addr)
-            return 1;
+            return i;
     }
-    return 0;
+    return -1;
 }
 
 static ssize_t client_sock_read(cmq_client_t *c, uint8_t *buf, size_t len) {
@@ -586,6 +586,9 @@ static void client_teardown(cmq_client_t *c) {
     cmq_server_t *srv = c->server;
     int was_connected = (c->state == CMQ_CLIENT_CONNECTED);
     c->state = CMQ_CLIENT_CLOSED;
+
+    if (c->is_route && srv && srv->routes && c->fd >= 0)
+        cmq_route_detach_fd(srv->routes, c->fd);
 
     if (c->ev_loop && c->fd >= 0) {
         cmq_ev_del(c->ev_loop, c->fd);
@@ -2311,12 +2314,17 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         /* CMQ_FLAG_ROUTE only trusted for peers whose IP is in routes[].
            Inbound source ports are ephemeral — IP ACL + optional shared auth. */
         if (frame->hdr.flags & CMQ_FLAG_ROUTE) {
-            if (!srv->routes || !peer_matches_configured_route(srv, c->fd)) {
+            int ri = peer_route_index(srv, c->fd);
+            if (!srv->routes || ri < 0) {
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
                 break;
             }
             c->is_route = 1;
+            /* Borrow fd into route pool for egress (same nid as outbound rN). */
+            char nid[CMQ_NODE_ID_SIZE];
+            snprintf(nid, sizeof(nid), "r%d", ri);
+            (void)cmq_route_attach_inbound(srv->routes, nid, c->fd);
         }
         c->state = CMQ_CLIENT_CONNECTED;
         c->last_activity_ms = srv_now_ms();
