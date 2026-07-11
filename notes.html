@@ -1212,6 +1212,19 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — TLS I/O · drain flush · leaf fd · sub check · ct auth</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">TLS sock I/O</span></td><td>✅</td><td>Client read/write go through <code>cmq_tls_read/write</code> when a TLS session is attached.</td></tr>
+<tr><td><span class="component-name">drain flush-then-teardown</span></td><td>✅</td><td>Worker TEARDOWN sets CLOSING and <code>client_finish_closing</code> so DISCONNECT can flush before close.</td></tr>
+<tr><td><span class="component-name">leaf accept pool full</span></td><td>✅</td><td>Closes caller-owned fd on reject (same as route add_conn).</td></tr>
+<tr><td><span class="component-name">delivery sub_id check</span></td><td>✅</td><td>Worker msgs carry <code>require_sub_id</code>; skip ghost delivery after UNSUBSCRIBE.</td></tr>
+<tr><td><span class="component-name">constant-time auth</span></td><td>✅</td><td>CONNECT username/password compared with XOR-accumulate over fixed 256-byte buffers.</td></tr>
+</table>
+</div>
+
+
 
 
 

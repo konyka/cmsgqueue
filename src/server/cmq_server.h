@@ -102,6 +102,7 @@ typedef struct cmq_client {
 typedef struct cmq_worker_msg {
     uint32_t target_id;             /* stable client id (not fd — avoids reuse) */
     int kind;                       /* 0=send data, 1=teardown client */
+    uint32_t require_sub_id;        /* 0 = no check; else skip if sub gone */
     uint8_t *buf;
     size_t len;
     struct cmq_worker_msg *next;

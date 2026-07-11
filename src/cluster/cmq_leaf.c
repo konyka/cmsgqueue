@@ -173,6 +173,7 @@ int cmq_leaf_accept(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
     cmq_mutex_lock(&leaf->lock);
     if (leaf->leaf_count >= CMQ_LEAF_MAX_CONNECTIONS) {
         cmq_mutex_unlock(&leaf->lock);
+        close(fd);
         return -1;
     }
     cmq_leaf_conn_t *c = &leaf->leaves[leaf->leaf_count++];

@@ -193,4 +193,25 @@ TEST(leaf, accept_remove) {
     cmq_leaf_destroy(l);
 }
 
+/* Pool-full accept must close the caller-owned fd. */
+TEST(leaf, accept_pool_full_closes_fd) {
+    cmq_leaf_node_t *l = cmq_leaf_create("10.0.0.1", 7654);
+    for (int i = 0; i < 64; i++) {
+        int p[2];
+        ASSERT_EQ(pipe(p), 0);
+        close(p[0]);
+        char id[16];
+        snprintf(id, sizeof(id), "L%d", i);
+        ASSERT_EQ(cmq_leaf_accept(l, p[1], id), 0);
+    }
+    int overflow[2];
+    ASSERT_EQ(pipe(overflow), 0);
+    ASSERT_EQ(cmq_leaf_accept(l, overflow[1], "overflow"), -1);
+    errno = 0;
+    ASSERT(write(overflow[1], "x", 1) < 0);
+    ASSERT_EQ(errno, EBADF);
+    close(overflow[0]);
+    cmq_leaf_destroy(l);
+}
+
 TEST_MAIN()
