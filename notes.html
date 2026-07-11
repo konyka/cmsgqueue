@@ -1129,6 +1129,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — Cluster route forward sizing</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route PUBLISH encode</span></td><td>✅</td><td>Heap-allocate forward buffer to <code>hdr + payload</code> (was stack 8 KiB). Preserves <code>frame-&gt;hdr.flags</code> (HEADERS etc.). OOM skips route fan-out only.</td></tr>
+</table>
+</div>
+
 </div>
 </body>
 </html>
