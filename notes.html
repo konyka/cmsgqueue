@@ -1942,6 +1942,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — ACL name bounds · MQTT connect timeout · filestore prefix</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">ACL names</span></td><td>✅</td><td>Reject overlong/inactive account names (no truncate into peer ACL).</td></tr>
+<tr><td><span class="component-name">MQTT bridge</span></td><td>✅</td><td><code>cmq_connect_timeout</code> + nonblock write/poll deadline.</td></tr>
+<tr><td><span class="component-name">filestore prefix</span></td><td>✅</td><td>Single path component only; reject <code>..</code>/<code>/</code>.</td></tr>
+</table>
+</div>
+
+
 
 
 

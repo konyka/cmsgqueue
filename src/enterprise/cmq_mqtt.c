@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_mqtt.h"
+#include "cmq_route.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -8,8 +9,11 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <poll.h>
+#include <fcntl.h>
 
 #define CMQ_MQTT_MAX_MAPPINGS 64
+#define CMQ_MQTT_CONNECT_MS   2000
+#define CMQ_MQTT_IO_MS        2000
 
 #define CMQ_MQTT_CONNECT    0x10
 #define CMQ_MQTT_CONNACK    0x20
@@ -48,16 +52,35 @@ void cmq_mqtt_bridge_destroy(cmq_mqtt_bridge_t *br) {
     free(br);
 }
 
+static void mqtt_set_nonblock(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
 static int mqtt_write_all(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
+    int waited = 0;
     while (off < len) {
         ssize_t n = write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+                for (;;) {
+                    int pr = poll(&pfd, 1, 100);
+                    if (pr > 0) break;
+                    if (pr < 0 && errno == EINTR) continue;
+                    waited += 100;
+                    if (pr == 0 && waited < CMQ_MQTT_IO_MS) continue;
+                    return -1;
+                }
+                continue;
+            }
             return -1;
         }
         if (n == 0) return -1;
         off += (size_t)n;
+        waited = 0;
     }
     return 0;
 }
@@ -104,10 +127,12 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
         return -1;
     }
 
-    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+    if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
+                             CMQ_MQTT_CONNECT_MS) != 0) {
         close(fd);
         return -1;
     }
+    mqtt_set_nonblock(fd);
 
     uint8_t cbuf[256];
     int keepalive_s = br->keepalive_ms > 0 ? br->keepalive_ms / 1000 : 60;

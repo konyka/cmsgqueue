@@ -187,8 +187,9 @@ static cmq_account_perms_t *find_or_create_perms(cmq_account_manager_t *mgr,
     if (mgr->perms_count >= CMQ_ACCOUNT_MAX) return NULL;
     p = &mgr->perms[mgr->perms_count++];
     memset(p, 0, sizeof(*p));
-    strncpy(p->account, account, CMQ_ACCOUNT_NAME_SIZE - 1);
-    p->account[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+    size_t n = strlen(account); /* caller validated length */
+    memcpy(p->account, account, n);
+    p->account[n] = '\0';
     return p;
 }
 
@@ -201,10 +202,34 @@ static int account_is_active(cmq_account_manager_t *mgr, const char *name) {
     return 0;
 }
 
+static int account_name_ok(const char *name) {
+    if (!name) return 0;
+    size_t n = strnlen(name, CMQ_ACCOUNT_NAME_SIZE);
+    return n > 0 && n < CMQ_ACCOUNT_NAME_SIZE;
+}
+
+static int acl_subject_ok(const char *subject) {
+    if (!subject) return 0;
+    size_t n = strnlen(subject, 256);
+    return n > 0 && n < 256;
+}
+
+static int peer_account_ok(cmq_account_manager_t *mgr, const char *name) {
+    if (strcmp(name, "*") == 0) return 1;
+    return account_is_active(mgr, name);
+}
+
 int cmq_account_add_export(cmq_account_manager_t *mgr, const char *account,
                             const char *subject, const char *dest_account) {
-    if (!mgr || !account || !subject || !dest_account) return -1;
+    if (!mgr || !account_name_ok(account) || !acl_subject_ok(subject) ||
+        !account_name_ok(dest_account))
+        return -1;
     cmq_mutex_lock(&mgr->lock);
+    if (!account_is_active(mgr, account) ||
+        !peer_account_ok(mgr, dest_account)) {
+        cmq_mutex_unlock(&mgr->lock);
+        return -1;
+    }
     cmq_account_perms_t *p = find_or_create_perms(mgr, account);
     if (!p) { cmq_mutex_unlock(&mgr->lock); return -1; }
     if (p->export_count >= CMQ_ACCOUNT_MAX_EXPORTS) { cmq_mutex_unlock(&mgr->lock); return -1; }
@@ -217,10 +242,12 @@ int cmq_account_add_export(cmq_account_manager_t *mgr, const char *account,
     }
     cmq_account_export_t *e = &p->exports[p->export_count++];
     memset(e, 0, sizeof(*e));
-    strncpy(e->subject, subject, sizeof(e->subject) - 1);
-    e->subject[sizeof(e->subject) - 1] = '\0';
-    strncpy(e->dest_account, dest_account, CMQ_ACCOUNT_NAME_SIZE - 1);
-    e->dest_account[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+    size_t slen = strlen(subject);
+    memcpy(e->subject, subject, slen);
+    e->subject[slen] = '\0';
+    size_t dlen = strlen(dest_account);
+    memcpy(e->dest_account, dest_account, dlen);
+    e->dest_account[dlen] = '\0';
     e->active = 1;
     cmq_mutex_unlock(&mgr->lock);
     return 0;
@@ -258,8 +285,15 @@ size_t cmq_account_export_count(cmq_account_manager_t *mgr, const char *account)
 
 int cmq_account_add_import(cmq_account_manager_t *mgr, const char *account,
                             const char *subject, const char *source_account) {
-    if (!mgr || !account || !subject || !source_account) return -1;
+    if (!mgr || !account_name_ok(account) || !acl_subject_ok(subject) ||
+        !account_name_ok(source_account))
+        return -1;
     cmq_mutex_lock(&mgr->lock);
+    if (!account_is_active(mgr, account) ||
+        !peer_account_ok(mgr, source_account)) {
+        cmq_mutex_unlock(&mgr->lock);
+        return -1;
+    }
     cmq_account_perms_t *p = find_or_create_perms(mgr, account);
     if (!p) { cmq_mutex_unlock(&mgr->lock); return -1; }
     if (p->import_count >= CMQ_ACCOUNT_MAX_IMPORTS) { cmq_mutex_unlock(&mgr->lock); return -1; }
@@ -272,10 +306,12 @@ int cmq_account_add_import(cmq_account_manager_t *mgr, const char *account,
     }
     cmq_account_import_t *imp = &p->imports[p->import_count++];
     memset(imp, 0, sizeof(*imp));
-    strncpy(imp->subject, subject, sizeof(imp->subject) - 1);
-    imp->subject[sizeof(imp->subject) - 1] = '\0';
-    strncpy(imp->source_account, source_account, CMQ_ACCOUNT_NAME_SIZE - 1);
-    imp->source_account[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+    size_t slen = strlen(subject);
+    memcpy(imp->subject, subject, slen);
+    imp->subject[slen] = '\0';
+    size_t src_len = strlen(source_account);
+    memcpy(imp->source_account, source_account, src_len);
+    imp->source_account[src_len] = '\0';
     imp->active = 1;
     cmq_mutex_unlock(&mgr->lock);
     return 0;

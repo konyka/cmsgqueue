@@ -94,6 +94,20 @@ static void build_paths(cmq_filestore_t *fs) {
     snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx", fs->dir, fs->prefix);
 }
 
+/* Prefix is a single path component under dir — reject traversal / separators. */
+static int prefix_safe(const char *prefix) {
+    if (!prefix || !prefix[0]) return 0;
+    size_t n = strnlen(prefix, sizeof(((cmq_filestore_t *)0)->prefix));
+    if (n == 0 || n >= sizeof(((cmq_filestore_t *)0)->prefix)) return 0;
+    if (strcmp(prefix, ".") == 0 || strcmp(prefix, "..") == 0) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)prefix[i];
+        if (c == '/' || c == '\\' || c < 0x20 || c == 0x7f)
+            return 0;
+    }
+    return 1;
+}
+
 /* Drop trailing .data bytes not covered by .idx (crash between fflush(data)
    and idx append). Indexed records stay intact; orphans are truncated. */
 static void truncate_orphan_data(cmq_filestore_t *fs, uint64_t n_idx) {
@@ -194,7 +208,10 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
 }
 
 cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
-    if (!dir || !prefix) return NULL;
+    if (!dir || !prefix_safe(prefix)) return NULL;
+    if (strnlen(dir, sizeof(((cmq_filestore_t *)0)->dir)) >=
+        sizeof(((cmq_filestore_t *)0)->dir))
+        return NULL;
 
     mkdir(dir, 0755);
 
@@ -203,7 +220,16 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     strncpy(fs->dir, dir, sizeof(fs->dir) - 1);
     strncpy(fs->prefix, prefix, sizeof(fs->prefix) - 1);
     cmq_mutex_init(&fs->lock);
-    build_paths(fs);
+    int dlen = snprintf(fs->data_path, sizeof(fs->data_path), "%s/%s.data",
+                        fs->dir, fs->prefix);
+    int ilen = snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx",
+                        fs->dir, fs->prefix);
+    if (dlen < 0 || (size_t)dlen >= sizeof(fs->data_path) ||
+        ilen < 0 || (size_t)ilen >= sizeof(fs->idx_path)) {
+        cmq_mutex_destroy(&fs->lock);
+        free(fs);
+        return NULL;
+    }
 
     fs->data_fp = fopen(fs->data_path, "a+b");
     if (!fs->data_fp) { cmq_mutex_destroy(&fs->lock); free(fs); return NULL; }

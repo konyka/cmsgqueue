@@ -74,6 +74,7 @@ TEST(account, exports_imports) {
     cmq_account_manager_t *mgr = cmq_account_manager_create();
     cmq_account_create(mgr, "acme");
     cmq_account_create(mgr, "globex");
+    cmq_account_create(mgr, "other");
 
     ASSERT_EQ(cmq_account_add_export(mgr, "acme", "acme.>", "globex"), 0);
     ASSERT_EQ(cmq_account_export_count(mgr, "acme"), (size_t)1);
@@ -160,6 +161,21 @@ TEST(account, perms_isolated_per_manager) {
 
     cmq_account_manager_destroy(a);
     cmq_account_manager_destroy(b);
+}
+
+TEST(account, reject_overlong_acl_names) {
+    cmq_account_manager_t *mgr = cmq_account_manager_create();
+    cmq_account_create(mgr, "victim");
+    char long_name[CMQ_ACCOUNT_NAME_SIZE + 8];
+    memset(long_name, 'v', CMQ_ACCOUNT_NAME_SIZE - 1);
+    memcpy(long_name, "victim", 6);
+    long_name[CMQ_ACCOUNT_NAME_SIZE - 1] = 'X';
+    long_name[CMQ_ACCOUNT_NAME_SIZE] = '\0';
+    /* Must not truncate into victim's ACL bucket. */
+    ASSERT_EQ(cmq_account_add_export(mgr, long_name, "x.>", "victim"), -1);
+    ASSERT_EQ(cmq_account_export_count(mgr, "victim"), (size_t)0);
+    ASSERT_EQ(cmq_account_add_export(mgr, "victim", "x.>", long_name), -1);
+    cmq_account_manager_destroy(mgr);
 }
 
 TEST(tls, config_create_destroy) {

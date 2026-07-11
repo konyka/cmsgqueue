@@ -280,4 +280,18 @@ TEST(filestore, read_nonexistent) {
     cmq_filestore_destroy(fs);
 }
 
+TEST(filestore, reject_path_traversal_prefix) {
+    const char *dir = "/tmp/cmq_fs_safe";
+    mkdir(dir, 0755);
+    ASSERT_NULL(cmq_filestore_create(dir, "../escape"));
+    ASSERT_NULL(cmq_filestore_create(dir, "a/b"));
+    ASSERT_NULL(cmq_filestore_create(dir, ".."));
+    ASSERT_NULL(cmq_filestore_create(dir, ""));
+    cmq_filestore_t *fs = cmq_filestore_create(dir, "ok_name");
+    ASSERT_NOT_NULL(fs);
+    cmq_filestore_destroy(fs);
+    remove("/tmp/cmq_fs_safe/ok_name.data");
+    remove("/tmp/cmq_fs_safe/ok_name.idx");
+}
+
 TEST_MAIN()
