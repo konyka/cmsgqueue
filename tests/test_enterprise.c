@@ -247,6 +247,7 @@ TEST(mqtt, mapping) {
     ASSERT_EQ(cmq_mqtt_mapping_count(br), (size_t)2);
 
     ASSERT_EQ(cmq_mqtt_add_mapping(br, "sensor.temp", "sensor/temp", 2), 0);
+    ASSERT_EQ(cmq_mqtt_add_mapping(br, "bad", "bad/qos", 3), -1);
     ASSERT_EQ(cmq_mqtt_mapping_count(br), (size_t)2);
 
     cmq_mqtt_mapping_t *m = cmq_mqtt_find_mapping(br, "sensor/temp");
@@ -290,6 +291,8 @@ TEST(mqtt, encode_publish) {
     ASSERT_EQ(cmq_mqtt_decode_packet_type(buf, (size_t)len), 3);
     len = cmq_mqtt_encode_publish(buf, sizeof(buf), "empty/topic", NULL, 0, 0);
     ASSERT(len > 0);
+    ASSERT_EQ(cmq_mqtt_encode_publish(buf, sizeof(buf), "t", payload, 5, 3), -1);
+    ASSERT_EQ(cmq_mqtt_encode_publish(buf, sizeof(buf), "t", payload, 5, -1), -1);
 }
 
 TEST(mqtt, encode_subscribe) {
@@ -297,6 +300,7 @@ TEST(mqtt, encode_subscribe) {
     int len = cmq_mqtt_encode_subscribe(buf, sizeof(buf), "test/topic", 1);
     ASSERT(len > 0);
     ASSERT_EQ(cmq_mqtt_decode_packet_type(buf, (size_t)len), 8);
+    ASSERT_EQ(cmq_mqtt_encode_subscribe(buf, sizeof(buf), "test/topic", 3), -1);
 }
 
 TEST(mqtt, encode_pingreq) {

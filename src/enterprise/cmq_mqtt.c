@@ -187,6 +187,7 @@ cmq_mqtt_bridge_info_t cmq_mqtt_bridge_info(cmq_mqtt_bridge_t *br) {
 int cmq_mqtt_add_mapping(cmq_mqtt_bridge_t *br, const char *cmq_subject,
                           const char *mqtt_topic, int qos) {
     if (!br || !cmq_subject || !mqtt_topic) return -1;
+    if (qos < 0 || qos > 2) return -1;
     if (br->mapping_count >= CMQ_MQTT_MAX_MAPPINGS) return -1;
     for (size_t i = 0; i < br->mapping_count; i++) {
         if (strcmp(br->mappings[i].mqtt_topic, mqtt_topic) == 0) {
@@ -301,6 +302,7 @@ int cmq_mqtt_encode_connect(uint8_t *buf, size_t len, const char *client_id,
 int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
                              const uint8_t *payload, size_t payload_len, int qos) {
     if (!buf || !topic) return -1;
+    if (qos < 0 || qos > 2) return -1;
     if (payload_len > 0 && !payload) return -1;
     size_t topic_len = strlen(topic);
     if (topic_len > 0xFFFFu || topic_len > SIZE_MAX - 2) return -1;
@@ -336,6 +338,7 @@ int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
 
 int cmq_mqtt_encode_subscribe(uint8_t *buf, size_t len, const char *topic, int qos) {
     if (!buf || !topic) return -1;
+    if (qos < 0 || qos > 2) return -1;
     size_t topic_len = strlen(topic);
     if (topic_len > 0xFFFFu || topic_len > SIZE_MAX - 5) return -1;
     size_t var_len = 2 + 2 + topic_len + 1;

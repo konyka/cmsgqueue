@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include "cmq_slab.h"
 #include "cmq_test.h"
 
@@ -55,6 +56,22 @@ TEST(slab, count) {
     ASSERT_EQ(cmq_slab_count(slab), (size_t)1);
     cmq_slab_alloc(slab);
     ASSERT_EQ(cmq_slab_count(slab), (size_t)2);
+    cmq_slab_destroy(slab);
+}
+
+TEST(slab, reject_size_overflow) {
+    ASSERT_NULL(cmq_slab_create(SIZE_MAX / 2, SIZE_MAX / 2));
+}
+
+TEST(slab, free_rejects_bad_ptr) {
+    cmq_slab_t *slab = cmq_slab_create(sizeof(int), 4);
+    int *p = (int *)cmq_slab_alloc(slab);
+    ASSERT_NOT_NULL(p);
+    cmq_slab_free(slab, (char *)p + 1); /* misaligned — ignored */
+    cmq_slab_free(slab, p);
+    cmq_slab_free(slab, p); /* double-free — ignored */
+    int *p2 = (int *)cmq_slab_alloc(slab);
+    ASSERT_EQ(p2, p); /* freelist still coherent */
     cmq_slab_destroy(slab);
 }
 

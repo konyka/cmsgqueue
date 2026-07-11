@@ -1952,6 +1952,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — worker coro_pool OOM · slab overflow/free · MQTT QoS</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">coro_pool</span></td><td>✅</td><td>Fail start on calloc OOM; spawn falls back if pool NULL.</td></tr>
+<tr><td><span class="component-name">slab</span></td><td>✅</td><td>Reject capacity×size wrap; free checks alignment + double-free.</td></tr>
+<tr><td><span class="component-name">MQTT QoS</span></td><td>✅</td><td>Mapping/encode reject QoS outside 0..2.</td></tr>
+</table>
+</div>
+
+
 
 
 

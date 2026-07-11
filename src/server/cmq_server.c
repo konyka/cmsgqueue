@@ -608,6 +608,16 @@ static cmq_worker_t *cmq_worker_create(cmq_server_t *srv, int id) {
     w->coro_cap = CMQ_CORO_MAX_PER_WORKER;
     w->coro_count = 0;
     w->coro_pool = calloc((size_t)w->coro_cap, sizeof(cmq_coro_t *));
+    if (!w->coro_pool) {
+        cmq_mutex_destroy(&w->msg_lock);
+        cmq_mutex_destroy(&w->clients_lock);
+        free(w->clients);
+        cmq_idmap_destroy(w->idmap);
+        wakeup_fd_close(w->wakeup_fd, w->wakeup_wfd);
+        cmq_ev_loop_destroy(w->ev_loop);
+        free(w);
+        return NULL;
+    }
     return w;
 }
 
@@ -1570,11 +1580,10 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
     }
     ctx->coro = coro;
 
-    if (w->coro_count < w->coro_cap) {
+    if (w->coro_pool && w->coro_count < w->coro_cap) {
         w->coro_pool[w->coro_count++] = coro;
     } else {
-        /* Pool full: sync fan-out instead of spinning resume in the publish
-           path (keeps the worker event loop responsive). */
+        /* Pool full or OOM at init: sync fan-out instead of spinning resume. */
         cmq_coro_destroy(coro);
         int rc = deliver_targets_sync(srv, ctx->targets, ctx->target_count,
                                        ctx->subject, ctx->pub_account,
@@ -3872,6 +3881,24 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             w->coro_cap = CMQ_CORO_MAX_PER_WORKER;
             w->coro_count = 0;
             w->coro_pool = calloc((size_t)w->coro_cap, sizeof(cmq_coro_t *));
+            if (!w->coro_pool) {
+                cmq_mutex_destroy(&w->msg_lock);
+                cmq_mutex_destroy(&w->clients_lock);
+                free(w->clients);
+                cmq_idmap_destroy(w->idmap);
+                w->clients = NULL;
+                w->idmap = NULL;
+                cmq_ev_loop_destroy(w->ev_loop);
+                wakeup_fd_close(w->wakeup_fd, w->wakeup_wfd);
+                for (int j = 0; j < i; j++) {
+                    cmq_ev_stop(srv->workers[j].ev_loop);
+                    cmq_worker_destroy(&srv->workers[j]);
+                }
+                free(srv->workers);
+                srv->workers = NULL;
+                close(srv->listen_fd);
+                return CMQ_ERR_NO_MEMORY;
+            }
         }
         for (int i = 0; i < nthreads; i++) {
             if (cmq_thread_create(&srv->workers[i].thread, worker_thread,
