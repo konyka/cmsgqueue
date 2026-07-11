@@ -1040,11 +1040,16 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
 
     if (srv->routes) {
-        uint8_t fwd_buf[8192];
-        size_t fwd_len = cmq_frame_encode(fwd_buf, sizeof(fwd_buf), CMQ_OP_PUBLISH, 0,
-                                           frame->payload, frame->payload_len);
-        if (fwd_len > 0) {
-            cmq_route_broadcast(srv->routes, fwd_buf, fwd_len, NULL);
+        /* Heap-size to the frame — stack 8 KiB silently dropped large pubs. */
+        size_t need = sizeof(cmq_frame_hdr_t) + frame->payload_len;
+        uint8_t *fwd = malloc(need);
+        if (fwd) {
+            size_t fwd_len = cmq_frame_encode(fwd, need, CMQ_OP_PUBLISH,
+                                               frame->hdr.flags,
+                                               frame->payload, frame->payload_len);
+            if (fwd_len > 0)
+                cmq_route_broadcast(srv->routes, fwd, fwd_len, NULL);
+            free(fwd);
         }
     }
 
