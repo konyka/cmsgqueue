@@ -26,18 +26,36 @@ void cmq_account_manager_destroy(cmq_account_manager_t *mgr) {
 int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     if (!mgr || !name) return -1;
     cmq_mutex_lock(&mgr->lock);
+    int free_slot = -1;
     for (size_t i = 0; i < mgr->count; i++) {
         if (strcmp(mgr->accounts[i].name, name) == 0) {
+            if (!mgr->accounts[i].active) {
+                /* Reactivate soft-deleted slot (stable pointer). */
+                mgr->accounts[i].active = 1;
+                mgr->accounts[i].connections = 0;
+                mgr->accounts[i].subscriptions = 0;
+                mgr->accounts[i].messages_in = 0;
+                mgr->accounts[i].messages_out = 0;
+                mgr->accounts[i].bytes_in = 0;
+                mgr->accounts[i].bytes_out = 0;
+            }
             cmq_mutex_unlock(&mgr->lock);
             return 0;
         }
+        if (!mgr->accounts[i].active && free_slot < 0)
+            free_slot = (int)i;
     }
-    if (mgr->count >= CMQ_ACCOUNT_MAX) {
+    cmq_account_t *a;
+    if (free_slot >= 0) {
+        a = &mgr->accounts[free_slot];
+    } else if (mgr->count < CMQ_ACCOUNT_MAX) {
+        a = &mgr->accounts[mgr->count++];
+    } else {
         cmq_mutex_unlock(&mgr->lock);
         return -1;
     }
-    cmq_account_t *a = &mgr->accounts[mgr->count++];
     strncpy(a->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
+    a->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
     a->active = 1;
     a->connections = 0;
     a->subscriptions = 0;
@@ -49,15 +67,18 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     return 0;
 }
 
+static void clear_account_perms(const char *name); /* after g_perms */
+
 int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
     if (!mgr || !name) return -1;
     cmq_mutex_lock(&mgr->lock);
     for (size_t i = 0; i < mgr->count; i++) {
-        if (strcmp(mgr->accounts[i].name, name) == 0) {
-            memmove(&mgr->accounts[i], &mgr->accounts[i + 1],
-                    (mgr->count - i - 1) * sizeof(cmq_account_t));
-            mgr->count--;
+        if (mgr->accounts[i].active &&
+            strcmp(mgr->accounts[i].name, name) == 0) {
+            /* Soft-delete: keep slot so concurrent get()+inc_* pointers stay valid. */
+            mgr->accounts[i].active = 0;
             cmq_mutex_unlock(&mgr->lock);
+            clear_account_perms(name);
             return 0;
         }
     }
@@ -70,7 +91,8 @@ cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name) {
     cmq_mutex_lock(&mgr->lock);
     cmq_account_t *found = NULL;
     for (size_t i = 0; i < mgr->count; i++) {
-        if (strcmp(mgr->accounts[i].name, name) == 0) {
+        if (mgr->accounts[i].active &&
+            strcmp(mgr->accounts[i].name, name) == 0) {
             found = &mgr->accounts[i];
             break;
         }
@@ -82,28 +104,49 @@ cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name) {
 size_t cmq_account_count(cmq_account_manager_t *mgr) {
     if (!mgr) return 0;
     cmq_mutex_lock(&mgr->lock);
-    size_t c = mgr->count;
+    size_t c = 0;
+    for (size_t i = 0; i < mgr->count; i++) {
+        if (mgr->accounts[i].active) c++;
+    }
     cmq_mutex_unlock(&mgr->lock);
     return c;
 }
 
 void cmq_account_inc_connections(cmq_account_t *acc) {
-    if (acc) acc->connections++;
+    if (acc && acc->active)
+        __atomic_fetch_add(&acc->connections, 1, __ATOMIC_RELAXED);
 }
 void cmq_account_dec_connections(cmq_account_t *acc) {
-    if (acc && acc->connections > 0) acc->connections--;
+    if (!acc || !acc->active) return;
+    uint64_t cur = __atomic_load_n(&acc->connections, __ATOMIC_RELAXED);
+    while (cur > 0) {
+        if (__atomic_compare_exchange_n(&acc->connections, &cur, cur - 1,
+                                         0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            return;
+    }
 }
 void cmq_account_inc_subscriptions(cmq_account_t *acc) {
-    if (acc) acc->subscriptions++;
+    if (acc && acc->active)
+        __atomic_fetch_add(&acc->subscriptions, 1, __ATOMIC_RELAXED);
 }
 void cmq_account_dec_subscriptions(cmq_account_t *acc) {
-    if (acc && acc->subscriptions > 0) acc->subscriptions--;
+    if (!acc || !acc->active) return;
+    uint64_t cur = __atomic_load_n(&acc->subscriptions, __ATOMIC_RELAXED);
+    while (cur > 0) {
+        if (__atomic_compare_exchange_n(&acc->subscriptions, &cur, cur - 1,
+                                         0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            return;
+    }
 }
 void cmq_account_inc_msgs_in(cmq_account_t *acc, uint64_t bytes) {
-    if (acc) { acc->messages_in++; acc->bytes_in += bytes; }
+    if (!acc || !acc->active) return;
+    __atomic_fetch_add(&acc->messages_in, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&acc->bytes_in, bytes, __ATOMIC_RELAXED);
 }
 void cmq_account_inc_msgs_out(cmq_account_t *acc, uint64_t bytes) {
-    if (acc) { acc->messages_out++; acc->bytes_out += bytes; }
+    if (!acc || !acc->active) return;
+    __atomic_fetch_add(&acc->messages_out, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&acc->bytes_out, bytes, __ATOMIC_RELAXED);
 }
 
 typedef struct {
@@ -124,6 +167,20 @@ static void ensure_perms_init(void) {
         cmq_mutex_init(&g_perms_lock);
         g_perms_init = 1;
     }
+}
+
+static void clear_account_perms(const char *name) {
+    ensure_perms_init();
+    cmq_mutex_lock(&g_perms_lock);
+    for (size_t i = 0; i < g_perms_count; i++) {
+        if (strcmp(g_perms[i].account, name) == 0) {
+            memmove(&g_perms[i], &g_perms[i + 1],
+                    (g_perms_count - i - 1) * sizeof(cmq_account_perms_t));
+            g_perms_count--;
+            break;
+        }
+    }
+    cmq_mutex_unlock(&g_perms_lock);
 }
 
 static cmq_account_perms_t *find_perms(const char *account) {

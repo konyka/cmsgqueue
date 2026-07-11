@@ -1411,6 +1411,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf write EAGAIN · account soft-delete</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf write_all</span></td><td>✅</td><td>Nonblocking hub writes poll(POLLOUT) on EAGAIN (3s) instead of hard-fail.</td></tr>
+<tr><td><span class="component-name">account soft-delete</span></td><td>✅</td><td>Delete marks inactive (no memmove); counters use atomics; perms cleared on delete.</td></tr>
+</table>
+</div>
+
 
 
 
