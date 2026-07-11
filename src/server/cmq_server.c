@@ -2521,8 +2521,18 @@ static void client_flush_write(cmq_client_t *c) {
             c->write_pos = 0;
             cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c);
         }
-    } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-        c->state = CMQ_CLIENT_CLOSING;
+    } else if (n <= 0 &&
+               (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK))) {
+        /* Hard write failure — do not leave CLOSING with a stuck write_buf
+           (busy WRITE loop + keepalive never scans CLOSING). */
+        c->write_len = 0;
+        c->write_pos = 0;
+        if (route_io_idx >= 0 && c->server && c->server->routes) {
+            cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+            route_io_idx = -1;
+        }
+        client_teardown(c);
+        return;
     }
 out:
     if (route_io_idx >= 0 && c->server && c->server->routes)

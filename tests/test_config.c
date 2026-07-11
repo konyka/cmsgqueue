@@ -126,6 +126,19 @@ TEST(config, validate_negative_limits) {
     ASSERT(cmq_config_validate(&config) != CMQ_OK);
 }
 
+TEST(config, validate_routes_need_cluster) {
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.port = 7654;
+    config.route_count = 1;
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+    config.cluster_name = strdup("c1");
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+    config.cluster_node_id = strdup("n1");
+    ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
+    cmq_config_free(&config);
+}
+
 TEST(config, load_skip_sections) {
     const char *path = write_test_config(
         "[server]\n"

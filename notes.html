@@ -1634,6 +1634,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — write hard-fail teardown · route config validate · leaf accept dedup</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">write hard-fail</span></td><td>✅</td><td>EPIPE/reset/zero-write → clear buf + client_teardown (no stuck CLOSING).</td></tr>
+<tr><td><span class="component-name">route config</span></td><td>✅</td><td>route_count&gt;0 requires cluster_name + cluster_node_id.</td></tr>
+<tr><td><span class="component-name">leaf accept dedup</span></td><td>✅</td><td>Same leaf_id reuses slot and closes previous fd.</td></tr>
+</table>
+</div>
+
 
 
 
