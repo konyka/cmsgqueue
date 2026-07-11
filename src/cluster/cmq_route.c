@@ -17,6 +17,8 @@
 #define CMQ_ROUTE_MAX_CONNS 32
 #define CMQ_ROUTE_HANDSHAKE_MS 3000
 #define CMQ_ROUTE_CONNECT_MS 2000
+/* Bound worker-thread stalls on partial route writes (was HANDSHAKE_MS). */
+#define CMQ_ROUTE_WRITE_POLL_MS 50
 
 static void set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
@@ -141,7 +143,7 @@ static int write_full(int fd, const uint8_t *data, size_t len) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 if (off == 0) return 1;
                 struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-                if (poll(&pfd, 1, CMQ_ROUTE_HANDSHAKE_MS) <= 0)
+                if (poll(&pfd, 1, CMQ_ROUTE_WRITE_POLL_MS) <= 0)
                     return -1;
                 continue;
             }

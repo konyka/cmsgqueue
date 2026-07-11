@@ -15,7 +15,7 @@
 #include <poll.h>
 
 #define CMQ_LEAF_MAX_SUBS 1024
-#define CMQ_LEAF_WRITE_MS 3000
+#define CMQ_LEAF_WRITE_MS 50
 #define CMQ_LEAF_CONNECT_MS 2000
 
 struct cmq_leaf_node {

@@ -1653,6 +1653,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — keepalive skip CLOSING · short route write poll</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">keepalive CLOSING</span></td><td>✅</td><td>Skip CLOSING/CLOSED in doom scan — no repeated DISCONNECT/TEARDOWN queue spam.</td></tr>
+<tr><td><span class="component-name">write poll</span></td><td>✅</td><td>route/gateway/leaf partial-EAGAIN poll capped at 50ms (was 3s).</td></tr>
+</table>
+</div>
+
 
 
 

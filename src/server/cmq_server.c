@@ -2958,13 +2958,16 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
     int ndoomed = 0;
     for (int i = 0; i < count; i++) {
         cmq_client_t *c = clients[i];
-        if (!c) continue;
+        if (!c || c->state == CMQ_CLIENT_CLOSED ||
+            c->state == CMQ_CLIENT_CLOSING)
+            continue;
         if ((c->state == CMQ_CLIENT_CONNECTED || c->state == CMQ_CLIENT_INIT) &&
             (now - c->last_activity_ms) > timeout_ms) {
             doomed[ndoomed++] = c;
             continue;
         }
         if (write_timeout_ms > 0 &&
+            c->state == CMQ_CLIENT_CONNECTED &&
             c->write_buf && c->write_pos < c->write_len &&
             c->last_write_progress_ms > 0 &&
             (now - c->last_write_progress_ms) > write_timeout_ms) {
@@ -2980,6 +2983,8 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
             if (disc_len > 0)
                 (void)cmq_client_send_local(c, disc, disc_len);
             c->state = CMQ_CLIENT_CLOSING;
+            client_finish_closing(c);
+        } else if (c->state == CMQ_CLIENT_CLOSING) {
             client_finish_closing(c);
         } else {
             client_teardown(c);
@@ -3025,11 +3030,14 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                 if (doomed_ids) {
                     for (int i = 0; i < wn; i++) {
                         cmq_client_t *c = w->clients[i];
-                        if (!c) continue;
+                        if (!c || c->state == CMQ_CLIENT_CLOSED ||
+                            c->state == CMQ_CLIENT_CLOSING)
+                            continue;
                         int idle = (c->state == CMQ_CLIENT_CONNECTED ||
                                     c->state == CMQ_CLIENT_INIT) &&
                                    (now - c->last_activity_ms) > timeout_ms;
                         int stalled = write_timeout_ms > 0 &&
+                                      c->state == CMQ_CLIENT_CONNECTED &&
                                       c->write_buf && c->write_pos < c->write_len &&
                                       c->last_write_progress_ms > 0 &&
                                       (now - c->last_write_progress_ms) > write_timeout_ms;

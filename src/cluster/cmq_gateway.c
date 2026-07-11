@@ -22,7 +22,7 @@ struct cmq_gateway {
     cmq_mutex_t io_locks[CMQ_GW_MAX_CONNECTIONS]; /* per-slot write serialization */
 };
 
-#define CMQ_GW_WRITE_MS 3000
+#define CMQ_GW_WRITE_MS 50
 #define CMQ_GW_CONNECT_MS 2000
 
 static void set_nonblock(int fd) {
