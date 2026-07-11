@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include "cmq_mpool.h"
 #include "cmq_test.h"
 
@@ -77,6 +78,15 @@ TEST(mpool, stats) {
     cmq_mpool_alloc(pool, 200);
     size_t used = cmq_mpool_used(pool);
     ASSERT(used >= 300);
+    cmq_mpool_destroy(pool);
+}
+
+TEST(mpool, reject_size_overflow) {
+    cmq_mpool_t *pool = cmq_mpool_create(4096);
+    ASSERT_NULL(cmq_mpool_alloc(pool, SIZE_MAX));
+    ASSERT_NULL(cmq_mpool_alloc(pool, SIZE_MAX - 8));
+    /* Still usable after rejected overflow. */
+    ASSERT_NOT_NULL(cmq_mpool_alloc(pool, 64));
     cmq_mpool_destroy(pool);
 }
 

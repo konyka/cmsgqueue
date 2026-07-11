@@ -18,12 +18,15 @@ struct cmq_mpool {
     size_t default_block_size;
 };
 
-/* helpers */
-static inline size_t cmq_align16(size_t v) {
-    return (v + 15) & ~((size_t)15);
+/* helpers — fail closed on size wrap */
+static inline int cmq_align16_ok(size_t v, size_t *out) {
+    if (v > SIZE_MAX - 15) return -1;
+    *out = (v + 15) & ~((size_t)15);
+    return 0;
 }
 
 static cmq_mpool_block_t *cmq_mpool_block_create(size_t block_size) {
+    if (block_size == 0) return NULL;
     cmq_mpool_block_t *b = (cmq_mpool_block_t *)malloc(sizeof(*b));
     if (!b) return NULL;
     b->size = block_size;
@@ -70,50 +73,72 @@ void *cmq_mpool_alloc(cmq_mpool_t *pool, size_t size) {
     /* Zero-size: still advance so consecutive calls do not alias. */
     if (size == 0) size = 1;
 
-    /* ensure 16-byte alignment for the allocation */
     cmq_mpool_block_t *b = pool->tail;
     if (!b) return NULL;
+    if (b->offset > b->size) return NULL;
+
     uintptr_t base = (uintptr_t)b->mem + b->offset;
     size_t align_offset = (16 - (base % 16)) % 16;
+    if (align_offset > SIZE_MAX - size) return NULL;
     size_t needed = align_offset + size;
-
-    /* If large enough to fit in current block, allocate here */
-    if (needed <= b->size - b->offset) {
+    size_t avail = b->size - b->offset;
+    if (needed <= avail) {
         b->offset += align_offset;
         void *ptr = b->mem + b->offset;
         b->offset += size;
         return ptr;
     }
 
-    /* Large allocation trigger: dedicated block for this allocation */
-    size_t dedicated = cmq_align16(size);
-    /* if the requested size would fit in a new block, allocate dedicated block */
+    size_t dedicated;
+    if (cmq_align16_ok(size, &dedicated) != 0) return NULL;
+
     if (size > (size_t)((double)b->size * 0.8)) {
-        cmq_mpool_block_t *nb = cmq_mpool_block_create(dedicated > 0 ? dedicated : 16);
+        size_t need_block = dedicated;
+        if (need_block < size + 16) {
+            if (size > SIZE_MAX - 16) return NULL;
+            need_block = size + 16;
+        }
+        cmq_mpool_block_t *nb = cmq_mpool_block_create(need_block);
         if (!nb) return NULL;
-        /* append to list */
+        uintptr_t addr = (uintptr_t)nb->mem;
+        size_t aoff = (16 - (addr % 16)) % 16;
+        if (aoff > SIZE_MAX - size || aoff + size > nb->size) {
+            free(nb->mem);
+            free(nb);
+            return NULL;
+        }
         b->next = nb;
         nb->next = NULL;
         pool->tail = nb;
-        /* allocate from the beginning of this new block, aligned */
-        uintptr_t addr = (uintptr_t)nb->mem;
-        size_t aoff = (16 - (addr % 16)) % 16;
         nb->offset = aoff;
         void *ptr = nb->mem + nb->offset;
         nb->offset += size;
         return ptr;
     }
 
-    /* Otherwise, allocate a new block with double the previous block size */
+    if (b->size > SIZE_MAX / 2) return NULL;
     size_t new_block_size = b->size * 2;
+    if (new_block_size < size) {
+        size_t aligned;
+        if (cmq_align16_ok(size, &aligned) != 0) return NULL;
+        if (aligned < size + 16) {
+            if (size > SIZE_MAX - 16) return NULL;
+            aligned = size + 16;
+        }
+        new_block_size = aligned;
+    }
     cmq_mpool_block_t *nb = cmq_mpool_block_create(new_block_size);
     if (!nb) return NULL;
+    uintptr_t addr = (uintptr_t)nb->mem;
+    size_t aoff = (16 - (addr % 16)) % 16;
+    if (aoff > SIZE_MAX - size || aoff + size > nb->size) {
+        free(nb->mem);
+        free(nb);
+        return NULL;
+    }
     b->next = nb;
     nb->next = NULL;
     pool->tail = nb;
-    /* allocate from this new block (aligned) */
-    uintptr_t addr = (uintptr_t)nb->mem;
-    size_t aoff = (16 - (addr % 16)) % 16;
     nb->offset = aoff;
     void *ptr = nb->mem + nb->offset;
     nb->offset += size;

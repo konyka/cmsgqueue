@@ -2641,8 +2641,17 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         /* Resolve account before CONNECTED so OOM/table-full never lands on
            $default after a successful password check. */
         if (c->username && c->username[0] != '\0') {
-            strncpy(c->account_name, c->username, CMQ_ACCOUNT_NAME_SIZE - 1);
-            c->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+            size_t ul = strnlen(c->username, CMQ_ACCOUNT_NAME_SIZE);
+            if (ul == 0 || ul >= CMQ_ACCOUNT_NAME_SIZE) {
+                if (c->is_route && srv->routes)
+                    route_detach_under_io_lock(srv, c->fd);
+                c->is_route = 0;
+                cmq_send_connack(c, 1);
+                c->state = CMQ_CLIENT_CLOSING;
+                break;
+            }
+            memcpy(c->account_name, c->username, ul);
+            c->account_name[ul] = '\0';
             if (cmq_account_create(srv->accounts, c->account_name) != 0) {
                 if (c->is_route && srv->routes)
                     route_detach_under_io_lock(srv, c->fd);
@@ -3211,7 +3220,7 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
                    (now - c->last_activity_ms) > timeout_ms;
         int stalled = write_timeout_ms > 0 &&
                       c->state == CMQ_CLIENT_CONNECTED &&
-                      c->write_buf && c->write_pos < c->write_len &&
+                      c->write_pos < c->write_len &&
                       c->last_write_progress_ms > 0 &&
                       (now - c->last_write_progress_ms) > write_timeout_ms;
         if (!idle && !stalled) continue;
@@ -3260,7 +3269,7 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                            (now - c->last_activity_ms) > timeout_ms;
                 int stalled = write_timeout_ms > 0 &&
                               c->state == CMQ_CLIENT_CONNECTED &&
-                              c->write_buf && c->write_pos < c->write_len &&
+                              c->write_pos < c->write_len &&
                               c->last_write_progress_ms > 0 &&
                               (now - c->last_write_progress_ms) > write_timeout_ms;
                 if ((idle || stalled) && c->fd >= 0)
@@ -3294,7 +3303,7 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                                    (now - c->last_activity_ms) > timeout_ms;
                         int stalled = write_timeout_ms > 0 &&
                                       c->state == CMQ_CLIENT_CONNECTED &&
-                                      c->write_buf && c->write_pos < c->write_len &&
+                                      c->write_pos < c->write_len &&
                                       c->last_write_progress_ms > 0 &&
                                       (now - c->last_write_progress_ms) > write_timeout_ms;
                         if (idle || stalled)
@@ -3311,7 +3320,7 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                                    (now - c->last_activity_ms) > timeout_ms;
                         int stalled = write_timeout_ms > 0 &&
                                       c->state == CMQ_CLIENT_CONNECTED &&
-                                      c->write_buf && c->write_pos < c->write_len &&
+                                      c->write_pos < c->write_len &&
                                       c->last_write_progress_ms > 0 &&
                                       (now - c->last_write_progress_ms) > write_timeout_ms;
                         if ((idle || stalled) && c->fd >= 0)

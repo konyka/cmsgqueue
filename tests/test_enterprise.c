@@ -34,6 +34,12 @@ TEST(account, create_delete) {
 
     ASSERT_EQ(cmq_account_delete(mgr, "nonexistent"), -1);
 
+    char too_long[CMQ_ACCOUNT_NAME_SIZE + 8];
+    memset(too_long, 'a', sizeof(too_long) - 1);
+    too_long[sizeof(too_long) - 1] = '\0';
+    ASSERT_EQ(cmq_account_create(mgr, too_long), -1);
+    ASSERT_NULL(cmq_account_get(mgr, too_long));
+
     cmq_account_manager_destroy(mgr);
 }
 

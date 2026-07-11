@@ -35,6 +35,8 @@ void cmq_account_manager_destroy(cmq_account_manager_t *mgr) {
 
 int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     if (!mgr || !name) return -1;
+    size_t nlen = strnlen(name, CMQ_ACCOUNT_NAME_SIZE);
+    if (nlen == 0 || nlen >= CMQ_ACCOUNT_NAME_SIZE) return -1;
     cmq_mutex_lock(&mgr->lock);
     int free_slot = -1;
     for (size_t i = 0; i < mgr->count; i++) {
@@ -98,6 +100,7 @@ int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
 
 cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name) {
     if (!mgr || !name) return NULL;
+    if (strnlen(name, CMQ_ACCOUNT_NAME_SIZE) >= CMQ_ACCOUNT_NAME_SIZE) return NULL;
     cmq_mutex_lock(&mgr->lock);
     cmq_account_t *found = NULL;
     for (size_t i = 0; i < mgr->count; i++) {

@@ -238,11 +238,7 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             if (slot < gw->conn_count &&
                 strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0) {
                 gw_slot_close_fd(gw, slot);
-                gw->conns[slot].fd = fd;
-                gw->conns[slot].connected = 1;
-                strncpy(gw->conns[slot].remote_addr, addr_copy,
-                        CMQ_NODE_ADDR_SIZE - 1);
-                gw->conns[slot].remote_port = port_copy;
+                gw_slot_install(gw, slot, cluster_name, addr_copy, port_copy, fd);
                 cmq_mutex_unlock(&gw->lock);
                 return 0;
             }

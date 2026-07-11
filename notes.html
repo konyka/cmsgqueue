@@ -1931,6 +1931,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — account name cap · route/gw slot publish · mpool overflow</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">account name</span></td><td>✅</td><td>Reject names ≥ <code>CMQ_ACCOUNT_NAME_SIZE</code> (no silent truncate).</td></tr>
+<tr><td><span class="component-name">route/gw slots</span></td><td>✅</td><td>Install under <code>io_lock</code>; broadcast skips unlocked <code>conn_count</code>.</td></tr>
+<tr><td><span class="component-name">mpool</span></td><td>✅</td><td>Fail closed on size/align/doubling wrap.</td></tr>
+<tr><td><span class="component-name">keepalive stall</span></td><td>✅</td><td>Do not dereference <code>write_buf</code> from scan threads.</td></tr>
+</table>
+</div>
+
+
 
 
 
