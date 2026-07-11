@@ -137,6 +137,25 @@ TEST(account, may_deliver_cross_account) {
     cmq_account_manager_destroy(mgr);
 }
 
+TEST(account, perms_isolated_per_manager) {
+    cmq_account_manager_t *a = cmq_account_manager_create();
+    cmq_account_manager_t *b = cmq_account_manager_create();
+    cmq_account_create(a, "acme");
+    cmq_account_create(a, "globex");
+    cmq_account_create(b, "acme");
+    cmq_account_create(b, "globex");
+
+    ASSERT_EQ(cmq_account_add_export(a, "acme", "acme.>", "globex"), 0);
+    ASSERT_EQ(cmq_account_add_import(a, "globex", "acme.>", "acme"), 0);
+    ASSERT_EQ(cmq_account_may_deliver(a, "acme", "globex", "acme.data"), 1);
+    /* Manager B must not inherit A's ACL. */
+    ASSERT_EQ(cmq_account_may_deliver(b, "acme", "globex", "acme.data"), 0);
+    ASSERT_EQ(cmq_account_export_count(b, "acme"), (size_t)0);
+
+    cmq_account_manager_destroy(a);
+    cmq_account_manager_destroy(b);
+}
+
 TEST(tls, config_create_destroy) {
     cmq_tls_config_t *cfg = cmq_tls_config_create();
     ASSERT_NOT_NULL(cfg);

@@ -482,9 +482,14 @@ void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd) {
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (pool->conns[i].fd == fd) {
-            pool->conns[i].fd = -1;
-            pool->conns[i].connected = 0;
-            pool->conns[i].fd_owned = 0;
+            /* pool->lock → io_lock (never reverse — avoids AB-BA with teardown). */
+            cmq_mutex_lock(&pool->io_locks[i]);
+            if (pool->conns[i].fd == fd) {
+                pool->conns[i].fd = -1;
+                pool->conns[i].connected = 0;
+                pool->conns[i].fd_owned = 0;
+            }
+            cmq_mutex_unlock(&pool->io_locks[i]);
             break;
         }
     }

@@ -17,9 +17,11 @@ void cmq_queue_init(cmq_queue_t *q) {
 }
 
 void cmq_queue_destroy(cmq_queue_t *q) {
-    if (!q || !q->stub) return;
+    if (!q) return;
     while (cmq_queue_pop(q) != NULL) {}
-    free(q->stub);
+    /* After drain, head is the remaining sentinel (original stub may already
+       have been freed by the first successful pop). */
+    free(q->head);
     q->stub = NULL;
     q->head = NULL;
     q->tail = NULL;

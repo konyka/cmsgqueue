@@ -82,6 +82,7 @@ cmq_leaf_node_t *cmq_leaf_create(const char *hub_addr, int hub_port) {
     l->hub_port = hub_port;
     l->hub_fd = -1;
     l->connected = 0;
+    l->next_sub_id = 1; /* server rejects sub_id 0 */
     l->sub_count = 0;
     l->leaf_count = 0;
     cmq_mutex_init(&l->lock);

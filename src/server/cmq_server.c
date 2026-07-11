@@ -733,13 +733,10 @@ static void cmq_client_destroy(cmq_client_t *c) {
     free(c);
 }
 
-/* Detach borrowed/owned route fd under io_lock (same contract as broadcast). */
+/* Detach route fd under pool->lock → io_lock (never hold io_lock first). */
 static void route_detach_under_io_lock(cmq_server_t *srv, int fd) {
     if (!srv || !srv->routes || fd < 0) return;
-    int ridx = cmq_route_io_lock_fd(srv->routes, fd);
     cmq_route_detach_fd(srv->routes, fd);
-    if (ridx >= 0)
-        cmq_route_io_unlock_idx(srv->routes, ridx);
 }
 
 /* Remove client from its owning array, clear subscriptions from the sublist,

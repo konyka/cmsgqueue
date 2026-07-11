@@ -1920,6 +1920,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — ACL per-manager · route detach lock · leaf sub_id · queue destroy</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">account ACL</span></td><td>✅</td><td>Import/export rules live in the manager (no process-global leak).</td></tr>
+<tr><td><span class="component-name">route detach</span></td><td>✅</td><td><code>detach_fd</code> uses pool→io lock order (no teardown AB-BA).</td></tr>
+<tr><td><span class="component-name">leaf sub_id</span></td><td>✅</td><td><code>next_sub_id</code> starts at 1 (server rejects 0).</td></tr>
+<tr><td><span class="component-name">MPSC destroy</span></td><td>✅</td><td>Free remaining sentinel head after drain (no stub double-free).</td></tr>
+</table>
+</div>
+
+
 
 
 
