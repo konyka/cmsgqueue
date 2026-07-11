@@ -1117,6 +1117,18 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<h2>Phase — Parser payload cap · Queue-group reject · WS PING/PONG</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_parser_set_max_payload</span></td><td>✅</td><td>Per-connection frame payload cap; <code>cmq_parser_feed</code> rejects oversize declared length before alloc (DoS). Wired from <code>max_payload_size + 256KiB</code> framing headroom so message-body ERROR path still works.</td></tr>
+<tr><td><span class="component-name">queue group reject</span></td><td>✅</td><td>Invalid/truncated/<code>&gt;= CMQ_MAX_QUEUE_GROUP</code> → SUBACK code=1 (no silent empty qg). Empty subject also rejected.</td></tr>
+<tr><td><span class="component-name">WS PING → PONG</span></td><td>✅</td><td>RFC 6455: unmasked PONG echoing app data via <code>cmq_client_send_direct</code>; PONG consumed; oversize control payload tears down.</td></tr>
+<tr><td><span class="component-name">RESPONSE max_payload</span></td><td>✅</td><td><code>handle_response</code> enforces body size like publish/request.</td></tr>
+<tr><td><span class="component-name">tests</span></td><td>✅</td><td><code>max_payload_reject</code>, <code>queue_group_too_long</code>, <code>ws_ping_pong</code>.</td></tr>
+</table>
+</div>
+
 </div>
 </body>
 </html>
