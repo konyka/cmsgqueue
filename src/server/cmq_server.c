@@ -3661,7 +3661,11 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)srv->config.port);
-    inet_pton(AF_INET, srv->config.host, &addr.sin_addr);
+    if (!srv->config.host ||
+        inet_pton(AF_INET, srv->config.host, &addr.sin_addr) != 1) {
+        close(srv->listen_fd);
+        return CMQ_ERR_INVALID_ARG;
+    }
 
     if (bind(srv->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         close(srv->listen_fd);

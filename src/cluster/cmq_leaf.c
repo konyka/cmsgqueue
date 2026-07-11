@@ -44,14 +44,24 @@ static void set_nonblock(int fd) {
 /* Complete write on nonblocking hub fd (poll on EAGAIN). */
 static int write_all(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
+    int stall_rounds = 0;
     while (off < len) {
         ssize_t n = write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-                if (poll(&pfd, 1, CMQ_LEAF_WRITE_MS) <= 0)
+                for (;;) {
+                    int pr = poll(&pfd, 1, CMQ_LEAF_WRITE_MS);
+                    if (pr > 0) {
+                        stall_rounds = 0;
+                        break;
+                    }
+                    if (pr < 0 && errno == EINTR) continue;
+                    if (pr == 0 && ++stall_rounds < 4)
+                        continue;
                     return -1;
+                }
                 continue;
             }
             return -1;

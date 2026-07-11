@@ -140,10 +140,11 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass) {
 }
 
 /* 0 = full write, 1 = EAGAIN with zero progress (keep fd), -1 = hard failure.
-   Partial progress + EAGAIN polls POLLOUT rather than closing (avoids truncating
-   a frame on the peer). */
+   Partial progress + EAGAIN polls POLLOUT (EINTR-safe, bounded stall rounds)
+   rather than closing mid-frame. */
 static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
+    int stall_rounds = 0;
     while (off < len) {
         ssize_t n = write(fd, data + off, len - off);
         if (n < 0) {
@@ -151,8 +152,17 @@ static int write_full(int fd, const uint8_t *data, size_t len) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 if (off == 0) return 1;
                 struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-                if (poll(&pfd, 1, CMQ_ROUTE_WRITE_POLL_MS) <= 0)
+                for (;;) {
+                    int pr = poll(&pfd, 1, CMQ_ROUTE_WRITE_POLL_MS);
+                    if (pr > 0) {
+                        stall_rounds = 0;
+                        break;
+                    }
+                    if (pr < 0 && errno == EINTR) continue;
+                    if (pr == 0 && ++stall_rounds < 4)
+                        continue; /* ~200ms total before giving up */
                     return -1;
+                }
                 continue;
             }
             return -1;

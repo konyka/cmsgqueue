@@ -177,6 +177,12 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->write_timeout_ms < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_clients < 0) return CMQ_ERR_INVALID_ARG;
     if (config->num_threads < 0) return CMQ_ERR_INVALID_ARG;
+    {
+        const char *host = config->host ? config->host : CMQ_DEFAULT_HOST;
+        struct in_addr ha;
+        if (inet_pton(AF_INET, host, &ha) != 1)
+            return CMQ_ERR_INVALID_ARG;
+    }
     /* Routes without cluster identity would silently disable forwarding. */
     if (config->route_count > 0 &&
         (!config->cluster_name || !config->cluster_node_id ||

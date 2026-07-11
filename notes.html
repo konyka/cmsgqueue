@@ -1800,6 +1800,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — write_full stall/EINTR · listen host inet_pton</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/gw/leaf write</span></td><td>✅</td><td>Partial-write <code>poll</code> retries on EINTR; up to ~200ms stall rounds before hard-fail (avoid truncated CMQ frames).</td></tr>
+<tr><td><span class="component-name">listen host</span></td><td>✅</td><td><code>inet_pton</code> checked in <code>cmq_server_run</code> and <code>cmq_config_validate</code> (no silent 0.0.0.0 bind).</td></tr>
+</table>
+</div>
+
 
 
 

@@ -49,6 +49,7 @@ static void gw_slot_close_fd(cmq_gateway_t *gw, size_t idx) {
 /* 0 = full write, 1 = EAGAIN zero progress, -1 = hard failure. */
 static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
+    int stall_rounds = 0;
     while (off < len) {
         ssize_t n = write(fd, data + off, len - off);
         if (n < 0) {
@@ -56,8 +57,17 @@ static int write_full(int fd, const uint8_t *data, size_t len) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 if (off == 0) return 1;
                 struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-                if (poll(&pfd, 1, CMQ_GW_WRITE_MS) <= 0)
+                for (;;) {
+                    int pr = poll(&pfd, 1, CMQ_GW_WRITE_MS);
+                    if (pr > 0) {
+                        stall_rounds = 0;
+                        break;
+                    }
+                    if (pr < 0 && errno == EINTR) continue;
+                    if (pr == 0 && ++stall_rounds < 4)
+                        continue;
                     return -1;
+                }
                 continue;
             }
             return -1;
