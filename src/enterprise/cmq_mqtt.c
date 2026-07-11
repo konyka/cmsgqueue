@@ -56,7 +56,10 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;
     sa.sin_port = htons((uint16_t)port);
-    inet_pton(AF_INET, addr, &sa.sin_addr);
+    if (inet_pton(AF_INET, addr, &sa.sin_addr) != 1) {
+        close(fd);
+        return -1;
+    }
 
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
         close(fd);
@@ -66,6 +69,7 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     br->fd = fd;
     br->connected = 1;
     strncpy(br->addr, addr, sizeof(br->addr) - 1);
+    br->addr[sizeof(br->addr) - 1] = '\0';
     br->port = port;
     return 0;
 }
@@ -169,12 +173,20 @@ const char *cmq_mqtt_subject_to_topic(const char *subject, char *buf, size_t len
 }
 
 static int encode_remaining_length(uint8_t *buf, size_t offset, size_t len_size, uint32_t value) {
+    size_t needed = 0;
+    uint32_t v = value;
+    do {
+        needed++;
+        v >>= 7;
+    } while (v > 0);
+    if (needed > 4 || offset + needed > len_size) return -1;
+
     size_t i = 0;
     do {
         uint8_t byte = value & 0x7F;
         value >>= 7;
         if (value > 0) byte |= 0x80;
-        if (offset + i < len_size) buf[offset + i] = byte;
+        buf[offset + i] = byte;
         i++;
     } while (value > 0);
     return (int)i;
@@ -189,6 +201,7 @@ int cmq_mqtt_encode_connect(uint8_t *buf, size_t len, const char *client_id,
 
     buf[0] = CMQ_MQTT_CONNECT;
     int rl = encode_remaining_length(buf, 1, len, (uint32_t)var_len);
+    if (rl < 0) return -1;
     size_t pos = (size_t)(1 + rl);
 
     buf[pos++] = 0x00; buf[pos++] = 0x04;
@@ -214,6 +227,7 @@ int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
 
     buf[0] = CMQ_MQTT_PUBLISH | (uint8_t)((qos & 0x03) << 1);
     int rl = encode_remaining_length(buf, 1, len, (uint32_t)var_len);
+    if (rl < 0) return -1;
     size_t pos = (size_t)(1 + rl);
 
     buf[pos++] = (uint8_t)((topic_len >> 8) & 0xFF);
@@ -238,6 +252,7 @@ int cmq_mqtt_encode_subscribe(uint8_t *buf, size_t len, const char *topic, int q
 
     buf[0] = CMQ_MQTT_SUBSCRIBE | 0x02;
     int rl = encode_remaining_length(buf, 1, len, (uint32_t)var_len);
+    if (rl < 0) return -1;
     size_t pos = (size_t)(1 + rl);
 
     buf[pos++] = 0x00; buf[pos++] = 0x01;

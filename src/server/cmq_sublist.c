@@ -125,6 +125,29 @@ static cmq_sl_node_t *add_child(cmq_sl_node_t *parent, const char *token, int is
     return child;
 }
 
+static void unlink_child(cmq_sl_node_t *parent, cmq_sl_node_t *child) {
+    cmq_sl_node_t **pp = &parent->children;
+    while (*pp) {
+        if (*pp == child) {
+            *pp = child->next;
+            child->next = NULL;
+            return;
+        }
+        pp = &(*pp)->next;
+    }
+}
+
+/* Drop empty nodes created during a failed insert (OOM rollback). */
+static void rollback_created(cmq_sl_node_t **created, cmq_sl_node_t **parents,
+                             int ncreated) {
+    for (int j = ncreated - 1; j >= 0; j--) {
+        if (created[j]->sub_count != 0 || created[j]->children != NULL)
+            break;
+        unlink_child(parents[j], created[j]);
+        cmq_sl_node_destroy(created[j]);
+    }
+}
+
 static int node_add_sub(cmq_sl_node_t *node, void *data) {
     if (node->sub_count >= node->sub_cap) {
         size_t new_cap = node->sub_cap == 0 ? 4 : node->sub_cap * 2;
@@ -194,6 +217,9 @@ int cmq_sublist_insert(cmq_sublist_t *sl, const char *subject, void *data) {
     cmq_rwlock_wrlock(&sl->lock);
 
     cmq_sl_node_t *current = &sl->root;
+    cmq_sl_node_t *created[64];
+    cmq_sl_node_t *created_parent[64];
+    int ncreated = 0;
     for (int i = 0; i < ntokens; i++) {
         int is_pwc = (strcmp(tokens[i], "*") == 0);
         int is_fwc = (strcmp(tokens[i], ">") == 0);
@@ -202,15 +228,25 @@ int cmq_sublist_insert(cmq_sublist_t *sl, const char *subject, void *data) {
         if (!child) {
             child = add_child(current, is_pwc ? NULL : (is_fwc ? NULL : tokens[i]), is_pwc, is_fwc);
             if (!child) {
+                rollback_created(created, created_parent, ncreated);
                 cmq_rwlock_unlock(&sl->lock);
                 return -1;
+            }
+            if (ncreated < 64) {
+                created[ncreated] = child;
+                created_parent[ncreated] = current;
+                ncreated++;
             }
         }
         current = child;
     }
 
     int rc = node_add_sub(current, data);
-    if (rc == 0) sl->count++;
+    if (rc == 0) {
+        sl->count++;
+    } else {
+        rollback_created(created, created_parent, ncreated);
+    }
     cmq_rwlock_unlock(&sl->lock);
     return rc;
 }

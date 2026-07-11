@@ -1820,6 +1820,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — ACL NUL · sublist OOM rollback · WS key · MQTT encode</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">ACL export/import</span></td><td>✅</td><td>NUL-terminate subject/account after strncpy (no strcmp UB).</td></tr>
+<tr><td><span class="component-name">sublist insert</span></td><td>✅</td><td>Rollback empty nodes created on mid-path / <code>node_add_sub</code> OOM.</td></tr>
+<tr><td><span class="component-name">WS Accept-Key</span></td><td>✅</td><td>NUL-terminate <code>EVP_EncodeBlock</code> output.</td></tr>
+<tr><td><span class="component-name">MQTT remaining len</span></td><td>✅</td><td>Fail when buffer too small (no silent truncate); bridge <code>inet_pton</code> checked.</td></tr>
+</table>
+</div>
+
 
 
 

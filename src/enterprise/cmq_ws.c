@@ -216,9 +216,10 @@ int cmq_ws_accept_key(const char *client_key, char *out_key, size_t out_len) {
     EVP_MD_CTX_free(ctx);
     free(combined);
 
-    size_t b64_len = 0;
-    EVP_EncodeBlock((unsigned char *)out_key, hash, SHA_DIGEST_LENGTH);
-    (void)b64_len;
+    size_t b64_len = (size_t)EVP_EncodeBlock((unsigned char *)out_key, hash,
+                                               SHA_DIGEST_LENGTH);
+    if (b64_len == 0 || b64_len >= out_len) return -1;
+    out_key[b64_len] = '\0';
     return 0;
 }
 

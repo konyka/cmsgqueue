@@ -219,8 +219,11 @@ int cmq_account_add_export(cmq_account_manager_t *mgr, const char *account,
         }
     }
     cmq_account_export_t *e = &p->exports[p->export_count++];
+    memset(e, 0, sizeof(*e));
     strncpy(e->subject, subject, sizeof(e->subject) - 1);
+    e->subject[sizeof(e->subject) - 1] = '\0';
     strncpy(e->dest_account, dest_account, CMQ_ACCOUNT_NAME_SIZE - 1);
+    e->dest_account[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
     e->active = 1;
     cmq_mutex_unlock(&g_perms_lock);
     return 0;
@@ -275,8 +278,11 @@ int cmq_account_add_import(cmq_account_manager_t *mgr, const char *account,
         }
     }
     cmq_account_import_t *imp = &p->imports[p->import_count++];
+    memset(imp, 0, sizeof(*imp));
     strncpy(imp->subject, subject, sizeof(imp->subject) - 1);
+    imp->subject[sizeof(imp->subject) - 1] = '\0';
     strncpy(imp->source_account, source_account, CMQ_ACCOUNT_NAME_SIZE - 1);
+    imp->source_account[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
     imp->active = 1;
     cmq_mutex_unlock(&g_perms_lock);
     return 0;
