@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_gateway.h"
+#include "cmq_route.h"
 #include "cmq_thread.h"
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +9,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 
 struct cmq_gateway {
     char local_cluster[64];
@@ -17,6 +19,11 @@ struct cmq_gateway {
     size_t cluster_count;
     cmq_mutex_t lock;
 };
+
+static void set_nonblock(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
 
 /* 0 = ok, 1 = EAGAIN zero progress, -1 = hard/partial (close fd). */
 static int write_full(int fd, const uint8_t *data, size_t len) {
@@ -123,6 +130,17 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
                 cmq_mutex_unlock(&gw->lock);
                 return -1;
             }
+            cmq_mutex_unlock(&gw->lock);
+            if (cmq_peer_handshake(fd, NULL, NULL) != 0) {
+                close(fd);
+                cmq_mutex_lock(&gw->lock);
+                gw->conns[i].fd = -1;
+                gw->conns[i].connected = 0;
+                cmq_mutex_unlock(&gw->lock);
+                return -1;
+            }
+            set_nonblock(fd);
+            cmq_mutex_lock(&gw->lock);
             gw->conns[i].fd = fd;
             gw->conns[i].connected = 1;
             strncpy(gw->conns[i].remote_addr, addr, CMQ_NODE_ADDR_SIZE - 1);
@@ -137,27 +155,41 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
         return -1;
     }
 
+    /* Copy addr/port then unlock for blocking connect+handshake. */
+    char addr_copy[CMQ_NODE_ADDR_SIZE];
+    strncpy(addr_copy, addr, sizeof(addr_copy) - 1);
+    addr_copy[sizeof(addr_copy) - 1] = '\0';
+    int port_copy = port;
+    cmq_mutex_unlock(&gw->lock);
+
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        cmq_mutex_unlock(&gw->lock);
-        return -1;
-    }
+    if (fd < 0) return -1;
 
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;
-    sa.sin_port = htons((uint16_t)port);
-    inet_pton(AF_INET, addr, &sa.sin_addr);
+    sa.sin_port = htons((uint16_t)port_copy);
+    inet_pton(AF_INET, addr_copy, &sa.sin_addr);
 
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
         close(fd);
-        cmq_mutex_unlock(&gw->lock);
         return -1;
     }
+    if (cmq_peer_handshake(fd, NULL, NULL) != 0) {
+        close(fd);
+        return -1;
+    }
+    set_nonblock(fd);
 
+    cmq_mutex_lock(&gw->lock);
+    if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        return -1;
+    }
     cmq_gw_conn_t *c = &gw->conns[gw->conn_count++];
     strncpy(c->remote_cluster, cluster_name, sizeof(c->remote_cluster) - 1);
-    strncpy(c->remote_addr, addr, CMQ_NODE_ADDR_SIZE - 1);
-    c->remote_port = port;
+    strncpy(c->remote_addr, addr_copy, CMQ_NODE_ADDR_SIZE - 1);
+    c->remote_port = port_copy;
     c->fd = fd;
     c->connected = 1;
 
@@ -183,17 +215,22 @@ int cmq_gateway_disconnect(cmq_gateway_t *gw, const char *cluster_name) {
 }
 
 size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
-                            const uint8_t *data, size_t len) {
+                            const uint8_t *data, size_t len,
+                            size_t *out_eagain) {
+    if (out_eagain) *out_eagain = 0;
     if (!gw || !data || len == 0) return 0;
     cmq_mutex_lock(&gw->lock);
     size_t sent = 0;
+    size_t deferred = 0;
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (strcmp(gw->conns[i].remote_cluster, target_cluster) == 0 &&
             gw->conns[i].connected) {
             int wr = write_full(gw->conns[i].fd, data, len);
             if (wr == 0) {
                 sent++;
-            } else if (wr < 0) {
+            } else if (wr == 1) {
+                deferred++;
+            } else {
                 if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
                 gw->conns[i].fd = -1;
                 gw->conns[i].connected = 0;
@@ -201,26 +238,32 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
         }
     }
     cmq_mutex_unlock(&gw->lock);
+    if (out_eagain) *out_eagain = deferred;
     return sent;
 }
 
-size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len) {
+size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
+                              size_t *out_eagain) {
+    if (out_eagain) *out_eagain = 0;
     if (!gw || !data || len == 0) return 0;
     cmq_mutex_lock(&gw->lock);
     size_t sent = 0;
+    size_t deferred = 0;
     for (size_t i = 0; i < gw->conn_count; i++) {
-        if (gw->conns[i].connected) {
-            int wr = write_full(gw->conns[i].fd, data, len);
-            if (wr == 0) {
-                sent++;
-            } else if (wr < 0) {
-                if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
-                gw->conns[i].fd = -1;
-                gw->conns[i].connected = 0;
-            }
+        if (!gw->conns[i].connected) continue;
+        int wr = write_full(gw->conns[i].fd, data, len);
+        if (wr == 0) {
+            sent++;
+        } else if (wr == 1) {
+            deferred++;
+        } else {
+            if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
+            gw->conns[i].fd = -1;
+            gw->conns[i].connected = 0;
         }
     }
     cmq_mutex_unlock(&gw->lock);
+    if (out_eagain) *out_eagain = deferred;
     return sent;
 }
 

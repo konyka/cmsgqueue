@@ -1,10 +1,14 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_leaf.h"
+#include "cmq_route.h"
+#include "cmq_parser.h"
+#include "cmq_proto.h"
 #include "cmq_thread.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -19,12 +23,32 @@ struct cmq_leaf_node {
 
     char *subs[CMQ_LEAF_MAX_SUBS];
     size_t sub_count;
+    uint32_t next_sub_id;
 
     cmq_leaf_conn_t leaves[CMQ_LEAF_MAX_CONNECTIONS];
     size_t leaf_count;
 
     cmq_mutex_t lock;
 };
+
+static void set_nonblock(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+static int write_all(int fd, const uint8_t *data, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, data + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        off += (size_t)n;
+    }
+    return 0;
+}
 
 cmq_leaf_node_t *cmq_leaf_create(const char *hub_addr, int hub_port) {
     if (!hub_addr) return NULL;
@@ -86,9 +110,23 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         cmq_mutex_unlock(&leaf->lock);
         return -1;
     }
+    cmq_mutex_unlock(&leaf->lock);
 
+    if (cmq_peer_handshake(fd, NULL, NULL) != 0) {
+        close(fd);
+        return -1;
+    }
+    set_nonblock(fd);
+
+    cmq_mutex_lock(&leaf->lock);
+    if (leaf->connected) {
+        close(fd);
+        cmq_mutex_unlock(&leaf->lock);
+        return 0;
+    }
     leaf->hub_fd = fd;
     leaf->connected = 1;
+    leaf->next_sub_id = 1;
 
     cmq_mutex_unlock(&leaf->lock);
     return 0;
@@ -114,6 +152,9 @@ int cmq_leaf_is_connected(cmq_leaf_node_t *leaf) {
 
 int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
     if (!leaf || !subject) return -1;
+    size_t slen = strlen(subject);
+    if (slen == 0 || slen >= 256) return -1;
+
     cmq_mutex_lock(&leaf->lock);
     if (leaf->sub_count >= CMQ_LEAF_MAX_SUBS) {
         cmq_mutex_unlock(&leaf->lock);
@@ -125,12 +166,44 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
             return 0;
         }
     }
-    leaf->subs[leaf->sub_count] = strdup(subject);
-    if (!leaf->subs[leaf->sub_count]) {
+    char *copy = strdup(subject);
+    if (!copy) {
         cmq_mutex_unlock(&leaf->lock);
         return -1;
     }
-    leaf->sub_count++;
+
+    int hub_fd = leaf->hub_fd;
+    int connected = leaf->connected;
+    uint32_t sub_id = leaf->next_sub_id++;
+    cmq_mutex_unlock(&leaf->lock);
+
+    if (connected && hub_fd >= 0) {
+        uint8_t payload[8 + 256];
+        size_t po = 0;
+        payload[po++] = (uint8_t)(sub_id >> 24);
+        payload[po++] = (uint8_t)(sub_id >> 16);
+        payload[po++] = (uint8_t)(sub_id >> 8);
+        payload[po++] = (uint8_t)sub_id;
+        payload[po++] = (uint8_t)(slen >> 8);
+        payload[po++] = (uint8_t)slen;
+        memcpy(payload + po, subject, slen);
+        po += slen;
+        uint8_t frame[16 + 256];
+        size_t flen = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_SUBSCRIBE,
+                                        0, payload, po);
+        if (flen == 0 || write_all(hub_fd, frame, flen) != 0) {
+            free(copy);
+            return -1;
+        }
+    }
+
+    cmq_mutex_lock(&leaf->lock);
+    if (leaf->sub_count >= CMQ_LEAF_MAX_SUBS) {
+        cmq_mutex_unlock(&leaf->lock);
+        free(copy);
+        return -1;
+    }
+    leaf->subs[leaf->sub_count++] = copy;
     cmq_mutex_unlock(&leaf->lock);
     return 0;
 }

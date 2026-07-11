@@ -17,6 +17,9 @@ typedef struct {
     uint64_t bytes_recv;
 } cmq_route_conn_t;
 
+/* Blocking CONNECT+CONNACK (optionally with auth). Call before set_nonblock. */
+int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass);
+
 cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster);
 void cmq_route_pool_destroy(cmq_route_pool_t *pool);
 
@@ -25,7 +28,9 @@ void cmq_route_pool_destroy(cmq_route_pool_t *pool);
 int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                        const char *addr, int port,
                        const char *auth_user, const char *auth_pass);
-int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd);
+/* fd < 0: placeholder slot (connected=1, no I/O). fd >= 0: handshake then nonblock. */
+int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
+                        const char *auth_user, const char *auth_pass);
 int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id);
 
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject,

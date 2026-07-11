@@ -52,6 +52,7 @@ void cmq_store_destroy(cmq_store_t *store) {
 
 uint64_t cmq_store_put(cmq_store_t *store, const uint8_t *data, size_t len) {
     if (!store || !data || len == 0) return 0;
+    if (len > (16u * 1024 * 1024)) return 0;
     cmq_mutex_lock(&store->lock);
 
     size_t idx = (size_t)(store->head_seq - 1) % store->cap;

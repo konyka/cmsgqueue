@@ -24,7 +24,7 @@ static void set_nonblock(int fd) {
 
 /* Blocking CONNECT + CONNACK so the peer accepts subsequent PUBLISH frames.
    Must run before set_nonblock. Skips INFO (sent before CONNACK). */
-static int route_handshake(int fd, const char *auth_user, const char *auth_pass) {
+int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass) {
     uint8_t payload[520];
     uint16_t ulen = 0, pwen = 0;
     if (auth_user) {
@@ -196,7 +196,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                 cmq_mutex_unlock(&pool->lock);
                 return -1;
             }
-            if (route_handshake(fd, auth_user, auth_pass) != 0) {
+            if (cmq_peer_handshake(fd, auth_user, auth_pass) != 0) {
                 close(fd);
                 pool->conns[i].fd = -1;
                 cmq_mutex_unlock(&pool->lock);
@@ -231,7 +231,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         cmq_mutex_unlock(&pool->lock);
         return -1;
     }
-    if (route_handshake(fd, auth_user, auth_pass) != 0) {
+    if (cmq_peer_handshake(fd, auth_user, auth_pass) != 0) {
         close(fd);
         cmq_mutex_unlock(&pool->lock);
         return -1;
@@ -251,29 +251,60 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
     return 0;
 }
 
-int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd) {
+int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
+                        const char *auth_user, const char *auth_pass) {
     if (!pool || !node_id) return -1;
-    cmq_mutex_lock(&pool->lock);
 
+    /* Reject pool-full before handshake so caller-owned fds are closed cleanly
+       without blocking on a peer that will never be retained. */
+    cmq_mutex_lock(&pool->lock);
+    int replace = -1;
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
+            replace = (int)i;
+            break;
+        }
+    }
+    if (replace < 0 && pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
+        cmq_mutex_unlock(&pool->lock);
+        if (fd >= 0) close(fd);
+        return -1;
+    }
+    cmq_mutex_unlock(&pool->lock);
+
+    if (fd >= 0) {
+        if (cmq_peer_handshake(fd, auth_user, auth_pass) != 0) {
+            close(fd);
+            return -1;
+        }
+        set_nonblock(fd);
+    }
+
+    cmq_mutex_lock(&pool->lock);
+    if (replace >= 0 && (size_t)replace < pool->conn_count &&
+        strcmp(pool->conns[replace].remote_id, node_id) == 0) {
+        if (pool->conns[replace].fd >= 0 && pool->conns[replace].fd != fd)
+            close(pool->conns[replace].fd);
+        pool->conns[replace].fd = fd;
+        pool->conns[replace].connected = 1;
+        cmq_mutex_unlock(&pool->lock);
+        return 0;
+    }
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
             if (pool->conns[i].fd >= 0 && pool->conns[i].fd != fd)
                 close(pool->conns[i].fd);
-            if (fd >= 0) set_nonblock(fd);
             pool->conns[i].fd = fd;
             pool->conns[i].connected = 1;
             cmq_mutex_unlock(&pool->lock);
             return 0;
         }
     }
-
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
         cmq_mutex_unlock(&pool->lock);
         if (fd >= 0) close(fd);
         return -1;
     }
-
-    if (fd >= 0) set_nonblock(fd);
     cmq_route_conn_t *c = &pool->conns[pool->conn_count++];
     strncpy(c->remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
     c->fd = fd;
@@ -282,7 +313,6 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd) {
     c->msgs_recv = 0;
     c->bytes_sent = 0;
     c->bytes_recv = 0;
-
     cmq_mutex_unlock(&pool->lock);
     return 0;
 }

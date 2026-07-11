@@ -99,6 +99,23 @@ static int ct_memeq(const void *a, const void *b, size_t n) {
     return diff == 0;
 }
 
+/* True if peer IP matches a configured outbound route address (ingress ACL). */
+static int peer_matches_configured_route(cmq_server_t *srv, int fd) {
+    if (!srv || fd < 0 || srv->config.route_count <= 0) return 0;
+    struct sockaddr_in peer;
+    socklen_t plen = sizeof(peer);
+    if (getpeername(fd, (struct sockaddr *)&peer, &plen) != 0) return 0;
+    for (int i = 0; i < srv->config.route_count; i++) {
+        if (!srv->config.routes[i].addr) continue;
+        struct in_addr expect;
+        if (inet_pton(AF_INET, srv->config.routes[i].addr, &expect) != 1)
+            continue;
+        if (expect.s_addr == peer.sin_addr.s_addr)
+            return 1;
+    }
+    return 0;
+}
+
 static ssize_t client_sock_read(cmq_client_t *c, uint8_t *buf, size_t len) {
     if (c->tls) return cmq_tls_read(c->tls, buf, len);
     return read(c->fd, buf, len);
@@ -2009,8 +2026,15 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             free(c->username);
             c->username = strdup(uname);
         }
-        if (frame->hdr.flags & CMQ_FLAG_ROUTE)
+        /* CMQ_FLAG_ROUTE only trusted for peers in configured routes[]. */
+        if (frame->hdr.flags & CMQ_FLAG_ROUTE) {
+            if (!srv->routes || !peer_matches_configured_route(srv, c->fd)) {
+                cmq_send_connack(c, 1);
+                c->state = CMQ_CLIENT_CLOSING;
+                break;
+            }
             c->is_route = 1;
+        }
         c->state = CMQ_CLIENT_CONNECTED;
         c->last_activity_ms = srv_now_ms();
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);

@@ -37,8 +37,8 @@ static void demo_routing(void) {
     cmq_cluster_t *cluster = cmq_cluster_create("dc1", "node-1");
     cmq_route_pool_t *routes = cmq_route_pool_create(cluster);
 
-    cmq_route_add_conn(routes, "node-2", -1);
-    cmq_route_add_conn(routes, "node-3", -1);
+    cmq_route_add_conn(routes, "node-2", -1, NULL, NULL);
+    cmq_route_add_conn(routes, "node-3", -1, NULL, NULL);
     printf("Added 2 route connections. Pool size: %zu\n", cmq_route_pool_count(routes));
 
     cmq_route_conn_t *c = cmq_route_get_conn(routes, "node-2");

@@ -35,8 +35,10 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name);
 int cmq_gateway_disconnect(cmq_gateway_t *gw, const char *cluster_name);
 
 size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
-                            const uint8_t *data, size_t len);
-size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len);
+                            const uint8_t *data, size_t len,
+                            size_t *out_eagain);
+size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
+                              size_t *out_eagain);
 
 size_t cmq_gateway_connection_count(cmq_gateway_t *gw);
 size_t cmq_gateway_known_cluster_count(cmq_gateway_t *gw);

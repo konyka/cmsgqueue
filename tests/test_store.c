@@ -30,6 +30,18 @@ TEST(store, put_get) {
     cmq_store_destroy(s);
 }
 
+TEST(store, put_rejects_oversize) {
+    cmq_store_t *s = cmq_store_create(8);
+    size_t huge = 16u * 1024 * 1024 + 1;
+    uint8_t *buf = malloc(huge);
+    ASSERT_NOT_NULL(buf);
+    memset(buf, 1, huge);
+    ASSERT_EQ(cmq_store_put(s, buf, huge), (uint64_t)0);
+    ASSERT_EQ(cmq_store_count(s), (size_t)0);
+    free(buf);
+    cmq_store_destroy(s);
+}
+
 TEST(store, ring_overwrite) {
     cmq_store_t *s = cmq_store_create(4);
     for (int i = 0; i < 6; i++) {

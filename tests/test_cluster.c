@@ -88,13 +88,13 @@ TEST(route, add_remove_conn) {
     cmq_cluster_t *c = cmq_cluster_create("c1", "n1");
     cmq_route_pool_t *rp = cmq_route_pool_create(c);
 
-    ASSERT_EQ(cmq_route_add_conn(rp, "n2", -1), 0);
+    ASSERT_EQ(cmq_route_add_conn(rp, "n2", -1, NULL, NULL), 0);
     ASSERT_EQ(cmq_route_pool_count(rp), (size_t)1);
 
-    ASSERT_EQ(cmq_route_add_conn(rp, "n2", -1), 0);
+    ASSERT_EQ(cmq_route_add_conn(rp, "n2", -1, NULL, NULL), 0);
     ASSERT_EQ(cmq_route_pool_count(rp), (size_t)1);
 
-    ASSERT_EQ(cmq_route_add_conn(rp, "n3", -1), 0);
+    ASSERT_EQ(cmq_route_add_conn(rp, "n3", -1, NULL, NULL), 0);
     ASSERT_EQ(cmq_route_pool_count(rp), (size_t)2);
 
     cmq_route_conn_t *conn = cmq_route_get_conn(rp, "n2");
@@ -119,11 +119,11 @@ TEST(route, add_conn_pool_full_closes_fd) {
     for (int i = 0; i < 32; i++) {
         char id[16];
         snprintf(id, sizeof(id), "n%d", i);
-        ASSERT_EQ(cmq_route_add_conn(rp, id, -1), 0);
+        ASSERT_EQ(cmq_route_add_conn(rp, id, -1, NULL, NULL), 0);
     }
     int fds[2];
     ASSERT_EQ(pipe(fds), 0);
-    ASSERT_EQ(cmq_route_add_conn(rp, "overflow", fds[1]), -1);
+    ASSERT_EQ(cmq_route_add_conn(rp, "overflow", fds[1], NULL, NULL), -1);
     /* Write end should be closed by add_conn; write must fail with EBADF. */
     errno = 0;
     ASSERT(write(fds[1], "x", 1) < 0);
