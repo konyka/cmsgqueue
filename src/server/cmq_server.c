@@ -71,6 +71,7 @@ static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
                               const char *subject,
                               const uint8_t *payload, size_t payload_len,
                               const uint8_t *headers, size_t headers_len);
+static void deliver_ctx_free(void *arg);
 
 static void worker_wakeup_cb(int fd, int events, void *data) {
     (void)events;
@@ -235,10 +236,14 @@ static void cmq_worker_destroy(cmq_worker_t *w) {
     if (w->wakeup_fd >= 0) { wakeup_fd_close(w->wakeup_fd); w->wakeup_fd = -1; }
     if (w->coro_pool) {
         for (int i = 0; i < w->coro_count; i++) {
-            cmq_coro_destroy(w->coro_pool[i]);
+            if (w->coro_pool[i]) {
+                deliver_ctx_free(w->coro_pool[i]->arg);
+                cmq_coro_destroy(w->coro_pool[i]);
+            }
         }
         free(w->coro_pool);
         w->coro_pool = NULL;
+        w->coro_count = 0;
     }
     if (w->ev_loop) { cmq_ev_loop_destroy(w->ev_loop); w->ev_loop = NULL; }
     cmq_mutex_destroy(&w->clients_lock);
@@ -650,8 +655,7 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
     cmq_deliver_tgt_t *tgts = malloc(result->count * sizeof(cmq_deliver_tgt_t));
     if (!tgts) return NULL;
 
-    const char *seen_qg[64];
-    int nseen = 0;
+    /* Dedup against already-selected targets — no fixed 64 cap, no extra alloc. */
     size_t n = 0;
     for (size_t i = 0; i < result->count; i++) {
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result->entries[i];
@@ -661,14 +665,14 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
 
         if (ref->queue_group[0] != '\0') {
             int skip = 0;
-            for (int s = 0; s < nseen; s++) {
-                if (strcmp(seen_qg[s], ref->queue_group) == 0) {
+            for (size_t s = 0; s < n; s++) {
+                if (tgts[s].queue_group[0] != '\0' &&
+                    strcmp(tgts[s].queue_group, ref->queue_group) == 0) {
                     skip = 1;
                     break;
                 }
             }
             if (skip) continue;
-            if (nseen < 64) seen_qg[nseen++] = ref->queue_group;
         }
 
         tgts[n].client_id = ref->client->id;
@@ -695,8 +699,12 @@ static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
                                               headers, headers_len, &flen);
     if (!frame) return;
 
-    const char *seen_qg[64];
+    const char **seen_qg = NULL;
     int nseen = 0;
+    if (result->count > 0) {
+        seen_qg = malloc(result->count * sizeof(const char *));
+        /* On OOM: skip queue-group members (never over-deliver within a group). */
+    }
 
     for (size_t i = 0; i < result->count; i++) {
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result->entries[i];
@@ -705,6 +713,7 @@ static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
             ref->client->state != CMQ_CLIENT_INIT) continue;
 
         if (ref->queue_group[0] != '\0') {
+            if (!seen_qg) continue;
             int skip = 0;
             for (int s = 0; s < nseen; s++) {
                 if (strcmp(seen_qg[s], ref->queue_group) == 0) {
@@ -713,7 +722,7 @@ static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
                 }
             }
             if (skip) continue;
-            if (nseen < 64) seen_qg[nseen++] = ref->queue_group;
+            seen_qg[nseen++] = ref->queue_group;
         }
 
         cmq_patch_message_sub_id(frame, ref->sub_id);
@@ -725,6 +734,7 @@ static void deliver_matches(cmq_server_t *srv, cmq_sublist_result_t *result,
             if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)payload_len);
         }
     }
+    free(seen_qg);
     free(frame);
 }
 
@@ -759,22 +769,26 @@ static void deliver_coro_func(void *arg) {
         cmq_deliver_tgt_t *t = &ctx->targets[i];
         cmq_patch_message_sub_id(ctx->frame, t->sub_id);
 
+        int delivered = 0;
         /* Never hold a bare client* across unlock — route by stable id.
            Queue raw CMQ; owning thread wraps WS in send_local. */
         if (t->worker_id >= 0 && srv->workers &&
             t->worker_id < srv->num_workers) {
             if (worker_push_msg(&srv->workers[t->worker_id], t->client_id,
-                                 ctx->frame, ctx->frame_len) != 0) {
-                /* OOM fallback: resolve under lock and send locally if we own it. */
+                                 ctx->frame, ctx->frame_len) == 0) {
+                delivered = 1;
+            } else if (cmq_current_worker_id == t->worker_id) {
+                /* OOM fallback only on the owning worker thread. */
                 cmq_worker_t *w = &srv->workers[t->worker_id];
                 cmq_mutex_lock(&w->clients_lock);
                 for (int ci = 0; ci < w->clients_count; ci++) {
                     cmq_client_t *c = w->clients[ci];
                     if (c && c->id == t->client_id &&
                         (c->state == CMQ_CLIENT_CONNECTED ||
-                         c->state == CMQ_CLIENT_INIT) &&
-                        cmq_current_worker_id == t->worker_id) {
-                        cmq_client_send_local(c, ctx->frame, ctx->frame_len);
+                         c->state == CMQ_CLIENT_INIT)) {
+                        if (cmq_client_send_local(c, ctx->frame,
+                                                   ctx->frame_len) == 0)
+                            delivered = 1;
                         break;
                     }
                 }
@@ -787,15 +801,17 @@ static void deliver_coro_func(void *arg) {
                 if (c && c->id == t->client_id &&
                     (c->state == CMQ_CLIENT_CONNECTED ||
                      c->state == CMQ_CLIENT_INIT)) {
-                    cmq_client_send_local(c, ctx->frame, ctx->frame_len);
+                    if (cmq_client_send_local(c, ctx->frame, ctx->frame_len) == 0)
+                        delivered = 1;
                     break;
                 }
             }
             cmq_mutex_unlock(&srv->clients_lock);
         }
 
-        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
-        {
+        if (delivered) {
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                      CMQ_ATOMIC_RELAXED);
             cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
             if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)ctx->payload_len);
         }
@@ -822,7 +838,8 @@ done:
     ctx->frame = NULL;
 }
 
-static void deliver_ctx_free(cmq_deliver_ctx_t *ctx) {
+static void deliver_ctx_free(void *arg) {
+    cmq_deliver_ctx_t *ctx = (cmq_deliver_ctx_t *)arg;
     if (!ctx) return;
     free((void *)ctx->payload);
     if (ctx->headers) free((void *)ctx->headers);
@@ -917,31 +934,45 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
     char subject[CMQ_MAX_SUBJECT];
-    if (subject_len >= CMQ_MAX_SUBJECT) subject_len = CMQ_MAX_SUBJECT - 1;
-    memcpy(subject, frame->payload + 2, subject_len);
-    subject[subject_len] = '\0';
+    size_t copy_len = subject_len;
+    if (copy_len >= CMQ_MAX_SUBJECT) copy_len = CMQ_MAX_SUBJECT - 1;
+    memcpy(subject, frame->payload + 2, copy_len);
+    subject[copy_len] = '\0';
 
-    size_t offset = 2 + subject_len;
+    /* Advance by wire subject_len, not the truncated copy length. */
+    size_t offset = 2 + (size_t)subject_len;
     if (offset + 2 <= frame->payload_len) {
         uint16_t reply_len = ((uint16_t)frame->payload[offset] << 8) |
                               frame->payload[offset + 1];
-        offset += 2 + reply_len;
+        if (offset + 2 + (size_t)reply_len > frame->payload_len) {
+            cmq_send_error(c, "invalid publish");
+            return;
+        }
+        offset += 2 + (size_t)reply_len;
     }
 
     const uint8_t *headers = NULL;
     size_t headers_len = 0;
     if (frame->hdr.flags & CMQ_FLAG_HEADERS) {
-        if (offset + 2 <= frame->payload_len) {
-            headers_len = ((uint16_t)frame->payload[offset] << 8) |
-                           frame->payload[offset + 1];
-            offset += 2;
-            if (offset + headers_len <= frame->payload_len) {
-                headers = frame->payload + offset;
-            }
-            offset += headers_len;
+        if (offset + 2 > frame->payload_len) {
+            cmq_send_error(c, "invalid publish headers");
+            return;
         }
+        headers_len = ((uint16_t)frame->payload[offset] << 8) |
+                       frame->payload[offset + 1];
+        offset += 2;
+        if (offset + headers_len > frame->payload_len) {
+            cmq_send_error(c, "invalid publish headers");
+            return;
+        }
+        headers = frame->payload + offset;
+        offset += headers_len;
     }
 
+    if (offset > frame->payload_len) {
+        cmq_send_error(c, "invalid publish");
+        return;
+    }
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
 
@@ -1208,14 +1239,17 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    const char *seen_qg[64];
+    const char **seen_qg = NULL;
     int nseen = 0;
+    if (result.count > 0)
+        seen_qg = malloc(result.count * sizeof(const char *));
     for (size_t i = 0; i < result.count; i++) {
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
         if (!ref || !ref->client) continue;
         if (ref->client->state != CMQ_CLIENT_CONNECTED &&
             ref->client->state != CMQ_CLIENT_INIT) continue;
         if (ref->queue_group[0] != '\0') {
+            if (!seen_qg) continue;
             int skip = 0;
             for (int s = 0; s < nseen; s++) {
                 if (strcmp(seen_qg[s], ref->queue_group) == 0) {
@@ -1224,13 +1258,14 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                 }
             }
             if (skip) continue;
-            if (nseen < 64) seen_qg[nseen++] = ref->queue_group;
+            seen_qg[nseen++] = ref->queue_group;
         }
         cmq_send_request_message(ref->client, ref->sub_id, subject,
                                   reply_to, msg_payload, msg_len);
         cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                   CMQ_ATOMIC_RELAXED);
     }
+    free(seen_qg);
     cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
 
@@ -1333,15 +1368,17 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         offset += 2;
         if (offset + subject_len > frame->payload_len) break;
         char subject[CMQ_MAX_SUBJECT];
-        if (subject_len >= CMQ_MAX_SUBJECT) subject_len = CMQ_MAX_SUBJECT - 1;
-        memcpy(subject, frame->payload + offset, subject_len);
-        subject[subject_len] = '\0';
+        size_t copy_len = subject_len;
+        if (copy_len >= CMQ_MAX_SUBJECT) copy_len = CMQ_MAX_SUBJECT - 1;
+        memcpy(subject, frame->payload + offset, copy_len);
+        subject[copy_len] = '\0';
         offset += subject_len;
 
         if (offset + 2 > frame->payload_len) break;
         uint16_t reply_len = ((uint16_t)frame->payload[offset] << 8) |
                               frame->payload[offset + 1];
-        offset += 2 + reply_len;
+        if (offset + 2 + (size_t)reply_len > frame->payload_len) break;
+        offset += 2 + (size_t)reply_len;
 
         if (offset + 4 > frame->payload_len) break;
         uint32_t payload_len = ((uint32_t)frame->payload[offset] << 24) |
@@ -1349,9 +1386,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                                 ((uint32_t)frame->payload[offset + 2] << 8) |
                                 (uint32_t)frame->payload[offset + 3];
         offset += 4;
-        if (offset + payload_len > frame->payload_len) {
-            payload_len = (uint32_t)(frame->payload_len - offset);
-        }
+        if (offset > frame->payload_len) break;
+        if (offset + payload_len > frame->payload_len) break;
         if (srv->config.max_payload_size > 0 &&
             payload_len > (uint32_t)srv->config.max_payload_size) {
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,

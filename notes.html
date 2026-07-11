@@ -1045,6 +1045,24 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Publish Bounds &amp; Queue-Group Scale</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">handle_publish bounds</span></td><td>✅</td><td>Validate reply/headers lengths before advancing; keep wire <code>subject_len</code> for offset (truncated name only). Reject malformed frames instead of mis-slicing payload.</td></tr>
+<tr><td><span class="component-name">handle_batch bounds</span></td><td>✅</td><td>Same reply/payload length checks; no silent truncation of oversize batch entries.</td></tr>
+<tr><td><span class="component-name">queue-group dedup uncapped</span></td><td>✅</td><td>Snapshot dedups via selected targets; sync/request paths allocate <code>seen_qg</code> sized to match count (OOM skips qg members — never over-delivers).</td></tr>
+<tr><td><span class="component-name">coro stats on success</span></td><td>✅</td><td><code>stat_messages_out</code> / account counters only increment when push or local send succeeds.</td></tr>
+<tr><td><span class="component-name">worker destroy coro ctx</span></td><td>✅</td><td><code>cmq_worker_destroy</code> frees pending <code>deliver_ctx</code> before destroying coroutines.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Pending commit</span> — Publish/batch bounds + uncapped queue-group dedup + coro stats. <strong>21/21 test suites pass.</strong>
+</div>
+</div>
+
 </div>
 </body>
 </html>
