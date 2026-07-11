@@ -145,6 +145,7 @@ static void do_response(int fd, const char *subject, const char *msg) {
 
 TEST(request_reply, basic_request_response) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = REQ_PORT;
     config.log_to_stdout = 0;
@@ -206,6 +207,7 @@ TEST(request_reply, basic_request_response) {
 
 TEST(request_reply, multi_responder) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = REQ_PORT + 1;
     config.log_to_stdout = 0;

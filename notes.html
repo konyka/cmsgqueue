@@ -1482,6 +1482,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route after match · reply-to · auto threads</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route after snapshot</span></td><td>✅</td><td>PUBLISH/REQUEST/RESPONSE forward only after match+snapshot succeed — no OOM cluster ghosts.</td></tr>
+<tr><td><span class="component-name">reply-to concrete</span></td><td>✅</td><td>Reject <code>*</code>/<code>&gt;</code> in REQUEST reply-to (same as publish subjects).</td></tr>
+<tr><td><span class="component-name">num_threads auto</span></td><td>✅</td><td><code>0</code> → <code>sysconf(_SC_NPROCESSORS_ONLN)</code> (capped 64) at <code>cmq_server_run</code>.</td></tr>
+</table>
+</div>
+
 
 
 

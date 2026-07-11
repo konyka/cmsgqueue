@@ -1501,11 +1501,6 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
 
     size_t route_sent = 0;
     int route_rc = 0;
-    /* Route ingress: local deliver only — never re-broadcast (loop/dup). */
-    if (!c->is_route)
-        route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
-                                         frame->payload, frame->payload_len,
-                                         &route_sent);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1518,6 +1513,11 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     if (result.count == 0) {
         cmq_sublist_result_free(&result);
         cmq_rwlock_unlock(&srv->sublist_lock);
+        /* Remote-only: forward after local match succeeded (no OOM ghost). */
+        if (!c->is_route)
+            route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
+                                             frame->payload, frame->payload_len,
+                                             &route_sent);
         if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent))
             cmq_send_error(c, "route failed");
         return;
@@ -1534,10 +1534,20 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     }
     if (!tgts || ntgt == 0) {
         free(tgts);
+        if (!c->is_route)
+            route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
+                                             frame->payload, frame->payload_len,
+                                             &route_sent);
         if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent))
             cmq_send_error(c, "route failed");
         return;
     }
+
+    /* Cluster forward only after local snapshot succeeded. */
+    if (!c->is_route)
+        route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
+                                         frame->payload, frame->payload_len,
+                                         &route_sent);
 
     if (ntgt > CMQ_CORO_DELIVER_BATCH && srv->num_workers > 0) {
         cmq_worker_t *w = &srv->workers[cmq_current_worker_id >= 0 ?
@@ -1828,6 +1838,10 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             }
             memcpy(reply_to, frame->payload + offset, wire_reply);
             reply_to[wire_reply] = '\0';
+            if (cmq_sublist_publish_subject_valid(reply_to) != 0) {
+                cmq_send_error(c, "invalid reply-to");
+                return;
+            }
         }
         offset += wire_reply;
     }
@@ -1858,10 +1872,6 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
 
     size_t route_sent = 0;
     int route_rc = 0;
-    if (!c->is_route)
-        route_rc = cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
-                                         frame->payload, frame->payload_len,
-                                         &route_sent);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1879,6 +1889,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "delivery failed");
         return;
     }
+    /* Forward only after local match/snapshot succeeded (no OOM ghosts). */
+    if (!c->is_route)
+        route_rc = cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
+                                         frame->payload, frame->payload_len,
+                                         &route_sent);
+
     if (tgts && ntgt > 0) {
         size_t n = deliver_request_targets(srv, tgts, ntgt, subject, reply_to,
                                             c->account_name,
@@ -1958,10 +1974,6 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
 
     size_t route_sent = 0;
     int route_rc = 0;
-    if (!c->is_route)
-        route_rc = cmq_route_forward_op(srv, CMQ_OP_RESPONSE, frame->hdr.flags,
-                                         frame->payload, frame->payload_len,
-                                         &route_sent);
 
     cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
@@ -1978,6 +1990,11 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "delivery failed");
         return;
     }
+    if (!c->is_route)
+        route_rc = cmq_route_forward_op(srv, CMQ_OP_RESPONSE, frame->hdr.flags,
+                                         frame->payload, frame->payload_len,
+                                         &route_sent);
+
     if (tgts && ntgt > 0) {
         if (deliver_targets_sync(srv, tgts, ntgt, subject, c->account_name,
                                   msg_payload, msg_len, NULL, 0) != 0 &&
@@ -3251,6 +3268,13 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     }
 
     int nthreads = srv->config.num_threads;
+    if (nthreads <= 0) {
+        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        if (n < 1) n = 1;
+        if (n > 64) n = 64;
+        nthreads = (int)n;
+        srv->config.num_threads = nthreads;
+    }
     if (nthreads > 1) {
         srv->num_workers = nthreads;
         srv->workers = calloc((size_t)nthreads, sizeof(cmq_worker_t));

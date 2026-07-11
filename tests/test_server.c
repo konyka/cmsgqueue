@@ -92,6 +92,7 @@ static void *server_thread(void *arg) {
 
 TEST(server, create_destroy) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 0;
     cmq_server_t *srv = NULL;
@@ -102,6 +103,7 @@ TEST(server, create_destroy) {
 
 TEST(server, bind_accept_info) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 18801;
     config.log_to_stdout = 0;
@@ -135,6 +137,7 @@ TEST(server, bind_accept_info) {
 
 TEST(server, connect_pong) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 18802;
     config.log_to_stdout = 0;
@@ -172,6 +175,7 @@ TEST(server, connect_pong) {
 
 TEST(server, pubsub_basic) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 18803;
     config.log_to_stdout = 0;

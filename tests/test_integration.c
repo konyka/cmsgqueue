@@ -96,6 +96,7 @@ static void do_connect(int fd, cmq_parser_t *parser) {
 
 TEST(integration, account_stats_on_connect) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 19101;
     config.log_to_stdout = 0;
@@ -131,6 +132,7 @@ TEST(integration, account_stats_on_connect) {
 
 TEST(integration, account_stats_on_pubsub) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 19102;
     config.log_to_stdout = 0;
@@ -212,6 +214,7 @@ TEST(integration, account_stats_on_pubsub) {
 
 TEST(integration, ws_upgrade_detection) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 19103;
     config.log_to_stdout = 0;
@@ -256,6 +259,7 @@ TEST(integration, ws_upgrade_detection) {
 
 TEST(integration, account_create_delete_via_api) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 19104;
     config.log_to_stdout = 0;

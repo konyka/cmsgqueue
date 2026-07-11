@@ -128,6 +128,7 @@ static void do_publish(int fd, const char *subject, const char *msg) {
 
 TEST(stress, many_clients_single_thread) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STRESS_PORT_BASE;
     config.log_to_stdout = 0;

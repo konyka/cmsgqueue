@@ -168,6 +168,7 @@ static int ws_recv_cmq(int fd, cmq_parser_t *parser, cmq_frame_t *out) {
 
 TEST(server_ops, stats_query) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT;
     config.log_to_stdout = 0;
@@ -211,6 +212,7 @@ TEST(server_ops, stats_query) {
 
 TEST(server_ops, batch_publish) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 1;
     config.log_to_stdout = 0;
@@ -298,6 +300,7 @@ TEST(server_ops, batch_publish) {
 
 TEST(server_ops, keepalive_disconnect) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 2;
     config.log_to_stdout = 0;
@@ -338,6 +341,7 @@ TEST(server_ops, keepalive_disconnect) {
 
 TEST(server_ops, payload_too_large) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 3;
     config.log_to_stdout = 0;
@@ -388,6 +392,7 @@ TEST(server_ops, payload_too_large) {
 
 TEST(server_ops, stats_reject_counters) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 5;
     config.log_to_stdout = 0;
@@ -459,6 +464,7 @@ TEST(server_ops, stats_reject_counters) {
 
 TEST(server_ops, subscribe_cap_enforced) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 4;
     config.log_to_stdout = 0;
@@ -508,6 +514,7 @@ TEST(server_ops, subscribe_cap_enforced) {
 
 TEST(server_ops, ws_round_trip) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 6;
     config.log_to_stdout = 0;
@@ -612,6 +619,7 @@ static uint8_t *ws_build_masked(cmq_op_t op, const uint8_t *payload, size_t plen
 
 TEST(server_ops, ws_partial_frame) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 7;
     config.log_to_stdout = 0;
@@ -666,6 +674,7 @@ TEST(server_ops, ws_partial_frame) {
 
 TEST(server_ops, ws_fragmented_message) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 8;
     config.log_to_stdout = 0;
@@ -735,6 +744,7 @@ TEST(server_ops, ws_fragmented_message) {
 /* HTTP upgrade + first WS frame in one TCP write — trailing bytes must not be dropped. */
 TEST(server_ops, ws_pipelined_upgrade) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 9;
     config.log_to_stdout = 0;
@@ -812,6 +822,7 @@ TEST(server_ops, ws_pipelined_upgrade) {
 /* Resubscribe same sub_id must replace, not double-deliver. */
 TEST(server_ops, subscribe_replace_same_id) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 10;
     config.log_to_stdout = 0;
@@ -875,6 +886,7 @@ TEST(server_ops, subscribe_replace_same_id) {
 /* Truncated batch must ERROR with no partial delivery. */
 TEST(server_ops, batch_invalid_rejected) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 11;
     config.log_to_stdout = 0;
@@ -929,6 +941,7 @@ TEST(server_ops, batch_invalid_rejected) {
 
 TEST(server_ops, unsubscribe_unknown) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 12;
     config.log_to_stdout = 0;
@@ -961,6 +974,7 @@ TEST(server_ops, unsubscribe_unknown) {
 /* Ops before CONNECT must be rejected (auth bypass / protocol gate). */
 TEST(server_ops, require_connect_before_ops) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 13;
     config.log_to_stdout = 0;
@@ -1006,6 +1020,7 @@ TEST(server_ops, require_connect_before_ops) {
 /* Overlong queue group must SUBACK fail (not silent empty qg). */
 TEST(server_ops, queue_group_too_long) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 15;
     config.log_to_stdout = 0;
@@ -1050,6 +1065,7 @@ TEST(server_ops, queue_group_too_long) {
 /* RFC 6455: server must answer WS PING with unmasked PONG echoing payload. */
 TEST(server_ops, ws_ping_pong) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 16;
     config.log_to_stdout = 0;
@@ -1115,6 +1131,7 @@ TEST(server_ops, ws_ping_pong) {
 /* TCP without CONNECT must be reaped by keepalive (slot exhaustion DoS). */
 TEST(server_ops, init_idle_timeout) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 14;
     config.log_to_stdout = 0;
@@ -1156,6 +1173,7 @@ TEST(server_ops, init_idle_timeout) {
 
 TEST(server_ops, publish_invalid_subject) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 17;
     config.log_to_stdout = 0;
@@ -1195,6 +1213,7 @@ TEST(server_ops, publish_invalid_subject) {
 /* RFC 6455: unmasked client frames must close the connection. */
 TEST(server_ops, ws_unmasked_rejected) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 18;
     config.log_to_stdout = 0;
@@ -1244,6 +1263,7 @@ TEST(server_ops, ws_unmasked_rejected) {
 /* CONNECT after DISCONNECT must not resurrect a CLOSING client. */
 TEST(server_ops, connect_while_closing_rejected) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 19;
     config.log_to_stdout = 0;
@@ -1283,6 +1303,7 @@ TEST(server_ops, connect_while_closing_rejected) {
 /* tls_enabled with stub backend must fail closed. */
 TEST(server_ops, tls_stub_refused) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 20;
     config.log_to_stdout = 0;
@@ -1297,6 +1318,7 @@ TEST(server_ops, tls_stub_refused) {
 /* Publish subjects must be concrete (no * / >). */
 TEST(server_ops, publish_wildcard_rejected) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 21;
     config.log_to_stdout = 0;
@@ -1337,6 +1359,7 @@ TEST(server_ops, publish_wildcard_rejected) {
 /* Mismatched Origin must fail the WebSocket upgrade. */
 TEST(server_ops, ws_origin_mismatch_rejected) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 22;
     config.log_to_stdout = 0;
@@ -1373,6 +1396,7 @@ TEST(server_ops, ws_origin_mismatch_rejected) {
 /* sub_id 0 must SUBACK-fail (require_sub_id treats 0 as "no check"). */
 TEST(server_ops, subscribe_sub_id_zero_rejected) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 23;
     config.log_to_stdout = 0;
@@ -1413,6 +1437,7 @@ TEST(server_ops, subscribe_sub_id_zero_rejected) {
 /* REQUEST with no subscribers must ERROR, not PUBACK. */
 TEST(server_ops, request_no_responders) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = STATS_PORT + 24;
     config.log_to_stdout = 0;
@@ -1429,6 +1454,51 @@ TEST(server_ops, request_no_responders) {
 
     const char *subj = "nobody.home";
     const char *reply = "_INBOX.x";
+    uint16_t slen = (uint16_t)strlen(subj);
+    uint16_t rlen = (uint16_t)strlen(reply);
+    uint8_t buf[128];
+    size_t off = 0;
+    buf[off++] = (slen >> 8) & 0xFF;
+    buf[off++] = slen & 0xFF;
+    memcpy(buf + off, subj, slen); off += slen;
+    buf[off++] = (rlen >> 8) & 0xFF;
+    buf[off++] = rlen & 0xFF;
+    memcpy(buf + off, reply, rlen); off += rlen;
+    buf[off++] = 'q';
+    send_frame(fd, CMQ_OP_REQUEST, buf, off);
+    wait_ms(80);
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_ERROR);
+    free_frame(&f);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+/* Wildcard reply-to must be rejected (would fan-out RESPONSE). */
+TEST(server_ops, request_wildcard_reply_to) {
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 25;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(80);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    const char *subj = "svc.echo";
+    const char *reply = "_INBOX.>";
     uint16_t slen = (uint16_t)strlen(subj);
     uint16_t rlen = (uint16_t)strlen(reply);
     uint8_t buf[128];

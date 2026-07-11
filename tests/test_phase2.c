@@ -107,6 +107,7 @@ static void do_connect(int fd, cmq_parser_t *parser) {
 
 TEST(phase2, auth_success) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 18901;
     config.log_to_stdout = 0;
@@ -159,6 +160,7 @@ TEST(phase2, auth_success) {
 
 TEST(phase2, auth_failure) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 18902;
     config.log_to_stdout = 0;
@@ -211,6 +213,7 @@ TEST(phase2, auth_failure) {
 
 TEST(phase2, queue_group_delivery) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 18903;
     config.log_to_stdout = 0;
@@ -314,6 +317,7 @@ TEST(phase2, queue_group_delivery) {
 
 TEST(phase2, headers_passthrough) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 18904;
     config.log_to_stdout = 0;
@@ -392,6 +396,7 @@ TEST(phase2, headers_passthrough) {
 
 TEST(phase2, info_has_stats) {
     cmq_config_t config = {0};
+    config.num_threads = 1;
     config.host = "127.0.0.1";
     config.port = 18905;
     config.log_to_stdout = 0;
