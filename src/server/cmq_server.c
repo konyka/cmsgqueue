@@ -3755,6 +3755,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         if (n > 64) n = 64;
         nthreads = (int)n;
         srv->config.num_threads = nthreads;
+    } else if (nthreads > 64) {
+        nthreads = 64;
+        srv->config.num_threads = nthreads;
     }
     if (nthreads > 1) {
         srv->num_workers = nthreads;

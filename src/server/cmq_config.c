@@ -35,7 +35,7 @@ static void strip_comments(char *line) {
     }
 }
 
-static void parse_key_value(const char *key, const char *value, cmq_config_t *config) {
+static int parse_key_value(const char *key, const char *value, cmq_config_t *config) {
     if (strcmp(key, "host") == 0) {
         free((void *)config->host);
         config->host = strdup(value);
@@ -83,23 +83,24 @@ static void parse_key_value(const char *key, const char *value, cmq_config_t *co
         free((void *)config->tls_key);
         config->tls_key = strdup(value);
     } else if (strcmp(key, "route") == 0) {
-        if (config->route_count >= 8) return;
+        if (config->route_count >= 8) return -1;
         char *colon = strrchr(value, ':');
-        if (!colon || colon == value || colon[1] == '\0') return;
+        if (!colon || colon == value || colon[1] == '\0') return 0;
         size_t alen = (size_t)(colon - value);
         char *addr = malloc(alen + 1);
-        if (!addr) return;
+        if (!addr) return -1;
         memcpy(addr, value, alen);
         addr[alen] = '\0';
         int port = atoi(colon + 1);
         if (port <= 0 || port > 65535) {
             free(addr);
-            return;
+            return 0;
         }
         config->routes[config->route_count].addr = addr;
         config->routes[config->route_count].port = port;
         config->route_count++;
     }
+    return 0;
 }
 
 void cmq_config_free(cmq_config_t *config) {
@@ -161,7 +162,11 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
             }
         }
 
-        parse_key_value(key, value, config);
+        if (parse_key_value(key, value, config) != 0) {
+            fclose(fp);
+            cmq_config_free(config);
+            return CMQ_ERR_INVALID_ARG;
+        }
     }
 
     fclose(fp);
@@ -176,7 +181,8 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->ping_interval_ms < 0) return CMQ_ERR_INVALID_ARG;
     if (config->write_timeout_ms < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_clients < 0) return CMQ_ERR_INVALID_ARG;
-    if (config->num_threads < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->num_threads < 0 || config->num_threads > 64)
+        return CMQ_ERR_INVALID_ARG;
     {
         const char *host = config->host ? config->host : CMQ_DEFAULT_HOST;
         struct in_addr ha;

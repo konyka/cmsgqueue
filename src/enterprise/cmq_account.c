@@ -400,37 +400,29 @@ int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
     cmq_account_perms_t *pub = find_perms(pub_account);
     cmq_account_perms_t *sub = find_perms(sub_account);
 
-    /* Explicit exports require a matching import on the subscriber (NATS-like). */
+    int export_ok = 0;
     if (pub && pub->export_count > 0) {
-        int ok = 0;
         for (size_t i = 0; i < pub->export_count; i++) {
             if (subject_match(pub->exports[i].subject, subject) &&
                 acct_eq_or_star(pub->exports[i].dest_account, sub_account)) {
-                ok = 1;
+                export_ok = 1;
                 break;
             }
-        }
-        if (!ok || !sub || sub->import_count == 0) {
-            cmq_mutex_unlock(&g_perms_lock);
-            return 0;
         }
     }
 
+    int import_ok = 0;
     if (sub && sub->import_count > 0) {
-        int ok = 0;
         for (size_t i = 0; i < sub->import_count; i++) {
             if (subject_match(sub->imports[i].subject, subject) &&
                 acct_eq_or_star(sub->imports[i].source_account, pub_account)) {
-                ok = 1;
+                import_ok = 1;
                 break;
             }
-        }
-        if (!ok) {
-            cmq_mutex_unlock(&g_perms_lock);
-            return 0;
         }
     }
 
     cmq_mutex_unlock(&g_perms_lock);
-    return 1;
+    /* Cross-account requires matching export and import (default deny). */
+    return (export_ok && import_ok) ? 1 : 0;
 }

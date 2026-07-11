@@ -1855,6 +1855,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — store seq cap · cross-account deny · route/threads limits</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">memstore seq</span></td><td>✅</td><td>Refuse put at <code>UINT64_MAX</code> (no wrap corruption).</td></tr>
+<tr><td><span class="component-name">may_deliver</span></td><td>✅</td><td>Cross-account default deny; require matching export and import.</td></tr>
+<tr><td><span class="component-name">config routes</span></td><td>✅</td><td>9th+ <code>route</code> fails load (no silent drop).</td></tr>
+<tr><td><span class="component-name">num_threads</span></td><td>✅</td><td>Validate/cap at 64 (align with auto-detect).</td></tr>
+</table>
+</div>
+
 
 
 

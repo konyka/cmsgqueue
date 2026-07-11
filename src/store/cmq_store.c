@@ -3,6 +3,7 @@
 #include "cmq_thread.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <time.h>
 
 typedef struct cmq_store_slot {
@@ -60,6 +61,11 @@ uint64_t cmq_store_put_owned(cmq_store_t *store, uint8_t *data, size_t len) {
         return 0;
     }
     cmq_mutex_lock(&store->lock);
+    if (store->head_seq == UINT64_MAX) {
+        cmq_mutex_unlock(&store->lock);
+        free(data);
+        return 0;
+    }
 
     size_t idx = (size_t)(store->head_seq - 1) % store->cap;
     free(store->ring[idx].data);

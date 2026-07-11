@@ -104,6 +104,8 @@ TEST(account, may_deliver_cross_account) {
     cmq_account_create(mgr, "other");
 
     ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "acme", "acme.data"), 1);
+    /* No export/import → deny cross-account (not open-default). */
+    ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "globex", "acme.data"), 0);
 
     cmq_account_add_export(mgr, "acme", "acme.>", "globex");
     cmq_account_add_import(mgr, "globex", "acme.>", "acme");
