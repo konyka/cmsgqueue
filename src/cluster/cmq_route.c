@@ -195,6 +195,16 @@ static void conn_drop_fd_dead(cmq_route_conn_t *c) {
     c->fd_owned = 0;
 }
 
+/* Caller must hold pool->lock. Order: pool->lock → io_lock (broadcast only
+   holds io_lock, never nests pool under io — no AB-BA). */
+static void route_slot_close(cmq_route_pool_t *pool, size_t idx) {
+    if (!pool || idx >= CMQ_ROUTE_MAX_CONNS) return;
+    cmq_mutex_lock(&pool->io_locks[idx]);
+    if (idx < pool->conn_count)
+        conn_drop_fd(&pool->conns[idx]);
+    cmq_mutex_unlock(&pool->io_locks[idx]);
+}
+
 cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
     cmq_route_pool_t *p = calloc(1, sizeof(cmq_route_pool_t));
     if (!p) return NULL;
@@ -209,8 +219,10 @@ cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
 
 void cmq_route_pool_destroy(cmq_route_pool_t *pool) {
     if (!pool) return;
+    cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++)
-        conn_drop_fd(&pool->conns[i]);
+        route_slot_close(pool, i);
+    cmq_mutex_unlock(&pool->lock);
     for (size_t i = 0; i < CMQ_ROUTE_MAX_CONNS; i++)
         cmq_mutex_destroy(&pool->io_locks[i]);
     cmq_mutex_destroy(&pool->lock);
@@ -279,7 +291,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
             close(fd);
             return 0;
         }
-        conn_drop_fd(&pool->conns[i]);
+        route_slot_close(pool, i);
         pool->conns[i].fd = fd;
         pool->conns[i].connected = 1;
         pool->conns[i].fd_owned = 1;
@@ -290,7 +302,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (pool->conns[i].remote_id[0] != '\0' && pool->conns[i].connected)
             continue;
-        conn_drop_fd(&pool->conns[i]);
+        route_slot_close(pool, i);
         memset(&pool->conns[i], 0, sizeof(pool->conns[i]));
         strncpy(pool->conns[i].remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
         pool->conns[i].fd = fd;
@@ -351,7 +363,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
     if (replace >= 0 && (size_t)replace < pool->conn_count &&
         strcmp(pool->conns[replace].remote_id, node_id) == 0) {
         if (pool->conns[replace].fd >= 0 && pool->conns[replace].fd != fd)
-            conn_drop_fd(&pool->conns[replace]);
+            route_slot_close(pool, (size_t)replace);
         pool->conns[replace].fd = fd;
         pool->conns[replace].connected = 1;
         pool->conns[replace].fd_owned = (fd >= 0) ? 1 : 0;
@@ -361,7 +373,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
             if (pool->conns[i].fd >= 0 && pool->conns[i].fd != fd)
-                conn_drop_fd(&pool->conns[i]);
+                route_slot_close(pool, i);
             pool->conns[i].fd = fd;
             pool->conns[i].connected = 1;
             pool->conns[i].fd_owned = (fd >= 0) ? 1 : 0;
@@ -372,7 +384,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (pool->conns[i].remote_id[0] != '\0' && pool->conns[i].connected)
             continue;
-        conn_drop_fd(&pool->conns[i]);
+        route_slot_close(pool, i);
         memset(&pool->conns[i], 0, sizeof(pool->conns[i]));
         strncpy(pool->conns[i].remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
         pool->conns[i].fd = fd;
@@ -410,7 +422,7 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
             cmq_mutex_unlock(&pool->lock);
             return -1;
         }
-        conn_drop_fd(&pool->conns[i]);
+        route_slot_close(pool, i);
         pool->conns[i].fd = fd;
         pool->conns[i].connected = 1;
         pool->conns[i].fd_owned = 0;
@@ -420,7 +432,7 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (pool->conns[i].remote_id[0] != '\0' && pool->conns[i].connected)
             continue;
-        conn_drop_fd(&pool->conns[i]);
+        route_slot_close(pool, i);
         memset(&pool->conns[i], 0, sizeof(pool->conns[i]));
         strncpy(pool->conns[i].remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
         pool->conns[i].fd = fd;
@@ -463,7 +475,7 @@ int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id) {
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
             /* Tombstone in place — never memmove (io_locks are index-stable). */
-            conn_drop_fd(&pool->conns[i]);
+            route_slot_close(pool, i);
             memset(pool->conns[i].remote_id, 0, sizeof(pool->conns[i].remote_id));
             pool->conns[i].fd = -1;
             pool->conns[i].connected = 0;

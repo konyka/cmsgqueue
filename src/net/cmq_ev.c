@@ -307,18 +307,23 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
 int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *data) {
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
 
+    int old_events = loop->watchers[fd].events;
     struct kevent ev[2];
     int n = 0;
 
-    if (loop->watchers[fd].events & CMQ_EV_READ)
+    if (old_events & CMQ_EV_READ)
         EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-    if (loop->watchers[fd].events & CMQ_EV_WRITE)
+    if (old_events & CMQ_EV_WRITE)
         EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
 
     if (n > 0) kevent(loop->backend_fd, ev, n, NULL, 0, NULL);
 
-    if (kqueue_add_filters(loop->backend_fd, fd, events) != 0)
+    if (kqueue_add_filters(loop->backend_fd, fd, events) != 0) {
+        /* Restore previous filters — do not leave fd unwatched. */
+        if (old_events != 0)
+            (void)kqueue_add_filters(loop->backend_fd, fd, old_events);
         return -1;
+    }
 
     loop->watchers[fd].events = events;
     loop->watchers[fd].cb = cb;

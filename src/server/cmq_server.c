@@ -475,7 +475,12 @@ static cmq_worker_t *cmq_worker_create(cmq_server_t *srv, int id) {
         free(w);
         return NULL;
     }
-    cmq_ev_add(w->ev_loop, w->wakeup_fd, CMQ_EV_READ, worker_wakeup_cb, w);
+    if (cmq_ev_add(w->ev_loop, w->wakeup_fd, CMQ_EV_READ, worker_wakeup_cb, w) != 0) {
+        wakeup_fd_close(w->wakeup_fd);
+        cmq_ev_loop_destroy(w->ev_loop);
+        free(w);
+        return NULL;
+    }
 
     w->clients_cap = 64;
     w->clients_count = 0;
@@ -3529,7 +3534,19 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 close(srv->listen_fd);
                 return CMQ_ERR_NO_MEMORY;
             }
-            cmq_ev_add(w->ev_loop, w->wakeup_fd, CMQ_EV_READ, worker_wakeup_cb, w);
+            if (cmq_ev_add(w->ev_loop, w->wakeup_fd, CMQ_EV_READ,
+                           worker_wakeup_cb, w) != 0) {
+                wakeup_fd_close(w->wakeup_fd);
+                cmq_ev_loop_destroy(w->ev_loop);
+                for (int j = 0; j < i; j++) {
+                    cmq_ev_stop(srv->workers[j].ev_loop);
+                    cmq_worker_destroy(&srv->workers[j]);
+                }
+                free(srv->workers);
+                srv->workers = NULL;
+                close(srv->listen_fd);
+                return CMQ_ERR_IO;
+            }
             w->clients_cap = 64;
             w->clients_count = 0;
             w->clients = calloc((size_t)w->clients_cap, sizeof(cmq_client_t *));

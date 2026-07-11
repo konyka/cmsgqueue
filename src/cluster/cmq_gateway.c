@@ -81,9 +81,10 @@ cmq_gateway_t *cmq_gateway_create(const char *local_cluster) {
 
 void cmq_gateway_destroy(cmq_gateway_t *gw) {
     if (!gw) return;
-    for (size_t i = 0; i < gw->conn_count; i++) {
-        if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
-    }
+    cmq_mutex_lock(&gw->lock);
+    for (size_t i = 0; i < gw->conn_count; i++)
+        gw_slot_close_fd(gw, i);
+    cmq_mutex_unlock(&gw->lock);
     for (size_t i = 0; i < CMQ_GW_MAX_CONNECTIONS; i++)
         cmq_mutex_destroy(&gw->io_locks[i]);
     cmq_mutex_destroy(&gw->lock);
