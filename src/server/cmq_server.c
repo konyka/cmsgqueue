@@ -2793,13 +2793,16 @@ static void client_read_cb(int fd, int events, void *data) {
                 int plen = cmq_ws_frame_serialize(&pf, pong, sizeof(pong));
                 if (plen > 0)
                     cmq_client_send_direct(c, pong, (size_t)plen);
-                /* WS ping proves liveness during INIT (before CMQ CONNECT). */
-                c->last_activity_ms = srv_now_ms();
+                /* Only CONNECTED may refresh keepalive — WS ping must not
+                   hold INIT slots forever (same rule as CMQ PING). */
+                if (c->state == CMQ_CLIENT_CONNECTED)
+                    c->last_activity_ms = srv_now_ms();
                 offset += (size_t)parsed;
                 continue;
             }
             if (ws_frame.opcode == CMQ_WS_OPCODE_PONG) {
-                c->last_activity_ms = srv_now_ms();
+                if (c->state == CMQ_CLIENT_CONNECTED)
+                    c->last_activity_ms = srv_now_ms();
                 offset += (size_t)parsed;
                 continue;
             }

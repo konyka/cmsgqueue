@@ -85,6 +85,37 @@ static uint64_t scan_last_seq(const char *idx_path) {
     return (uint64_t)sz / 8u;
 }
 
+/* Drop trailing .data bytes not covered by .idx (crash between fflush(data)
+   and idx append). Indexed records stay intact; orphans are truncated. */
+static void truncate_orphan_data(cmq_filestore_t *fs) {
+    uint64_t n = scan_last_seq(fs->idx_path);
+    off_t expect = 0;
+    if (n > 0) {
+        if (fseek(fs->idx_fp, (long)((n - 1) * 8u), SEEK_SET) != 0)
+            return;
+        uint8_t idxb[8];
+        if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1)
+            return;
+        uint64_t offset = get_le64(idxb);
+        if (fseek(fs->data_fp, (long)offset, SEEK_SET) != 0)
+            return;
+        uint8_t hdr[CMQ_FS_HDR_SIZE];
+        if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1)
+            return;
+        if (get_le32(hdr) != CMQ_FS_MAGIC)
+            return;
+        uint32_t len = get_le32(hdr + 14);
+        expect = (off_t)(offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)len);
+    }
+    if (fseek(fs->data_fp, 0, SEEK_END) != 0)
+        return;
+    long sz = ftell(fs->data_fp);
+    if (sz < 0 || (off_t)sz <= expect)
+        return;
+    if (ftruncate(fileno(fs->data_fp), expect) == 0)
+        fseek(fs->data_fp, 0, SEEK_END);
+}
+
 cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     if (!dir || !prefix) return NULL;
 
@@ -103,6 +134,7 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     fs->idx_fp = fopen(fs->idx_path, "a+b");
     if (!fs->idx_fp) { fclose(fs->data_fp); cmq_mutex_destroy(&fs->lock); free(fs); return NULL; }
 
+    truncate_orphan_data(fs);
     fs->next_seq = scan_last_seq(fs->idx_path) + 1;
     return fs;
 }

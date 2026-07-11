@@ -1562,6 +1562,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS INIT keepalive · leaf timed connect · filestore orphan truncate</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">WS ping keepalive</span></td><td>✅</td><td>INIT no longer refreshes last_activity via WS ping/pong (slot DoS).</td></tr>
+<tr><td><span class="component-name">leaf connect</span></td><td>✅</td><td>Unlock before cmq_connect_timeout (2s) + handshake.</td></tr>
+<tr><td><span class="component-name">filestore orphan</span></td><td>✅</td><td>On open, truncate .data past last indexed record end.</td></tr>
+</table>
+</div>
+
 
 
 

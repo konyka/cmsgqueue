@@ -16,6 +16,7 @@
 
 #define CMQ_LEAF_MAX_SUBS 1024
 #define CMQ_LEAF_WRITE_MS 3000
+#define CMQ_LEAF_CONNECT_MS 2000
 
 struct cmq_leaf_node {
     char hub_addr[CMQ_NODE_ADDR_SIZE];
@@ -104,24 +105,25 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         return 0;
     }
 
+    char addr_copy[CMQ_NODE_ADDR_SIZE];
+    strncpy(addr_copy, leaf->hub_addr, sizeof(addr_copy) - 1);
+    addr_copy[sizeof(addr_copy) - 1] = '\0';
+    int port_copy = leaf->hub_port;
+    cmq_mutex_unlock(&leaf->lock);
+
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        cmq_mutex_unlock(&leaf->lock);
-        return -1;
-    }
+    if (fd < 0) return -1;
 
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;
-    sa.sin_port = htons((uint16_t)leaf->hub_port);
-    inet_pton(AF_INET, leaf->hub_addr, &sa.sin_addr);
+    sa.sin_port = htons((uint16_t)port_copy);
+    inet_pton(AF_INET, addr_copy, &sa.sin_addr);
 
-    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+    if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
+                             CMQ_LEAF_CONNECT_MS) != 0) {
         close(fd);
-        cmq_mutex_unlock(&leaf->lock);
         return -1;
     }
-    cmq_mutex_unlock(&leaf->lock);
-
     if (cmq_peer_handshake(fd, NULL, NULL) != 0) {
         close(fd);
         return -1;
