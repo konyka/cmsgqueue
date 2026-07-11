@@ -27,13 +27,23 @@ static int wakeup_fd_create(void) {
 #endif
 }
 
-static void wakeup_fd_signal(int fd) {
+static int wakeup_fd_signal(int fd) {
 #ifdef CMQ_OS_LINUX
     uint64_t val = 1;
-    write(fd, &val, sizeof(val));
+    for (;;) {
+        ssize_t n = write(fd, &val, sizeof(val));
+        if (n == (ssize_t)sizeof(val)) return 0;
+        if (n < 0 && errno == EINTR) continue;
+        return -1;
+    }
 #else
     char c = 1;
-    write(fd + 1, &c, 1);
+    for (;;) {
+        ssize_t n = write(fd + 1, &c, 1);
+        if (n == 1) return 0;
+        if (n < 0 && errno == EINTR) continue;
+        return -1;
+    }
 #endif
 }
 
@@ -283,76 +293,79 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
     cmq_worker_t *w = (cmq_worker_t *)data;
     wakeup_fd_drain(fd);
 
-    cmq_mutex_lock(&w->msg_lock);
-    cmq_worker_msg_t *msg = w->msg_head;
-    cmq_worker_msg_t *batch = msg;
-    cmq_worker_msg_t *last = NULL;
-    int n = 0;
-    while (msg && n < CMQ_WORKER_WAKE_BATCH) {
-        last = msg;
-        msg = msg->next;
-        n++;
-    }
-    if (last)
-        last->next = NULL;
-    w->msg_head = msg;
-    if (!msg)
-        w->msg_tail = NULL;
-    if (w->msg_pending >= (size_t)n)
-        w->msg_pending -= (size_t)n;
-    else
-        w->msg_pending = 0;
-    int more = (msg != NULL);
-    cmq_mutex_unlock(&w->msg_lock);
+    for (;;) {
+        cmq_mutex_lock(&w->msg_lock);
+        cmq_worker_msg_t *msg = w->msg_head;
+        cmq_worker_msg_t *batch = msg;
+        cmq_worker_msg_t *last = NULL;
+        int n = 0;
+        while (msg && n < CMQ_WORKER_WAKE_BATCH) {
+            last = msg;
+            msg = msg->next;
+            n++;
+        }
+        if (last)
+            last->next = NULL;
+        w->msg_head = msg;
+        if (!msg)
+            w->msg_tail = NULL;
+        if (w->msg_pending >= (size_t)n)
+            w->msg_pending -= (size_t)n;
+        else
+            w->msg_pending = 0;
+        int more = (msg != NULL);
+        cmq_mutex_unlock(&w->msg_lock);
 
-    msg = batch;
-    while (msg) {
-        cmq_worker_msg_t *next = msg->next;
-        if (msg->kind == CMQ_WORKER_MSG_TEARDOWN) {
+        msg = batch;
+        while (msg) {
+            cmq_worker_msg_t *next = msg->next;
+            if (msg->kind == CMQ_WORKER_MSG_TEARDOWN) {
+                cmq_mutex_lock(&w->clients_lock);
+                cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
+                cmq_mutex_unlock(&w->clients_lock);
+                if (target) {
+                    /* Flush pending DISCONNECT/ERROR before closing the fd. */
+                    if (target->state != CMQ_CLIENT_CLOSED &&
+                        target->state != CMQ_CLIENT_CLOSING)
+                        target->state = CMQ_CLIENT_CLOSING;
+                    client_finish_closing(target);
+                }
+                free(msg);
+                msg = next;
+                continue;
+            }
+
             cmq_mutex_lock(&w->clients_lock);
             cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
-            cmq_mutex_unlock(&w->clients_lock);
-            if (target) {
-                /* Flush pending DISCONNECT/ERROR before closing the fd. */
-                if (target->state != CMQ_CLIENT_CLOSED &&
-                    target->state != CMQ_CLIENT_CLOSING)
-                    target->state = CMQ_CLIENT_CLOSING;
-                client_finish_closing(target);
-            }
-            free(msg);
-            msg = next;
-            continue;
-        }
-
-        cmq_mutex_lock(&w->clients_lock);
-        cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
-        /* Owning worker thread: wrap WS here so coro/drain can push raw CMQ. */
-        if (target && target->state != CMQ_CLIENT_CLOSED &&
-            target->state != CMQ_CLIENT_CLOSING) {
-            if (msg->require_sub_id == 0 ||
-                client_has_sub(target, msg->require_sub_id)) {
-                if (cmq_client_send_local(target, msg->buf, msg->len) != 0 &&
-                    w->server) {
+            /* Owning worker thread: wrap WS here so coro/drain can push raw CMQ. */
+            if (target && target->state != CMQ_CLIENT_CLOSED &&
+                target->state != CMQ_CLIENT_CLOSING) {
+                if (msg->require_sub_id == 0 ||
+                    client_has_sub(target, msg->require_sub_id)) {
+                    if (cmq_client_send_local(target, msg->buf, msg->len) != 0 &&
+                        w->server) {
+                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                                  CMQ_ATOMIC_RELAXED);
+                    }
+                } else if (w->server) {
+                    /* Queued while subscribed; drain after unsub — count as drop. */
                     cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                               CMQ_ATOMIC_RELAXED);
                 }
             } else if (w->server) {
-                /* Queued while subscribed; drain after unsub — count as drop. */
                 cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
             }
-        } else if (w->server) {
-            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                      CMQ_ATOMIC_RELAXED);
+            cmq_mutex_unlock(&w->clients_lock);
+            free(msg->buf);
+            free(msg);
+            msg = next;
         }
-        cmq_mutex_unlock(&w->clients_lock);
-        free(msg->buf);
-        free(msg);
-        msg = next;
+        if (!more) break;
+        /* Prefer re-arm; if wakeup write fails keep draining here. */
+        if (w->wakeup_fd >= 0 && wakeup_fd_signal(w->wakeup_fd) == 0)
+            break;
     }
-    /* Re-arm so remaining messages drain without starving epoll. */
-    if (more && w->wakeup_fd >= 0)
-        wakeup_fd_signal(w->wakeup_fd);
 }
 
 /* Returns 0 on success, -1 on OOM or queue-full (message dropped).
@@ -658,8 +671,13 @@ static void client_teardown(cmq_client_t *c) {
     int was_connected = (c->state == CMQ_CLIENT_CONNECTED);
     c->state = CMQ_CLIENT_CLOSED;
 
-    if (c->is_route && srv && srv->routes && c->fd >= 0)
+    if (c->is_route && srv && srv->routes && c->fd >= 0) {
+        /* Serialize with route broadcast writes (io_lock) before detach/close. */
+        int ridx = cmq_route_io_lock_fd(srv->routes, c->fd);
         cmq_route_detach_fd(srv->routes, c->fd);
+        if (ridx >= 0)
+            cmq_route_io_unlock_idx(srv->routes, ridx);
+    }
 
     if (c->ev_loop && c->fd >= 0) {
         cmq_ev_del(c->ev_loop, c->fd);
@@ -1102,7 +1120,7 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
         if (used[i]) continue;
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result->entries[i];
         if (!ref || !ref->client) continue;
-        if (ref->client->state != CMQ_CLIENT_CONNECTED) continue;
+        /* Do not read client->state here (cross-thread race); send paths filter. */
 
         if (ref->queue_group[0] == '\0') {
             cmq_fill_deliver_tgt(&tgts[n++], ref);
@@ -1115,7 +1133,6 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
             if (used[j]) continue;
             cmq_sub_ref_t *rj = (cmq_sub_ref_t *)result->entries[j];
             if (!rj || !rj->client) continue;
-            if (rj->client->state != CMQ_CLIENT_CONNECTED) continue;
             if (rj->queue_group[0] == '\0') continue;
             if (strcmp(rj->queue_group, ref->queue_group) != 0) continue;
             if (strcmp(rj->subject, ref->subject) != 0) continue;
@@ -3517,7 +3534,19 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     }
 
     srv->accounts = cmq_account_manager_create();
-    cmq_account_create(srv->accounts, "$default");
+    if (!srv->accounts ||
+        cmq_account_create(srv->accounts, "$default") != 0) {
+        if (srv->accounts) cmq_account_manager_destroy(srv->accounts);
+        free(srv->clients);
+        cmq_idmap_destroy(srv->idmap);
+        cmq_sublist_destroy(srv->sublist);
+        cmq_log_destroy(srv->log);
+        cmq_mutex_destroy(&srv->clients_lock);
+        cmq_rwlock_destroy(&srv->sublist_lock);
+        cmq_config_free(&srv->config);
+        free(srv);
+        return CMQ_ERR_NO_MEMORY;
+    }
 
     srv->routes = NULL;
     srv->cluster = NULL;

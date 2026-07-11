@@ -1758,6 +1758,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route teardown io_lock · deliver snap · wakeup drain · $default</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route teardown</span></td><td>✅</td><td>detach under route io_lock (no broadcast write/close race).</td></tr>
+<tr><td><span class="component-name">deliver snapshot</span></td><td>✅</td><td>No unlocked client-&gt;state read; send paths filter CONNECTED.</td></tr>
+<tr><td><span class="component-name">wakeup signal</span></td><td>✅</td><td>EINTR retry; failed re-arm keeps draining in wakeup_cb.</td></tr>
+<tr><td><span class="component-name">$default create</span></td><td>✅</td><td>server_create fails if $default account cannot be created.</td></tr>
+</table>
+</div>
+
 
 
 
