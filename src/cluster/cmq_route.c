@@ -18,13 +18,16 @@ static void set_nonblock(int fd) {
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
-/* Write the full buffer; never report success on a partial frame. */
+/* 0 = full write, 1 = EAGAIN with zero progress (keep fd), -1 = hard/partial
+   failure (caller must close — stream may already contain a truncated frame). */
 static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
     while (off < len) {
         ssize_t n = write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
+            if ((errno == EAGAIN || errno == EWOULDBLOCK) && off == 0)
+                return 1;
             return -1;
         }
         if (n == 0) return -1;
@@ -47,6 +50,16 @@ struct cmq_route_pool {
     size_t interest_count;
     cmq_mutex_t lock;
 };
+
+static void mark_conn_dead(cmq_route_pool_t *pool, size_t idx, int fd) {
+    cmq_mutex_lock(&pool->lock);
+    if (idx < pool->conn_count && pool->conns[idx].fd == fd) {
+        if (pool->conns[idx].fd >= 0) close(pool->conns[idx].fd);
+        pool->conns[idx].fd = -1;
+        pool->conns[idx].connected = 0;
+    }
+    cmq_mutex_unlock(&pool->lock);
+}
 
 cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
     cmq_route_pool_t *p = calloc(1, sizeof(cmq_route_pool_t));
@@ -157,6 +170,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd) {
 
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
         cmq_mutex_unlock(&pool->lock);
+        if (fd >= 0) close(fd);
         return -1;
     }
 
@@ -211,7 +225,8 @@ int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__(
 
     int sent = 0;
     for (size_t j = 0; j < n; j++) {
-        if (write_full(fds[j], data, len) == 0) {
+        int wr = write_full(fds[j], data, len);
+        if (wr == 0) {
             cmq_mutex_lock(&pool->lock);
             if (idxs[j] < pool->conn_count &&
                 pool->conns[idxs[j]].fd == fds[j] &&
@@ -221,15 +236,10 @@ int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__(
             }
             cmq_mutex_unlock(&pool->lock);
             sent++;
+        } else if (wr == 1) {
+            continue; /* zero-progress backpressure: keep connection */
         } else {
-            int err = errno;
-            if (err == EAGAIN || err == EWOULDBLOCK)
-                continue; /* backpressure: keep connection */
-            cmq_mutex_lock(&pool->lock);
-            if (idxs[j] < pool->conn_count &&
-                pool->conns[idxs[j]].fd == fds[j])
-                pool->conns[idxs[j]].connected = 0;
-            cmq_mutex_unlock(&pool->lock);
+            mark_conn_dead(pool, idxs[j], fds[j]);
         }
     }
     return sent > 0 ? 0 : -1;
@@ -254,7 +264,8 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
 
     size_t sent = 0;
     for (size_t j = 0; j < n; j++) {
-        if (write_full(fds[j], data, len) == 0) {
+        int wr = write_full(fds[j], data, len);
+        if (wr == 0) {
             cmq_mutex_lock(&pool->lock);
             if (idxs[j] < pool->conn_count &&
                 pool->conns[idxs[j]].fd == fds[j] &&
@@ -264,15 +275,10 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
             }
             cmq_mutex_unlock(&pool->lock);
             sent++;
+        } else if (wr == 1) {
+            continue;
         } else {
-            int err = errno;
-            if (err == EAGAIN || err == EWOULDBLOCK)
-                continue; /* backpressure: keep connection */
-            cmq_mutex_lock(&pool->lock);
-            if (idxs[j] < pool->conn_count &&
-                pool->conns[idxs[j]].fd == fds[j])
-                pool->conns[idxs[j]].connected = 0;
-            cmq_mutex_unlock(&pool->lock);
+            mark_conn_dead(pool, idxs[j], fds[j]);
         }
     }
     return sent;

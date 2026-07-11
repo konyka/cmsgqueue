@@ -5,7 +5,9 @@
 #include "cmq_test.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <unistd.h>
+#include <errno.h>
 
 TEST(cluster, create_destroy) {
     cmq_cluster_t *c = cmq_cluster_create("test-cluster", "node-1");
@@ -106,6 +108,27 @@ TEST(route, add_remove_conn) {
 
     ASSERT_EQ(cmq_route_disconnect(rp, "nonexistent"), -1);
 
+    cmq_route_pool_destroy(rp);
+    cmq_cluster_destroy(c);
+}
+
+/* Pool-full add_conn must close the caller-owned fd (no leak). */
+TEST(route, add_conn_pool_full_closes_fd) {
+    cmq_cluster_t *c = cmq_cluster_create("c1", "n1");
+    cmq_route_pool_t *rp = cmq_route_pool_create(c);
+    for (int i = 0; i < 32; i++) {
+        char id[16];
+        snprintf(id, sizeof(id), "n%d", i);
+        ASSERT_EQ(cmq_route_add_conn(rp, id, -1), 0);
+    }
+    int fds[2];
+    ASSERT_EQ(pipe(fds), 0);
+    ASSERT_EQ(cmq_route_add_conn(rp, "overflow", fds[1]), -1);
+    /* Write end should be closed by add_conn; write must fail with EBADF. */
+    errno = 0;
+    ASSERT(write(fds[1], "x", 1) < 0);
+    ASSERT_EQ(errno, EBADF);
+    close(fds[0]);
     cmq_route_pool_destroy(rp);
     cmq_cluster_destroy(c);
 }

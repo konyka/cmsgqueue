@@ -1654,20 +1654,38 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    /* Pass 2: deliver (+ cluster route, same as PUBLISH). */
+    /* Pass 2a: snapshot all deliveries before any fan-out (atomic batch). */
+    typedef struct {
+        char subject[CMQ_MAX_SUBJECT];
+        uint16_t subject_len;
+        uint16_t reply_len;
+        size_t entry_start;
+        const uint8_t *msg_payload;
+        uint32_t payload_len;
+        cmq_deliver_tgt_t *tgts;
+        size_t ntgt;
+    } batch_prep_t;
+
+    batch_prep_t *prep = calloc((size_t)count, sizeof(batch_prep_t));
+    if (!prep) {
+        cmq_send_error(c, "delivery failed");
+        return;
+    }
+
     offset = 2;
     for (uint16_t msg = 0; msg < count; msg++) {
         uint16_t subject_len = ((uint16_t)frame->payload[offset] << 8) |
                                 frame->payload[offset + 1];
         offset += 2;
-        char subject[CMQ_MAX_SUBJECT];
-        memcpy(subject, frame->payload + offset, subject_len);
-        subject[subject_len] = '\0';
+        memcpy(prep[msg].subject, frame->payload + offset, subject_len);
+        prep[msg].subject[subject_len] = '\0';
+        prep[msg].subject_len = subject_len;
         offset += subject_len;
 
         uint16_t reply_len = ((uint16_t)frame->payload[offset] << 8) |
                               frame->payload[offset + 1];
-        size_t entry_start = offset - 2 - subject_len; /* start of slen field */
+        prep[msg].entry_start = offset - 2 - subject_len;
+        prep[msg].reply_len = reply_len;
         offset += 2 + (size_t)reply_len;
 
         uint32_t payload_len = ((uint32_t)frame->payload[offset] << 24) |
@@ -1675,10 +1693,40 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                                 ((uint32_t)frame->payload[offset + 2] << 8) |
                                 (uint32_t)frame->payload[offset + 3];
         offset += 4;
-        const uint8_t *msg_payload = frame->payload + offset;
+        prep[msg].msg_payload = frame->payload + offset;
+        prep[msg].payload_len = payload_len;
         offset += payload_len;
 
-        /* Rebuild PUBLISH wire body: [slen][subj][rlen][reply][body] (no 4B plen). */
+        cmq_rwlock_rdlock(&srv->sublist_lock);
+        cmq_sublist_result_t result;
+        if (cmq_sublist_match(srv->sublist, prep[msg].subject, &result) != 0) {
+            cmq_rwlock_unlock(&srv->sublist_lock);
+            for (uint16_t k = 0; k <= msg; k++) free(prep[k].tgts);
+            free(prep);
+            cmq_send_error(c, "delivery failed");
+            return;
+        }
+        size_t ntgt = 0;
+        cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
+        cmq_sublist_result_free(&result);
+        cmq_rwlock_unlock(&srv->sublist_lock);
+        if (ntgt == SIZE_MAX) {
+            for (uint16_t k = 0; k < msg; k++) free(prep[k].tgts);
+            free(prep);
+            cmq_send_error(c, "delivery failed");
+            return;
+        }
+        prep[msg].tgts = tgts;
+        prep[msg].ntgt = ntgt;
+    }
+
+    /* Pass 2b: route + deliver (all snapshots already held). */
+    for (uint16_t msg = 0; msg < count; msg++) {
+        uint16_t subject_len = prep[msg].subject_len;
+        uint16_t reply_len = prep[msg].reply_len;
+        uint32_t payload_len = prep[msg].payload_len;
+        const uint8_t *msg_payload = prep[msg].msg_payload;
+
         if (srv->routes) {
             size_t pub_len = 2 + subject_len + 2 + reply_len + payload_len;
             uint8_t *pub = malloc(pub_len);
@@ -1686,12 +1734,13 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 size_t po = 0;
                 pub[po++] = (subject_len >> 8) & 0xFF;
                 pub[po++] = subject_len & 0xFF;
-                memcpy(pub + po, subject, subject_len); po += subject_len;
+                memcpy(pub + po, prep[msg].subject, subject_len); po += subject_len;
                 pub[po++] = (reply_len >> 8) & 0xFF;
                 pub[po++] = reply_len & 0xFF;
                 if (reply_len > 0) {
                     memcpy(pub + po,
-                           frame->payload + entry_start + 2 + subject_len + 2,
+                           frame->payload + prep[msg].entry_start + 2 +
+                               subject_len + 2,
                            reply_len);
                     po += reply_len;
                 }
@@ -1702,28 +1751,14 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             }
         }
 
-        cmq_rwlock_rdlock(&srv->sublist_lock);
-        cmq_sublist_result_t result;
-        if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
-            cmq_rwlock_unlock(&srv->sublist_lock);
-            cmq_send_error(c, "delivery failed");
-            return;
-        }
-        size_t ntgt = 0;
-        cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
-        cmq_sublist_result_free(&result);
-        cmq_rwlock_unlock(&srv->sublist_lock);
-        if (ntgt == SIZE_MAX) {
-            cmq_send_error(c, "delivery failed");
-            return;
-        }
-        if (tgts && ntgt > 0)
-            deliver_targets_sync(srv, tgts, ntgt, subject, msg_payload,
-                                  payload_len, NULL, 0);
-        free(tgts);
-
+        if (prep[msg].tgts && prep[msg].ntgt > 0)
+            deliver_targets_sync(srv, prep[msg].tgts, prep[msg].ntgt,
+                                  prep[msg].subject, msg_payload, payload_len,
+                                  NULL, 0);
+        free(prep[msg].tgts);
         cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
     }
+    free(prep);
 }
 
 static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
@@ -2037,6 +2072,12 @@ static void client_read_cb(int fd, int events, void *data) {
                 return;
             }
             if (parsed == 0) break; /* need more data */
+
+            /* RFC 6455: client→server frames MUST be masked. */
+            if (!ws_frame.masked) {
+                client_teardown(c);
+                return;
+            }
 
             if (ws_frame.opcode == CMQ_WS_OPCODE_CLOSE) {
                 client_teardown(c);

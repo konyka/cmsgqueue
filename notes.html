@@ -1201,6 +1201,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — Route partial-write close · BATCH atomic · WS mask</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/gateway write_full</span></td><td>✅</td><td>EAGAIN only keeps the fd when zero bytes were written; any partial frame closes and clears the slot (avoids peer desync).</td></tr>
+<tr><td><span class="component-name">route add_conn pool full</span></td><td>✅</td><td>Closes caller-owned fd on reject.</td></tr>
+<tr><td><span class="component-name">BATCH atomic snapshot</span></td><td>✅</td><td>Pass-2a snapshots all entries before any deliver/route; match/OOM aborts with zero fan-out.</td></tr>
+<tr><td><span class="component-name">WS client mask required</span></td><td>✅</td><td>RFC 6455: unmasked client frames tear down the connection.</td></tr>
+</table>
+</div>
+
+
 
 
 

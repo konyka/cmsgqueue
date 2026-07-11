@@ -18,13 +18,15 @@ struct cmq_gateway {
     cmq_mutex_t lock;
 };
 
-/* Write the full buffer; never report success on a partial frame. */
+/* 0 = ok, 1 = EAGAIN zero progress, -1 = hard/partial (close fd). */
 static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
     while (off < len) {
         ssize_t n = write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
+            if ((errno == EAGAIN || errno == EWOULDBLOCK) && off == 0)
+                return 1;
             return -1;
         }
         if (n == 0) return -1;
@@ -188,8 +190,14 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (strcmp(gw->conns[i].remote_cluster, target_cluster) == 0 &&
             gw->conns[i].connected) {
-            if (write_full(gw->conns[i].fd, data, len) == 0) sent++;
-            else if (errno != EAGAIN) gw->conns[i].connected = 0;
+            int wr = write_full(gw->conns[i].fd, data, len);
+            if (wr == 0) {
+                sent++;
+            } else if (wr < 0) {
+                if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
+                gw->conns[i].fd = -1;
+                gw->conns[i].connected = 0;
+            }
         }
     }
     cmq_mutex_unlock(&gw->lock);
@@ -202,8 +210,14 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len)
     size_t sent = 0;
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (gw->conns[i].connected) {
-            if (write_full(gw->conns[i].fd, data, len) == 0) sent++;
-            else if (errno != EAGAIN) gw->conns[i].connected = 0;
+            int wr = write_full(gw->conns[i].fd, data, len);
+            if (wr == 0) {
+                sent++;
+            } else if (wr < 0) {
+                if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
+                gw->conns[i].fd = -1;
+                gw->conns[i].connected = 0;
+            }
         }
     }
     cmq_mutex_unlock(&gw->lock);
