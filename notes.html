@@ -1624,6 +1624,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route dead under io_lock · kqueue dual filter · leaf connect lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route dead io_lock</span></td><td>✅</td><td>broadcast write-fail drops fd while still holding per-slot io_lock.</td></tr>
+<tr><td><span class="component-name">kqueue READ|WRITE</span></td><td>✅</td><td>cmq_ev_add/mod register both EVFILT_READ and EVFILT_WRITE when requested.</td></tr>
+<tr><td><span class="component-name">leaf connect lock</span></td><td>✅</td><td>hub_fd published under hub_io_lock before SUB replay.</td></tr>
+</table>
+</div>
+
 
 
 

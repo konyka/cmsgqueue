@@ -133,10 +133,13 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     }
     set_nonblock(fd);
 
+    /* Publish hub_fd under hub_io_lock so disconnect cannot close mid-replay. */
+    cmq_mutex_lock(&leaf->hub_io_lock);
     cmq_mutex_lock(&leaf->lock);
     if (leaf->connected) {
-        close(fd);
         cmq_mutex_unlock(&leaf->lock);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        close(fd);
         return 0;
     }
     leaf->hub_fd = fd;
@@ -153,8 +156,9 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
             free(ids);
             leaf->hub_fd = -1;
             leaf->connected = 0;
-            close(fd);
             cmq_mutex_unlock(&leaf->lock);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
+            close(fd);
             return -1;
         }
         for (size_t i = 0; i < n; i++) {
@@ -164,7 +168,6 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     }
     cmq_mutex_unlock(&leaf->lock);
 
-    cmq_mutex_lock(&leaf->hub_io_lock);
     for (size_t i = 0; i < n; i++) {
         const char *subject = subjects[i];
         size_t slen = strlen(subject);
@@ -187,12 +190,12 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
             free(ids);
             cmq_mutex_lock(&leaf->lock);
             if (leaf->hub_fd == fd) {
-                close(fd);
                 leaf->hub_fd = -1;
                 leaf->connected = 0;
             }
             cmq_mutex_unlock(&leaf->lock);
             cmq_mutex_unlock(&leaf->hub_io_lock);
+            close(fd);
             return -1;
         }
     }

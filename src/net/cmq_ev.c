@@ -238,12 +238,6 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
 #elif CMQ_OS_MACOS || CMQ_OS_FREEBSD || CMQ_OS_OPENBSD || CMQ_OS_NETBSD
 
-static short cmq_to_kqueue_filter(int events) {
-    if (events & CMQ_EV_READ) return EVFILT_READ;
-    if (events & CMQ_EV_WRITE) return EVFILT_WRITE;
-    return EVFILT_READ;
-}
-
 static int kqueue_to_cmq_events(short filter, int flags) {
     int events = 0;
     if (filter == EVFILT_READ)  events |= CMQ_EV_READ;
@@ -252,14 +246,22 @@ static int kqueue_to_cmq_events(short filter, int flags) {
     return events;
 }
 
+static int kqueue_add_filters(int kq, int fd, int events) {
+    struct kevent ev[2];
+    int n = 0;
+    if (events & CMQ_EV_READ)
+        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+    if (events & CMQ_EV_WRITE)
+        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
+    if (n == 0) return -1;
+    return kevent(kq, ev, n, NULL, 0, NULL) == 0 ? 0 : -1;
+}
+
 int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *data) {
     if (!loop || fd < 0) return -1;
     if (cmq_ev_ensure_watcher(loop, fd) != 0) return -1;
 
-    struct kevent ev;
-    short filter = cmq_to_kqueue_filter(events);
-    EV_SET(&ev, (uintptr_t)fd, filter, EV_ADD | EV_ENABLE, 0, 0, NULL);
-    if (kevent(loop->backend_fd, &ev, 1, NULL, 0, NULL) != 0)
+    if (kqueue_add_filters(loop->backend_fd, fd, events) != 0)
         return -1;
 
     loop->watchers[fd].fd = fd;
@@ -282,9 +284,7 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
 
     if (n > 0) kevent(loop->backend_fd, ev, n, NULL, 0, NULL);
 
-    short filter = cmq_to_kqueue_filter(events);
-    EV_SET(&ev[0], (uintptr_t)fd, filter, EV_ADD | EV_ENABLE, 0, 0, NULL);
-    if (kevent(loop->backend_fd, &ev[0], 1, NULL, 0, NULL) != 0)
+    if (kqueue_add_filters(loop->backend_fd, fd, events) != 0)
         return -1;
 
     loop->watchers[fd].events = events;

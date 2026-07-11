@@ -193,13 +193,6 @@ static void conn_drop_fd_dead(cmq_route_conn_t *c) {
     c->fd_owned = 0;
 }
 
-static void mark_conn_dead(cmq_route_pool_t *pool, size_t idx, int fd) {
-    cmq_mutex_lock(&pool->lock);
-    if (idx < pool->conn_count && pool->conns[idx].fd == fd)
-        conn_drop_fd_dead(&pool->conns[idx]);
-    cmq_mutex_unlock(&pool->lock);
-}
-
 cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
     cmq_route_pool_t *p = calloc(1, sizeof(cmq_route_pool_t));
     if (!p) return NULL;
@@ -533,7 +526,6 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
             continue;
         }
         int wr = write_full(fd, data, len);
-        cmq_mutex_unlock(&pool->io_locks[idxs[j]]);
         if (wr == 0) {
             cmq_mutex_lock(&pool->lock);
             if (idxs[j] < pool->conn_count &&
@@ -543,11 +535,19 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
                 pool->conns[idxs[j]].msgs_sent++;
             }
             cmq_mutex_unlock(&pool->lock);
+            cmq_mutex_unlock(&pool->io_locks[idxs[j]]);
             sent++;
         } else if (wr == 1) {
+            cmq_mutex_unlock(&pool->io_locks[idxs[j]]);
             deferred++;
         } else {
-            mark_conn_dead(pool, idxs[j], fd);
+            /* Drop under io_lock (align with gateway) so other writers cannot
+               race close/shutdown on this fd. */
+            cmq_mutex_lock(&pool->lock);
+            if (idxs[j] < pool->conn_count && pool->conns[idxs[j]].fd == fd)
+                conn_drop_fd_dead(&pool->conns[idxs[j]]);
+            cmq_mutex_unlock(&pool->lock);
+            cmq_mutex_unlock(&pool->io_locks[idxs[j]]);
         }
     }
     if (out_eagain) *out_eagain = deferred;
