@@ -29,8 +29,8 @@ static void set_block(int fd) {
 }
 
 /* Nonblocking connect with poll deadline, then restore blocking for handshake. */
-static int connect_timeout(int fd, const struct sockaddr *sa, socklen_t slen,
-                            int timeout_ms) {
+int cmq_connect_timeout(int fd, const struct sockaddr *sa, socklen_t slen,
+                         int timeout_ms) {
     set_nonblock(fd);
     int rc = connect(fd, sa, slen);
     if (rc != 0 && errno != EINPROGRESS) return -1;
@@ -206,86 +206,76 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                        const char *addr, int port,
                        const char *auth_user, const char *auth_pass) {
     if (!pool || !node_id || !addr) return -1;
-    cmq_mutex_lock(&pool->lock);
 
+    cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
-        if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
-            if (pool->conns[i].connected && pool->conns[i].fd >= 0) {
-                cmq_mutex_unlock(&pool->lock);
-                return 0;
-            }
-            /* Stale slot: replace fd instead of silently succeeding. */
-            conn_drop_fd(&pool->conns[i]);
-            int fd = socket(AF_INET, SOCK_STREAM, 0);
-            if (fd < 0) {
-                cmq_mutex_unlock(&pool->lock);
-                return -1;
-            }
-            struct sockaddr_in sa = {0};
-            sa.sin_family = AF_INET;
-            sa.sin_port = htons((uint16_t)port);
-            inet_pton(AF_INET, addr, &sa.sin_addr);
-            if (connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
-                                 CMQ_ROUTE_CONNECT_MS) != 0) {
-                close(fd);
-                pool->conns[i].fd = -1;
-                cmq_mutex_unlock(&pool->lock);
-                return -1;
-            }
-            if (cmq_peer_handshake(fd, auth_user, auth_pass) != 0) {
-                close(fd);
-                pool->conns[i].fd = -1;
-                cmq_mutex_unlock(&pool->lock);
-                return -1;
-            }
-            set_nonblock(fd);
-            pool->conns[i].fd = fd;
-            pool->conns[i].connected = 1;
-            pool->conns[i].fd_owned = 1;
+        if (strcmp(pool->conns[i].remote_id, node_id) == 0 &&
+            pool->conns[i].connected && pool->conns[i].fd >= 0) {
             cmq_mutex_unlock(&pool->lock);
             return 0;
         }
     }
-
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
-        cmq_mutex_unlock(&pool->lock);
-        return -1;
+        /* Allow replace of an existing stale slot even when "full". */
+        int have = 0;
+        for (size_t i = 0; i < pool->conn_count; i++) {
+            if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
+                have = 1;
+                break;
+            }
+        }
+        if (!have) {
+            cmq_mutex_unlock(&pool->lock);
+            return -1;
+        }
     }
+    cmq_mutex_unlock(&pool->lock);
 
+    /* Connect + handshake outside the pool lock so broadcast can proceed. */
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        cmq_mutex_unlock(&pool->lock);
-        return -1;
-    }
-
+    if (fd < 0) return -1;
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;
     sa.sin_port = htons((uint16_t)port);
     inet_pton(AF_INET, addr, &sa.sin_addr);
-
-    if (connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
-                         CMQ_ROUTE_CONNECT_MS) != 0) {
+    if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
+                             CMQ_ROUTE_CONNECT_MS) != 0) {
         close(fd);
-        cmq_mutex_unlock(&pool->lock);
         return -1;
     }
     if (cmq_peer_handshake(fd, auth_user, auth_pass) != 0) {
         close(fd);
-        cmq_mutex_unlock(&pool->lock);
         return -1;
     }
     set_nonblock(fd);
 
+    cmq_mutex_lock(&pool->lock);
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        if (strcmp(pool->conns[i].remote_id, node_id) != 0) continue;
+        /* Another thread may have restored a live egress. */
+        if (pool->conns[i].connected && pool->conns[i].fd >= 0) {
+            cmq_mutex_unlock(&pool->lock);
+            close(fd);
+            return 0;
+        }
+        conn_drop_fd(&pool->conns[i]);
+        pool->conns[i].fd = fd;
+        pool->conns[i].connected = 1;
+        pool->conns[i].fd_owned = 1;
+        cmq_mutex_unlock(&pool->lock);
+        return 0;
+    }
+    if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
+        cmq_mutex_unlock(&pool->lock);
+        close(fd);
+        return -1;
+    }
     cmq_route_conn_t *c = &pool->conns[pool->conn_count++];
+    memset(c, 0, sizeof(*c));
     strncpy(c->remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
     c->fd = fd;
     c->connected = 1;
     c->fd_owned = 1;
-    c->msgs_sent = 0;
-    c->msgs_recv = 0;
-    c->bytes_sent = 0;
-    c->bytes_recv = 0;
-
     cmq_mutex_unlock(&pool->lock);
     return 0;
 }

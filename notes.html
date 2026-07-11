@@ -1532,6 +1532,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route connect unlock · gw connect timeout · BATCH local-first</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route_connect</span></td><td>✅</td><td>Connect/handshake outside pool lock; install fd under lock (no broadcast freeze).</td></tr>
+<tr><td><span class="component-name">cmq_connect_timeout</span></td><td>✅</td><td>Shared API; gateway uses 2s timed connect (no infinite hang).</td></tr>
+<tr><td><span class="component-name">BATCH local-first</span></td><td>✅</td><td>All local delivers succeed before any cluster forward — avoids ERROR after partial route.</td></tr>
+</table>
+</div>
+
 
 
 

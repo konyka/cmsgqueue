@@ -22,6 +22,7 @@ struct cmq_gateway {
 };
 
 #define CMQ_GW_WRITE_MS 3000
+#define CMQ_GW_CONNECT_MS 2000
 
 static void set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
@@ -138,7 +139,8 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             sa.sin_family = AF_INET;
             sa.sin_port = htons((uint16_t)port_copy);
             inet_pton(AF_INET, addr_copy, &sa.sin_addr);
-            if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+            if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
+                                     CMQ_GW_CONNECT_MS) != 0) {
                 close(fd);
                 return -1;
             }
@@ -185,7 +187,8 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
     sa.sin_port = htons((uint16_t)port_copy);
     inet_pton(AF_INET, addr_copy, &sa.sin_addr);
 
-    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+    if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
+                             CMQ_GW_CONNECT_MS) != 0) {
         close(fd);
         return -1;
     }

@@ -2237,8 +2237,35 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         }
     }
 
-    /* Pass 2b: route + deliver; stop on first failure (no further fan-out). */
+    /* Pass 2b: local deliver first — no cluster side effects yet. */
     int batch_fail = 0;
+    for (uint16_t msg = 0; msg < count; msg++) {
+        const uint8_t *msg_payload = prep[msg].msg_payload;
+        uint32_t payload_len = prep[msg].payload_len;
+        if (prep[msg].tgts && prep[msg].ntgt > 0) {
+            if (deliver_targets_sync(srv, prep[msg].tgts, prep[msg].ntgt,
+                                      prep[msg].subject, c->account_name,
+                                      msg_payload, payload_len,
+                                      NULL, 0) != 0)
+                batch_fail = 1;
+        }
+        free(prep[msg].tgts);
+        prep[msg].tgts = NULL;
+        if (batch_fail) {
+            for (uint16_t k = (uint16_t)(msg + 1); k < count; k++) {
+                free(prep[k].tgts);
+                prep[k].tgts = NULL;
+            }
+            break;
+        }
+    }
+    if (batch_fail) {
+        free(prep);
+        cmq_send_error(c, "batch delivery failed");
+        return;
+    }
+
+    /* Pass 2c: cluster forward only after all local delivers succeeded. */
     for (uint16_t msg = 0; msg < count; msg++) {
         uint16_t subject_len = prep[msg].subject_len;
         uint16_t reply_len = prep[msg].reply_len;
@@ -2268,7 +2295,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 int route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, 0,
                                                      pub, pub_len, &route_sent);
                 free(pub);
-                if ((!prep[msg].tgts || prep[msg].ntgt == 0) &&
+                /* Remote-only entries must reach at least one live peer. */
+                if (prep[msg].ntgt == 0 &&
                     cmq_route_forward_missed(srv, route_rc, route_sent))
                     batch_fail = 1;
             } else {
@@ -2278,24 +2306,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             }
         }
 
-        if (!batch_fail && prep[msg].tgts && prep[msg].ntgt > 0) {
-            if (deliver_targets_sync(srv, prep[msg].tgts, prep[msg].ntgt,
-                                      prep[msg].subject, c->account_name,
-                                      msg_payload, payload_len,
-                                      NULL, 0) != 0 &&
-                route_sent == 0)
-                batch_fail = 1;
-        }
-
-        free(prep[msg].tgts);
-        prep[msg].tgts = NULL;
-        if (batch_fail) {
-            for (uint16_t k = (uint16_t)(msg + 1); k < count; k++) {
-                free(prep[k].tgts);
-                prep[k].tgts = NULL;
-            }
+        if (batch_fail)
             break;
-        }
         cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
         {
             cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);

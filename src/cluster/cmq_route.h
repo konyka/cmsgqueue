@@ -4,6 +4,7 @@
 #include "cmq_cluster.h"
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/socket.h>
 
 typedef struct cmq_route_pool cmq_route_pool_t;
 
@@ -20,6 +21,10 @@ typedef struct {
 
 /* Blocking CONNECT+CONNACK (optionally with auth). Call before set_nonblock. */
 int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass);
+
+/* Nonblocking connect with poll deadline (timeout_ms). Restores blocking mode. */
+int cmq_connect_timeout(int fd, const struct sockaddr *sa, socklen_t slen,
+                         int timeout_ms);
 
 cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster);
 void cmq_route_pool_destroy(cmq_route_pool_t *pool);
