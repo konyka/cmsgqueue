@@ -1137,6 +1137,20 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — Route IDs · full write · INIT freeze · lock-free fan-out</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">unique route node_id</span></td><td>✅</td><td>Connect peers as <code>r0</code>..<code>rN</code> (was shared <code>node-&lt;port&gt;</code> → only first route connected).</td></tr>
+<tr><td><span class="component-name">write_full</span></td><td>✅</td><td>Route/gateway never count partial <code>write()</code> as a successful frame.</td></tr>
+<tr><td><span class="component-name">INIT activity freeze</span></td><td>✅</td><td><code>last_activity_ms</code> only advances when <code>CONNECTED</code>; pre-CONNECT PING/junk cannot hold <code>max_clients</code> slots. Gate rejects PING before CONNECT.</td></tr>
+<tr><td><span class="component-name">cmq_sublist_subject_valid</span></td><td>✅</td><td>PUBLISH/SUBSCRIBE/REQUEST/RESPONSE/BATCH reject illegal subjects with ERROR/SUBACK (no silent drop).</td></tr>
+<tr><td><span class="component-name">deliver_targets_sync</span></td><td>✅</td><td>Always snapshot under rdlock then unlock before I/O; single-thread large fan-out no longer holds sublist lock during send.</td></tr>
+<tr><td><span class="component-name">tests</span></td><td>✅</td><td><code>subject_valid_api</code>, <code>publish_invalid_subject</code>, INIT PING does not defeat <code>init_idle_timeout</code>.</td></tr>
+</table>
+</div>
+
+
 </div>
 </body>
 </html>
