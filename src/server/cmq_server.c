@@ -3519,14 +3519,19 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             /* Unique per peer — shared "node-<port>" skipped all but first. */
             char nid[CMQ_NODE_ID_SIZE];
             snprintf(nid, sizeof(nid), "r%d", i);
-            cmq_route_connect(srv->routes, nid,
-                              srv->config.routes[i].addr,
-                              srv->config.routes[i].port,
-                              srv->config.auth_username,
-                              srv->config.auth_password);
-            cmq_log_info(srv->log, "Route connected to %s:%d",
-                         srv->config.routes[i].addr,
-                         srv->config.routes[i].port);
+            if (cmq_route_connect(srv->routes, nid,
+                                  srv->config.routes[i].addr,
+                                  srv->config.routes[i].port,
+                                  srv->config.auth_username,
+                                  srv->config.auth_password) == 0) {
+                cmq_log_info(srv->log, "Route connected to %s:%d",
+                             srv->config.routes[i].addr,
+                             srv->config.routes[i].port);
+            } else {
+                cmq_log_warn(srv->log, "Route connect failed to %s:%d",
+                             srv->config.routes[i].addr,
+                             srv->config.routes[i].port);
+            }
         }
         /* Background reconnect — never block acceptor keepalive/accept. */
         if (cmq_thread_create(&srv->route_reconn_thr, route_reconnect_thread,

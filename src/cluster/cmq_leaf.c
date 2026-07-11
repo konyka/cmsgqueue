@@ -120,7 +120,10 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;
     sa.sin_port = htons((uint16_t)port_copy);
-    inet_pton(AF_INET, addr_copy, &sa.sin_addr);
+    if (inet_pton(AF_INET, addr_copy, &sa.sin_addr) != 1) {
+        close(fd);
+        return -1;
+    }
 
     if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
                              CMQ_LEAF_CONNECT_MS) != 0) {

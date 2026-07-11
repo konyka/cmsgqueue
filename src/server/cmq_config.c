@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 
 static void trim(char *s) {
     char *start = s;
@@ -181,5 +183,19 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
          config->cluster_name[0] == '\0' ||
          config->cluster_node_id[0] == '\0'))
         return CMQ_ERR_INVALID_ARG;
+    /* Inbound route identity is by peer IP only — duplicate IPs collide on rN. */
+    for (int i = 0; i < config->route_count; i++) {
+        if (!config->routes[i].addr) return CMQ_ERR_INVALID_ARG;
+        struct in_addr a;
+        if (inet_pton(AF_INET, config->routes[i].addr, &a) != 1)
+            return CMQ_ERR_INVALID_ARG;
+        for (int j = 0; j < i; j++) {
+            struct in_addr b;
+            if (inet_pton(AF_INET, config->routes[j].addr, &b) != 1)
+                return CMQ_ERR_INVALID_ARG;
+            if (a.s_addr == b.s_addr)
+                return CMQ_ERR_INVALID_ARG;
+        }
+    }
     return CMQ_OK;
 }

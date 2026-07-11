@@ -255,7 +255,10 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;
     sa.sin_port = htons((uint16_t)port);
-    inet_pton(AF_INET, addr, &sa.sin_addr);
+    if (inet_pton(AF_INET, addr, &sa.sin_addr) != 1) {
+        close(fd);
+        return -1;
+    }
     if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
                              CMQ_ROUTE_CONNECT_MS) != 0) {
         close(fd);
