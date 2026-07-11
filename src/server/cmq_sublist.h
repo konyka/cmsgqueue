@@ -23,6 +23,8 @@ int cmq_sublist_insert(cmq_sublist_t *sl, const char *subject, void *data);
 int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject, void *data);
 /* 0 if subject is legal for publish/subscribe (tokens, dots, wildcards). */
 int cmq_sublist_subject_valid(const char *subject);
+/* 0 if subject is a concrete publish/request subject (no * or > tokens). */
+int cmq_sublist_publish_subject_valid(const char *subject);
 /* Match subject against the trie. Returns 0 on success, -1 on OOM (result cleared).
    Invalid subjects should be rejected via cmq_sublist_subject_valid first. */
 int cmq_sublist_match(cmq_sublist_t *sl, const char *subject, cmq_sublist_result_t *result);

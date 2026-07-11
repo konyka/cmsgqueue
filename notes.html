@@ -1248,6 +1248,19 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS Origin · outbound keepalive · concrete publish</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">WS Origin Host check</span></td><td>✅</td><td>Require GET + Version 13; if Origin present it must match Host (CSWSH mitigation).</td></tr>
+<tr><td><span class="component-name">outbound last_activity</span></td><td>✅</td><td><code>cmq_client_send_local</code> refreshes activity so pure subscribers are not keepalive-killed.</td></tr>
+<tr><td><span class="component-name">keepalive DISCONNECT</span></td><td>✅</td><td>Idle/write-timeout paths send DISCONNECT then <code>client_finish_closing</code> (workers: push disc + teardown).</td></tr>
+<tr><td><span class="component-name">publish concrete subject</span></td><td>✅</td><td><code>cmq_sublist_publish_subject_valid</code> rejects <code>*</code>/<code>&gt;</code> on PUBLISH/REQUEST/RESPONSE/BATCH.</td></tr>
+<tr><td><span class="component-name">STATS auth gate</span></td><td>✅</td><td>When auth is configured, STATS requires an authenticated username.</td></tr>
+</table>
+</div>
+
+
 
 
 

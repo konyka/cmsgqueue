@@ -1294,4 +1294,80 @@ TEST(server_ops, tls_stub_refused) {
     ASSERT_NULL(srv);
 }
 
+/* Publish subjects must be concrete (no * / >). */
+TEST(server_ops, publish_wildcard_rejected) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 21;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(80);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    cmq_parser_t *parser = cmq_parser_create();
+    do_connect(fd, parser);
+
+    const char *subj = "orders.*";
+    uint16_t slen = (uint16_t)strlen(subj);
+    uint8_t buf[64];
+    size_t off = 0;
+    buf[off++] = (slen >> 8) & 0xFF;
+    buf[off++] = slen & 0xFF;
+    memcpy(buf + off, subj, slen); off += slen;
+    buf[off++] = 0; buf[off++] = 0; /* reply */
+    buf[off++] = 'x';
+    send_frame(fd, CMQ_OP_PUBLISH, buf, off);
+    wait_ms(80);
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(fd, &f, parser), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_ERROR);
+    free_frame(&f);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+/* Mismatched Origin must fail the WebSocket upgrade. */
+TEST(server_ops, ws_origin_mismatch_rejected) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 22;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(80);
+
+    int fd = connect_to(config.port);
+    ASSERT(fd >= 0);
+    const char *upgrade =
+        "GET /ws HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Origin: http://evil.example\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    ASSERT(write(fd, upgrade, strlen(upgrade)) > 0);
+    wait_ms(80);
+    char resp[512];
+    ssize_t rn = read(fd, resp, sizeof(resp) - 1);
+    if (rn > 0) {
+        resp[rn] = '\0';
+        ASSERT(strstr(resp, "101") == NULL);
+    }
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

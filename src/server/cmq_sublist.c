@@ -97,6 +97,14 @@ int cmq_sublist_subject_valid(const char *subject) {
     return tokenize(subject, tokens, &ntokens);
 }
 
+int cmq_sublist_publish_subject_valid(const char *subject) {
+    if (cmq_sublist_subject_valid(subject) != 0) return -1;
+    for (const char *p = subject; *p; p++) {
+        if (*p == '*' || *p == '>') return -1;
+    }
+    return 0;
+}
+
 static cmq_sl_node_t *find_child(cmq_sl_node_t *parent, const char *token, int is_pwc, int is_fwc) {
     cmq_sl_node_t *child = parent->children;
     while (child) {

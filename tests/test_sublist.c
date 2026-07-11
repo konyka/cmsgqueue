@@ -218,6 +218,12 @@ TEST(sublist, subject_valid_api) {
     ASSERT_EQ(cmq_sublist_subject_valid(".foo"), -1);
     ASSERT_EQ(cmq_sublist_subject_valid("foo."), -1);
     ASSERT_EQ(cmq_sublist_subject_valid(""), -1);
+    ASSERT_EQ(cmq_sublist_subject_valid("foo.*"), 0);
+    ASSERT_EQ(cmq_sublist_subject_valid(">"), 0);
+    ASSERT_EQ(cmq_sublist_publish_subject_valid("foo.bar"), 0);
+    ASSERT_EQ(cmq_sublist_publish_subject_valid("foo.*"), -1);
+    ASSERT_EQ(cmq_sublist_publish_subject_valid(">"), -1);
+    ASSERT_EQ(cmq_sublist_publish_subject_valid("foo.>"), -1);
 }
 
 TEST_MAIN()

@@ -560,31 +560,36 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
 static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t len) {
     if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
         return -1;
-    if (!c->is_websocket)
-        return cmq_client_send_direct(c, data, len);
-
-    size_t hdr_len = (len <= 125) ? 2 : (len <= 65535) ? 4 : 10;
-    size_t total = hdr_len + len;
-    uint8_t *wsbuf = malloc(total);
-    if (!wsbuf) {
-        if (c->server)
-            cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
-                                      CMQ_ATOMIC_RELAXED);
-        return -1;
-    }
-    cmq_ws_frame_t wf;
-    wf.fin = 1;
-    wf.opcode = CMQ_WS_OPCODE_BINARY;
-    wf.payload = data;
-    wf.payload_len = len;
-    wf.mask_key = 0;
-    wf.masked = 0;
-    if (cmq_ws_frame_serialize(&wf, wsbuf, total) < 0) {
+    int rc;
+    if (!c->is_websocket) {
+        rc = cmq_client_send_direct(c, data, len);
+    } else {
+        size_t hdr_len = (len <= 125) ? 2 : (len <= 65535) ? 4 : 10;
+        size_t total = hdr_len + len;
+        uint8_t *wsbuf = malloc(total);
+        if (!wsbuf) {
+            if (c->server)
+                cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            return -1;
+        }
+        cmq_ws_frame_t wf;
+        wf.fin = 1;
+        wf.opcode = CMQ_WS_OPCODE_BINARY;
+        wf.payload = data;
+        wf.payload_len = len;
+        wf.mask_key = 0;
+        wf.masked = 0;
+        if (cmq_ws_frame_serialize(&wf, wsbuf, total) < 0) {
+            free(wsbuf);
+            return -1;
+        }
+        rc = cmq_client_send_direct(c, wsbuf, total);
         free(wsbuf);
-        return -1;
     }
-    int rc = cmq_client_send_direct(c, wsbuf, total);
-    free(wsbuf);
+    /* Outbound traffic keeps pure subscribers alive under keepalive. */
+    if (rc == 0)
+        c->last_activity_ms = srv_now_ms();
     return rc;
 }
 
@@ -1139,7 +1144,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     char subject[CMQ_MAX_SUBJECT];
     memcpy(subject, frame->payload + 2, subject_len);
     subject[subject_len] = '\0';
-    if (cmq_sublist_subject_valid(subject) != 0) {
+    if (cmq_sublist_publish_subject_valid(subject) != 0) {
         cmq_send_error(c, "invalid subject");
         return;
     }
@@ -1458,7 +1463,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     memcpy(subject, frame->payload + offset, wire_subj);
     subject[wire_subj] = '\0';
     offset += wire_subj;
-    if (cmq_sublist_subject_valid(subject) != 0) {
+    if (cmq_sublist_publish_subject_valid(subject) != 0) {
         cmq_send_error(c, "invalid subject");
         return;
     }
@@ -1549,7 +1554,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     memcpy(subject, frame->payload + offset, wire_subj);
     subject[wire_subj] = '\0';
     offset += wire_subj;
-    if (cmq_sublist_subject_valid(subject) != 0) {
+    if (cmq_sublist_publish_subject_valid(subject) != 0) {
         cmq_send_error(c, "invalid subject");
         return;
     }
@@ -1593,6 +1598,12 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
 }
 
 static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
+    /* When auth is configured, only authenticated clients may read stats. */
+    if ((srv->config.auth_username || srv->config.auth_password) &&
+        !c->username) {
+        cmq_send_error(c, "unauthorized");
+        return;
+    }
     uint64_t conn = cmq_atomic_load_u64(&srv->stat_connections, CMQ_ATOMIC_RELAXED);
     uint64_t msg_in = cmq_atomic_load_u64(&srv->stat_messages_in, CMQ_ATOMIC_RELAXED);
     uint64_t msg_out = cmq_atomic_load_u64(&srv->stat_messages_out, CMQ_ATOMIC_RELAXED);
@@ -1671,7 +1682,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             char subj[CMQ_MAX_SUBJECT];
             memcpy(subj, frame->payload + offset, subject_len);
             subj[subject_len] = '\0';
-            if (cmq_sublist_subject_valid(subj) != 0) {
+            if (cmq_sublist_publish_subject_valid(subj) != 0) {
                 cmq_send_error(c, "invalid subject");
                 return;
             }
@@ -1970,6 +1981,57 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
     c->info_sent = 1;
 }
 
+static int http_header_value(const char *req, const char *name,
+                              char *out, size_t out_sz) {
+    if (!req || !name || !out || out_sz == 0) return -1;
+    size_t nlen = strlen(name);
+    const char *p = req;
+    while (*p) {
+        const char *line = p;
+        while (*p && *p != '\r' && *p != '\n') p++;
+        size_t llen = (size_t)(p - line);
+        if (llen > nlen + 1) {
+            int match = 1;
+            for (size_t i = 0; i < nlen; i++) {
+                char a = line[i], b = name[i];
+                if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+                if (a != b) { match = 0; break; }
+            }
+            if (match && line[nlen] == ':') {
+                const char *v = line + nlen + 1;
+                while (*v == ' ' || *v == '\t') v++;
+                size_t vlen = (size_t)((line + llen) - v);
+                if (vlen >= out_sz) vlen = out_sz - 1;
+                memcpy(out, v, vlen);
+                out[vlen] = '\0';
+                return 0;
+            }
+        }
+        if (*p == '\r') p++;
+        if (*p == '\n') p++;
+    }
+    return -1;
+}
+
+/* Extract host[:port] from Origin URL or Host header into out. */
+static void http_host_from_value(const char *val, char *out, size_t out_sz) {
+    out[0] = '\0';
+    if (!val || out_sz == 0) return;
+    const char *host = val;
+    if (strncmp(val, "http://", 7) == 0) host = val + 7;
+    else if (strncmp(val, "https://", 8) == 0) host = val + 8;
+    else if (strncmp(val, "ws://", 5) == 0) host = val + 5;
+    else if (strncmp(val, "wss://", 6) == 0) host = val + 6;
+    size_t i = 0;
+    while (host[i] && host[i] != '/' && host[i] != '?' && i + 1 < out_sz) {
+        char ch = host[i];
+        if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+        out[i++] = ch;
+    }
+    out[i] = '\0';
+}
+
 static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                               size_t *consumed) {
     if (consumed) *consumed = 0;
@@ -1991,8 +2053,24 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
     memcpy(req, data, copy);
     req[copy] = '\0';
 
+    if (strncmp(req, "GET ", 4) != 0) return -1;
     if (strstr(req, "Upgrade: websocket") == NULL &&
         strstr(req, "Upgrade: WebSocket") == NULL) return -1;
+    if (strstr(req, "Sec-WebSocket-Version: 13") == NULL &&
+        strstr(req, "Sec-WebSocket-Version:13") == NULL) return -1;
+
+    /* CSWSH: if Origin is present it must match Host. Native clients may omit Origin. */
+    char origin_raw[256] = {0}, host_raw[256] = {0};
+    char origin_host[256] = {0}, host_host[256] = {0};
+    if (http_header_value(req, "Origin", origin_raw, sizeof(origin_raw)) == 0) {
+        if (http_header_value(req, "Host", host_raw, sizeof(host_raw)) != 0)
+            return -1;
+        http_host_from_value(origin_raw, origin_host, sizeof(origin_host));
+        http_host_from_value(host_raw, host_host, sizeof(host_host));
+        if (origin_host[0] == '\0' || host_host[0] == '\0' ||
+            strcmp(origin_host, host_host) != 0)
+            return -1;
+    }
 
     char ws_key[128] = {0};
     if (cmq_ws_parse_http_upgrade(req, copy, ws_key, sizeof(ws_key)) != 0)
@@ -2317,7 +2395,18 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
         }
     }
     for (int i = 0; i < ndoomed; i++) {
-        client_teardown(doomed[i]);
+        cmq_client_t *c = doomed[i];
+        if (c->state == CMQ_CLIENT_CONNECTED) {
+            uint8_t disc[16];
+            size_t disc_len = cmq_frame_encode(disc, sizeof(disc),
+                                                CMQ_OP_DISCONNECT, 0, NULL, 0);
+            if (disc_len > 0)
+                (void)cmq_client_send_local(c, disc, disc_len);
+            c->state = CMQ_CLIENT_CLOSING;
+            client_finish_closing(c);
+        } else {
+            client_teardown(c);
+        }
     }
     free(doomed);
 }
@@ -2373,7 +2462,12 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                 }
             }
             cmq_mutex_unlock(&w->clients_lock);
+            uint8_t disc[16];
+            size_t disc_len = cmq_frame_encode(disc, sizeof(disc),
+                                                CMQ_OP_DISCONNECT, 0, NULL, 0);
             for (int i = 0; i < ndoomed; i++) {
+                if (disc_len > 0)
+                    worker_push_msg(w, doomed_ids[i], disc, disc_len, 0);
                 if (worker_push_teardown(w, doomed_ids[i]) != 0) {
                     /* OOM: force-close fd so the worker notices EOF. */
                     cmq_mutex_lock(&w->clients_lock);
