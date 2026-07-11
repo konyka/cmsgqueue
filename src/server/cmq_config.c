@@ -188,6 +188,13 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         return CMQ_ERR_INVALID_ARG;
     if (config->auth_password && config->auth_password[0] == '\0')
         return CMQ_ERR_INVALID_ARG;
+    /* CONNECT compares into 256-byte pads — longer creds would truncate. */
+    if (config->auth_username &&
+        strnlen(config->auth_username, 256) >= 256)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->auth_password &&
+        strnlen(config->auth_password, 256) >= 256)
+        return CMQ_ERR_INVALID_ARG;
     {
         const char *host = config->host ? config->host : CMQ_DEFAULT_HOST;
         struct in_addr ha;

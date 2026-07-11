@@ -245,6 +245,7 @@ int cmq_parser_next(cmq_parser_t *p) {
 
 size_t cmq_frame_encode(uint8_t *buf, size_t buf_size, cmq_op_t op, cmq_u8_t flags, const uint8_t *payload, size_t payload_len) {
     if (payload_len > UINT32_MAX) return 0;
+    if (payload_len > 0 && !payload) return 0;
     if (payload_len > SIZE_MAX - sizeof(cmq_frame_hdr_t)) return 0;
     size_t needed = sizeof(cmq_frame_hdr_t) + payload_len;
     if (buf_size < needed) return 0;
@@ -259,8 +260,7 @@ size_t cmq_frame_encode(uint8_t *buf, size_t buf_size, cmq_op_t op, cmq_u8_t fla
     buf[6] = (uint8_t)(le >> 8);
     buf[7] = (uint8_t)(le >> 16);
     buf[8] = (uint8_t)(le >> 24);
-    if (payload_len > 0 && payload) {
+    if (payload_len > 0)
         memcpy(buf + sizeof(cmq_frame_hdr_t), payload, payload_len);
-    }
     return sizeof(cmq_frame_hdr_t) + payload_len;
 }

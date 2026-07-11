@@ -383,6 +383,10 @@ TEST(ws, frame_serialize) {
     frame.payload_len = SIZE_MAX - 1;
     frame.payload = NULL;
     ASSERT_EQ(cmq_ws_frame_serialize(&frame, buf, sizeof(buf)), -1);
+
+    frame.payload_len = 4;
+    frame.payload = NULL;
+    ASSERT_EQ(cmq_ws_frame_serialize(&frame, buf, sizeof(buf)), -1);
 }
 
 TEST(ws, mask_unmask) {

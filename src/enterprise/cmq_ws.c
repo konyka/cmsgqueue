@@ -157,6 +157,7 @@ static int ws_encode_header(const cmq_ws_frame_t *frame, uint8_t *buf,
 int cmq_ws_frame_serialize(const cmq_ws_frame_t *frame, uint8_t *buf,
                             size_t buf_len) {
     if (!frame || !buf) return -1;
+    if (frame->payload_len > 0 && !frame->payload) return -1;
 
     size_t header_len = ws_header_len(frame->payload_len);
     if (frame->payload_len > SIZE_MAX - header_len) return -1;
@@ -165,7 +166,7 @@ int cmq_ws_frame_serialize(const cmq_ws_frame_t *frame, uint8_t *buf,
 
     if (ws_encode_header(frame, buf, buf_len) < 0) return -1;
 
-    if (frame->payload && frame->payload_len > 0)
+    if (frame->payload_len > 0)
         memcpy(&buf[header_len], frame->payload, frame->payload_len);
 
     return (int)total;

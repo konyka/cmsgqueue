@@ -2588,12 +2588,18 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 c->state = CMQ_CLIENT_CLOSING;
                 break;
             }
+            /* Cred pads are 256 bytes; reject overlong fields (no silent truncate). */
+            if (ulen >= 256 || plen >= 256) {
+                cmq_send_connack(c, 1);
+                c->state = CMQ_CLIENT_CLOSING;
+                break;
+            }
             char uname[256] = {0};
             char passwd[256] = {0};
             char expect_u[256] = {0};
             char expect_p[256] = {0};
-            if (ulen > 0 && ulen < 256) memcpy(uname, frame->payload + 4, ulen);
-            if (plen > 0 && plen < 256) memcpy(passwd, frame->payload + 4 + ulen, plen);
+            if (ulen > 0) memcpy(uname, frame->payload + 4, ulen);
+            if (plen > 0) memcpy(passwd, frame->payload + 4 + ulen, plen);
             if (srv->config.auth_username && srv->config.auth_username[0])
                 strncpy(expect_u, srv->config.auth_username, sizeof(expect_u) - 1);
             if (srv->config.auth_password && srv->config.auth_password[0])

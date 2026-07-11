@@ -172,6 +172,19 @@ TEST(config, validate_routes_bad_addr) {
     cmq_config_free(&config);
 }
 
+TEST(config, validate_auth_cred_length) {
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.port = 7654;
+    char longcred[300];
+    memset(longcred, 'a', sizeof(longcred) - 1);
+    longcred[sizeof(longcred) - 1] = '\0';
+    config.auth_password = longcred;
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+    config.auth_password = "ok";
+    ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
+}
+
 TEST(config, load_skip_sections) {
     const char *path = write_test_config(
         "[server]\n"

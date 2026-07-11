@@ -40,9 +40,9 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     cmq_mutex_lock(&mgr->lock);
     for (size_t i = 0; i < mgr->count; i++) {
         if (strcmp(mgr->accounts[i].name, name) == 0) {
-            if (!mgr->accounts[i].active) {
+            if (!__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE)) {
                 /* Reactivate soft-deleted slot (stable pointer for same name). */
-                mgr->accounts[i].active = 1;
+                __atomic_store_n(&mgr->accounts[i].active, 1, __ATOMIC_RELEASE);
                 mgr->accounts[i].connections = 0;
                 mgr->accounts[i].subscriptions = 0;
                 mgr->accounts[i].messages_in = 0;
@@ -63,7 +63,7 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     cmq_account_t *a = &mgr->accounts[mgr->count++];
     strncpy(a->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
     a->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
-    a->active = 1;
+    __atomic_store_n(&a->active, 1, __ATOMIC_RELEASE);
     a->connections = 0;
     a->subscriptions = 0;
     a->messages_in = 0;
@@ -80,10 +80,10 @@ int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
     if (!mgr || !name) return -1;
     cmq_mutex_lock(&mgr->lock);
     for (size_t i = 0; i < mgr->count; i++) {
-        if (mgr->accounts[i].active &&
+        if (__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE) &&
             strcmp(mgr->accounts[i].name, name) == 0) {
             /* Soft-delete: keep slot so concurrent get()+inc_* pointers stay valid. */
-            mgr->accounts[i].active = 0;
+            __atomic_store_n(&mgr->accounts[i].active, 0, __ATOMIC_RELEASE);
             clear_account_perms_unlocked(mgr, name);
             cmq_mutex_unlock(&mgr->lock);
             return 0;
@@ -99,7 +99,7 @@ cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name) {
     cmq_mutex_lock(&mgr->lock);
     cmq_account_t *found = NULL;
     for (size_t i = 0; i < mgr->count; i++) {
-        if (mgr->accounts[i].active &&
+        if (__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE) &&
             strcmp(mgr->accounts[i].name, name) == 0) {
             found = &mgr->accounts[i];
             break;
@@ -114,18 +114,18 @@ size_t cmq_account_count(cmq_account_manager_t *mgr) {
     cmq_mutex_lock(&mgr->lock);
     size_t c = 0;
     for (size_t i = 0; i < mgr->count; i++) {
-        if (mgr->accounts[i].active) c++;
+        if (__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE)) c++;
     }
     cmq_mutex_unlock(&mgr->lock);
     return c;
 }
 
 void cmq_account_inc_connections(cmq_account_t *acc) {
-    if (acc && acc->active)
+    if (acc && __atomic_load_n(&acc->active, __ATOMIC_ACQUIRE))
         __atomic_fetch_add(&acc->connections, 1, __ATOMIC_RELAXED);
 }
 void cmq_account_dec_connections(cmq_account_t *acc) {
-    if (!acc || !acc->active) return;
+    if (!acc || !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
     uint64_t cur = __atomic_load_n(&acc->connections, __ATOMIC_RELAXED);
     while (cur > 0) {
         if (__atomic_compare_exchange_n(&acc->connections, &cur, cur - 1,
@@ -134,11 +134,11 @@ void cmq_account_dec_connections(cmq_account_t *acc) {
     }
 }
 void cmq_account_inc_subscriptions(cmq_account_t *acc) {
-    if (acc && acc->active)
+    if (acc && __atomic_load_n(&acc->active, __ATOMIC_ACQUIRE))
         __atomic_fetch_add(&acc->subscriptions, 1, __ATOMIC_RELAXED);
 }
 void cmq_account_dec_subscriptions(cmq_account_t *acc) {
-    if (!acc || !acc->active) return;
+    if (!acc || !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
     uint64_t cur = __atomic_load_n(&acc->subscriptions, __ATOMIC_RELAXED);
     while (cur > 0) {
         if (__atomic_compare_exchange_n(&acc->subscriptions, &cur, cur - 1,
@@ -147,12 +147,12 @@ void cmq_account_dec_subscriptions(cmq_account_t *acc) {
     }
 }
 void cmq_account_inc_msgs_in(cmq_account_t *acc, uint64_t bytes) {
-    if (!acc || !acc->active) return;
+    if (!acc || !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
     __atomic_fetch_add(&acc->messages_in, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&acc->bytes_in, bytes, __ATOMIC_RELAXED);
 }
 void cmq_account_inc_msgs_out(cmq_account_t *acc, uint64_t bytes) {
-    if (!acc || !acc->active) return;
+    if (!acc || !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
     __atomic_fetch_add(&acc->messages_out, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&acc->bytes_out, bytes, __ATOMIC_RELAXED);
 }
@@ -190,7 +190,7 @@ static cmq_account_perms_t *find_or_create_perms(cmq_account_manager_t *mgr,
 
 static int account_is_active(cmq_account_manager_t *mgr, const char *name) {
     for (size_t i = 0; i < mgr->count; i++) {
-        if (mgr->accounts[i].active &&
+        if (__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE) &&
             strcmp(mgr->accounts[i].name, name) == 0)
             return 1;
     }

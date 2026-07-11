@@ -1973,6 +1973,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — auth cred cap · encode null payload · account active atomics</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">auth creds</span></td><td>✅</td><td>Reject config/CONNECT creds ≥ 256 (no truncate auth).</td></tr>
+<tr><td><span class="component-name">frame/ws encode</span></td><td>✅</td><td>Reject null payload with nonzero length (no leak).</td></tr>
+<tr><td><span class="component-name">account active</span></td><td>✅</td><td>Atomic acquire/release for delete vs <code>inc_*</code>.</td></tr>
+</table>
+</div>
+
+
 
 
 

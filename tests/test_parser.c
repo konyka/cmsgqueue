@@ -202,6 +202,12 @@ TEST(parser, frame_encode_buffer_too_small) {
     ASSERT_EQ(len, (size_t)0);
 }
 
+TEST(parser, frame_encode_null_payload) {
+    uint8_t buf[64];
+    ASSERT_EQ(cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH, 0, NULL, 8),
+              (size_t)0);
+}
+
 TEST(parser, large_payload) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t bigpayload[4096];
