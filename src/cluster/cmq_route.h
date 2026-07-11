@@ -55,5 +55,10 @@ size_t cmq_route_pool_count(cmq_route_pool_t *pool);
 /* Connected peers with a live fd (excludes placeholders / dead slots). */
 size_t cmq_route_live_count(cmq_route_pool_t *pool);
 cmq_route_conn_t *cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id);
+/* 1 if connected && fd>=0 (checked under lock). */
+int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id);
+/* Serialize writes on a route fd (inbound borrow + client path). Returns idx or -1. */
+int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd);
+void cmq_route_io_unlock_idx(cmq_route_pool_t *pool, int idx);
 
 #endif

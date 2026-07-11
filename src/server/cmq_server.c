@@ -694,6 +694,10 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
     if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
         return -1;
 
+    int route_io_idx = -1;
+    if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+        route_io_idx = cmq_route_io_lock_fd(c->server->routes, c->fd);
+
     /* Mark CLOSING without teardown — callers may hold clients_lock. */
     #define CMQ_SEND_FORCE_CLOSE() do { \
         c->state = CMQ_CLIENT_CLOSING; \
@@ -702,12 +706,13 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
                        client_read_cb, c); \
     } while (0)
 
+    int rc = -1;
     if (c->write_buf && c->write_pos < c->write_len) {
         size_t remaining = c->write_len - c->write_pos;
         size_t new_len = remaining + len;
         if (new_len > CMQ_WRITE_BUF_LIMIT) {
             CMQ_SEND_FORCE_CLOSE();
-            return -1;
+            goto out;
         }
         /* Compact unsent bytes to the front, then grow capacity if needed. */
         if (c->write_pos > 0) {
@@ -720,13 +725,14 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
                 cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
             CMQ_SEND_FORCE_CLOSE();
-            return -1;
+            goto out;
         }
         memcpy(c->write_buf + c->write_len, data, len);
         c->write_len = new_len;
         if (c->last_write_progress_ms == 0)
             c->last_write_progress_ms = srv_now_ms();
-        return 0;
+        rc = 0;
+        goto out;
     }
 
     /* Buffer empty: reuse existing capacity when possible. */
@@ -735,7 +741,7 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
             cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
         CMQ_SEND_FORCE_CLOSE();
-        return -1;
+        goto out;
     }
     memcpy(c->write_buf, data, len);
     c->write_len = len;
@@ -743,8 +749,12 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
     c->last_write_progress_ms = srv_now_ms();
 
     cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE, client_read_cb, c);
-    return 0;
+    rc = 0;
+out:
 #undef CMQ_SEND_FORCE_CLOSE
+    if (route_io_idx >= 0 && c->server && c->server->routes)
+        cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+    return rc;
 }
 
 /* Owning-thread send of a raw CMQ frame. Wraps WebSocket binary if needed.
@@ -1411,8 +1421,8 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
         cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, (uint64_t)eagain,
                                   CMQ_ATOMIC_RELAXED);
     }
-    /* All live peers back-pressured: treat as forward failure (no silent OK). */
-    if (sent == 0 && eagain > 0)
+    /* Any live peer deferred = incomplete fan-out (no retry queue yet). */
+    if (eagain > 0)
         return -1;
     return 0;
 }
@@ -2450,13 +2460,17 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
 }
 
 static void client_flush_write(cmq_client_t *c) {
+    int route_io_idx = -1;
+    if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+        route_io_idx = cmq_route_io_lock_fd(c->server->routes, c->fd);
+
     if (!c->write_buf || c->write_pos >= c->write_len) {
         c->write_len = 0;
         c->write_pos = 0;
         /* Keep write_buf/write_cap for reuse on the next send. */
         if (c->fd >= 0)
             cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c);
-        return;
+        goto out;
     }
 
     size_t remaining = c->write_len - c->write_pos;
@@ -2474,6 +2488,9 @@ static void client_flush_write(cmq_client_t *c) {
     } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
         c->state = CMQ_CLIENT_CLOSING;
     }
+out:
+    if (route_io_idx >= 0 && c->server && c->server->routes)
+        cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
 }
 
 static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
@@ -3002,8 +3019,8 @@ static void *route_reconnect_thread(void *arg) {
                     break;
                 char nid[CMQ_NODE_ID_SIZE];
                 snprintf(nid, sizeof(nid), "r%d", i);
-                cmq_route_conn_t *rc = cmq_route_get_conn(srv->routes, nid);
-                if (rc && rc->connected) continue;
+                if (cmq_route_peer_live(srv->routes, nid))
+                    continue;
                 if (cmq_route_connect(srv->routes, nid,
                                       srv->config.routes[i].addr,
                                       srv->config.routes[i].port,

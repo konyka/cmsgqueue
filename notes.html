@@ -1542,6 +1542,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route io_lock · strict EAGAIN · peer_live</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route io_lock</span></td><td>✅</td><td>Per-slot write lock shared by broadcast and route-client send/flush — no cross-thread frame interleave.</td></tr>
+<tr><td><span class="component-name">forward EAGAIN</span></td><td>✅</td><td>Any deferred peer fails the forward (no silent partial OK).</td></tr>
+<tr><td><span class="component-name">peer_live</span></td><td>✅</td><td>Reconnect thread checks liveness under lock (no get_conn TOCTOU).</td></tr>
+</table>
+</div>
+
 
 
 

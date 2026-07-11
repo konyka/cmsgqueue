@@ -166,6 +166,7 @@ struct cmq_route_pool {
     cmq_route_interest_t interests[256];
     size_t interest_count;
     cmq_mutex_t lock;
+    cmq_mutex_t io_locks[CMQ_ROUTE_MAX_CONNS]; /* per-slot write serialization */
 };
 
 static void conn_drop_fd(cmq_route_conn_t *c) {
@@ -191,6 +192,8 @@ cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
     p->conn_count = 0;
     p->interest_count = 0;
     cmq_mutex_init(&p->lock);
+    for (size_t i = 0; i < CMQ_ROUTE_MAX_CONNS; i++)
+        cmq_mutex_init(&p->io_locks[i]);
     return p;
 }
 
@@ -198,6 +201,8 @@ void cmq_route_pool_destroy(cmq_route_pool_t *pool) {
     if (!pool) return;
     for (size_t i = 0; i < pool->conn_count; i++)
         conn_drop_fd(&pool->conns[i]);
+    for (size_t i = 0; i < CMQ_ROUTE_MAX_CONNS; i++)
+        cmq_mutex_destroy(&pool->io_locks[i]);
     cmq_mutex_destroy(&pool->lock);
     free(pool);
 }
@@ -444,7 +449,9 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
     size_t sent = 0;
     size_t deferred = 0;
     for (size_t j = 0; j < n; j++) {
+        cmq_mutex_lock(&pool->io_locks[idxs[j]]);
         int wr = write_full(fds[j], data, len);
+        cmq_mutex_unlock(&pool->io_locks[idxs[j]]);
         if (wr == 0) {
             cmq_mutex_lock(&pool->lock);
             if (idxs[j] < pool->conn_count &&
@@ -497,4 +504,46 @@ cmq_route_conn_t *cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id
     }
     cmq_mutex_unlock(&pool->lock);
     return found;
+}
+
+int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id) {
+    if (!pool || !node_id) return 0;
+    cmq_mutex_lock(&pool->lock);
+    int live = 0;
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
+            live = (pool->conns[i].connected && pool->conns[i].fd >= 0) ? 1 : 0;
+            break;
+        }
+    }
+    cmq_mutex_unlock(&pool->lock);
+    return live;
+}
+
+int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd) {
+    if (!pool || fd < 0) return -1;
+    cmq_mutex_lock(&pool->lock);
+    int idx = -1;
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        if (pool->conns[i].fd == fd) {
+            idx = (int)i;
+            break;
+        }
+    }
+    cmq_mutex_unlock(&pool->lock);
+    if (idx < 0) return -1;
+    cmq_mutex_lock(&pool->io_locks[idx]);
+    cmq_mutex_lock(&pool->lock);
+    if ((size_t)idx >= pool->conn_count || pool->conns[idx].fd != fd) {
+        cmq_mutex_unlock(&pool->lock);
+        cmq_mutex_unlock(&pool->io_locks[idx]);
+        return -1;
+    }
+    cmq_mutex_unlock(&pool->lock);
+    return idx;
+}
+
+void cmq_route_io_unlock_idx(cmq_route_pool_t *pool, int idx) {
+    if (!pool || idx < 0 || (size_t)idx >= CMQ_ROUTE_MAX_CONNS) return;
+    cmq_mutex_unlock(&pool->io_locks[idx]);
 }
