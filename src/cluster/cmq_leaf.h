@@ -21,6 +21,8 @@ typedef struct {
 
 cmq_leaf_node_t *cmq_leaf_create(const char *hub_addr, int hub_port);
 void cmq_leaf_destroy(cmq_leaf_node_t *leaf);
+/* Optional shared credentials for hub CONNECT (NULL clears). */
+int cmq_leaf_set_auth(cmq_leaf_node_t *leaf, const char *user, const char *pass);
 
 const char *cmq_leaf_hub_addr(cmq_leaf_node_t *leaf);
 int cmq_leaf_hub_port(cmq_leaf_node_t *leaf);

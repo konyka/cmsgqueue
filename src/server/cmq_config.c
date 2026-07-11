@@ -35,10 +35,17 @@ static void strip_comments(char *line) {
     }
 }
 
+static int cfg_set_str(const char **dst, const char *value) {
+    char *copy = strdup(value);
+    if (!copy) return -1;
+    free((void *)*dst);
+    *dst = copy;
+    return 0;
+}
+
 static int parse_key_value(const char *key, const char *value, cmq_config_t *config) {
     if (strcmp(key, "host") == 0) {
-        free((void *)config->host);
-        config->host = strdup(value);
+        return cfg_set_str(&config->host, value);
     } else if (strcmp(key, "port") == 0) {
         config->port = atoi(value);
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
@@ -54,8 +61,7 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "write_timeout") == 0 || strcmp(key, "write_timeout_ms") == 0) {
         config->write_timeout_ms = atoi(value);
     } else if (strcmp(key, "log_file") == 0) {
-        free((void *)config->log_file);
-        config->log_file = strdup(value);
+        return cfg_set_str(&config->log_file, value);
     } else if (strcmp(key, "log_level") == 0) {
         config->log_level = atoi(value);
     } else if (strcmp(key, "log_to_stdout") == 0) {
@@ -63,29 +69,23 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "log_to_file") == 0) {
         config->log_to_file = atoi(value);
     } else if (strcmp(key, "auth_username") == 0) {
-        free((void *)config->auth_username);
-        config->auth_username = strdup(value);
+        return cfg_set_str(&config->auth_username, value);
     } else if (strcmp(key, "auth_password") == 0) {
-        free((void *)config->auth_password);
-        config->auth_password = strdup(value);
+        return cfg_set_str(&config->auth_password, value);
     } else if (strcmp(key, "cluster_name") == 0) {
-        free((void *)config->cluster_name);
-        config->cluster_name = strdup(value);
+        return cfg_set_str(&config->cluster_name, value);
     } else if (strcmp(key, "cluster_node_id") == 0) {
-        free((void *)config->cluster_node_id);
-        config->cluster_node_id = strdup(value);
+        return cfg_set_str(&config->cluster_node_id, value);
     } else if (strcmp(key, "tls_enabled") == 0) {
         config->tls_enabled = atoi(value);
     } else if (strcmp(key, "tls_cert") == 0) {
-        free((void *)config->tls_cert);
-        config->tls_cert = strdup(value);
+        return cfg_set_str(&config->tls_cert, value);
     } else if (strcmp(key, "tls_key") == 0) {
-        free((void *)config->tls_key);
-        config->tls_key = strdup(value);
+        return cfg_set_str(&config->tls_key, value);
     } else if (strcmp(key, "route") == 0) {
         if (config->route_count >= 8) return -1;
         char *colon = strrchr(value, ':');
-        if (!colon || colon == value || colon[1] == '\0') return 0;
+        if (!colon || colon == value || colon[1] == '\0') return -1;
         size_t alen = (size_t)(colon - value);
         char *addr = malloc(alen + 1);
         if (!addr) return -1;
@@ -94,7 +94,7 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         int port = atoi(colon + 1);
         if (port <= 0 || port > 65535) {
             free(addr);
-            return 0;
+            return -1;
         }
         config->routes[config->route_count].addr = addr;
         config->routes[config->route_count].port = port;

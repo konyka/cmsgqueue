@@ -2453,6 +2453,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
        remote-only failure cannot ERROR after local subscribers already got
        the batch. */
     int batch_fail = 0;
+    int any_delivered = 0;
     for (uint16_t msg = 0; msg < count; msg++) {
         uint16_t subject_len = prep[msg].subject_len;
         uint16_t reply_len = prep[msg].reply_len;
@@ -2482,6 +2483,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 int route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, 0,
                                                      pub, pub_len, &route_sent);
                 free(pub);
+                if (route_sent > 0)
+                    any_delivered = 1;
                 /* Remote-only entries must reach at least one live peer. */
                 if (prep[msg].ntgt == 0 &&
                     cmq_route_forward_missed(srv, route_rc, route_sent))
@@ -2514,6 +2517,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                                       NULL, 0) != 0)
                 batch_fail = 1;
             else {
+                any_delivered = 1;
                 cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1,
                                           CMQ_ATOMIC_RELAXED);
                 cmq_account_t *acc =
@@ -2532,7 +2536,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         prep[msg].tgts = NULL;
     }
     free(prep);
-    if (batch_fail)
+    /* Avoid ERROR after partial local/remote success (retry would duplicate). */
+    if (batch_fail && !any_delivered)
         cmq_send_error(c, "batch delivery failed");
 }
 

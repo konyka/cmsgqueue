@@ -23,6 +23,8 @@ struct cmq_leaf_node {
     int hub_port;
     int hub_fd;
     int connected;
+    char auth_user[256];
+    char auth_pass[256];
 
     char *subs[CMQ_LEAF_MAX_SUBS];
     uint32_t sub_ids[CMQ_LEAF_MAX_SUBS];
@@ -107,6 +109,30 @@ void cmq_leaf_destroy(cmq_leaf_node_t *leaf) {
     free(leaf);
 }
 
+int cmq_leaf_set_auth(cmq_leaf_node_t *leaf, const char *user, const char *pass) {
+    if (!leaf) return -1;
+    cmq_mutex_lock(&leaf->lock);
+    memset(leaf->auth_user, 0, sizeof(leaf->auth_user));
+    memset(leaf->auth_pass, 0, sizeof(leaf->auth_pass));
+    if (user && user[0])
+        strncpy(leaf->auth_user, user, sizeof(leaf->auth_user) - 1);
+    if (pass && pass[0])
+        strncpy(leaf->auth_pass, pass, sizeof(leaf->auth_pass) - 1);
+    cmq_mutex_unlock(&leaf->lock);
+    return 0;
+}
+
+static int leaf_handshake(cmq_leaf_node_t *leaf, int fd) {
+    char user[256], pass[256];
+    cmq_mutex_lock(&leaf->lock);
+    strncpy(user, leaf->auth_user, sizeof(user) - 1);
+    user[sizeof(user) - 1] = '\0';
+    strncpy(pass, leaf->auth_pass, sizeof(pass) - 1);
+    pass[sizeof(pass) - 1] = '\0';
+    cmq_mutex_unlock(&leaf->lock);
+    return cmq_peer_handshake(fd, user[0] ? user : NULL, pass[0] ? pass : NULL);
+}
+
 const char *cmq_leaf_hub_addr(cmq_leaf_node_t *leaf) {
     return leaf ? leaf->hub_addr : NULL;
 }
@@ -146,7 +172,7 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         close(fd);
         return -1;
     }
-    if (cmq_peer_handshake(fd, NULL, NULL) != 0) {
+    if (leaf_handshake(leaf, fd) != 0) {
         close(fd);
         return -1;
     }
@@ -408,7 +434,7 @@ int cmq_leaf_accept(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
 
     /* fd < 0: placeholder slot (tests). Live fd: cluster handshake first. */
     if (fd >= 0) {
-        if (cmq_peer_handshake(fd, NULL, NULL) != 0) {
+        if (leaf_handshake(leaf, fd) != 0) {
             close(fd);
             return -1;
         }
@@ -448,6 +474,7 @@ int cmq_leaf_accept(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
     }
     cmq_leaf_conn_t *c = &leaf->leaves[leaf->leaf_count++];
     strncpy(c->leaf_id, leaf_id, CMQ_NODE_ID_SIZE - 1);
+    c->leaf_id[CMQ_NODE_ID_SIZE - 1] = '\0';
     c->fd = fd;
     c->connected = 1;
     c->subscriptions = 0;

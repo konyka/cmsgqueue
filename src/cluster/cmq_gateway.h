@@ -28,6 +28,8 @@ typedef struct {
 
 cmq_gateway_t *cmq_gateway_create(const char *local_cluster);
 void cmq_gateway_destroy(cmq_gateway_t *gw);
+/* Optional shared credentials for outbound peer CONNECT (NULL clears). */
+int cmq_gateway_set_auth(cmq_gateway_t *gw, const char *user, const char *pass);
 
 int cmq_gateway_add_remote(cmq_gateway_t *gw, const char *cluster_name,
                             const char *addr, int port);

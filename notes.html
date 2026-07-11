@@ -1887,6 +1887,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route identity · gw/leaf auth · BATCH partial · config strdup</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">broadcast identity</span></td><td>✅</td><td>Re-check remote_id / remote_cluster with fd under io_lock (no slot reuse misdelivery).</td></tr>
+<tr><td><span class="component-name">gw/leaf set_auth</span></td><td>✅</td><td>Outbound handshake uses stored credentials (align with route connect).</td></tr>
+<tr><td><span class="component-name">BATCH ERROR</span></td><td>✅</td><td>Suppress ERROR when any local/remote delivery already succeeded.</td></tr>
+<tr><td><span class="component-name">config parse</span></td><td>✅</td><td>Invalid route / strdup OOM fails load; leaf_id NUL-terminated.</td></tr>
+</table>
+</div>
+
 
 
 

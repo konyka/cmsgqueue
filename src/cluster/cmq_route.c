@@ -534,6 +534,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
     if (!pool || !data || len == 0) return 0;
     int fds[CMQ_ROUTE_MAX_CONNS];
     size_t idxs[CMQ_ROUTE_MAX_CONNS];
+    char ids[CMQ_ROUTE_MAX_CONNS][CMQ_NODE_ID_SIZE];
     size_t n = 0;
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
@@ -542,6 +543,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
         if (exclude_id && strcmp(c->remote_id, exclude_id) == 0) continue;
         fds[n] = c->fd;
         idxs[n] = i;
+        memcpy(ids[n], c->remote_id, CMQ_NODE_ID_SIZE);
         n++;
     }
     cmq_mutex_unlock(&pool->lock);
@@ -557,7 +559,8 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
         int fd = -1;
         if (idx < pool->conn_count &&
             pool->conns[idx].connected &&
-            pool->conns[idx].fd == expect_fd) {
+            pool->conns[idx].fd == expect_fd &&
+            memcmp(pool->conns[idx].remote_id, ids[j], CMQ_NODE_ID_SIZE) == 0) {
             fd = expect_fd;
         }
         if (fd < 0) {
