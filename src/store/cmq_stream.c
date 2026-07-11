@@ -4,6 +4,7 @@
 #include "cmq_thread.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #define CMQ_MAX_CONSUMERS 64
 #define CMQ_MAX_NAME 128
@@ -55,10 +56,19 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
     if (!stream || !data || len == 0) return 0;
     cmq_mutex_lock(&stream->lock);
 
+    /* Do not evict past the slowest consumer's ack watermark. */
+    uint64_t retain_floor = UINT64_MAX;
+    for (size_t i = 0; i < stream->consumer_count; i++) {
+        uint64_t floor = stream->consumers[i].acked_seq + 1;
+        if (floor < retain_floor) retain_floor = floor;
+    }
+
     if (stream->max_bytes > 0 && stream->total_bytes + len > stream->max_bytes) {
         uint64_t first = cmq_store_first_seq(stream->store);
         uint64_t last = cmq_store_last_seq(stream->store);
         while (first <= last && stream->total_bytes + len > stream->max_bytes) {
+            if (first >= retain_floor)
+                break; /* unacked — refuse rather than drop */
             cmq_store_msg_t msg;
             if (cmq_store_get(stream->store, first, &msg) != 0)
                 break; /* cannot account bytes — stop eviction */
@@ -77,6 +87,10 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
     /* Ring wrap overwrites oldest slot — keep total_bytes honest. */
     if (cmq_store_count(stream->store) >= stream->max_msgs) {
         uint64_t first = cmq_store_first_seq(stream->store);
+        if (first >= retain_floor) {
+            cmq_mutex_unlock(&stream->lock);
+            return 0; /* would overwrite unacked */
+        }
         cmq_store_msg_t old;
         if (cmq_store_get(stream->store, first, &old) == 0) {
             if (stream->total_bytes >= old.len)

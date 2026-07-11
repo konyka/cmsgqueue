@@ -144,6 +144,21 @@ TEST(stream, max_bytes_eviction) {
     cmq_stream_destroy(st);
 }
 
+TEST(stream, retain_unacked_on_pressure) {
+    cmq_stream_t *st = cmq_stream_create("retain", 100, 10);
+    ASSERT_EQ(cmq_stream_add_consumer(st, "slow"), 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"12345", 5) > 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"67890", 5) > 0);
+    /* Consumer has not acked — must refuse rather than drop pending. */
+    ASSERT_EQ(cmq_stream_append(st, (const uint8_t *)"abcdefgh", 8), (uint64_t)0);
+    ASSERT_EQ(cmq_stream_msg_count(st), (size_t)2);
+    ASSERT_EQ(cmq_stream_first_seq(st), (uint64_t)1);
+    ASSERT_EQ(cmq_stream_consumer_ack(st, "slow", 2), 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"abcdefgh", 8) > 0);
+    ASSERT_EQ(cmq_stream_first_seq(st), (uint64_t)3);
+    cmq_stream_destroy(st);
+}
+
 TEST(filestore, create_destroy) {
     const char *dir = "/tmp/cmq_fs_test1";
     mkdir(dir, 0755);

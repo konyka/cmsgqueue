@@ -1401,6 +1401,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route-ok no ERROR · stream ack retain</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">local fail + route_sent</span></td><td>✅</td><td>PUBLISH/REQUEST/RESPONSE/coro skip ERROR when cluster already accepted the message.</td></tr>
+<tr><td><span class="component-name">stream ack retain</span></td><td>✅</td><td>Eviction/ring wrap never drops seq &gt; min(consumer.acked_seq); refuse append instead.</td></tr>
+<tr><td><span class="component-name">tests</span></td><td>✅</td><td><code>stream.retain_unacked_on_pressure</code>.</td></tr>
+</table>
+</div>
+
 
 
 

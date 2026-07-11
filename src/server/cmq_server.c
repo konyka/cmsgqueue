@@ -1157,6 +1157,7 @@ typedef struct {
     uint32_t publisher_id;          /* 0 = no publisher ERROR notify */
     int publisher_worker_id;
     int delivered_any;
+    int suppress_fail_error;        /* 1 if cluster already accepted the msg */
 } cmq_deliver_ctx_t;
 
 static void deliver_coro_func(void *arg) {
@@ -1216,7 +1217,8 @@ static void deliver_coro_func(void *arg) {
     }
 
 done:
-    if (!ctx->delivered_any && ctx->publisher_id != 0) {
+    if (!ctx->delivered_any && ctx->publisher_id != 0 &&
+        !ctx->suppress_fail_error) {
         static const char emsg[] = "delivery failed";
         uint8_t ebuf[256];
         size_t elen = cmq_frame_encode(ebuf, sizeof(ebuf), CMQ_OP_ERROR, 0,
@@ -1293,7 +1295,8 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
                                        const uint8_t *headers,
                                        size_t headers_len,
                                        uint32_t publisher_id,
-                                       int publisher_worker_id) {
+                                       int publisher_worker_id,
+                                       int suppress_fail_error) {
     cmq_deliver_ctx_t *ctx = calloc(1, sizeof(cmq_deliver_ctx_t));
     if (!ctx) {
         free(targets);
@@ -1314,6 +1317,7 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
     ctx->idx = 0;
     ctx->publisher_id = publisher_id;
     ctx->publisher_worker_id = publisher_worker_id;
+    ctx->suppress_fail_error = suppress_fail_error;
 
     cmq_coro_t *coro = cmq_coro_create(deliver_coro_func, ctx, 32768);
     if (!coro) {
@@ -1526,10 +1530,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                        c->account_name,
                                        coro_payload, msg_len,
                                        coro_headers, headers_len,
-                                       c->id, c->worker_id) != 0) {
+                                       c->id, c->worker_id,
+                                       route_sent > 0 ? 1 : 0) != 0) {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
-            cmq_send_error(c, "delivery failed");
+            if (route_sent == 0)
+                cmq_send_error(c, "delivery failed");
         }
         return;
     }
@@ -1539,7 +1545,9 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                               headers, headers_len) != 0) {
         cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                   CMQ_ATOMIC_RELAXED);
-        cmq_send_error(c, "delivery failed");
+        /* Cluster already has the message — do not ERROR the publisher. */
+        if (route_sent == 0)
+            cmq_send_error(c, "delivery failed");
     }
     free(tgts);
 }
@@ -1845,6 +1853,10 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+        } else if (route_sent > 0) {
+            uint8_t ack[4] = {0};
+            size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
+            if (ack_len > 0) cmq_client_send(c, ack, ack_len);
         } else {
             cmq_send_error(c, "delivery failed");
         }
@@ -1933,7 +1945,8 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     }
     if (tgts && ntgt > 0) {
         if (deliver_targets_sync(srv, tgts, ntgt, subject, c->account_name,
-                                  msg_payload, msg_len, NULL, 0) != 0)
+                                  msg_payload, msg_len, NULL, 0) != 0 &&
+            route_sent == 0)
             cmq_send_error(c, "delivery failed");
     } else if (!c->is_route) {
         if (route_sent == 0) {
