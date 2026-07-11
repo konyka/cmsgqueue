@@ -35,6 +35,7 @@ static void strip_comments(char *line) {
 
 static void parse_key_value(const char *key, const char *value, cmq_config_t *config) {
     if (strcmp(key, "host") == 0) {
+        free((void *)config->host);
         config->host = strdup(value);
     } else if (strcmp(key, "port") == 0) {
         config->port = atoi(value);
@@ -51,6 +52,7 @@ static void parse_key_value(const char *key, const char *value, cmq_config_t *co
     } else if (strcmp(key, "write_timeout") == 0 || strcmp(key, "write_timeout_ms") == 0) {
         config->write_timeout_ms = atoi(value);
     } else if (strcmp(key, "log_file") == 0) {
+        free((void *)config->log_file);
         config->log_file = strdup(value);
     } else if (strcmp(key, "log_level") == 0) {
         config->log_level = atoi(value);
@@ -59,18 +61,24 @@ static void parse_key_value(const char *key, const char *value, cmq_config_t *co
     } else if (strcmp(key, "log_to_file") == 0) {
         config->log_to_file = atoi(value);
     } else if (strcmp(key, "auth_username") == 0) {
+        free((void *)config->auth_username);
         config->auth_username = strdup(value);
     } else if (strcmp(key, "auth_password") == 0) {
+        free((void *)config->auth_password);
         config->auth_password = strdup(value);
     } else if (strcmp(key, "cluster_name") == 0) {
+        free((void *)config->cluster_name);
         config->cluster_name = strdup(value);
     } else if (strcmp(key, "cluster_node_id") == 0) {
+        free((void *)config->cluster_node_id);
         config->cluster_node_id = strdup(value);
     } else if (strcmp(key, "tls_enabled") == 0) {
         config->tls_enabled = atoi(value);
     } else if (strcmp(key, "tls_cert") == 0) {
+        free((void *)config->tls_cert);
         config->tls_cert = strdup(value);
     } else if (strcmp(key, "tls_key") == 0) {
+        free((void *)config->tls_key);
         config->tls_key = strdup(value);
     } else if (strcmp(key, "route") == 0) {
         if (config->route_count >= 8) return;
@@ -90,6 +98,33 @@ static void parse_key_value(const char *key, const char *value, cmq_config_t *co
         config->routes[config->route_count].port = port;
         config->route_count++;
     }
+}
+
+void cmq_config_free(cmq_config_t *config) {
+    if (!config) return;
+    free((void *)config->host);
+    free((void *)config->log_file);
+    free((void *)config->auth_username);
+    free((void *)config->auth_password);
+    free((void *)config->cluster_name);
+    free((void *)config->cluster_node_id);
+    free((void *)config->tls_cert);
+    free((void *)config->tls_key);
+    for (int i = 0; i < config->route_count && i < 8; i++)
+        free((void *)config->routes[i].addr);
+    config->host = NULL;
+    config->log_file = NULL;
+    config->auth_username = NULL;
+    config->auth_password = NULL;
+    config->cluster_name = NULL;
+    config->cluster_node_id = NULL;
+    config->tls_cert = NULL;
+    config->tls_key = NULL;
+    for (int i = 0; i < 8; i++) {
+        config->routes[i].addr = NULL;
+        config->routes[i].port = 0;
+    }
+    config->route_count = 0;
 }
 
 cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {

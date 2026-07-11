@@ -30,7 +30,7 @@ TEST(config, load_basic) {
     ASSERT_EQ(config.num_threads, 4);
     ASSERT_EQ(config.max_clients, 1000);
     ASSERT_EQ(config.max_payload_size, 1048576);
-    free((void *)config.host);
+    cmq_config_free(&config);
 }
 
 TEST(config, load_with_comments) {
@@ -46,7 +46,7 @@ TEST(config, load_with_comments) {
     ASSERT_EQ(rc, CMQ_OK);
     ASSERT_EQ(config.port, 7654);
     ASSERT_STR_EQ(config.host, "127.0.0.1");
-    free((void *)config.host);
+    cmq_config_free(&config);
 }
 
 TEST(config, load_quoted_values) {
@@ -60,8 +60,7 @@ TEST(config, load_quoted_values) {
     ASSERT_EQ(rc, CMQ_OK);
     ASSERT_STR_EQ(config.host, "192.168.1.1");
     ASSERT_STR_EQ(config.log_file, "/var/log/cmq.log");
-    free((void *)config.host);
-    free((void *)config.log_file);
+    cmq_config_free(&config);
 }
 
 TEST(config, load_logging) {
@@ -82,7 +81,7 @@ TEST(config, load_logging) {
     ASSERT_EQ(config.log_to_file, 1);
     ASSERT_EQ(config.ping_interval_ms, 15000);
     ASSERT_EQ(config.write_timeout_ms, 3000);
-    free((void *)config.log_file);
+    cmq_config_free(&config);
 }
 
 TEST(config, load_file_not_found) {
@@ -165,12 +164,7 @@ TEST(config, load_cluster_tls_routes) {
     ASSERT_EQ(config.routes[0].port, 7654);
     ASSERT_STR_EQ(config.routes[1].addr, "10.0.0.2");
     ASSERT_EQ(config.routes[1].port, 7655);
-    free((void *)config.cluster_name);
-    free((void *)config.cluster_node_id);
-    free((void *)config.tls_cert);
-    free((void *)config.tls_key);
-    free((void *)config.routes[0].addr);
-    free((void *)config.routes[1].addr);
+    cmq_config_free(&config);
 }
 
 TEST(config, load_empty_file) {

@@ -1502,6 +1502,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — stream put_owned · config_free</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">append prealloc</span></td><td>✅</td><td>Copy payload before eviction; <code>put_owned</code> installs without second malloc — no silent drop on OOM.</td></tr>
+<tr><td><span class="component-name">wrap debit</span></td><td>✅</td><td><code>total_bytes</code> only debit ring-wrap length after successful put.</td></tr>
+<tr><td><span class="component-name">cmq_config_free</span></td><td>✅</td><td>Frees load-allocated strings; overwrite keys free previous strdup.</td></tr>
+</table>
+</div>
+
 
 
 

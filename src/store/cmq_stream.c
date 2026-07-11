@@ -56,6 +56,14 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
     if (!stream || !data || len == 0) return 0;
     cmq_mutex_lock(&stream->lock);
 
+    /* Allocate payload before any eviction so OOM cannot drop retained msgs. */
+    uint8_t *copy = malloc(len);
+    if (!copy) {
+        cmq_mutex_unlock(&stream->lock);
+        return 0;
+    }
+    memcpy(copy, data, len);
+
     /* Do not evict past the slowest consumer's ack watermark. */
     uint64_t last_seq = cmq_store_last_seq(stream->store);
     uint64_t retain_floor = UINT64_MAX;
@@ -82,30 +90,36 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
             first++;
         }
         if (stream->total_bytes + len > stream->max_bytes) {
+            free(copy);
             cmq_mutex_unlock(&stream->lock);
             return 0; /* refuse append — do not exceed max_bytes */
         }
     }
 
-    /* Ring wrap overwrites oldest slot — keep total_bytes honest. */
+    /* Ring wrap: debit bytes only after put succeeds. */
+    size_t wrap_debit = 0;
     if (cmq_store_count(stream->store) >= stream->max_msgs) {
         uint64_t first = cmq_store_first_seq(stream->store);
         if (first >= retain_floor) {
+            free(copy);
             cmq_mutex_unlock(&stream->lock);
             return 0; /* would overwrite unacked */
         }
         cmq_store_msg_t old;
         if (cmq_store_get(stream->store, first, &old) == 0) {
-            if (stream->total_bytes >= old.len)
-                stream->total_bytes -= old.len;
-            else
-                stream->total_bytes = 0;
+            wrap_debit = old.len;
             cmq_store_msg_release(&old);
         }
     }
 
-    uint64_t seq = cmq_store_put(stream->store, data, len);
+    uint64_t seq = cmq_store_put_owned(stream->store, copy, len);
     if (seq > 0) {
+        if (wrap_debit > 0) {
+            if (stream->total_bytes >= wrap_debit)
+                stream->total_bytes -= wrap_debit;
+            else
+                stream->total_bytes = 0;
+        }
         stream->total_bytes += len;
     }
 

@@ -50,20 +50,20 @@ void cmq_store_destroy(cmq_store_t *store) {
     free(store);
 }
 
-uint64_t cmq_store_put(cmq_store_t *store, const uint8_t *data, size_t len) {
-    if (!store || !data || len == 0) return 0;
-    if (len > (16u * 1024 * 1024)) return 0;
+uint64_t cmq_store_put_owned(cmq_store_t *store, uint8_t *data, size_t len) {
+    if (!store || !data || len == 0) {
+        free(data);
+        return 0;
+    }
+    if (len > (16u * 1024 * 1024)) {
+        free(data);
+        return 0;
+    }
     cmq_mutex_lock(&store->lock);
 
     size_t idx = (size_t)(store->head_seq - 1) % store->cap;
-    uint8_t *nd = malloc(len);
-    if (!nd) {
-        cmq_mutex_unlock(&store->lock);
-        return 0;
-    }
-    memcpy(nd, data, len);
     free(store->ring[idx].data);
-    store->ring[idx].data = nd;
+    store->ring[idx].data = data;
     store->ring[idx].seq = store->head_seq;
     store->ring[idx].len = len;
     store->ring[idx].timestamp_ms = now_ms();
@@ -78,6 +78,15 @@ uint64_t cmq_store_put(cmq_store_t *store, const uint8_t *data, size_t len) {
 
     cmq_mutex_unlock(&store->lock);
     return assigned;
+}
+
+uint64_t cmq_store_put(cmq_store_t *store, const uint8_t *data, size_t len) {
+    if (!store || !data || len == 0) return 0;
+    if (len > (16u * 1024 * 1024)) return 0;
+    uint8_t *nd = malloc(len);
+    if (!nd) return 0;
+    memcpy(nd, data, len);
+    return cmq_store_put_owned(store, nd, len);
 }
 
 int cmq_store_get(cmq_store_t *store, uint64_t seq, cmq_store_msg_t *out) {

@@ -102,6 +102,9 @@ void cmq_parser_reset(cmq_parser_t *p) {
     }
     p->inbuf_cap = 1024;
     p->inbuf = (uint8_t *)malloc(p->inbuf_cap);
+    if (!p->inbuf) {
+        p->inbuf_cap = 0;
+    }
     p->inbuf_len = 0;
     p->inbuf_off = 0;
 }
