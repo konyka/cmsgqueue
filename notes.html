@@ -1512,6 +1512,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — config ownership · WS opcode · WS ping keepalive</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">config own on create</span></td><td>✅</td><td>Server strdup's config strings; destroy calls <code>cmq_config_free</code> (no UAF if caller frees load).</td></tr>
+<tr><td><span class="component-name">WS reserved opcode</span></td><td>✅</td><td>Unknown/reserved opcodes tear down the connection (RFC 6455).</td></tr>
+<tr><td><span class="component-name">WS ping activity</span></td><td>✅</td><td>PING/PONG refresh <code>last_activity_ms</code> so INIT WS stays alive until CMQ CONNECT.</td></tr>
+</table>
+</div>
+
 
 
 

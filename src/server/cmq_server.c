@@ -2749,10 +2749,13 @@ static void client_read_cb(int fd, int events, void *data) {
                 int plen = cmq_ws_frame_serialize(&pf, pong, sizeof(pong));
                 if (plen > 0)
                     cmq_client_send_direct(c, pong, (size_t)plen);
+                /* WS ping proves liveness during INIT (before CMQ CONNECT). */
+                c->last_activity_ms = srv_now_ms();
                 offset += (size_t)parsed;
                 continue;
             }
             if (ws_frame.opcode == CMQ_WS_OPCODE_PONG) {
+                c->last_activity_ms = srv_now_ms();
                 offset += (size_t)parsed;
                 continue;
             }
@@ -2760,6 +2763,11 @@ static void client_read_cb(int fd, int events, void *data) {
             int is_data = (ws_frame.opcode == CMQ_WS_OPCODE_BINARY ||
                            ws_frame.opcode == CMQ_WS_OPCODE_TEXT ||
                            ws_frame.opcode == CMQ_WS_OPCODE_CONTINUATION);
+            if (!is_data) {
+                /* Reserved / unknown opcode — RFC 6455: close the connection. */
+                client_teardown(c);
+                return;
+            }
             if (is_data) {
                 /* Copy+unmask into message assembly buffer (never mutate
                    ws_recv_buf in place — remaining frames still reference it). */
@@ -3136,11 +3144,59 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     cmq_server_t *srv = calloc(1, sizeof(cmq_server_t));
     if (!srv) return CMQ_ERR_NO_MEMORY;
 
-    if (config) {
-        srv->config = *config;
+    cmq_config_t src = {0};
+    if (config) src = *config;
+
+    /* Copy scalars; strings are duplicated below so server owns them. */
+    srv->config = src;
+    srv->config.host = NULL;
+    srv->config.log_file = NULL;
+    srv->config.auth_username = NULL;
+    srv->config.auth_password = NULL;
+    srv->config.cluster_name = NULL;
+    srv->config.cluster_node_id = NULL;
+    srv->config.tls_cert = NULL;
+    srv->config.tls_key = NULL;
+    srv->config.route_count = 0;
+    for (int i = 0; i < 8; i++) {
+        srv->config.routes[i].addr = NULL;
+        srv->config.routes[i].port = 0;
     }
+
+    const char *host_src = src.host ? src.host : CMQ_DEFAULT_HOST;
+    srv->config.host = strdup(host_src);
+    if (!srv->config.host) {
+        free(srv);
+        return CMQ_ERR_NO_MEMORY;
+    }
+#define OWN(dst, srcv) do { \
+        if ((srcv)) { \
+            (dst) = strdup(srcv); \
+            if (!(dst)) { cmq_config_free(&srv->config); free(srv); return CMQ_ERR_NO_MEMORY; } \
+        } \
+    } while (0)
+    OWN(srv->config.log_file, src.log_file);
+    OWN(srv->config.auth_username, src.auth_username);
+    OWN(srv->config.auth_password, src.auth_password);
+    OWN(srv->config.cluster_name, src.cluster_name);
+    OWN(srv->config.cluster_node_id, src.cluster_node_id);
+    OWN(srv->config.tls_cert, src.tls_cert);
+    OWN(srv->config.tls_key, src.tls_key);
+#undef OWN
+    for (int i = 0; i < src.route_count && i < 8; i++) {
+        if (!src.routes[i].addr) continue;
+        char *a = strdup(src.routes[i].addr);
+        if (!a) {
+            cmq_config_free(&srv->config);
+            free(srv);
+            return CMQ_ERR_NO_MEMORY;
+        }
+        srv->config.routes[srv->config.route_count].addr = a;
+        srv->config.routes[srv->config.route_count].port = src.routes[i].port;
+        srv->config.route_count++;
+    }
+
     if (srv->config.port == 0) srv->config.port = CMQ_DEFAULT_PORT;
-    if (!srv->config.host) srv->config.host = CMQ_DEFAULT_HOST;
     if (srv->config.max_payload_size == 0)
         srv->config.max_payload_size = CMQ_DEFAULT_MAX_PAYLOAD;
     if (srv->config.max_subs_per_client == 0)
@@ -3151,6 +3207,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         srv->config.write_timeout_ms = CMQ_DEFAULT_WRITE_TIMEOUT;
 
     if (cmq_config_validate(&srv->config) != CMQ_OK) {
+        cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_INVALID_ARG;
     }
@@ -3163,6 +3220,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
 
     srv->sublist = cmq_sublist_create();
     if (!srv->sublist) {
+        cmq_mutex_destroy(&srv->clients_lock);
+        cmq_rwlock_destroy(&srv->sublist_lock);
+        cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_NO_MEMORY;
     }
@@ -3187,6 +3247,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         cmq_idmap_destroy(srv->idmap);
         cmq_sublist_destroy(srv->sublist);
         cmq_log_destroy(srv->log);
+        cmq_mutex_destroy(&srv->clients_lock);
+        cmq_rwlock_destroy(&srv->sublist_lock);
+        cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_NO_MEMORY;
     }
@@ -3491,5 +3554,6 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->tls_config) cmq_tls_config_destroy(srv->tls_config);
     cmq_mutex_destroy(&srv->clients_lock);
     cmq_rwlock_destroy(&srv->sublist_lock);
+    cmq_config_free(&srv->config);
     free(srv);
 }
