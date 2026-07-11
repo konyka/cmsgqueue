@@ -1183,6 +1183,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — Snapshot/coro OOM → ERROR</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">snapshot OOM ERROR</span></td><td>✅</td><td><code>snapshot_deliver_targets</code> sets <code>*out_n = SIZE_MAX</code> on malloc failure (vs 0 = no live targets). PUBLISH/REQUEST/RESPONSE/BATCH send <code>delivery failed</code>.</td></tr>
+<tr><td><span class="component-name">coro payload OOM</span></td><td>✅</td><td>Large-fanout coro path reports ERROR when payload/headers copy fails.</td></tr>
+</table>
+</div>
+
+
 
 
 

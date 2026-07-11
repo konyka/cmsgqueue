@@ -698,13 +698,17 @@ typedef struct {
 
 /* Build a queue-group-deduped target list from match results.
    Must be called while holding sublist_lock (rd). Returns malloc'd array;
-   *out_n set to count. Caller frees. */
+   *out_n set to count. On OOM: returns NULL and *out_n = SIZE_MAX.
+   Empty/filtered: NULL and *out_n = 0. Caller frees. */
 static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
                                                     size_t *out_n) {
     *out_n = 0;
     if (result->count == 0) return NULL;
     cmq_deliver_tgt_t *tgts = malloc(result->count * sizeof(cmq_deliver_tgt_t));
-    if (!tgts) return NULL;
+    if (!tgts) {
+        *out_n = SIZE_MAX; /* distinguish OOM from "no live targets" */
+        return NULL;
+    }
 
     /* Dedup against already-selected targets — no fixed 64 cap, no extra alloc. */
     size_t n = 0;
@@ -1135,6 +1139,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
     cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
+    if (ntgt == SIZE_MAX) {
+        cmq_send_error(c, "delivery failed");
+        return;
+    }
     if (!tgts || ntgt == 0) {
         free(tgts);
         return;
@@ -1147,6 +1155,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         uint8_t *coro_headers = NULL;
         if (!coro_payload) {
             free(tgts);
+            cmq_send_error(c, "delivery failed");
             return;
         }
         if (msg_len > 0) memcpy(coro_payload, msg_payload, msg_len);
@@ -1155,6 +1164,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             if (!coro_headers) {
                 free(coro_payload);
                 free(tgts);
+                cmq_send_error(c, "delivery failed");
                 return;
             }
             memcpy(coro_headers, headers, headers_len);
@@ -1424,6 +1434,10 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
 
+    if (ntgt == SIZE_MAX) {
+        cmq_send_error(c, "delivery failed");
+        return;
+    }
     if (tgts && ntgt > 0)
         deliver_request_targets(srv, tgts, ntgt, subject, reply_to,
                                  msg_payload, msg_len);
@@ -1488,6 +1502,10 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
     cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
+    if (ntgt == SIZE_MAX) {
+        cmq_send_error(c, "delivery failed");
+        return;
+    }
     if (tgts && ntgt > 0)
         deliver_targets_sync(srv, tgts, ntgt, subject, msg_payload, msg_len, NULL, 0);
     free(tgts);
@@ -1677,6 +1695,10 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
         cmq_sublist_result_free(&result);
         cmq_rwlock_unlock(&srv->sublist_lock);
+        if (ntgt == SIZE_MAX) {
+            cmq_send_error(c, "delivery failed");
+            return;
+        }
         if (tgts && ntgt > 0)
             deliver_targets_sync(srv, tgts, ntgt, subject, msg_payload,
                                   payload_len, NULL, 0);
