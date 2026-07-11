@@ -123,38 +123,45 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
                 return 0;
             }
             if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
+            gw->conns[i].fd = -1;
+            gw->conns[i].connected = 0;
+            char addr_copy[CMQ_NODE_ADDR_SIZE];
+            strncpy(addr_copy, addr, sizeof(addr_copy) - 1);
+            addr_copy[sizeof(addr_copy) - 1] = '\0';
+            int port_copy = port;
+            size_t slot = i;
+            cmq_mutex_unlock(&gw->lock);
+
             int fd = socket(AF_INET, SOCK_STREAM, 0);
-            if (fd < 0) {
-                cmq_mutex_unlock(&gw->lock);
-                return -1;
-            }
+            if (fd < 0) return -1;
             struct sockaddr_in sa = {0};
             sa.sin_family = AF_INET;
-            sa.sin_port = htons((uint16_t)port);
-            inet_pton(AF_INET, addr, &sa.sin_addr);
+            sa.sin_port = htons((uint16_t)port_copy);
+            inet_pton(AF_INET, addr_copy, &sa.sin_addr);
             if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
                 close(fd);
-                gw->conns[i].fd = -1;
-                cmq_mutex_unlock(&gw->lock);
                 return -1;
             }
-            cmq_mutex_unlock(&gw->lock);
             if (cmq_peer_handshake(fd, NULL, NULL) != 0) {
                 close(fd);
-                cmq_mutex_lock(&gw->lock);
-                gw->conns[i].fd = -1;
-                gw->conns[i].connected = 0;
-                cmq_mutex_unlock(&gw->lock);
                 return -1;
             }
             set_nonblock(fd);
             cmq_mutex_lock(&gw->lock);
-            gw->conns[i].fd = fd;
-            gw->conns[i].connected = 1;
-            strncpy(gw->conns[i].remote_addr, addr, CMQ_NODE_ADDR_SIZE - 1);
-            gw->conns[i].remote_port = port;
+            if (slot < gw->conn_count &&
+                strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0) {
+                if (gw->conns[slot].fd >= 0) close(gw->conns[slot].fd);
+                gw->conns[slot].fd = fd;
+                gw->conns[slot].connected = 1;
+                strncpy(gw->conns[slot].remote_addr, addr_copy,
+                        CMQ_NODE_ADDR_SIZE - 1);
+                gw->conns[slot].remote_port = port_copy;
+                cmq_mutex_unlock(&gw->lock);
+                return 0;
+            }
             cmq_mutex_unlock(&gw->lock);
-            return 0;
+            close(fd);
+            return -1;
         }
     }
 
@@ -227,25 +234,38 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
                             size_t *out_eagain) {
     if (out_eagain) *out_eagain = 0;
     if (!gw || !data || len == 0) return 0;
+    int fds[CMQ_GW_MAX_CONNECTIONS];
+    size_t idxs[CMQ_GW_MAX_CONNECTIONS];
+    size_t n = 0;
     cmq_mutex_lock(&gw->lock);
-    size_t sent = 0;
-    size_t deferred = 0;
-    for (size_t i = 0; i < gw->conn_count; i++) {
+    for (size_t i = 0; i < gw->conn_count && n < CMQ_GW_MAX_CONNECTIONS; i++) {
         if (strcmp(gw->conns[i].remote_cluster, target_cluster) == 0 &&
-            gw->conns[i].connected) {
-            int wr = write_full(gw->conns[i].fd, data, len);
-            if (wr == 0) {
-                sent++;
-            } else if (wr == 1) {
-                deferred++;
-            } else {
-                if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
-                gw->conns[i].fd = -1;
-                gw->conns[i].connected = 0;
-            }
+            gw->conns[i].connected && gw->conns[i].fd >= 0) {
+            fds[n] = gw->conns[i].fd;
+            idxs[n] = i;
+            n++;
         }
     }
     cmq_mutex_unlock(&gw->lock);
+
+    size_t sent = 0;
+    size_t deferred = 0;
+    for (size_t j = 0; j < n; j++) {
+        int wr = write_full(fds[j], data, len);
+        if (wr == 0) {
+            sent++;
+        } else if (wr == 1) {
+            deferred++;
+        } else {
+            cmq_mutex_lock(&gw->lock);
+            if (idxs[j] < gw->conn_count && gw->conns[idxs[j]].fd == fds[j]) {
+                if (gw->conns[idxs[j]].fd >= 0) close(gw->conns[idxs[j]].fd);
+                gw->conns[idxs[j]].fd = -1;
+                gw->conns[idxs[j]].connected = 0;
+            }
+            cmq_mutex_unlock(&gw->lock);
+        }
+    }
     if (out_eagain) *out_eagain = deferred;
     return sent;
 }
@@ -254,23 +274,36 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
                               size_t *out_eagain) {
     if (out_eagain) *out_eagain = 0;
     if (!gw || !data || len == 0) return 0;
+    int fds[CMQ_GW_MAX_CONNECTIONS];
+    size_t idxs[CMQ_GW_MAX_CONNECTIONS];
+    size_t n = 0;
     cmq_mutex_lock(&gw->lock);
+    for (size_t i = 0; i < gw->conn_count && n < CMQ_GW_MAX_CONNECTIONS; i++) {
+        if (!gw->conns[i].connected || gw->conns[i].fd < 0) continue;
+        fds[n] = gw->conns[i].fd;
+        idxs[n] = i;
+        n++;
+    }
+    cmq_mutex_unlock(&gw->lock);
+
     size_t sent = 0;
     size_t deferred = 0;
-    for (size_t i = 0; i < gw->conn_count; i++) {
-        if (!gw->conns[i].connected) continue;
-        int wr = write_full(gw->conns[i].fd, data, len);
+    for (size_t j = 0; j < n; j++) {
+        int wr = write_full(fds[j], data, len);
         if (wr == 0) {
             sent++;
         } else if (wr == 1) {
             deferred++;
         } else {
-            if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
-            gw->conns[i].fd = -1;
-            gw->conns[i].connected = 0;
+            cmq_mutex_lock(&gw->lock);
+            if (idxs[j] < gw->conn_count && gw->conns[idxs[j]].fd == fds[j]) {
+                if (gw->conns[idxs[j]].fd >= 0) close(gw->conns[idxs[j]].fd);
+                gw->conns[idxs[j]].fd = -1;
+                gw->conns[idxs[j]].connected = 0;
+            }
+            cmq_mutex_unlock(&gw->lock);
         }
     }
-    cmq_mutex_unlock(&gw->lock);
     if (out_eagain) *out_eagain = deferred;
     return sent;
 }

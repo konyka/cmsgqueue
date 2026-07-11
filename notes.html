@@ -1522,6 +1522,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — write-buf no teardown · gw unlock I/O · multi reconnect</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">send_direct close</span></td><td>✅</td><td>Write-buffer overflow/OOM marks <code>CLOSING</code> + EV_WRITE instead of <code>client_teardown</code> (avoids clients_lock deadlock).</td></tr>
+<tr><td><span class="component-name">gateway I/O</span></td><td>✅</td><td>Snapshot fds then write unlocked; reconnect connect/handshake outside lock.</td></tr>
+<tr><td><span class="component-name">route reconnect</span></td><td>✅</td><td>Each interval retries all dead peers (not just the first).</td></tr>
+</table>
+</div>
+
 
 
 

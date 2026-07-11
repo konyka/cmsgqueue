@@ -694,11 +694,19 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
     if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
         return -1;
 
+    /* Mark CLOSING without teardown — callers may hold clients_lock. */
+    #define CMQ_SEND_FORCE_CLOSE() do { \
+        c->state = CMQ_CLIENT_CLOSING; \
+        if (c->ev_loop && c->fd >= 0) \
+            cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE, \
+                       client_read_cb, c); \
+    } while (0)
+
     if (c->write_buf && c->write_pos < c->write_len) {
         size_t remaining = c->write_len - c->write_pos;
         size_t new_len = remaining + len;
         if (new_len > CMQ_WRITE_BUF_LIMIT) {
-            client_teardown(c);
+            CMQ_SEND_FORCE_CLOSE();
             return -1;
         }
         /* Compact unsent bytes to the front, then grow capacity if needed. */
@@ -711,7 +719,7 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
             if (c->server)
                 cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
-            client_teardown(c);
+            CMQ_SEND_FORCE_CLOSE();
             return -1;
         }
         memcpy(c->write_buf + c->write_len, data, len);
@@ -726,7 +734,7 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
         if (c->server)
             cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
-        client_teardown(c);
+        CMQ_SEND_FORCE_CLOSE();
         return -1;
     }
     memcpy(c->write_buf, data, len);
@@ -736,6 +744,7 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
 
     cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE, client_read_cb, c);
     return 0;
+#undef CMQ_SEND_FORCE_CLOSE
 }
 
 /* Owning-thread send of a raw CMQ frame. Wraps WebSocket binary if needed.
@@ -2992,7 +3001,7 @@ static void *route_reconnect_thread(void *arg) {
                                  srv->config.routes[i].addr,
                                  srv->config.routes[i].port);
                 }
-                break; /* one attempt per sleep interval */
+                /* Continue — retry every dead peer each interval. */
             }
         }
         for (int s = 0; s < 10; s++) {
