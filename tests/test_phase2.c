@@ -284,6 +284,23 @@ TEST(phase2, queue_group_delivery) {
 
     ASSERT(got_sub1 + got_sub2 == 1);
 
+    /* Round-robin: subsequent publishes should reach both members. */
+    int n1 = got_sub1, n2 = got_sub2;
+    for (int i = 0; i < 19; i++) {
+        send_frame(pub_fd, CMQ_OP_PUBLISH, pub_pl, off);
+        wait_ms(40);
+        if (recv_frame(sub1, &frame, p1) == 0) {
+            n1++;
+            free_frame_payload(&frame);
+        }
+        if (recv_frame(sub2, &frame, p2) == 0) {
+            n2++;
+            free_frame_payload(&frame);
+        }
+    }
+    ASSERT_EQ(n1 + n2, 20);
+    ASSERT(n1 >= 1 && n2 >= 1);
+
     cmq_parser_destroy(pp);
     cmq_parser_destroy(p1);
     cmq_parser_destroy(p2);

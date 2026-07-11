@@ -798,50 +798,70 @@ typedef struct {
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
 } cmq_deliver_tgt_t;
 
+static void cmq_fill_deliver_tgt(cmq_deliver_tgt_t *t, const cmq_sub_ref_t *ref) {
+    t->client_id = ref->client->id;
+    t->worker_id = ref->client->worker_id;
+    t->sub_id = ref->sub_id;
+    memcpy(t->subject, ref->subject, CMQ_MAX_SUBJECT);
+    memcpy(t->queue_group, ref->queue_group, CMQ_MAX_QUEUE_GROUP);
+    memcpy(t->account_name, ref->client->account_name, CMQ_ACCOUNT_NAME_SIZE);
+}
+
 /* Build a queue-group-deduped target list from match results.
-   Must be called while holding sublist_lock (rd). Returns malloc'd array;
-   *out_n set to count. On OOM: returns NULL and *out_n = SIZE_MAX.
-   Empty/filtered: NULL and *out_n = 0. Caller frees. */
-static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
+   Queue groups (scoped by subscription subject) pick one member via
+   round-robin (srv->qg_rr_counter). Must hold sublist_lock (rd).
+   Returns malloc'd array; *out_n = count. OOM: NULL + *out_n = SIZE_MAX.
+   Empty/filtered: NULL + *out_n = 0. Caller frees. */
+static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
+                                                    cmq_sublist_result_t *result,
                                                     size_t *out_n) {
     *out_n = 0;
     if (result->count == 0) return NULL;
     cmq_deliver_tgt_t *tgts = malloc(result->count * sizeof(cmq_deliver_tgt_t));
-    if (!tgts) {
-        *out_n = SIZE_MAX; /* distinguish OOM from "no live targets" */
+    uint8_t *used = calloc(result->count, 1);
+    size_t *memb = malloc(result->count * sizeof(size_t));
+    if (!tgts || !used || !memb) {
+        free(tgts);
+        free(used);
+        free(memb);
+        *out_n = SIZE_MAX;
         return NULL;
     }
 
-    /* Dedup against already-selected targets — no fixed 64 cap, no extra alloc. */
     size_t n = 0;
     for (size_t i = 0; i < result->count; i++) {
+        if (used[i]) continue;
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result->entries[i];
         if (!ref || !ref->client) continue;
         if (ref->client->state != CMQ_CLIENT_CONNECTED) continue;
 
-        if (ref->queue_group[0] != '\0') {
-            int skip = 0;
-            for (size_t s = 0; s < n; s++) {
-                /* Queue groups are scoped per subscription subject. */
-                if (tgts[s].queue_group[0] != '\0' &&
-                    strcmp(tgts[s].queue_group, ref->queue_group) == 0 &&
-                    strcmp(tgts[s].subject, ref->subject) == 0) {
-                    skip = 1;
-                    break;
-                }
-            }
-            if (skip) continue;
+        if (ref->queue_group[0] == '\0') {
+            cmq_fill_deliver_tgt(&tgts[n++], ref);
+            continue;
         }
 
-        tgts[n].client_id = ref->client->id;
-        tgts[n].worker_id = ref->client->worker_id;
-        tgts[n].sub_id = ref->sub_id;
-        memcpy(tgts[n].subject, ref->subject, CMQ_MAX_SUBJECT);
-        memcpy(tgts[n].queue_group, ref->queue_group, CMQ_MAX_QUEUE_GROUP);
-        memcpy(tgts[n].account_name, ref->client->account_name,
-               CMQ_ACCOUNT_NAME_SIZE);
-        n++;
+        /* Collect all live members of this (subject, queue_group). */
+        size_t mn = 0;
+        for (size_t j = i; j < result->count; j++) {
+            if (used[j]) continue;
+            cmq_sub_ref_t *rj = (cmq_sub_ref_t *)result->entries[j];
+            if (!rj || !rj->client) continue;
+            if (rj->client->state != CMQ_CLIENT_CONNECTED) continue;
+            if (rj->queue_group[0] == '\0') continue;
+            if (strcmp(rj->queue_group, ref->queue_group) != 0) continue;
+            if (strcmp(rj->subject, ref->subject) != 0) continue;
+            memb[mn++] = j;
+            used[j] = 1;
+        }
+        if (mn == 0) continue;
+        uint64_t tick = cmq_atomic_fetch_add_u64(&srv->qg_rr_counter, 1,
+                                                  CMQ_ATOMIC_RELAXED);
+        size_t pick = (size_t)(tick % (uint64_t)mn);
+        cmq_fill_deliver_tgt(&tgts[n++],
+                             (cmq_sub_ref_t *)result->entries[memb[pick]]);
     }
+    free(used);
+    free(memb);
     *out_n = n;
     return tgts;
 }
@@ -1321,7 +1341,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
 
     /* Always snapshot under the read lock, then unlock before any I/O. */
     size_t ntgt = 0;
-    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
+    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
     cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
     if (ntgt == SIZE_MAX) {
@@ -1662,7 +1682,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
     size_t ntgt = 0;
-    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
+    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
     cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
 
@@ -1758,7 +1778,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
     size_t ntgt = 0;
-    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
+    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
     cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
     if (ntgt == SIZE_MAX) {
@@ -1970,7 +1990,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             return;
         }
         size_t ntgt = 0;
-        cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
+        cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
         cmq_sublist_result_free(&result);
         cmq_rwlock_unlock(&srv->sublist_lock);
         if (ntgt == SIZE_MAX) {
@@ -2033,6 +2053,11 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         }
         free(prep[msg].tgts);
         cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
+        {
+            cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
+            if (acc)
+                cmq_account_inc_msgs_in(acc, (uint64_t)payload_len);
+        }
     }
     free(prep);
     if (batch_fail)

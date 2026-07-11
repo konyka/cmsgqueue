@@ -1361,6 +1361,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — queue-group round-robin · BATCH account bytes</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">qg round-robin</span></td><td>✅</td><td>Snapshot collects live (subject,qg) members and picks via <code>qg_rr_counter</code> (atomic).</td></tr>
+<tr><td><span class="component-name">BATCH account msgs_in</span></td><td>✅</td><td>Each BATCH entry bumps account <code>msgs_in</code> like PUBLISH.</td></tr>
+<tr><td><span class="component-name">tests</span></td><td>✅</td><td><code>queue_group_delivery</code> asserts both members receive across 20 pubs.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -172,6 +172,7 @@ struct cmq_server {
     cmq_atomic_u64 stat_publishes_rejected;
     cmq_atomic_u64 stat_subscribes_rejected;
     cmq_atomic_u64 stat_messages_dropped;   /* worker queue full / push OOM */
+    cmq_atomic_u64 qg_rr_counter;           /* queue-group round-robin pick */
 };
 
 #endif
