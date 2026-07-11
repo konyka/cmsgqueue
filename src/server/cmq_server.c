@@ -1672,37 +1672,18 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                       ? srv->config.max_subs_per_client
                       : CMQ_MAX_SUBS_PER_CLIENT;
 
-    /* Replace existing sub_id: remove old sublist ref to avoid leak/double-delivery. */
-    int replacing = 0;
+    /* Locate existing sub_id but keep it until the replacement is inserted —
+       otherwise OOM/insert failure would leave the client with no subscription. */
+    cmq_sub_entry_t *old = NULL;
     cmq_sub_entry_t **pp = &c->subs;
     while (*pp) {
         if ((*pp)->sub_id == sub_id) {
-            cmq_sub_entry_t *old = *pp;
-            *pp = old->next;
-            cmq_rwlock_wrlock(&srv->sublist_lock);
-            if (old->ref) {
-                cmq_sublist_remove(srv->sublist, old->subject, old->ref);
-                free(old->ref);
-                old->ref = NULL;
-            }
-            cmq_rwlock_unlock(&srv->sublist_lock);
-            free(old);
-            if (c->sub_count > 0) c->sub_count--;
-            uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
-                                                CMQ_ATOMIC_RELAXED);
-            if (cur > 0) {
-                cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
-                                          CMQ_ATOMIC_RELAXED);
-            }
-            {
-                cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
-                if (a) cmq_account_dec_subscriptions(a);
-            }
-            replacing = 1;
+            old = *pp;
             break;
         }
         pp = &(*pp)->next;
     }
+    int replacing = (old != NULL);
 
     if (!replacing && c->sub_count >= sub_cap) {
         cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
@@ -1739,6 +1720,11 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_rwlock_wrlock(&srv->sublist_lock);
     int irc = cmq_sublist_insert(srv->sublist, subject, ref);
+    if (irc == 0 && old && old->ref) {
+        cmq_sublist_remove(srv->sublist, old->subject, old->ref);
+        free(old->ref);
+        old->ref = NULL;
+    }
     cmq_rwlock_unlock(&srv->sublist_lock);
     if (irc != 0) {
         free(ref);
@@ -1747,13 +1733,25 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    if (old) {
+        cmq_sub_entry_t **q = &c->subs;
+        while (*q) {
+            if (*q == old) {
+                *q = old->next;
+                break;
+            }
+            q = &(*q)->next;
+        }
+        free(old);
+    }
+
     entry->ref = ref;
     entry->next = c->subs;
     c->subs = entry;
 
-    cmq_atomic_fetch_add_u64(&srv->stat_subscriptions, 1, CMQ_ATOMIC_RELAXED);
-    c->sub_count++;
-    {
+    if (!replacing) {
+        cmq_atomic_fetch_add_u64(&srv->stat_subscriptions, 1, CMQ_ATOMIC_RELAXED);
+        c->sub_count++;
         cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
         if (a) cmq_account_inc_subscriptions(a);
     }
@@ -2247,35 +2245,10 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         }
     }
 
-    /* Pass 2b: local deliver first — no cluster side effects yet. */
+    /* Pass 2b: cluster forward first (same order as single PUBLISH) so a
+       remote-only failure cannot ERROR after local subscribers already got
+       the batch. */
     int batch_fail = 0;
-    for (uint16_t msg = 0; msg < count; msg++) {
-        const uint8_t *msg_payload = prep[msg].msg_payload;
-        uint32_t payload_len = prep[msg].payload_len;
-        if (prep[msg].tgts && prep[msg].ntgt > 0) {
-            if (deliver_targets_sync(srv, prep[msg].tgts, prep[msg].ntgt,
-                                      prep[msg].subject, c->account_name,
-                                      msg_payload, payload_len,
-                                      NULL, 0) != 0)
-                batch_fail = 1;
-        }
-        free(prep[msg].tgts);
-        prep[msg].tgts = NULL;
-        if (batch_fail) {
-            for (uint16_t k = (uint16_t)(msg + 1); k < count; k++) {
-                free(prep[k].tgts);
-                prep[k].tgts = NULL;
-            }
-            break;
-        }
-    }
-    if (batch_fail) {
-        free(prep);
-        cmq_send_error(c, "batch delivery failed");
-        return;
-    }
-
-    /* Pass 2c: cluster forward only after all local delivers succeeded. */
     for (uint16_t msg = 0; msg < count; msg++) {
         uint16_t subject_len = prep[msg].subject_len;
         uint16_t reply_len = prep[msg].reply_len;
@@ -2316,8 +2289,39 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             }
         }
 
-        if (batch_fail)
-            break;
+        if (batch_fail) {
+            for (uint16_t k = 0; k < count; k++) {
+                free(prep[k].tgts);
+                prep[k].tgts = NULL;
+            }
+            free(prep);
+            cmq_send_error(c, "batch delivery failed");
+            return;
+        }
+    }
+
+    /* Pass 2c: local deliver only after cluster forwards for remote-only OK. */
+    for (uint16_t msg = 0; msg < count; msg++) {
+        const uint8_t *msg_payload = prep[msg].msg_payload;
+        uint32_t payload_len = prep[msg].payload_len;
+        if (prep[msg].tgts && prep[msg].ntgt > 0) {
+            if (deliver_targets_sync(srv, prep[msg].tgts, prep[msg].ntgt,
+                                      prep[msg].subject, c->account_name,
+                                      msg_payload, payload_len,
+                                      NULL, 0) != 0)
+                batch_fail = 1;
+        }
+        free(prep[msg].tgts);
+        prep[msg].tgts = NULL;
+        if (batch_fail) {
+            for (uint16_t k = (uint16_t)(msg + 1); k < count; k++) {
+                free(prep[k].tgts);
+                prep[k].tgts = NULL;
+            }
+            free(prep);
+            cmq_send_error(c, "batch delivery failed");
+            return;
+        }
         cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
         {
             cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
@@ -2326,8 +2330,6 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         }
     }
     free(prep);
-    if (batch_fail)
-        cmq_send_error(c, "batch delivery failed");
 }
 
 static void handle_frame(cmq_server_t *srv, cmq_client_t *c,

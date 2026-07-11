@@ -1538,7 +1538,7 @@ All 15 test suites passing, 0 warnings.
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">route_connect</span></td><td>✅</td><td>Connect/handshake outside pool lock; install fd under lock (no broadcast freeze).</td></tr>
 <tr><td><span class="component-name">cmq_connect_timeout</span></td><td>✅</td><td>Shared API; gateway uses 2s timed connect (no infinite hang).</td></tr>
-<tr><td><span class="component-name">BATCH local-first</span></td><td>✅</td><td>All local delivers succeed before any cluster forward — avoids ERROR after partial route.</td></tr>
+<tr><td><span class="component-name">BATCH local-first</span></td><td>✅</td><td>Superseded: batch now cluster-then-local (align with single PUBLISH).</td></tr>
 </table>
 </div>
 
@@ -1569,6 +1569,16 @@ All 15 test suites passing, 0 warnings.
 <tr><td><span class="component-name">WS ping keepalive</span></td><td>✅</td><td>INIT no longer refreshes last_activity via WS ping/pong (slot DoS).</td></tr>
 <tr><td><span class="component-name">leaf connect</span></td><td>✅</td><td>Unlock before cmq_connect_timeout (2s) + handshake.</td></tr>
 <tr><td><span class="component-name">filestore orphan</span></td><td>✅</td><td>On open, truncate .data past last indexed record end.</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<h2>Phase — BATCH cluster-first · filestore idx repair · subscribe replace</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">BATCH order</span></td><td>✅</td><td>Cluster forward before local deliver; remote-only fail aborts with no local fan-out.</td></tr>
+<tr><td><span class="component-name">filestore idx repair</span></td><td>✅</td><td>Validate idx→data (magic/seq/crc); truncate torn/invalid idx tail; then orphan data.</td></tr>
+<tr><td><span class="component-name">subscribe replace</span></td><td>✅</td><td>Insert new sublist ref before removing old — OOM no longer drops the subscription.</td></tr>
 </table>
 </div>
 

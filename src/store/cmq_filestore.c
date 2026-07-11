@@ -72,26 +72,12 @@ static void build_paths(cmq_filestore_t *fs) {
     snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx", fs->dir, fs->prefix);
 }
 
-static uint64_t scan_last_seq(const char *idx_path) {
-    FILE *fp = fopen(idx_path, "rb");
-    if (!fp) return 0;
-    if (fseek(fp, 0, SEEK_END) != 0) {
-        fclose(fp);
-        return 0;
-    }
-    long sz = ftell(fp);
-    fclose(fp);
-    if (sz < 0) return 0;
-    return (uint64_t)sz / 8u;
-}
-
 /* Drop trailing .data bytes not covered by .idx (crash between fflush(data)
    and idx append). Indexed records stay intact; orphans are truncated. */
-static void truncate_orphan_data(cmq_filestore_t *fs) {
-    uint64_t n = scan_last_seq(fs->idx_path);
+static void truncate_orphan_data(cmq_filestore_t *fs, uint64_t n_idx) {
     off_t expect = 0;
-    if (n > 0) {
-        if (fseek(fs->idx_fp, (long)((n - 1) * 8u), SEEK_SET) != 0)
+    if (n_idx > 0) {
+        if (fseek(fs->idx_fp, (long)((n_idx - 1) * 8u), SEEK_SET) != 0)
             return;
         uint8_t idxb[8];
         if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1)
@@ -116,6 +102,73 @@ static void truncate_orphan_data(cmq_filestore_t *fs) {
         fseek(fs->data_fp, 0, SEEK_END);
 }
 
+/* Validate idx→data records from the start; truncate at first bad/partial
+   entry (crash after idx append with incomplete data, or torn idx write). */
+static uint64_t repair_idx(cmq_filestore_t *fs) {
+    if (fseek(fs->idx_fp, 0, SEEK_END) != 0)
+        return 0;
+    long idx_sz = ftell(fs->idx_fp);
+    if (idx_sz < 0)
+        return 0;
+    /* Drop torn trailing bytes that are not a full offset entry. */
+    if ((idx_sz % 8) != 0) {
+        idx_sz -= idx_sz % 8;
+        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_sz) != 0)
+            return 0;
+    }
+    if (fseek(fs->data_fp, 0, SEEK_END) != 0)
+        return 0;
+    long data_sz = ftell(fs->data_fp);
+    if (data_sz < 0)
+        return 0;
+
+    uint64_t valid = 0;
+    uint64_t n = (uint64_t)idx_sz / 8u;
+    for (uint64_t i = 0; i < n; i++) {
+        if (fseek(fs->idx_fp, (long)(i * 8u), SEEK_SET) != 0)
+            break;
+        uint8_t idxb[8];
+        if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1)
+            break;
+        uint64_t offset = get_le64(idxb);
+        if (offset + (uint64_t)CMQ_FS_HDR_SIZE > (uint64_t)data_sz)
+            break;
+        if (fseek(fs->data_fp, (long)offset, SEEK_SET) != 0)
+            break;
+        uint8_t hdr[CMQ_FS_HDR_SIZE];
+        if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1)
+            break;
+        if (get_le32(hdr + 0) != CMQ_FS_MAGIC ||
+            get_le16(hdr + 4) != (uint16_t)CMQ_FS_VERSION)
+            break;
+        uint64_t hseq = get_le64(hdr + 6);
+        uint32_t hlen = get_le32(hdr + 14);
+        if (hseq != i + 1 || hlen == 0 || hlen > (16u * 1024 * 1024))
+            break;
+        if (offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen >
+            (uint64_t)data_sz)
+            break;
+        uint8_t *buf = malloc(hlen);
+        if (!buf)
+            break;
+        if (fread(buf, 1, hlen, fs->data_fp) != hlen) {
+            free(buf);
+            break;
+        }
+        uint32_t hcrc = get_le32(hdr + 18);
+        int ok = (crc32_compute(buf, hlen) == hcrc);
+        free(buf);
+        if (!ok)
+            break;
+        valid = i + 1;
+    }
+    if (valid * 8u != (uint64_t)idx_sz) {
+        if (ftruncate(fileno(fs->idx_fp), (off_t)(valid * 8u)) == 0)
+            fseek(fs->idx_fp, 0, SEEK_END);
+    }
+    return valid;
+}
+
 cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     if (!dir || !prefix) return NULL;
 
@@ -134,8 +187,9 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     fs->idx_fp = fopen(fs->idx_path, "a+b");
     if (!fs->idx_fp) { fclose(fs->data_fp); cmq_mutex_destroy(&fs->lock); free(fs); return NULL; }
 
-    truncate_orphan_data(fs);
-    fs->next_seq = scan_last_seq(fs->idx_path) + 1;
+    uint64_t n = repair_idx(fs);
+    truncate_orphan_data(fs, n);
+    fs->next_seq = n + 1;
     return fs;
 }
 
