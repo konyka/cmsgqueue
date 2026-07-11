@@ -221,15 +221,18 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         }
     }
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
-        /* Allow replace of an existing stale slot even when "full". */
-        int have = 0;
+        /* Full: allow same-id replace, or empty/!connected tombstone reuse.
+           connected+fd<0 placeholders are live slots — do not steal. */
+        int usable = 0;
         for (size_t i = 0; i < pool->conn_count; i++) {
-            if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
-                have = 1;
+            if (strcmp(pool->conns[i].remote_id, node_id) == 0 ||
+                !pool->conns[i].connected ||
+                pool->conns[i].remote_id[0] == '\0') {
+                usable = 1;
                 break;
             }
         }
-        if (!have) {
+        if (!usable) {
             cmq_mutex_unlock(&pool->lock);
             return -1;
         }
@@ -270,6 +273,19 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         cmq_mutex_unlock(&pool->lock);
         return 0;
     }
+    /* Reuse empty/!connected tombstone before growing (not live placeholders). */
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        if (pool->conns[i].remote_id[0] != '\0' && pool->conns[i].connected)
+            continue;
+        conn_drop_fd(&pool->conns[i]);
+        memset(&pool->conns[i], 0, sizeof(pool->conns[i]));
+        strncpy(pool->conns[i].remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
+        pool->conns[i].fd = fd;
+        pool->conns[i].connected = 1;
+        pool->conns[i].fd_owned = 1;
+        cmq_mutex_unlock(&pool->lock);
+        return 0;
+    }
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
         cmq_mutex_unlock(&pool->lock);
         close(fd);
@@ -293,13 +309,17 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
        without blocking on a peer that will never be retained. */
     cmq_mutex_lock(&pool->lock);
     int replace = -1;
+    int dead = -1;
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
             replace = (int)i;
             break;
         }
+        if (dead < 0 &&
+            (pool->conns[i].remote_id[0] == '\0' || !pool->conns[i].connected))
+            dead = (int)i;
     }
-    if (replace < 0 && pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
+    if (replace < 0 && dead < 0 && pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
         cmq_mutex_unlock(&pool->lock);
         if (fd >= 0) close(fd);
         return -1;
@@ -336,6 +356,18 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
             return 0;
         }
     }
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        if (pool->conns[i].remote_id[0] != '\0' && pool->conns[i].connected)
+            continue;
+        conn_drop_fd(&pool->conns[i]);
+        memset(&pool->conns[i], 0, sizeof(pool->conns[i]));
+        strncpy(pool->conns[i].remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
+        pool->conns[i].fd = fd;
+        pool->conns[i].connected = 1;
+        pool->conns[i].fd_owned = (fd >= 0) ? 1 : 0;
+        cmq_mutex_unlock(&pool->lock);
+        return 0;
+    }
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
         cmq_mutex_unlock(&pool->lock);
         if (fd >= 0) close(fd);
@@ -365,6 +397,18 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
             return 0;
         }
         conn_drop_fd(&pool->conns[i]);
+        pool->conns[i].fd = fd;
+        pool->conns[i].connected = 1;
+        pool->conns[i].fd_owned = 0;
+        cmq_mutex_unlock(&pool->lock);
+        return 0;
+    }
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        if (pool->conns[i].remote_id[0] != '\0' && pool->conns[i].connected)
+            continue;
+        conn_drop_fd(&pool->conns[i]);
+        memset(&pool->conns[i], 0, sizeof(pool->conns[i]));
+        strncpy(pool->conns[i].remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
         pool->conns[i].fd = fd;
         pool->conns[i].connected = 1;
         pool->conns[i].fd_owned = 0;
@@ -404,10 +448,18 @@ int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id) {
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
+            /* Tombstone in place — never memmove (io_locks are index-stable). */
             conn_drop_fd(&pool->conns[i]);
-            memmove(&pool->conns[i], &pool->conns[i + 1],
-                    (pool->conn_count - i - 1) * sizeof(cmq_route_conn_t));
-            pool->conn_count--;
+            memset(pool->conns[i].remote_id, 0, sizeof(pool->conns[i].remote_id));
+            pool->conns[i].fd = -1;
+            pool->conns[i].connected = 0;
+            pool->conns[i].fd_owned = 0;
+            while (pool->conn_count > 0) {
+                cmq_route_conn_t *last = &pool->conns[pool->conn_count - 1];
+                if (last->remote_id[0] != '\0' || last->connected || last->fd >= 0)
+                    break;
+                pool->conn_count--;
+            }
             cmq_mutex_unlock(&pool->lock);
             return 0;
         }
@@ -488,7 +540,11 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
 size_t cmq_route_pool_count(cmq_route_pool_t *pool) {
     if (!pool) return 0;
     cmq_mutex_lock(&pool->lock);
-    size_t c = pool->conn_count;
+    size_t c = 0;
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        if (pool->conns[i].remote_id[0] != '\0')
+            c++;
+    }
     cmq_mutex_unlock(&pool->lock);
     return c;
 }

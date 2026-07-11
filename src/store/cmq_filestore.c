@@ -346,7 +346,8 @@ int cmq_filestore_sync(cmq_filestore_t *fs) {
     if (fs->data_fp) fflush(fs->data_fp);
     if (fs->idx_fp) fflush(fs->idx_fp);
     rc = fsync(fileno(fs->data_fp));
-    fsync(fileno(fs->idx_fp));
+    if (fsync(fileno(fs->idx_fp)) != 0)
+        rc = -1;
     cmq_mutex_unlock(&fs->lock);
     return rc;
 }

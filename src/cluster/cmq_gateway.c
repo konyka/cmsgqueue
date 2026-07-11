@@ -173,7 +173,59 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
     }
 
     if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {
+        /* Reuse a dead/empty slot rather than failing when the table is full. */
+        int slot = -1;
+        for (size_t i = 0; i < gw->conn_count; i++) {
+            if (!gw->conns[i].connected ||
+                gw->conns[i].remote_cluster[0] == '\0') {
+                slot = (int)i;
+                break;
+            }
+        }
+        if (slot < 0) {
+            cmq_mutex_unlock(&gw->lock);
+            return -1;
+        }
+        char addr_copy[CMQ_NODE_ADDR_SIZE];
+        strncpy(addr_copy, addr, sizeof(addr_copy) - 1);
+        addr_copy[sizeof(addr_copy) - 1] = '\0';
+        int port_copy = port;
         cmq_mutex_unlock(&gw->lock);
+
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return -1;
+        struct sockaddr_in sa = {0};
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons((uint16_t)port_copy);
+        inet_pton(AF_INET, addr_copy, &sa.sin_addr);
+        if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
+                                 CMQ_GW_CONNECT_MS) != 0) {
+            close(fd);
+            return -1;
+        }
+        if (cmq_peer_handshake(fd, NULL, NULL) != 0) {
+            close(fd);
+            return -1;
+        }
+        set_nonblock(fd);
+        cmq_mutex_lock(&gw->lock);
+        if ((size_t)slot < gw->conn_count &&
+            (!gw->conns[slot].connected ||
+             gw->conns[slot].remote_cluster[0] == '\0' ||
+             strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0)) {
+            if (gw->conns[slot].fd >= 0) close(gw->conns[slot].fd);
+            memset(&gw->conns[slot], 0, sizeof(gw->conns[slot]));
+            strncpy(gw->conns[slot].remote_cluster, cluster_name,
+                    sizeof(gw->conns[slot].remote_cluster) - 1);
+            strncpy(gw->conns[slot].remote_addr, addr_copy, CMQ_NODE_ADDR_SIZE - 1);
+            gw->conns[slot].remote_port = port_copy;
+            gw->conns[slot].fd = fd;
+            gw->conns[slot].connected = 1;
+            cmq_mutex_unlock(&gw->lock);
+            return 0;
+        }
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
         return -1;
     }
 
@@ -204,10 +256,31 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
     set_nonblock(fd);
 
     cmq_mutex_lock(&gw->lock);
+    /* Prefer append; reuse dead/empty if table grew full during connect. */
     if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {
+        int slot = -1;
+        for (size_t i = 0; i < gw->conn_count; i++) {
+            if (!gw->conns[i].connected ||
+                gw->conns[i].remote_cluster[0] == '\0') {
+                slot = (int)i;
+                break;
+            }
+        }
+        if (slot < 0) {
+            cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            return -1;
+        }
+        if (gw->conns[slot].fd >= 0) close(gw->conns[slot].fd);
+        memset(&gw->conns[slot], 0, sizeof(gw->conns[slot]));
+        strncpy(gw->conns[slot].remote_cluster, cluster_name,
+                sizeof(gw->conns[slot].remote_cluster) - 1);
+        strncpy(gw->conns[slot].remote_addr, addr_copy, CMQ_NODE_ADDR_SIZE - 1);
+        gw->conns[slot].remote_port = port_copy;
+        gw->conns[slot].fd = fd;
+        gw->conns[slot].connected = 1;
         cmq_mutex_unlock(&gw->lock);
-        close(fd);
-        return -1;
+        return 0;
     }
     cmq_gw_conn_t *c = &gw->conns[gw->conn_count++];
     strncpy(c->remote_cluster, cluster_name, sizeof(c->remote_cluster) - 1);
@@ -225,10 +298,18 @@ int cmq_gateway_disconnect(cmq_gateway_t *gw, const char *cluster_name) {
     cmq_mutex_lock(&gw->lock);
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0) {
-            close(gw->conns[i].fd);
-            memmove(&gw->conns[i], &gw->conns[i + 1],
-                    (gw->conn_count - i - 1) * sizeof(cmq_gw_conn_t));
-            gw->conn_count--;
+            /* Tombstone — keep io_locks[] index-stable (no memmove). */
+            if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
+            memset(&gw->conns[i], 0, sizeof(gw->conns[i]));
+            gw->conns[i].fd = -1;
+            gw->conns[i].connected = 0;
+            while (gw->conn_count > 0) {
+                cmq_gw_conn_t *last = &gw->conns[gw->conn_count - 1];
+                if (last->remote_cluster[0] != '\0' || last->connected ||
+                    last->fd >= 0)
+                    break;
+                gw->conn_count--;
+            }
             cmq_mutex_unlock(&gw->lock);
             return 0;
         }
@@ -347,7 +428,11 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
 size_t cmq_gateway_connection_count(cmq_gateway_t *gw) {
     if (!gw) return 0;
     cmq_mutex_lock(&gw->lock);
-    size_t c = gw->conn_count;
+    size_t c = 0;
+    for (size_t i = 0; i < gw->conn_count; i++) {
+        if (gw->conns[i].remote_cluster[0] != '\0')
+            c++;
+    }
     cmq_mutex_unlock(&gw->lock);
     return c;
 }

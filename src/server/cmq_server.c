@@ -1380,12 +1380,15 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
     if (w->coro_count < w->coro_cap) {
         w->coro_pool[w->coro_count++] = coro;
     } else {
-        /* Pool full: drain synchronously so we never truncate fan-out. */
-        while (cmq_coro_state(coro) != CMQ_CORO_DONE) {
-            cmq_coro_resume(coro);
-        }
-        deliver_ctx_free(ctx);
+        /* Pool full: sync fan-out instead of spinning resume in the publish
+           path (keeps the worker event loop responsive). */
         cmq_coro_destroy(coro);
+        int rc = deliver_targets_sync(srv, ctx->targets, ctx->target_count,
+                                       ctx->subject, ctx->pub_account,
+                                       ctx->payload, ctx->payload_len,
+                                       ctx->headers, ctx->headers_len);
+        deliver_ctx_free(ctx);
+        return rc == 0 ? 0 : -1;
     }
     return 0;
 }

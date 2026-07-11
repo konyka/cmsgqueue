@@ -1582,6 +1582,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route dead-slot reuse · tombstone disconnect · coro sync fallback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/gw dead reuse</span></td><td>✅</td><td>Full pool reuses !connected/empty slots; pool_count counts named entries.</td></tr>
+<tr><td><span class="component-name">disconnect tombstone</span></td><td>✅</td><td>No memmove — io_locks stay index-stable; trailing empties shrink.</td></tr>
+<tr><td><span class="component-name">coro pool full</span></td><td>✅</td><td>Falls back to deliver_targets_sync instead of resume-spin in publish path.</td></tr>
+<tr><td><span class="component-name">filestore sync</span></td><td>✅</td><td>fsync failure on idx propagates to return code.</td></tr>
+</table>
+</div>
+
 
 
 
