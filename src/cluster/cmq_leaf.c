@@ -380,9 +380,19 @@ int cmq_leaf_accept(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
 
     cmq_mutex_lock(&leaf->lock);
     if (leaf->leaf_count >= CMQ_LEAF_MAX_CONNECTIONS) {
-        cmq_mutex_unlock(&leaf->lock);
-        if (fd >= 0) close(fd);
-        return -1;
+        /* Allow replace of an existing same leaf_id even when table is full. */
+        int have = 0;
+        for (size_t i = 0; i < leaf->leaf_count; i++) {
+            if (strcmp(leaf->leaves[i].leaf_id, leaf_id) == 0) {
+                have = 1;
+                break;
+            }
+        }
+        if (!have) {
+            cmq_mutex_unlock(&leaf->lock);
+            if (fd >= 0) close(fd);
+            return -1;
+        }
     }
     cmq_mutex_unlock(&leaf->lock);
 

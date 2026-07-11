@@ -196,7 +196,9 @@ static cmq_account_perms_t *find_or_create_perms(const char *account) {
     if (p) return p;
     if (g_perms_count >= CMQ_ACCOUNT_MAX) return NULL;
     p = &g_perms[g_perms_count++];
+    memset(p, 0, sizeof(*p));
     strncpy(p->account, account, CMQ_ACCOUNT_NAME_SIZE - 1);
+    p->account[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
     return p;
 }
 

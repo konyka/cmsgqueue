@@ -1789,6 +1789,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — ACL perms zero · leaf full replace · gateway close · poll EINTR</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">ACL slot reuse</span></td><td>✅</td><td>find_or_create_perms memset before naming (no cross-tenant ACL leak).</td></tr>
+<tr><td><span class="component-name">leaf full reconnect</span></td><td>✅</td><td>Full table still allows same leaf_id replace.</td></tr>
+<tr><td><span class="component-name">gateway fail close</span></td><td>✅</td><td>Clear slot under io_lock before close(fd).</td></tr>
+<tr><td><span class="component-name">connect poll</span></td><td>✅</td><td>cmq_connect_timeout retries poll on EINTR.</td></tr>
+</table>
+</div>
+
 
 
 

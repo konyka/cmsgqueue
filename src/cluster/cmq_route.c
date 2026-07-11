@@ -38,7 +38,15 @@ int cmq_connect_timeout(int fd, const struct sockaddr *sa, socklen_t slen,
     if (rc != 0 && errno != EINPROGRESS) return -1;
     if (rc != 0) {
         struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-        if (poll(&pfd, 1, timeout_ms) <= 0) return -1;
+        for (;;) {
+            int pr = poll(&pfd, 1, timeout_ms);
+            if (pr < 0) {
+                if (errno == EINTR) continue;
+                return -1;
+            }
+            if (pr == 0) return -1;
+            break;
+        }
         int err = 0;
         socklen_t el = sizeof(err);
         if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el) != 0 || err != 0)
