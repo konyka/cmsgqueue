@@ -1319,6 +1319,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — cross-account deliver · RESPONSE ERROR · leaf accept · WS RSV</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">may_deliver ACL</span></td><td>✅</td><td>Export/import dest/source enforced at fan-out; same-account always allowed.</td></tr>
+<tr><td><span class="component-name">RESPONSE delivery ERROR</span></td><td>✅</td><td>Total delivery failure surfaces ERROR to responder.</td></tr>
+<tr><td><span class="component-name">leaf accept handshake</span></td><td>✅</td><td>Live fds handshake before slot; <code>fd&lt;0</code> placeholder for tests.</td></tr>
+<tr><td><span class="component-name">WS RSV / ctrl FIN</span></td><td>✅</td><td>Parse rejects RSV1-3 and fragmented control frames (RFC 6455).</td></tr>
+</table>
+</div>
+
 
 
 

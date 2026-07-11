@@ -242,11 +242,29 @@ size_t cmq_leaf_accept_count(cmq_leaf_node_t *leaf) {
 }
 
 int cmq_leaf_accept(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
-    if (!leaf || fd < 0 || !leaf_id) return -1;
+    if (!leaf || !leaf_id) return -1;
+
     cmq_mutex_lock(&leaf->lock);
     if (leaf->leaf_count >= CMQ_LEAF_MAX_CONNECTIONS) {
         cmq_mutex_unlock(&leaf->lock);
-        close(fd);
+        if (fd >= 0) close(fd);
+        return -1;
+    }
+    cmq_mutex_unlock(&leaf->lock);
+
+    /* fd < 0: placeholder slot (tests). Live fd: cluster handshake first. */
+    if (fd >= 0) {
+        if (cmq_peer_handshake(fd, NULL, NULL) != 0) {
+            close(fd);
+            return -1;
+        }
+        set_nonblock(fd);
+    }
+
+    cmq_mutex_lock(&leaf->lock);
+    if (leaf->leaf_count >= CMQ_LEAF_MAX_CONNECTIONS) {
+        cmq_mutex_unlock(&leaf->lock);
+        if (fd >= 0) close(fd);
         return -1;
     }
     cmq_leaf_conn_t *c = &leaf->leaves[leaf->leaf_count++];

@@ -846,6 +846,7 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_sublist_result_t *result,
 static int deliver_targets_sync(cmq_server_t *srv,
                                   cmq_deliver_tgt_t *tgts, size_t ntgt,
                                   const char *subject,
+                                  const char *pub_account,
                                   const uint8_t *payload, size_t payload_len,
                                   const uint8_t *headers, size_t headers_len) {
     if (!tgts || ntgt == 0) return -1;
@@ -857,6 +858,9 @@ static int deliver_targets_sync(cmq_server_t *srv,
     int any = 0;
     for (size_t i = 0; i < ntgt; i++) {
         cmq_deliver_tgt_t *t = &tgts[i];
+        if (!cmq_account_may_deliver(srv->accounts, pub_account,
+                                      t->account_name, subject))
+            continue;
         cmq_patch_message_sub_id(frame, t->sub_id);
         int delivered = 0;
         if (t->worker_id >= 0 && srv->workers &&
@@ -912,11 +916,15 @@ static int deliver_targets_sync(cmq_server_t *srv,
 static size_t deliver_request_targets(cmq_server_t *srv,
                                      cmq_deliver_tgt_t *tgts, size_t ntgt,
                                      const char *subject, const char *reply_to,
+                                     const char *pub_account,
                                      const uint8_t *payload, size_t payload_len) {
     if (!tgts || ntgt == 0) return 0;
     size_t delivered_n = 0;
     for (size_t i = 0; i < ntgt; i++) {
         cmq_deliver_tgt_t *t = &tgts[i];
+        if (!cmq_account_may_deliver(srv->accounts, pub_account,
+                                      t->account_name, subject))
+            continue;
         cmq_client_t *target = NULL;
         if (t->worker_id >= 0 && srv->workers &&
             t->worker_id < srv->num_workers) {
@@ -968,6 +976,7 @@ typedef struct {
     cmq_deliver_tgt_t *targets;
     size_t target_count;
     char subject[CMQ_MAX_SUBJECT];
+    char pub_account[CMQ_ACCOUNT_NAME_SIZE];
     const uint8_t *payload;
     size_t payload_len;
     const uint8_t *headers;
@@ -992,6 +1001,9 @@ static void deliver_coro_func(void *arg) {
 
     for (size_t i = ctx->idx; i < ctx->target_count; i++) {
         cmq_deliver_tgt_t *t = &ctx->targets[i];
+        if (!cmq_account_may_deliver(srv->accounts, ctx->pub_account,
+                                      t->account_name, ctx->subject))
+            continue;
         cmq_patch_message_sub_id(ctx->frame, t->sub_id);
 
         int delivered = 0;
@@ -1109,6 +1121,7 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
                                        cmq_deliver_tgt_t *targets,
                                        size_t target_count,
                                        const char *subject,
+                                       const char *pub_account,
                                        const uint8_t *payload,
                                        size_t payload_len,
                                        const uint8_t *headers,
@@ -1124,6 +1137,8 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
     ctx->targets = targets;
     ctx->target_count = target_count;
     strncpy(ctx->subject, subject, CMQ_MAX_SUBJECT - 1);
+    if (pub_account)
+        strncpy(ctx->pub_account, pub_account, CMQ_ACCOUNT_NAME_SIZE - 1);
     ctx->payload = payload;
     ctx->payload_len = payload_len;
     ctx->headers = headers;
@@ -1318,6 +1333,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         }
 
         if (worker_coro_spawn_deliver(w, srv, tgts, ntgt, subject,
+                                       c->account_name,
                                        coro_payload, msg_len,
                                        coro_headers, headers_len) != 0) {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
@@ -1327,7 +1343,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    if (deliver_targets_sync(srv, tgts, ntgt, subject, msg_payload, msg_len,
+    if (deliver_targets_sync(srv, tgts, ntgt, subject, c->account_name,
+                              msg_payload, msg_len,
                               headers, headers_len) != 0) {
         cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                   CMQ_ATOMIC_RELAXED);
@@ -1625,6 +1642,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     }
     if (tgts && ntgt > 0) {
         size_t n = deliver_request_targets(srv, tgts, ntgt, subject, reply_to,
+                                            c->account_name,
                                             msg_payload, msg_len);
         free(tgts);
         if (n > 0) {
@@ -1706,8 +1724,11 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "delivery failed");
         return;
     }
-    if (tgts && ntgt > 0)
-        deliver_targets_sync(srv, tgts, ntgt, subject, msg_payload, msg_len, NULL, 0);
+    if (tgts && ntgt > 0) {
+        if (deliver_targets_sync(srv, tgts, ntgt, subject, c->account_name,
+                                  msg_payload, msg_len, NULL, 0) != 0)
+            cmq_send_error(c, "delivery failed");
+    }
     free(tgts);
 }
 
@@ -1952,7 +1973,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
 
         if (prep[msg].tgts && prep[msg].ntgt > 0) {
             if (deliver_targets_sync(srv, prep[msg].tgts, prep[msg].ntgt,
-                                      prep[msg].subject, msg_payload, payload_len,
+                                      prep[msg].subject, c->account_name,
+                                      msg_payload, payload_len,
                                       NULL, 0) != 0)
                 batch_fail = 1;
         }

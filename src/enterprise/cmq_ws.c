@@ -76,8 +76,14 @@ int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
     if (!buf || !out_frame) return -1;
     if (buf_len < 2) return 0; /* need more */
 
-    out_frame->fin = (buf[0] >> 7) & 0x01;
-    out_frame->opcode = (cmq_ws_opcode_t)(buf[0] & 0x0F);
+    /* RFC 6455 §5.2: RSV1-3 MUST be 0; §5.5: control frames MUST be FIN=1. */
+    if (buf[0] & 0x70) return -1;
+    uint8_t opcode = (uint8_t)(buf[0] & 0x0F);
+    int fin = (buf[0] >> 7) & 0x01;
+    if (opcode >= 0x08 && !fin) return -1;
+
+    out_frame->fin = fin;
+    out_frame->opcode = (cmq_ws_opcode_t)opcode;
     out_frame->masked = (buf[1] >> 7) & 0x01;
 
     uint64_t payload_len = (uint64_t)(buf[1] & 0x7F);

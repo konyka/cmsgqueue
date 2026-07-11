@@ -317,3 +317,52 @@ int cmq_account_can_export(cmq_account_manager_t *mgr, const char *account,
     cmq_mutex_unlock(&g_perms_lock);
     return ok;
 }
+
+static int acct_eq_or_star(const char *rule, const char *actual) {
+    return strcmp(rule, "*") == 0 || strcmp(rule, actual) == 0;
+}
+
+int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
+                             const char *sub_account, const char *subject) {
+    (void)mgr;
+    if (!pub_account || !sub_account || !subject) return 0;
+    if (strcmp(pub_account, sub_account) == 0) return 1;
+
+    ensure_perms_init();
+    cmq_mutex_lock(&g_perms_lock);
+
+    cmq_account_perms_t *pub = find_perms(pub_account);
+    if (pub && pub->export_count > 0) {
+        int ok = 0;
+        for (size_t i = 0; i < pub->export_count; i++) {
+            if (subject_match(pub->exports[i].subject, subject) &&
+                acct_eq_or_star(pub->exports[i].dest_account, sub_account)) {
+                ok = 1;
+                break;
+            }
+        }
+        if (!ok) {
+            cmq_mutex_unlock(&g_perms_lock);
+            return 0;
+        }
+    }
+
+    cmq_account_perms_t *sub = find_perms(sub_account);
+    if (sub && sub->import_count > 0) {
+        int ok = 0;
+        for (size_t i = 0; i < sub->import_count; i++) {
+            if (subject_match(sub->imports[i].subject, subject) &&
+                acct_eq_or_star(sub->imports[i].source_account, pub_account)) {
+                ok = 1;
+                break;
+            }
+        }
+        if (!ok) {
+            cmq_mutex_unlock(&g_perms_lock);
+            return 0;
+        }
+    }
+
+    cmq_mutex_unlock(&g_perms_lock);
+    return 1;
+}

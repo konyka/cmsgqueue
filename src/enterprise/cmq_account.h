@@ -66,5 +66,9 @@ int cmq_account_can_import(cmq_account_manager_t *mgr, const char *account,
                             const char *subject);
 int cmq_account_can_export(cmq_account_manager_t *mgr, const char *account,
                             const char *subject);
+/* Cross-account delivery gate: same account always ok; when export/import
+   lists are non-empty, dest/source account must match (or "*"). */
+int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
+                             const char *sub_account, const char *subject);
 
 #endif

@@ -97,6 +97,22 @@ TEST(account, exports_imports) {
     cmq_account_manager_destroy(mgr);
 }
 
+TEST(account, may_deliver_cross_account) {
+    cmq_account_manager_t *mgr = cmq_account_manager_create();
+    cmq_account_create(mgr, "acme");
+    cmq_account_create(mgr, "globex");
+    cmq_account_create(mgr, "other");
+
+    ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "acme", "acme.data"), 1);
+
+    cmq_account_add_export(mgr, "acme", "acme.>", "globex");
+    cmq_account_add_import(mgr, "globex", "acme.>", "acme");
+    ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "globex", "acme.data"), 1);
+    ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "other", "acme.data"), 0);
+
+    cmq_account_manager_destroy(mgr);
+}
+
 TEST(tls, config_create_destroy) {
     cmq_tls_config_t *cfg = cmq_tls_config_create();
     ASSERT_NOT_NULL(cfg);
@@ -334,6 +350,14 @@ TEST(ws, parse_need_more_vs_fatal) {
     /* 127-length with MSB set — fatal */
     uint8_t bad[10] = {0x82, 0x7F, 0x80, 0, 0, 0, 0, 0, 0, 1};
     ASSERT_EQ(cmq_ws_frame_parse(bad, sizeof(bad), &frame), -1);
+}
+
+TEST(ws, reject_rsv_and_fragmented_control) {
+    cmq_ws_frame_t frame = {0};
+    uint8_t rsv[] = {0xC2, 0x00}; /* FIN + RSV1 + BINARY */
+    ASSERT_EQ(cmq_ws_frame_parse(rsv, sizeof(rsv), &frame), -1);
+    uint8_t frag_ping[] = {0x09, 0x00}; /* PING without FIN */
+    ASSERT_EQ(cmq_ws_frame_parse(frag_ping, sizeof(frag_ping), &frame), -1);
 }
 
 TEST_MAIN()
