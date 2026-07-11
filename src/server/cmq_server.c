@@ -595,9 +595,9 @@ static cmq_worker_t *cmq_worker_create(cmq_server_t *srv, int id) {
 static void cmq_worker_destroy(cmq_worker_t *w) {
     if (!w) return;
     if (w->clients) {
-        for (int i = 0; i < w->clients_count; i++) {
-            cmq_client_destroy(w->clients[i]);
-        }
+        /* Teardown (not bare destroy) so inbound routes detach under io_lock. */
+        while (w->clients_count > 0)
+            client_teardown(w->clients[0]);
         free(w->clients);
         w->clients = NULL;
     }
@@ -2450,9 +2450,13 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                     cmq_route_forward_missed(srv, route_rc, route_sent))
                     batch_fail = 1;
             } else {
+                /* Encode OOM — abort without local pass (no partial fan-out). */
                 cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
-                batch_fail = 1;
+                for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
+                free(prep);
+                cmq_send_error(c, "batch delivery failed");
+                return;
             }
         }
 
@@ -3861,14 +3865,29 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
     size_t disc_len = cmq_frame_encode(disc, sizeof(disc), CMQ_OP_DISCONNECT, 0, NULL, 0);
 
     cmq_mutex_lock(&srv->clients_lock);
-    for (int i = 0; i < srv->clients_count; i++) {
-        cmq_client_t *c = srv->clients[i];
-        if (c && c->state == CMQ_CLIENT_CONNECTED) {
-            if (disc_len > 0) cmq_client_send_local(c, disc, disc_len);
-            c->state = CMQ_CLIENT_CLOSING;
+    int nacc = srv->clients_count;
+    cmq_client_t **acc_snap = NULL;
+    if (nacc > 0) {
+        acc_snap = malloc((size_t)nacc * sizeof(cmq_client_t *));
+        if (acc_snap)
+            memcpy(acc_snap, srv->clients, (size_t)nacc * sizeof(cmq_client_t *));
+        for (int i = 0; i < nacc; i++) {
+            cmq_client_t *c = srv->clients[i];
+            if (c && c->state == CMQ_CLIENT_CONNECTED) {
+                if (disc_len > 0) cmq_client_send_local(c, disc, disc_len);
+                c->state = CMQ_CLIENT_CLOSING;
+            }
         }
     }
     cmq_mutex_unlock(&srv->clients_lock);
+    if (acc_snap) {
+        for (int i = 0; i < nacc; i++) {
+            cmq_client_t *c = acc_snap[i];
+            if (c && c->state == CMQ_CLIENT_CLOSING)
+                client_finish_closing(c);
+        }
+        free(acc_snap);
+    }
 
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
@@ -3938,10 +3957,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     }
 
     if (srv->clients) {
-        for (int i = 0; i < srv->clients_count; i++) {
-            cmq_client_destroy(srv->clients[i]);
-        }
+        while (srv->clients_count > 0)
+            client_teardown(srv->clients[0]);
         free(srv->clients);
+        srv->clients = NULL;
     }
     cmq_idmap_destroy(srv->idmap);
     srv->idmap = NULL;

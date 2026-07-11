@@ -1779,6 +1779,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — destroy teardown · drain finish_closing · BATCH OOM abort</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">worker/server destroy</span></td><td>✅</td><td>client_teardown (not bare destroy) so route slots detach.</td></tr>
+<tr><td><span class="component-name">drain acceptor</span></td><td>✅</td><td>client_finish_closing after DISCONNECT so write_buf drains.</td></tr>
+<tr><td><span class="component-name">BATCH encode OOM</span></td><td>✅</td><td>Abort without local pass 2c (no silent partial fan-out).</td></tr>
+</table>
+</div>
+
 
 
 
