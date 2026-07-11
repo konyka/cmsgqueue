@@ -2539,8 +2539,16 @@ static void client_flush_write(cmq_client_t *c) {
         c->write_len = 0;
         c->write_pos = 0;
         /* Keep write_buf/write_cap for reuse on the next send. */
-        if (c->fd >= 0)
-            cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c);
+        if (c->fd >= 0 &&
+            cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c) != 0) {
+            /* Still armed WRITE → level-trigger busy loop; force EOF. */
+            if (route_io_idx >= 0 && c->server && c->server->routes) {
+                cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+                route_io_idx = -1;
+            }
+            (void)shutdown(c->fd, SHUT_RDWR);
+            return;
+        }
         goto out;
     }
 
@@ -2554,7 +2562,14 @@ static void client_flush_write(cmq_client_t *c) {
         if (c->write_pos >= c->write_len) {
             c->write_len = 0;
             c->write_pos = 0;
-            cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c);
+            if (cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c) != 0) {
+                if (route_io_idx >= 0 && c->server && c->server->routes) {
+                    cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+                    route_io_idx = -1;
+                }
+                (void)shutdown(c->fd, SHUT_RDWR);
+                return;
+            }
         }
     } else if (n <= 0 &&
                (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK))) {
@@ -3490,7 +3505,14 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         return CMQ_ERR_NO_MEMORY;
     }
 
-    cmq_ev_add(srv->ev_loop, srv->listen_fd, CMQ_EV_READ, accept_cb, srv);
+    if (cmq_ev_add(srv->ev_loop, srv->listen_fd, CMQ_EV_READ, accept_cb,
+                   srv) != 0) {
+        cmq_ev_loop_destroy(srv->ev_loop);
+        srv->ev_loop = NULL;
+        close(srv->listen_fd);
+        srv->listen_fd = -1;
+        return CMQ_ERR_IO;
+    }
 
     if (srv->config.ping_interval_ms > 0) {
         cmq_ev_timer_add(srv->ev_loop, (uint64_t)srv->config.ping_interval_ms,
@@ -3583,7 +3605,24 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             w->coro_pool = calloc((size_t)w->coro_cap, sizeof(cmq_coro_t *));
         }
         for (int i = 0; i < nthreads; i++) {
-            cmq_thread_create(&srv->workers[i].thread, worker_thread, &srv->workers[i]);
+            if (cmq_thread_create(&srv->workers[i].thread, worker_thread,
+                                  &srv->workers[i]) != 0) {
+                cmq_log_error(srv->log, "Failed to create worker thread %d", i);
+                for (int j = 0; j < i; j++)
+                    cmq_ev_stop(srv->workers[j].ev_loop);
+                for (int j = 0; j < i; j++)
+                    cmq_thread_join(srv->workers[j].thread);
+                for (int j = 0; j < nthreads; j++)
+                    cmq_worker_destroy(&srv->workers[j]);
+                free(srv->workers);
+                srv->workers = NULL;
+                srv->num_workers = 0;
+                cmq_ev_loop_destroy(srv->ev_loop);
+                srv->ev_loop = NULL;
+                close(srv->listen_fd);
+                srv->listen_fd = -1;
+                return CMQ_ERR_IO;
+            }
         }
         cmq_log_info(srv->log, "CMQ server started with %d worker threads", nthreads);
     }
@@ -3681,7 +3720,19 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
             for (int j = 0; j < nids; j++) {
                 if (disc_len > 0)
                     worker_push_msg(w, ids[j], disc, disc_len, 0);
-                worker_push_teardown(w, ids[j]);
+                if (worker_push_teardown(w, ids[j]) != 0) {
+                    /* OOM: force-close fd so the worker notices EOF (same as
+                       keepalive_timer_cb). */
+                    cmq_mutex_lock(&w->clients_lock);
+                    for (int k = 0; k < w->clients_count; k++) {
+                        cmq_client_t *c = w->clients[k];
+                        if (c && c->id == ids[j] && c->fd >= 0) {
+                            shutdown(c->fd, SHUT_RDWR);
+                            break;
+                        }
+                    }
+                    cmq_mutex_unlock(&w->clients_lock);
+                }
             }
             free(ids);
         }

@@ -1714,6 +1714,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — worker thread create · leaf destroy · flush disarm · drain</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">worker pthread</span></td><td>✅</td><td>cmq_thread_create failure rolls back and returns CMQ_ERR_IO.</td></tr>
+<tr><td><span class="component-name">listen ev_add</span></td><td>✅</td><td>Failed accept registration aborts server_run.</td></tr>
+<tr><td><span class="component-name">leaf destroy</span></td><td>✅</td><td>hub_fd closed under hub_io_lock→lock (match disconnect).</td></tr>
+<tr><td><span class="component-name">flush ev_mod</span></td><td>✅</td><td>Disarm WRITE failure → SHUT_RDWR (no level-trigger busy loop).</td></tr>
+<tr><td><span class="component-name">drain teardown</span></td><td>✅</td><td>worker_push_teardown OOM falls back to SHUT_RDWR like keepalive.</td></tr>
+</table>
+</div>
+
 
 
 

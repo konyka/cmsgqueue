@@ -79,7 +79,13 @@ cmq_leaf_node_t *cmq_leaf_create(const char *hub_addr, int hub_port) {
 
 void cmq_leaf_destroy(cmq_leaf_node_t *leaf) {
     if (!leaf) return;
+    cmq_mutex_lock(&leaf->hub_io_lock);
+    cmq_mutex_lock(&leaf->lock);
     if (leaf->hub_fd >= 0) close(leaf->hub_fd);
+    leaf->hub_fd = -1;
+    leaf->connected = 0;
+    cmq_mutex_unlock(&leaf->lock);
+    cmq_mutex_unlock(&leaf->hub_io_lock);
     for (size_t i = 0; i < leaf->leaf_count; i++) {
         if (leaf->leaves[i].fd >= 0) close(leaf->leaves[i].fd);
     }
