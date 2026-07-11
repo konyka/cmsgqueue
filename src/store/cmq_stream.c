@@ -192,8 +192,11 @@ cmq_stream_consumer_t cmq_stream_consumer_state(cmq_stream_t *stream,
             uint64_t base = state.consumer_seq;
             if (first > 0 && base + 1 < first)
                 base = first - 1;
-            if (last > base)
-                state.pending_count = (uint32_t)(last - base);
+            if (last > base) {
+                uint64_t pend = last - base;
+                state.pending_count = pend > UINT32_MAX
+                    ? UINT32_MAX : (uint32_t)pend;
+            }
             break;
         }
     }

@@ -1809,6 +1809,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — wakeup EAGAIN · frame size overflow · filestore fseeko</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">wakeup EAGAIN</span></td><td>✅</td><td>eventfd/pipe full treated as already-pending wake; hard-fail unlinks if still queued (no false success / UAF).</td></tr>
+<tr><td><span class="component-name">MESSAGE frame size</span></td><td>✅</td><td><code>cmq_build_message_frame</code> / request path reject wire-field and <code>SIZE_MAX</code> wrap before malloc.</td></tr>
+<tr><td><span class="component-name">filestore off_t</span></td><td>✅</td><td><code>fseeko</code>/<code>ftello</code> + append overflow check (no 32-bit <code>long</code> truncate).</td></tr>
+<tr><td><span class="component-name">stream pending</span></td><td>✅</td><td><code>pending_count</code> saturates at <code>UINT32_MAX</code>.</td></tr>
+</table>
+</div>
+
 
 
 

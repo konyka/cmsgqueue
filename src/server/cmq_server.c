@@ -34,6 +34,8 @@ static int wakeup_fd_signal(int fd) {
         ssize_t n = write(fd, &val, sizeof(val));
         if (n == (ssize_t)sizeof(val)) return 0;
         if (n < 0 && errno == EINTR) continue;
+        /* Counter already saturated → fd is readable; worker will wake. */
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
         return -1;
     }
 #else
@@ -42,6 +44,8 @@ static int wakeup_fd_signal(int fd) {
         ssize_t n = write(fd + 1, &c, 1);
         if (n == 1) return 0;
         if (n < 0 && errno == EINTR) continue;
+        /* Pipe full → pending bytes already wake the reader. */
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
         return -1;
     }
 #endif
@@ -431,32 +435,34 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
     if (wakeup_fd_signal(w->wakeup_fd) == 0)
         return 0;
 
-    /* Wakeup failed — undo enqueue if still at tail so callers can retry. */
+    /* Wakeup hard-failed — unlink if still queued so callers can retry.
+       If already drained by the worker, treat as success (delivery in flight). */
     cmq_mutex_lock(&w->msg_lock);
-    if (w->msg_tail == msg) {
-        if (w->msg_head == msg) {
-            w->msg_head = NULL;
-            w->msg_tail = NULL;
-        } else {
-            cmq_worker_msg_t *p = w->msg_head;
-            while (p && p->next != msg) p = p->next;
-            if (p) {
-                p->next = NULL;
-                w->msg_tail = p;
-            }
+    int found = 0;
+    if (w->msg_head == msg) {
+        w->msg_head = msg->next;
+        if (w->msg_tail == msg) w->msg_tail = NULL;
+        found = 1;
+    } else {
+        cmq_worker_msg_t *p = w->msg_head;
+        while (p && p->next != msg) p = p->next;
+        if (p) {
+            p->next = msg->next;
+            if (w->msg_tail == msg) w->msg_tail = p;
+            found = 1;
         }
-        if (w->msg_pending > 0) w->msg_pending--;
-        cmq_mutex_unlock(&w->msg_lock);
-        free(msg->buf);
-        free(msg);
-        if (w->server) {
-            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                      CMQ_ATOMIC_RELAXED);
-        }
-        return -1;
     }
+    if (found && w->msg_pending > 0) w->msg_pending--;
     cmq_mutex_unlock(&w->msg_lock);
-    return 0;
+    if (!found)
+        return 0;
+    free(msg->buf);
+    free(msg);
+    if (w->server) {
+        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                  CMQ_ATOMIC_RELAXED);
+    }
+    return -1;
 }
 
 /* Schedule client teardown on the owning worker thread (never cross-thread free).
@@ -512,25 +518,26 @@ static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
         return 0;
 
     cmq_mutex_lock(&w->msg_lock);
-    if (w->msg_tail == msg) {
-        if (w->msg_head == msg) {
-            w->msg_head = NULL;
-            w->msg_tail = NULL;
-        } else {
-            cmq_worker_msg_t *p = w->msg_head;
-            while (p && p->next != msg) p = p->next;
-            if (p) {
-                p->next = NULL;
-                w->msg_tail = p;
-            }
+    int found = 0;
+    if (w->msg_head == msg) {
+        w->msg_head = msg->next;
+        if (w->msg_tail == msg) w->msg_tail = NULL;
+        found = 1;
+    } else {
+        cmq_worker_msg_t *p = w->msg_head;
+        while (p && p->next != msg) p = p->next;
+        if (p) {
+            p->next = msg->next;
+            if (w->msg_tail == msg) w->msg_tail = p;
+            found = 1;
         }
-        if (w->msg_pending > 0) w->msg_pending--;
-        cmq_mutex_unlock(&w->msg_lock);
-        free(msg);
-        return -1;
     }
+    if (found && w->msg_pending > 0) w->msg_pending--;
     cmq_mutex_unlock(&w->msg_lock);
-    return 0;
+    if (!found)
+        return 0;
+    free(msg);
+    return -1;
 }
 
 static void worker_coro_tick(cmq_worker_t *w);
@@ -1013,9 +1020,16 @@ static uint8_t *cmq_build_message_frame(uint32_t sub_id,
                                          const uint8_t *payload, size_t payload_len,
                                          const uint8_t *headers, size_t headers_len,
                                          size_t *out_len) {
-    if (headers_len > 0 && !headers) return NULL;
+    if (!subject || (headers_len > 0 && !headers)) return NULL;
     size_t subject_len = strlen(subject);
+    if (subject_len == 0 || subject_len >= CMQ_MAX_SUBJECT ||
+        subject_len > 0xFFFFu || headers_len > 0xFFFFu)
+        return NULL;
+    /* Saturating size check — reject before wraparound malloc. */
+    if (payload_len > SIZE_MAX - (4u + 2u + subject_len + 2u + headers_len + 4u))
+        return NULL;
     size_t body_len = 4 + 2 + subject_len + 2 + headers_len + 4 + payload_len;
+    if (body_len > SIZE_MAX - sizeof(cmq_frame_hdr_t)) return NULL;
     size_t buf_size = sizeof(cmq_frame_hdr_t) + body_len;
     uint8_t *buf = malloc(buf_size);
     if (!buf) return NULL;
@@ -1078,9 +1092,16 @@ static int cmq_send_request_message(cmq_client_t *c, uint32_t sub_id,
                                        const char *subject,
                                        const char *reply_to,
                                        const uint8_t *payload, size_t payload_len) {
+    if (!subject) return -1;
     size_t subject_len = strlen(subject);
     size_t reply_len = reply_to ? strlen(reply_to) : 0;
+    if (subject_len == 0 || subject_len >= CMQ_MAX_SUBJECT ||
+        subject_len > 0xFFFFu || reply_len > 0xFFFFu)
+        return -1;
+    if (payload_len > SIZE_MAX - (4u + 2u + subject_len + 2u + reply_len + 4u))
+        return -1;
     size_t body_len = 4 + 2 + subject_len + 2 + reply_len + 4 + payload_len;
+    if (body_len > SIZE_MAX - sizeof(cmq_frame_hdr_t)) return -1;
     size_t buf_size = sizeof(cmq_frame_hdr_t) + body_len;
     uint8_t *buf = malloc(buf_size);
     if (!buf) return -1;

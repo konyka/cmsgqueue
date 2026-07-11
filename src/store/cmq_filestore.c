@@ -1,4 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
 #include "cmq_filestore.h"
 #include "cmq_thread.h"
 
@@ -10,6 +13,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdint.h>
 
 #define CMQ_FS_MAGIC   0xCF510u
 #define CMQ_FS_VERSION 1
@@ -67,6 +71,24 @@ static uint64_t get_le64(const uint8_t *p) {
     return (uint64_t)get_le32(p) | ((uint64_t)get_le32(p + 4) << 32);
 }
 
+/* Large-file safe seek/tell (avoids 32-bit long truncation via fseek/ftell). */
+static int fs_seek(FILE *fp, uint64_t off) {
+    off_t o = (off_t)off;
+    if (o < 0 || (uint64_t)o != off) return -1;
+    return fseeko(fp, o, SEEK_SET);
+}
+
+static int fs_seek_end(FILE *fp) {
+    return fseeko(fp, 0, SEEK_END);
+}
+
+static int fs_tell(FILE *fp, uint64_t *out) {
+    off_t o = ftello(fp);
+    if (o < 0) return -1;
+    *out = (uint64_t)o;
+    return 0;
+}
+
 static void build_paths(cmq_filestore_t *fs) {
     snprintf(fs->data_path, sizeof(fs->data_path), "%s/%s.data", fs->dir, fs->prefix);
     snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx", fs->dir, fs->prefix);
@@ -77,13 +99,13 @@ static void build_paths(cmq_filestore_t *fs) {
 static void truncate_orphan_data(cmq_filestore_t *fs, uint64_t n_idx) {
     off_t expect = 0;
     if (n_idx > 0) {
-        if (fseek(fs->idx_fp, (long)((n_idx - 1) * 8u), SEEK_SET) != 0)
+        if (fs_seek(fs->idx_fp, (n_idx - 1) * 8u) != 0)
             return;
         uint8_t idxb[8];
         if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1)
             return;
         uint64_t offset = get_le64(idxb);
-        if (fseek(fs->data_fp, (long)offset, SEEK_SET) != 0)
+        if (fs_seek(fs->data_fp, offset) != 0)
             return;
         uint8_t hdr[CMQ_FS_HDR_SIZE];
         if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1)
@@ -92,23 +114,26 @@ static void truncate_orphan_data(cmq_filestore_t *fs, uint64_t n_idx) {
             return;
         uint32_t len = get_le32(hdr + 14);
         expect = (off_t)(offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)len);
+        if (expect < 0 || (uint64_t)expect !=
+            offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)len)
+            return;
     }
-    if (fseek(fs->data_fp, 0, SEEK_END) != 0)
+    if (fs_seek_end(fs->data_fp) != 0)
         return;
-    long sz = ftell(fs->data_fp);
-    if (sz < 0 || (off_t)sz <= expect)
+    uint64_t sz;
+    if (fs_tell(fs->data_fp, &sz) != 0 || (off_t)sz <= expect)
         return;
     if (ftruncate(fileno(fs->data_fp), expect) == 0)
-        fseek(fs->data_fp, 0, SEEK_END);
+        fs_seek_end(fs->data_fp);
 }
 
 /* Validate idx→data records from the start; truncate at first bad/partial
    entry (crash after idx append with incomplete data, or torn idx write). */
 static uint64_t repair_idx(cmq_filestore_t *fs) {
-    if (fseek(fs->idx_fp, 0, SEEK_END) != 0)
+    if (fs_seek_end(fs->idx_fp) != 0)
         return 0;
-    long idx_sz = ftell(fs->idx_fp);
-    if (idx_sz < 0)
+    uint64_t idx_sz;
+    if (fs_tell(fs->idx_fp, &idx_sz) != 0)
         return 0;
     /* Drop torn trailing bytes that are not a full offset entry. */
     if ((idx_sz % 8) != 0) {
@@ -116,24 +141,24 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
         if (ftruncate(fileno(fs->idx_fp), (off_t)idx_sz) != 0)
             return 0;
     }
-    if (fseek(fs->data_fp, 0, SEEK_END) != 0)
+    if (fs_seek_end(fs->data_fp) != 0)
         return 0;
-    long data_sz = ftell(fs->data_fp);
-    if (data_sz < 0)
+    uint64_t data_sz;
+    if (fs_tell(fs->data_fp, &data_sz) != 0)
         return 0;
 
     uint64_t valid = 0;
-    uint64_t n = (uint64_t)idx_sz / 8u;
+    uint64_t n = idx_sz / 8u;
     for (uint64_t i = 0; i < n; i++) {
-        if (fseek(fs->idx_fp, (long)(i * 8u), SEEK_SET) != 0)
+        if (fs_seek(fs->idx_fp, i * 8u) != 0)
             break;
         uint8_t idxb[8];
         if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1)
             break;
         uint64_t offset = get_le64(idxb);
-        if (offset + (uint64_t)CMQ_FS_HDR_SIZE > (uint64_t)data_sz)
+        if (offset + (uint64_t)CMQ_FS_HDR_SIZE > data_sz)
             break;
-        if (fseek(fs->data_fp, (long)offset, SEEK_SET) != 0)
+        if (fs_seek(fs->data_fp, offset) != 0)
             break;
         uint8_t hdr[CMQ_FS_HDR_SIZE];
         if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1)
@@ -145,8 +170,7 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
         uint32_t hlen = get_le32(hdr + 14);
         if (hseq != i + 1 || hlen == 0 || hlen > (16u * 1024 * 1024))
             break;
-        if (offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen >
-            (uint64_t)data_sz)
+        if (offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen > data_sz)
             break;
         uint8_t *buf = malloc(hlen);
         if (!buf)
@@ -162,9 +186,9 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
             break;
         valid = i + 1;
     }
-    if (valid * 8u != (uint64_t)idx_sz) {
+    if (valid * 8u != idx_sz) {
         if (ftruncate(fileno(fs->idx_fp), (off_t)(valid * 8u)) == 0)
-            fseek(fs->idx_fp, 0, SEEK_END);
+            fs_seek_end(fs->idx_fp);
     }
     return valid;
 }
@@ -207,17 +231,19 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     cmq_mutex_lock(&fs->lock);
 
     /* Always append at EOF — read() leaves the stream mid-file. */
-    if (fseek(fs->data_fp, 0, SEEK_END) != 0 ||
-        fseek(fs->idx_fp, 0, SEEK_END) != 0) {
+    if (fs_seek_end(fs->data_fp) != 0 || fs_seek_end(fs->idx_fp) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
-    long off_l = ftell(fs->data_fp);
-    if (off_l < 0) {
+    uint64_t offset;
+    if (fs_tell(fs->data_fp, &offset) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
-    uint64_t offset = (uint64_t)off_l;
+    if (offset > UINT64_MAX - (uint64_t)CMQ_FS_HDR_SIZE - (uint64_t)len) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
 
     uint8_t hdr[CMQ_FS_HDR_SIZE];
     put_le32(hdr + 0, CMQ_FS_MAGIC);
@@ -230,32 +256,37 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
         fwrite(data, 1, len, fs->data_fp) != len) {
         fflush(fs->data_fp);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
-            fseek(fs->data_fp, (long)offset, SEEK_SET);
+            fs_seek(fs->data_fp, offset);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     if (fflush(fs->data_fp) != 0) {
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
-            fseek(fs->data_fp, (long)offset, SEEK_SET);
+            fs_seek(fs->data_fp, offset);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     uint8_t idxb[8];
     put_le64(idxb, offset);
-    long idx_off = ftell(fs->idx_fp);
+    uint64_t idx_off;
+    if (fs_tell(fs->idx_fp, &idx_off) != 0) {
+        if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
+            fs_seek(fs->data_fp, offset);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
     if (fwrite(idxb, sizeof(idxb), 1, fs->idx_fp) != 1) {
         fflush(fs->idx_fp);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
-            fseek(fs->data_fp, (long)offset, SEEK_SET);
+            fs_seek(fs->data_fp, offset);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     if (fflush(fs->idx_fp) != 0) {
-        if (idx_off >= 0)
-            ftruncate(fileno(fs->idx_fp), (off_t)idx_off);
+        ftruncate(fileno(fs->idx_fp), (off_t)idx_off);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
-            fseek(fs->data_fp, (long)offset, SEEK_SET);
+            fs_seek(fs->data_fp, offset);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -278,9 +309,12 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
     }
 
     uint64_t target_idx = seq - 1;
-    long idx_pos = (long)(target_idx * 8u);
+    if (target_idx > UINT64_MAX / 8u) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
 
-    if (fseek(fs->idx_fp, idx_pos, SEEK_SET) != 0) {
+    if (fs_seek(fs->idx_fp, target_idx * 8u) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -292,7 +326,7 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
     }
     uint64_t data_offset = get_le64(idxb);
 
-    if (fseek(fs->data_fp, (long)data_offset, SEEK_SET) != 0) {
+    if (fs_seek(fs->data_fp, data_offset) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
