@@ -58,7 +58,8 @@ static cmq_slab_page_t *slab_page_create(size_t obj_size, size_t capacity) {
 }
 
 cmq_slab_t *cmq_slab_create(size_t obj_size, size_t capacity) {
-    if (obj_size == 0) return NULL;
+    /* Index freelist stores uint32_t inside free objects. */
+    if (obj_size < sizeof(uint32_t)) return NULL;
     cmq_slab_t *slab = (cmq_slab_t *)malloc(sizeof(*slab));
     if (!slab) return NULL;
     slab->obj_size = obj_size;

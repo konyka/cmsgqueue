@@ -1831,6 +1831,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — client_id skip tomb · WS host port · slab/mpool · ev wait</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_id</span></td><td>✅</td><td>Skip 0 / UINT32_MAX tomb ids; idmap refuse silent remapping of live ids.</td></tr>
+<tr><td><span class="component-name">WS Origin/Host</span></td><td>✅</td><td>Strip <code>:port</code> (and IPv6 <code>]:port</code>) before CSWSH compare.</td></tr>
+<tr><td><span class="component-name">slab min size</span></td><td>✅</td><td>Reject <code>obj_size &lt; sizeof(uint32_t)</code> (freelist link).</td></tr>
+<tr><td><span class="component-name">mpool zero</span></td><td>✅</td><td>Zero-size alloc advances 1 byte (no aliased pointers).</td></tr>
+<tr><td><span class="component-name">ev wait_ms</span></td><td>✅</td><td>Clamp timer wait to <code>INT_MAX</code> (no negative epoll/kevent wait).</td></tr>
+</table>
+</div>
+
 
 
 

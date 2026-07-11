@@ -165,8 +165,9 @@ static int cmq_idmap_put(cmq_idmap_t *m, uint32_t id, cmq_client_t *c) {
     for (;;) {
         uint32_t k = m->keys[i];
         if (k == id) {
-            m->vals[i] = c;
-            return 0;
+            /* Never silently remap an in-use id to another client. */
+            if (m->vals[i] == c) return 0;
+            return -1;
         }
         if (k == CMQ_IDMAP_TOMB) {
             if (tomb == SIZE_MAX) tomb = i;
@@ -2791,6 +2792,20 @@ static void http_host_from_value(const char *val, char *out, size_t out_sz) {
         out[i++] = ch;
     }
     out[i] = '\0';
+    /* Normalize host:port — Origin often omits default/explicit port vs Host. */
+    if (out[0] == '[') {
+        char *rb = strchr(out, ']');
+        if (rb && rb[1] == ':') rb[1] = '\0';
+    } else {
+        char *colon = strrchr(out, ':');
+        if (colon && colon[1]) {
+            int digits = 1;
+            for (const char *p = colon + 1; *p; p++) {
+                if (*p < '0' || *p > '9') { digits = 0; break; }
+            }
+            if (digits) *colon = '\0';
+        }
+    }
 }
 
 static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
@@ -3372,8 +3387,21 @@ static void accept_cb(int fd, int events, void *data) {
         cmq_atomic_fetch_add_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
     }
 
-    uint32_t cid = cmq_atomic_fetch_add_u32(&srv->next_client_id, 1,
-                                             CMQ_ATOMIC_SEQ_CST);
+    uint32_t cid = 0;
+    for (int id_try = 0; id_try < 16; id_try++) {
+        uint32_t cand = cmq_atomic_fetch_add_u32(&srv->next_client_id, 1,
+                                                  CMQ_ATOMIC_SEQ_CST);
+        /* 0 = empty slot; UINT32_MAX = tombstone — never assign as client id. */
+        if (cand != 0 && cand != CMQ_IDMAP_TOMB) {
+            cid = cand;
+            break;
+        }
+    }
+    if (cid == 0) {
+        close(client_fd);
+        cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+        return;
+    }
 
     if (srv->workers && srv->num_workers > 0) {
         uint32_t wi = cmq_atomic_fetch_add_u32(&srv->next_worker, 1,

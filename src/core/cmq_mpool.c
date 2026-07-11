@@ -67,13 +67,8 @@ void cmq_mpool_destroy(cmq_mpool_t *pool) {
 
 void *cmq_mpool_alloc(cmq_mpool_t *pool, size_t size) {
     if (!pool) return NULL;
-    if (size == 0) {
-        /* Return a non-null pointer to satisfy tests, no actual storage needed */
-        if (pool->tail && pool->tail->mem) {
-            return pool->tail->mem + pool->tail->offset;
-        }
-        return NULL;
-    }
+    /* Zero-size: still advance so consecutive calls do not alias. */
+    if (size == 0) size = 1;
 
     /* ensure 16-byte alignment for the allocation */
     cmq_mpool_block_t *b = pool->tail;

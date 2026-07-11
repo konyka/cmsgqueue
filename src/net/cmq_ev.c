@@ -7,6 +7,7 @@
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 
 #if CMQ_OS_LINUX
 #include <sys/epoll.h>
@@ -230,6 +231,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             if (!t->active) continue;
             int64_t diff = (int64_t)(t->expire_ms) - (int64_t)now;
             if (diff <= 0) diff = 0;
+            if (diff > INT_MAX) diff = INT_MAX;
             if (diff < wait_ms || wait_ms < 0) wait_ms = (int)diff;
         }
 
@@ -366,6 +368,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             if (!t->active) continue;
             int64_t diff = (int64_t)(t->expire_ms) - (int64_t)now;
             if (diff <= 0) diff = 0;
+            if (diff > INT_MAX) diff = INT_MAX;
             if (diff < wait_ms || wait_ms < 0) wait_ms = (int)diff;
         }
 
