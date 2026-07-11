@@ -1603,6 +1603,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route-miss all-dead · broadcast fd&gt;=0 · leaf hub_io_lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">forward_missed</span></td><td>✅</td><td>named&gt;0 && live==0 → miss (single PUBLISH matches BATCH).</td></tr>
+<tr><td><span class="component-name">route broadcast fd</span></td><td>✅</td><td>Skip connected placeholders with fd&lt;0.</td></tr>
+<tr><td><span class="component-name">leaf hub_io_lock</span></td><td>✅</td><td>Hub write vs disconnect close serialized.</td></tr>
+<tr><td><span class="component-name">account perms once</span></td><td>✅</td><td>pthread_once for g_perms_lock init.</td></tr>
+</table>
+</div>
+
 
 
 

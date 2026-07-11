@@ -1430,12 +1430,16 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
     return 0;
 }
 
-/* True when live cluster peers exist but none accepted this forward. */
+/* True when configured cluster peers should have received this forward but
+   none did — includes "routes configured but all dead" (align with BATCH). */
 static int cmq_route_forward_missed(cmq_server_t *srv, int route_rc,
                                     size_t route_sent) {
     if (route_rc != 0) return 1;
     if (!srv || !srv->routes) return 0;
-    if (cmq_route_live_count(srv->routes) == 0) return 0;
+    size_t named = cmq_route_pool_count(srv->routes);
+    size_t live = cmq_route_live_count(srv->routes);
+    if (named > 0 && live == 0) return 1;
+    if (live == 0) return 0;
     return route_sent == 0;
 }
 

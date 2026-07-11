@@ -490,7 +490,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
         cmq_route_conn_t *c = &pool->conns[i];
-        if (!c->connected) continue;
+        if (!c->connected || c->fd < 0) continue;
         if (exclude_id && strcmp(c->remote_id, exclude_id) == 0) continue;
         fds[n] = c->fd;
         idxs[n] = i;
@@ -507,6 +507,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
         int fd = -1;
         if (idxs[j] < pool->conn_count &&
             pool->conns[idxs[j]].connected &&
+            pool->conns[idxs[j]].fd >= 0 &&
             pool->conns[idxs[j]].fd == fds[j]) {
             fd = fds[j];
         }

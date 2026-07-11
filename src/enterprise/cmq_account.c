@@ -160,13 +160,14 @@ typedef struct {
 static cmq_account_perms_t g_perms[CMQ_ACCOUNT_MAX];
 static size_t g_perms_count = 0;
 static cmq_mutex_t g_perms_lock;
-static int g_perms_init = 0;
+
+static void perms_lock_init(void) {
+    cmq_mutex_init(&g_perms_lock);
+}
 
 static void ensure_perms_init(void) {
-    if (!g_perms_init) {
-        cmq_mutex_init(&g_perms_lock);
-        g_perms_init = 1;
-    }
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, perms_lock_init);
 }
 
 static void clear_account_perms(const char *name) {
