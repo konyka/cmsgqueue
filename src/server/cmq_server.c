@@ -62,6 +62,147 @@ static int set_nonblocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+/* Open-addressing client_id → client* map (power-of-2, linear probe).
+   keys: 0 = empty, UINT32_MAX = tombstone. */
+typedef struct cmq_idmap cmq_idmap_t;
+struct cmq_idmap {
+    uint32_t *keys;
+    cmq_client_t **vals;
+    size_t cap;
+    size_t live;
+    size_t tombs;
+};
+
+#define CMQ_IDMAP_TOMB UINT32_MAX
+
+static uint32_t cmq_idmap_hash(uint32_t id) {
+    id ^= id >> 16;
+    id *= 0x7feb352du;
+    id ^= id >> 15;
+    id *= 0x846ca68bu;
+    id ^= id >> 16;
+    return id;
+}
+
+static cmq_idmap_t *cmq_idmap_create(size_t cap) {
+    if (cap < 16) cap = 16;
+    size_t c = 16;
+    while (c < cap) c <<= 1;
+    cmq_idmap_t *m = calloc(1, sizeof(*m));
+    if (!m) return NULL;
+    m->keys = calloc(c, sizeof(uint32_t));
+    m->vals = calloc(c, sizeof(cmq_client_t *));
+    if (!m->keys || !m->vals) {
+        free(m->keys);
+        free(m->vals);
+        free(m);
+        return NULL;
+    }
+    m->cap = c;
+    return m;
+}
+
+static void cmq_idmap_destroy(cmq_idmap_t *m) {
+    if (!m) return;
+    free(m->keys);
+    free(m->vals);
+    free(m);
+}
+
+static int cmq_idmap_rehash(cmq_idmap_t *m, size_t ncap) {
+    uint32_t *ok = m->keys;
+    cmq_client_t **ov = m->vals;
+    size_t ocap = m->cap;
+    m->keys = calloc(ncap, sizeof(uint32_t));
+    m->vals = calloc(ncap, sizeof(cmq_client_t *));
+    if (!m->keys || !m->vals) {
+        free(m->keys);
+        free(m->vals);
+        m->keys = ok;
+        m->vals = ov;
+        return -1;
+    }
+    m->cap = ncap;
+    m->live = 0;
+    m->tombs = 0;
+    for (size_t i = 0; i < ocap; i++) {
+        uint32_t k = ok[i];
+        if (k == 0 || k == CMQ_IDMAP_TOMB) continue;
+        size_t j = cmq_idmap_hash(k) & (ncap - 1);
+        while (m->keys[j] != 0)
+            j = (j + 1) & (ncap - 1);
+        m->keys[j] = k;
+        m->vals[j] = ov[i];
+        m->live++;
+    }
+    free(ok);
+    free(ov);
+    return 0;
+}
+
+static int cmq_idmap_put(cmq_idmap_t *m, uint32_t id, cmq_client_t *c) {
+    if (!m || id == 0 || id == CMQ_IDMAP_TOMB || !c) return -1;
+    if ((m->live + m->tombs + 1) * 2 >= m->cap) {
+        if (cmq_idmap_rehash(m, m->cap * 2) != 0) return -1;
+    }
+    size_t mask = m->cap - 1;
+    size_t i = cmq_idmap_hash(id) & mask;
+    size_t tomb = SIZE_MAX;
+    for (;;) {
+        uint32_t k = m->keys[i];
+        if (k == id) {
+            m->vals[i] = c;
+            return 0;
+        }
+        if (k == CMQ_IDMAP_TOMB) {
+            if (tomb == SIZE_MAX) tomb = i;
+        } else if (k == 0) {
+            size_t slot = (tomb != SIZE_MAX) ? tomb : i;
+            if (m->keys[slot] == CMQ_IDMAP_TOMB) m->tombs--;
+            m->keys[slot] = id;
+            m->vals[slot] = c;
+            m->live++;
+            return 0;
+        }
+        i = (i + 1) & mask;
+    }
+}
+
+static cmq_client_t *cmq_idmap_get(const cmq_idmap_t *m, uint32_t id) {
+    if (!m || !m->cap || id == 0 || id == CMQ_IDMAP_TOMB) return NULL;
+    size_t mask = m->cap - 1;
+    size_t i = cmq_idmap_hash(id) & mask;
+    size_t start = i;
+    do {
+        uint32_t k = m->keys[i];
+        if (k == 0) return NULL;
+        if (k == id) return m->vals[i];
+        i = (i + 1) & mask;
+    } while (i != start);
+    return NULL;
+}
+
+static void cmq_idmap_del(cmq_idmap_t *m, uint32_t id) {
+    if (!m || !m->cap || id == 0 || id == CMQ_IDMAP_TOMB) return;
+    size_t mask = m->cap - 1;
+    size_t i = cmq_idmap_hash(id) & mask;
+    size_t start = i;
+    do {
+        uint32_t k = m->keys[i];
+        if (k == 0) return;
+        if (k == id) {
+            m->keys[i] = CMQ_IDMAP_TOMB;
+            m->vals[i] = NULL;
+            m->live--;
+            m->tombs++;
+            if (m->tombs > m->cap / 4 && m->live * 4 < m->cap && m->cap > 16)
+                (void)cmq_idmap_rehash(m, m->cap / 2);
+            return;
+        }
+        i = (i + 1) & mask;
+    } while (i != start);
+}
+
 static void client_read_cb(int fd, int events, void *data);
 static void cmq_client_destroy(cmq_client_t *c);
 static void client_teardown(cmq_client_t *c);
@@ -142,13 +283,7 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
         cmq_worker_msg_t *next = msg->next;
         if (msg->kind == CMQ_WORKER_MSG_TEARDOWN) {
             cmq_mutex_lock(&w->clients_lock);
-            cmq_client_t *target = NULL;
-            for (int i = 0; i < w->clients_count; i++) {
-                if (w->clients[i] && w->clients[i]->id == msg->target_id) {
-                    target = w->clients[i];
-                    break;
-                }
-            }
+            cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
             cmq_mutex_unlock(&w->clients_lock);
             if (target) {
                 /* Flush pending DISCONNECT/ERROR before closing the fd. */
@@ -163,13 +298,7 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
         }
 
         cmq_mutex_lock(&w->clients_lock);
-        cmq_client_t *target = NULL;
-        for (int i = 0; i < w->clients_count; i++) {
-            if (w->clients[i] && w->clients[i]->id == msg->target_id) {
-                target = w->clients[i];
-                break;
-            }
-        }
+        cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
         /* Owning worker thread: wrap WS here so coro/drain can push raw CMQ. */
         if (target && target->state != CMQ_CLIENT_CLOSED &&
             target->state != CMQ_CLIENT_CLOSING) {
@@ -310,6 +439,15 @@ static cmq_worker_t *cmq_worker_create(cmq_server_t *srv, int id) {
     w->clients_cap = 64;
     w->clients_count = 0;
     w->clients = calloc((size_t)w->clients_cap, sizeof(cmq_client_t *));
+    w->idmap = cmq_idmap_create(64);
+    if (!w->clients || !w->idmap) {
+        free(w->clients);
+        cmq_idmap_destroy(w->idmap);
+        wakeup_fd_close(w->wakeup_fd);
+        cmq_ev_loop_destroy(w->ev_loop);
+        free(w);
+        return NULL;
+    }
     cmq_mutex_init(&w->clients_lock);
     cmq_mutex_init(&w->msg_lock);
     w->msg_head = NULL;
@@ -330,6 +468,8 @@ static void cmq_worker_destroy(cmq_worker_t *w) {
         free(w->clients);
         w->clients = NULL;
     }
+    cmq_idmap_destroy(w->idmap);
+    w->idmap = NULL;
     cmq_worker_msg_t *msg = w->msg_head;
     while (msg) {
         cmq_worker_msg_t *next = msg->next;
@@ -478,6 +618,7 @@ static void client_teardown(cmq_client_t *c) {
     if (c->worker_id >= 0 && srv->workers) {
         cmq_worker_t *w = &srv->workers[c->worker_id];
         cmq_mutex_lock(&w->clients_lock);
+        cmq_idmap_del(w->idmap, c->id);
         for (int i = 0; i < w->clients_count; i++) {
             if (w->clients[i] == c) {
                 w->clients[i] = w->clients[w->clients_count - 1];
@@ -488,6 +629,7 @@ static void client_teardown(cmq_client_t *c) {
         cmq_mutex_unlock(&w->clients_lock);
     } else {
         cmq_mutex_lock(&srv->clients_lock);
+        cmq_idmap_del(srv->idmap, c->id);
         for (int i = 0; i < srv->clients_count; i++) {
             if (srv->clients[i] == c) {
                 srv->clients[i] = srv->clients[srv->clients_count - 1];
@@ -866,6 +1008,33 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
     return tgts;
 }
 
+/* Lookup by id under the owning list lock and send_local. Returns 1 on send. */
+static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_id,
+                              uint32_t require_sub_id,
+                              const uint8_t *frame, size_t flen) {
+    if (worker_id >= 0 && srv->workers && worker_id < srv->num_workers) {
+        cmq_worker_t *w = &srv->workers[worker_id];
+        cmq_mutex_lock(&w->clients_lock);
+        cmq_client_t *c = cmq_idmap_get(w->idmap, client_id);
+        int ok = 0;
+        if (c && c->state == CMQ_CLIENT_CONNECTED &&
+            (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
+            if (cmq_client_send_local(c, frame, flen) == 0) ok = 1;
+        }
+        cmq_mutex_unlock(&w->clients_lock);
+        return ok;
+    }
+    cmq_mutex_lock(&srv->clients_lock);
+    cmq_client_t *c = cmq_idmap_get(srv->idmap, client_id);
+    int ok = 0;
+    if (c && c->state == CMQ_CLIENT_CONNECTED &&
+        (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
+        if (cmq_client_send_local(c, frame, flen) == 0) ok = 1;
+    }
+    cmq_mutex_unlock(&srv->clients_lock);
+    return ok;
+}
+
 /* Sync fan-out by stable client_id — no sublist lock held (teardown-safe).
    Returns 0 if at least one delivery was queued/sent, -1 on total failure. */
 static int deliver_targets_sync(cmq_server_t *srv,
@@ -894,33 +1063,12 @@ static int deliver_targets_sync(cmq_server_t *srv,
                                  frame, flen, t->sub_id) == 0) {
                 delivered = 1;
             } else if (cmq_current_worker_id == t->worker_id) {
-                cmq_worker_t *w = &srv->workers[t->worker_id];
-                cmq_mutex_lock(&w->clients_lock);
-                for (int ci = 0; ci < w->clients_count; ci++) {
-                    cmq_client_t *c = w->clients[ci];
-                    if (c && c->id == t->client_id &&
-                        c->state == CMQ_CLIENT_CONNECTED &&
-                        client_has_sub(c, t->sub_id)) {
-                        if (cmq_client_send_local(c, frame, flen) == 0)
-                            delivered = 1;
-                        break;
-                    }
-                }
-                cmq_mutex_unlock(&w->clients_lock);
+                delivered = client_send_by_id(srv, t->worker_id, t->client_id,
+                                               t->sub_id, frame, flen);
             }
         } else {
-            cmq_mutex_lock(&srv->clients_lock);
-            for (int ci = 0; ci < srv->clients_count; ci++) {
-                cmq_client_t *c = srv->clients[ci];
-                if (c && c->id == t->client_id &&
-                    c->state == CMQ_CLIENT_CONNECTED &&
-                    client_has_sub(c, t->sub_id)) {
-                    if (cmq_client_send_local(c, frame, flen) == 0)
-                        delivered = 1;
-                    break;
-                }
-            }
-            cmq_mutex_unlock(&srv->clients_lock);
+            delivered = client_send_by_id(srv, -1, t->client_id, t->sub_id,
+                                           frame, flen);
         }
         if (delivered) {
             any = 1;
@@ -955,15 +1103,11 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             t->worker_id < srv->num_workers) {
             cmq_worker_t *w = &srv->workers[t->worker_id];
             cmq_mutex_lock(&w->clients_lock);
-            for (int ci = 0; ci < w->clients_count; ci++) {
-                cmq_client_t *c = w->clients[ci];
-                if (c && c->id == t->client_id &&
-                    c->state == CMQ_CLIENT_CONNECTED &&
-                    client_has_sub(c, t->sub_id)) {
-                    target = c;
-                    break;
-                }
-            }
+            target = cmq_idmap_get(w->idmap, t->client_id);
+            if (target &&
+                (target->state != CMQ_CLIENT_CONNECTED ||
+                 !client_has_sub(target, t->sub_id)))
+                target = NULL;
             if (target &&
                 cmq_send_request_message(target, t->sub_id, subject,
                                           reply_to, payload, payload_len) == 0) {
@@ -974,15 +1118,11 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             cmq_mutex_unlock(&w->clients_lock);
         } else {
             cmq_mutex_lock(&srv->clients_lock);
-            for (int ci = 0; ci < srv->clients_count; ci++) {
-                cmq_client_t *c = srv->clients[ci];
-                if (c && c->id == t->client_id &&
-                    c->state == CMQ_CLIENT_CONNECTED &&
-                    client_has_sub(c, t->sub_id)) {
-                    target = c;
-                    break;
-                }
-            }
+            target = cmq_idmap_get(srv->idmap, t->client_id);
+            if (target &&
+                (target->state != CMQ_CLIENT_CONNECTED ||
+                 !client_has_sub(target, t->sub_id)))
+                target = NULL;
             if (target &&
                 cmq_send_request_message(target, t->sub_id, subject,
                                           reply_to, payload, payload_len) == 0) {
@@ -1010,6 +1150,9 @@ typedef struct {
     size_t frame_len;
     size_t idx;
     cmq_coro_t *coro;
+    uint32_t publisher_id;          /* 0 = no publisher ERROR notify */
+    int publisher_worker_id;
+    int delivered_any;
 } cmq_deliver_ctx_t;
 
 static void deliver_coro_func(void *arg) {
@@ -1040,38 +1183,17 @@ static void deliver_coro_func(void *arg) {
                                  ctx->frame, ctx->frame_len, t->sub_id) == 0) {
                 delivered = 1;
             } else if (cmq_current_worker_id == t->worker_id) {
-                /* OOM fallback only on the owning worker thread. */
-                cmq_worker_t *w = &srv->workers[t->worker_id];
-                cmq_mutex_lock(&w->clients_lock);
-                for (int ci = 0; ci < w->clients_count; ci++) {
-                    cmq_client_t *c = w->clients[ci];
-                    if (c && c->id == t->client_id &&
-                        c->state == CMQ_CLIENT_CONNECTED &&
-                        client_has_sub(c, t->sub_id)) {
-                        if (cmq_client_send_local(c, ctx->frame,
-                                                   ctx->frame_len) == 0)
-                            delivered = 1;
-                        break;
-                    }
-                }
-                cmq_mutex_unlock(&w->clients_lock);
+                delivered = client_send_by_id(srv, t->worker_id, t->client_id,
+                                               t->sub_id, ctx->frame,
+                                               ctx->frame_len);
             }
         } else {
-            cmq_mutex_lock(&srv->clients_lock);
-            for (int ci = 0; ci < srv->clients_count; ci++) {
-                cmq_client_t *c = srv->clients[ci];
-                if (c && c->id == t->client_id &&
-                    c->state == CMQ_CLIENT_CONNECTED &&
-                    client_has_sub(c, t->sub_id)) {
-                    if (cmq_client_send_local(c, ctx->frame, ctx->frame_len) == 0)
-                        delivered = 1;
-                    break;
-                }
-            }
-            cmq_mutex_unlock(&srv->clients_lock);
+            delivered = client_send_by_id(srv, -1, t->client_id, t->sub_id,
+                                           ctx->frame, ctx->frame_len);
         }
 
         if (delivered) {
+            ctx->delivered_any = 1;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                       CMQ_ATOMIC_RELAXED);
             cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
@@ -1090,6 +1212,21 @@ static void deliver_coro_func(void *arg) {
     }
 
 done:
+    if (!ctx->delivered_any && ctx->publisher_id != 0) {
+        static const char emsg[] = "delivery failed";
+        uint8_t ebuf[256];
+        size_t elen = cmq_frame_encode(ebuf, sizeof(ebuf), CMQ_OP_ERROR, 0,
+                                        (const uint8_t *)emsg, sizeof(emsg) - 1);
+        if (elen > 0) {
+            if (ctx->publisher_worker_id >= 0 && srv->workers &&
+                ctx->publisher_worker_id < srv->num_workers) {
+                (void)worker_push_msg(&srv->workers[ctx->publisher_worker_id],
+                                       ctx->publisher_id, ebuf, elen, 0);
+            } else {
+                (void)client_send_by_id(srv, -1, ctx->publisher_id, 0, ebuf, elen);
+            }
+        }
+    }
     /* Ownership transferred to deliver_ctx_free via NULLed fields. */
     free((void *)ctx->payload);
     ctx->payload = NULL;
@@ -1150,7 +1287,9 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
                                        const uint8_t *payload,
                                        size_t payload_len,
                                        const uint8_t *headers,
-                                       size_t headers_len) {
+                                       size_t headers_len,
+                                       uint32_t publisher_id,
+                                       int publisher_worker_id) {
     cmq_deliver_ctx_t *ctx = calloc(1, sizeof(cmq_deliver_ctx_t));
     if (!ctx) {
         free(targets);
@@ -1169,6 +1308,8 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
     ctx->headers = headers;
     ctx->headers_len = headers_len;
     ctx->idx = 0;
+    ctx->publisher_id = publisher_id;
+    ctx->publisher_worker_id = publisher_worker_id;
 
     cmq_coro_t *coro = cmq_coro_create(deliver_coro_func, ctx, 32768);
     if (!coro) {
@@ -1380,7 +1521,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         if (worker_coro_spawn_deliver(w, srv, tgts, ntgt, subject,
                                        c->account_name,
                                        coro_payload, msg_len,
-                                       coro_headers, headers_len) != 0) {
+                                       coro_headers, headers_len,
+                                       c->id, c->worker_id) != 0) {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
             cmq_send_error(c, "delivery failed");
@@ -2826,6 +2968,13 @@ static void accept_cb(int fd, int events, void *data) {
             w->clients_cap = new_cap;
         }
         w->clients[w->clients_count++] = client;
+        if (cmq_idmap_put(w->idmap, client->id, client) != 0) {
+            w->clients_count--;
+            cmq_mutex_unlock(&w->clients_lock);
+            cmq_client_destroy(client);
+            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+            return;
+        }
         cmq_mutex_unlock(&w->clients_lock);
 
         cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb, client);
@@ -2859,6 +3008,13 @@ static void accept_cb(int fd, int events, void *data) {
             srv->clients_cap = new_cap;
         }
         srv->clients[srv->clients_count++] = client;
+        if (cmq_idmap_put(srv->idmap, client->id, client) != 0) {
+            srv->clients_count--;
+            cmq_mutex_unlock(&srv->clients_lock);
+            cmq_client_destroy(client);
+            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+            return;
+        }
         cmq_mutex_unlock(&srv->clients_lock);
 
         cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb, client);
@@ -2917,6 +3073,16 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->clients_cap = 64;
     srv->clients_count = 0;
     srv->clients = calloc((size_t)srv->clients_cap, sizeof(cmq_client_t *));
+    srv->idmap = cmq_idmap_create(64);
+    cmq_atomic_store_u32(&srv->next_client_id, 1, CMQ_ATOMIC_RELAXED);
+    if (!srv->clients || !srv->idmap) {
+        free(srv->clients);
+        cmq_idmap_destroy(srv->idmap);
+        cmq_sublist_destroy(srv->sublist);
+        cmq_log_destroy(srv->log);
+        free(srv);
+        return CMQ_ERR_NO_MEMORY;
+    }
 
     srv->accounts = cmq_account_manager_create();
     cmq_account_create(srv->accounts, "$default");
@@ -3037,6 +3203,23 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             w->clients_cap = 64;
             w->clients_count = 0;
             w->clients = calloc((size_t)w->clients_cap, sizeof(cmq_client_t *));
+            w->idmap = cmq_idmap_create(64);
+            if (!w->clients || !w->idmap) {
+                free(w->clients);
+                cmq_idmap_destroy(w->idmap);
+                w->clients = NULL;
+                w->idmap = NULL;
+                cmq_ev_loop_destroy(w->ev_loop);
+                wakeup_fd_close(w->wakeup_fd);
+                for (int j = 0; j < i; j++) {
+                    cmq_ev_stop(srv->workers[j].ev_loop);
+                    cmq_worker_destroy(&srv->workers[j]);
+                }
+                free(srv->workers);
+                srv->workers = NULL;
+                close(srv->listen_fd);
+                return CMQ_ERR_NO_MEMORY;
+            }
             cmq_mutex_init(&w->clients_lock);
             cmq_mutex_init(&w->msg_lock);
             w->msg_head = NULL;
@@ -3168,6 +3351,8 @@ void cmq_server_destroy(cmq_server_t *srv) {
         }
         free(srv->clients);
     }
+    cmq_idmap_destroy(srv->idmap);
+    srv->idmap = NULL;
 
     if (srv->listen_fd >= 0) close(srv->listen_fd);
     if (srv->ev_loop) cmq_ev_loop_destroy(srv->ev_loop);

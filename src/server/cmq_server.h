@@ -118,6 +118,7 @@ typedef struct cmq_worker {
     cmq_client_t **clients;
     int clients_count;
     int clients_cap;
+    struct cmq_idmap *idmap;        /* client_id → client* (O(1)) */
     cmq_mutex_t clients_lock;
 
     int wakeup_fd;
@@ -148,6 +149,7 @@ struct cmq_server {
     cmq_client_t **clients;
     int clients_count;
     int clients_cap;
+    struct cmq_idmap *idmap;        /* acceptor-thread clients */
     cmq_atomic_u32 next_client_id;
     cmq_mutex_t clients_lock;
 

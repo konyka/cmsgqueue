@@ -1371,6 +1371,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — client idmap O(1) · coro delivery ERROR</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client idmap</span></td><td>✅</td><td>Worker/acceptor open-addressing <code>idmap</code>; deliver/wakeup/request lookup O(1).</td></tr>
+<tr><td><span class="component-name">coro total-fail ERROR</span></td><td>✅</td><td>Large fan-out coroutine notifies publisher with <code>delivery failed</code> when no target succeeds.</td></tr>
+</table>
+</div>
+
 
 
 
