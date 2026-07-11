@@ -1614,6 +1614,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — inbound route shutdown · reject duplicate attach · wake batch</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">inbound mark_dead</span></td><td>✅</td><td>Borrowed route fds get SHUT_RDWR on write failure → client teardown.</td></tr>
+<tr><td><span class="component-name">attach_inbound</span></td><td>✅</td><td>Live egress present → -1; server rejects redundant inbound CONNECT.</td></tr>
+<tr><td><span class="component-name">worker wake batch</span></td><td>✅</td><td>Drain at most 64 msgs per wakeup; re-signal if more remain.</td></tr>
+</table>
+</div>
+
 
 
 

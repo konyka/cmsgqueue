@@ -38,7 +38,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
 int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                         const char *auth_user, const char *auth_pass);
 /* Register an already-handshaken inbound route fd (pool does not own/close it).
-   If a live egress already exists for node_id, leaves it unchanged (returns 0). */
+   Returns -1 if pool full OR a live egress already exists for node_id. */
 int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd);
 /* Drop pool reference to fd without closing (client still owns the socket). */
 void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd);

@@ -178,10 +178,25 @@ static void conn_drop_fd(cmq_route_conn_t *c) {
     c->fd_owned = 0;
 }
 
+/* Write-path death: owned fds are closed; borrowed inbound fds get SHUT_RDWR
+   so the server client_read_cb sees EOF and tears down (no zombie route). */
+static void conn_drop_fd_dead(cmq_route_conn_t *c) {
+    if (!c) return;
+    if (c->fd >= 0) {
+        if (c->fd_owned)
+            close(c->fd);
+        else
+            (void)shutdown(c->fd, SHUT_RDWR);
+    }
+    c->fd = -1;
+    c->connected = 0;
+    c->fd_owned = 0;
+}
+
 static void mark_conn_dead(cmq_route_pool_t *pool, size_t idx, int fd) {
     cmq_mutex_lock(&pool->lock);
     if (idx < pool->conn_count && pool->conns[idx].fd == fd)
-        conn_drop_fd(&pool->conns[idx]);
+        conn_drop_fd_dead(&pool->conns[idx]);
     cmq_mutex_unlock(&pool->lock);
 }
 
@@ -391,10 +406,11 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) != 0) continue;
-        /* Prefer existing live egress — do not replace with inbound. */
+        /* Prefer existing live egress — reject redundant inbound (server
+           must not accept a route client that is not in the pool). */
         if (pool->conns[i].connected && pool->conns[i].fd >= 0) {
             cmq_mutex_unlock(&pool->lock);
-            return 0;
+            return -1;
         }
         conn_drop_fd(&pool->conns[i]);
         pool->conns[i].fd = fd;

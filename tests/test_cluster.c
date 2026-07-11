@@ -148,11 +148,13 @@ TEST(route, attach_inbound_borrow) {
     ASSERT_EQ(conn->fd, a[1]);
     ASSERT_EQ(conn->fd_owned, 0);
 
-    /* Prefer existing live peer — do not replace with another inbound fd. */
-    ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", b[1]), 0);
+    /* Live egress already present — reject redundant inbound (do not replace). */
+    ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", b[1]), -1);
     conn = cmq_route_get_conn(rp, "r0");
     ASSERT_NOT_NULL(conn);
     ASSERT_EQ(conn->fd, a[1]);
+    /* Rejected fd must still be usable by caller. */
+    ASSERT_EQ(write(b[1], "y", 1), 1);
 
     cmq_route_detach_fd(rp, a[1]);
     ASSERT_EQ(cmq_route_live_count(rp), (size_t)0);

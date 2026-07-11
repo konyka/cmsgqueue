@@ -268,6 +268,8 @@ static ssize_t client_sock_write(cmq_client_t *c, const uint8_t *buf, size_t len
     return write(c->fd, buf, len);
 }
 
+#define CMQ_WORKER_WAKE_BATCH 64
+
 static void worker_wakeup_cb(int fd, int events, void *data) {
     (void)events;
     cmq_worker_t *w = (cmq_worker_t *)data;
@@ -275,11 +277,27 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
 
     cmq_mutex_lock(&w->msg_lock);
     cmq_worker_msg_t *msg = w->msg_head;
-    w->msg_head = NULL;
-    w->msg_tail = NULL;
-    w->msg_pending = 0;
+    cmq_worker_msg_t *batch = msg;
+    cmq_worker_msg_t *last = NULL;
+    int n = 0;
+    while (msg && n < CMQ_WORKER_WAKE_BATCH) {
+        last = msg;
+        msg = msg->next;
+        n++;
+    }
+    if (last)
+        last->next = NULL;
+    w->msg_head = msg;
+    if (!msg)
+        w->msg_tail = NULL;
+    if (w->msg_pending >= (size_t)n)
+        w->msg_pending -= (size_t)n;
+    else
+        w->msg_pending = 0;
+    int more = (msg != NULL);
     cmq_mutex_unlock(&w->msg_lock);
 
+    msg = batch;
     while (msg) {
         cmq_worker_msg_t *next = msg->next;
         if (msg->kind == CMQ_WORKER_MSG_TEARDOWN) {
@@ -324,6 +342,9 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
         free(msg);
         msg = next;
     }
+    /* Re-arm so remaining messages drain without starving epoll. */
+    if (more && w->wakeup_fd >= 0)
+        wakeup_fd_signal(w->wakeup_fd);
 }
 
 /* Returns 0 on success, -1 on OOM or queue-full (message dropped).
@@ -2415,7 +2436,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             char nid[CMQ_NODE_ID_SIZE];
             snprintf(nid, sizeof(nid), "r%d", ri);
             if (cmq_route_attach_inbound(srv->routes, nid, c->fd) != 0) {
-                /* Pool full — reject rather than accept a one-way route peer. */
+                /* Pool full or live egress already present — reject inbound. */
                 c->is_route = 0;
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
