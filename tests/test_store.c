@@ -159,6 +159,21 @@ TEST(stream, retain_unacked_on_pressure) {
     cmq_stream_destroy(st);
 }
 
+TEST(stream, ack_rejects_beyond_last) {
+    cmq_stream_t *st = cmq_stream_create("ackbound", 100, 10);
+    ASSERT_EQ(cmq_stream_add_consumer(st, "c"), 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"12345", 5) > 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"67890", 5) > 0);
+    ASSERT_EQ(cmq_stream_consumer_ack(st, "c", 999), -1);
+    ASSERT_EQ(cmq_stream_consumer_ack(st, "c", 0), -1);
+    /* Rejected over-ack must not raise retain_floor — still refuse under pressure. */
+    ASSERT_EQ(cmq_stream_append(st, (const uint8_t *)"abcdefgh", 8), (uint64_t)0);
+    ASSERT_EQ(cmq_stream_msg_count(st), (size_t)2);
+    ASSERT_EQ(cmq_stream_consumer_ack(st, "c", 2), 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"abcdefgh", 8) > 0);
+    cmq_stream_destroy(st);
+}
+
 TEST(filestore, create_destroy) {
     const char *dir = "/tmp/cmq_fs_test1";
     mkdir(dir, 0755);

@@ -57,9 +57,12 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
     cmq_mutex_lock(&stream->lock);
 
     /* Do not evict past the slowest consumer's ack watermark. */
+    uint64_t last_seq = cmq_store_last_seq(stream->store);
     uint64_t retain_floor = UINT64_MAX;
     for (size_t i = 0; i < stream->consumer_count; i++) {
-        uint64_t floor = stream->consumers[i].acked_seq + 1;
+        uint64_t acked = stream->consumers[i].acked_seq;
+        if (acked > last_seq) acked = last_seq; /* clamp stale/bad ack */
+        uint64_t floor = acked + 1;
         if (floor < retain_floor) retain_floor = floor;
     }
 
@@ -185,14 +188,18 @@ uint64_t cmq_stream_consumer_next(cmq_stream_t *stream, const char *consumer_nam
 
 int cmq_stream_consumer_ack(cmq_stream_t *stream, const char *consumer_name,
                              uint64_t seq) {
-    if (!stream || !consumer_name) return -1;
+    if (!stream || !consumer_name || seq == 0) return -1;
     cmq_mutex_lock(&stream->lock);
     int found = -1;
+    uint64_t last = cmq_store_last_seq(stream->store);
+    if (seq > last) {
+        cmq_mutex_unlock(&stream->lock);
+        return -1;
+    }
     for (size_t i = 0; i < stream->consumer_count; i++) {
         if (strcmp(stream->consumers[i].name, consumer_name) == 0) {
-            if (seq > stream->consumers[i].acked_seq) {
+            if (seq > stream->consumers[i].acked_seq)
                 stream->consumers[i].acked_seq = seq;
-            }
             found = 0;
             break;
         }

@@ -1420,6 +1420,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — stream ack bound</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">ack ≤ last_seq</span></td><td>✅</td><td>Reject seq 0 / beyond last; retain_floor clamps acked to last_seq.</td></tr>
+<tr><td><span class="component-name">tests</span></td><td>✅</td><td><code>stream.ack_rejects_beyond_last</code>.</td></tr>
+</table>
+</div>
+
 
 
 
