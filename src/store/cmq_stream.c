@@ -62,6 +62,7 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
             cmq_store_msg_t msg;
             if (cmq_store_get(stream->store, first, &msg) == 0) {
                 stream->total_bytes -= msg.len;
+                cmq_store_msg_release(&msg);
             }
             cmq_store_truncate(stream->store, first + 1);
             first++;
@@ -83,10 +84,17 @@ int cmq_stream_read(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out) {
     int rc = cmq_store_get(stream->store, seq, &msg);
     if (rc != 0) return rc;
     out->seq = msg.seq;
-    out->data = msg.data;
+    out->data = msg.data; /* ownership transferred */
     out->len = msg.len;
     out->timestamp_ms = msg.timestamp_ms;
     return 0;
+}
+
+void cmq_stream_msg_release(cmq_stream_msg_t *msg) {
+    if (!msg) return;
+    free(msg->data);
+    msg->data = NULL;
+    msg->len = 0;
 }
 
 int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name) {

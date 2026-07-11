@@ -69,6 +69,8 @@ static int client_has_sub(const cmq_client_t *c, uint32_t sub_id);
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len);
 static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t len);
 static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len);
+static int cmq_client_send_checked(cmq_client_t *c, const uint8_t *data, size_t len,
+                                    uint32_t require_sub_id);
 static ssize_t client_sock_read(cmq_client_t *c, uint8_t *buf, size_t len);
 static ssize_t client_sock_write(cmq_client_t *c, const uint8_t *buf, size_t len);
 static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
@@ -531,6 +533,8 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
         }
         memcpy(c->write_buf + c->write_len, data, len);
         c->write_len = new_len;
+        if (c->last_write_progress_ms == 0)
+            c->last_write_progress_ms = srv_now_ms();
         return 0;
     }
 
@@ -545,6 +549,7 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
     memcpy(c->write_buf, data, len);
     c->write_len = len;
     c->write_pos = 0;
+    c->last_write_progress_ms = srv_now_ms();
 
     cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE, client_read_cb, c);
     return 0;
@@ -583,20 +588,24 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
     return rc;
 }
 
-static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len) {
+static int cmq_client_send_checked(cmq_client_t *c, const uint8_t *data, size_t len,
+                                    uint32_t require_sub_id) {
     if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
         return -1;
     cmq_server_t *srv = c->server;
     int cross = srv->workers && c->worker_id >= 0 && c->worker_id != cmq_current_worker_id;
 
-    /* Always queue raw CMQ frames across workers; the owning worker wraps WS
-       in worker_wakeup_cb via cmq_client_send_local. Avoids double-wrap and
-       lets coro fan-out share one MESSAGE template. HTTP 101 is written before
-       is_websocket is set, so it is never wrapped. */
     if (cross) {
-        return worker_push_msg(&srv->workers[c->worker_id], c->id, data, len, 0);
+        return worker_push_msg(&srv->workers[c->worker_id], c->id, data, len,
+                                require_sub_id);
     }
+    if (require_sub_id != 0 && !client_has_sub(c, require_sub_id))
+        return -1;
     return cmq_client_send_local(c, data, len);
+}
+
+static int cmq_client_send(cmq_client_t *c, const uint8_t *data, size_t len) {
+    return cmq_client_send_checked(c, data, len, 0);
 }
 
 static void cmq_send_pong(cmq_client_t *c) {
@@ -738,7 +747,7 @@ static void cmq_send_request_message(cmq_client_t *c, uint32_t sub_id,
     size_t len = cmq_frame_encode(buf, buf_size, CMQ_OP_MESSAGE, 0,
                                     buf + sizeof(cmq_frame_hdr_t), body_len);
     if (len > 0) {
-        cmq_client_send(c, buf, len);
+        cmq_client_send_checked(c, buf, len, sub_id);
     }
     free(buf);
 }
@@ -1179,8 +1188,6 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     }
 
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
-    cmq_atomic_fetch_add_u64(&srv->stat_bytes_in, (uint64_t)frame->payload_len,
-                              CMQ_ATOMIC_RELAXED);
 
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
     if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
@@ -1822,6 +1829,10 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    cmq_atomic_fetch_add_u64(&srv->stat_bytes_in,
+                              (uint64_t)(sizeof(cmq_frame_hdr_t) + frame->payload_len),
+                              CMQ_ATOMIC_RELAXED);
+
     switch (frame->hdr.op) {
     case CMQ_OP_CONNECT:
         if (c->state == CMQ_CLIENT_CONNECTED) {
@@ -1919,6 +1930,7 @@ static void client_flush_write(cmq_client_t *c) {
     ssize_t n = client_sock_write(c, c->write_buf + c->write_pos, remaining);
     if (n > 0) {
         c->write_pos += (size_t)n;
+        c->last_write_progress_ms = srv_now_ms();
         cmq_atomic_fetch_add_u64(&c->server->stat_bytes_out, (uint64_t)n,
                                   CMQ_ATOMIC_RELAXED);
         if (c->write_pos >= c->write_len) {
@@ -2270,7 +2282,8 @@ static void client_read_cb(int fd, int events, void *data) {
 }
 
 static void keepalive_scan_clients(cmq_client_t **clients, int count,
-                                    uint64_t now, uint64_t timeout_ms) {
+                                    uint64_t now, uint64_t timeout_ms,
+                                    uint64_t write_timeout_ms) {
     /* Acceptor-thread clients only — teardown is safe on this thread. */
     if (count <= 0) return;
     cmq_client_t **doomed = malloc((size_t)count * sizeof(cmq_client_t *));
@@ -2278,8 +2291,16 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
     int ndoomed = 0;
     for (int i = 0; i < count; i++) {
         cmq_client_t *c = clients[i];
-        if (c && (c->state == CMQ_CLIENT_CONNECTED || c->state == CMQ_CLIENT_INIT) &&
+        if (!c) continue;
+        if ((c->state == CMQ_CLIENT_CONNECTED || c->state == CMQ_CLIENT_INIT) &&
             (now - c->last_activity_ms) > timeout_ms) {
+            doomed[ndoomed++] = c;
+            continue;
+        }
+        if (write_timeout_ms > 0 &&
+            c->write_buf && c->write_pos < c->write_len &&
+            c->last_write_progress_ms > 0 &&
+            (now - c->last_write_progress_ms) > write_timeout_ms) {
             doomed[ndoomed++] = c;
         }
     }
@@ -2297,6 +2318,9 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     if (interval <= 0) return;
     uint64_t timeout_ms = (uint64_t)interval * 2;
     uint64_t now = srv_now_ms();
+    uint64_t write_timeout_ms = srv->config.write_timeout_ms > 0
+                                    ? (uint64_t)srv->config.write_timeout_ms
+                                    : 0;
 
     cmq_mutex_lock(&srv->clients_lock);
     int n = srv->clients_count;
@@ -2307,7 +2331,7 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     }
     cmq_mutex_unlock(&srv->clients_lock);
     if (snap) {
-        keepalive_scan_clients(snap, n, now, timeout_ms);
+        keepalive_scan_clients(snap, n, now, timeout_ms, write_timeout_ms);
         free(snap);
     }
 
@@ -2323,11 +2347,16 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                 if (doomed_ids) {
                     for (int i = 0; i < wn; i++) {
                         cmq_client_t *c = w->clients[i];
-                        if (c && (c->state == CMQ_CLIENT_CONNECTED ||
-                                   c->state == CMQ_CLIENT_INIT) &&
-                            (now - c->last_activity_ms) > timeout_ms) {
+                        if (!c) continue;
+                        int idle = (c->state == CMQ_CLIENT_CONNECTED ||
+                                    c->state == CMQ_CLIENT_INIT) &&
+                                   (now - c->last_activity_ms) > timeout_ms;
+                        int stalled = write_timeout_ms > 0 &&
+                                      c->write_buf && c->write_pos < c->write_len &&
+                                      c->last_write_progress_ms > 0 &&
+                                      (now - c->last_write_progress_ms) > write_timeout_ms;
+                        if (idle || stalled)
                             doomed_ids[ndoomed++] = c->id;
-                        }
                     }
                 }
             }

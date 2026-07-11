@@ -103,12 +103,24 @@ int cmq_store_get(cmq_store_t *store, uint64_t seq, cmq_store_msg_t *out) {
     }
 
     out->seq = slot->seq;
-    out->data = slot->data;
+    out->data = malloc(slot->len);
+    if (!out->data) {
+        cmq_mutex_unlock(&store->lock);
+        return -1;
+    }
+    memcpy(out->data, slot->data, slot->len);
     out->len = slot->len;
     out->timestamp_ms = slot->timestamp_ms;
 
     cmq_mutex_unlock(&store->lock);
     return 0;
+}
+
+void cmq_store_msg_release(cmq_store_msg_t *msg) {
+    if (!msg) return;
+    free(msg->data);
+    msg->data = NULL;
+    msg->len = 0;
 }
 
 size_t cmq_store_count(cmq_store_t *store) {

@@ -25,6 +25,7 @@ TEST(store, put_get) {
     ASSERT_EQ(msg.len, (size_t)5);
     ASSERT(memcmp(msg.data, "hello", 5) == 0);
     ASSERT(msg.timestamp_ms > 0);
+    cmq_store_msg_release(&msg);
 
     cmq_store_destroy(s);
 }
@@ -44,6 +45,7 @@ TEST(store, ring_overwrite) {
     ASSERT(cmq_store_get(s, 2, &msg) != 0);
     ASSERT_EQ(cmq_store_get(s, 3, &msg), 0);
     ASSERT_EQ(msg.seq, (uint64_t)3);
+    cmq_store_msg_release(&msg);
 
     cmq_store_destroy(s);
 }
@@ -85,8 +87,10 @@ TEST(stream, append_read) {
     cmq_stream_msg_t msg;
     ASSERT_EQ(cmq_stream_read(st, 1, &msg), 0);
     ASSERT(memcmp(msg.data, "order1", 6) == 0);
+    cmq_stream_msg_release(&msg);
     ASSERT_EQ(cmq_stream_read(st, 2, &msg), 0);
     ASSERT(memcmp(msg.data, "order2", 6) == 0);
+    cmq_stream_msg_release(&msg);
 
     cmq_stream_destroy(st);
 }

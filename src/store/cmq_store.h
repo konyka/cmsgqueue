@@ -18,6 +18,7 @@ void cmq_store_destroy(cmq_store_t *store);
 
 uint64_t cmq_store_put(cmq_store_t *store, const uint8_t *data, size_t len);
 int cmq_store_get(cmq_store_t *store, uint64_t seq, cmq_store_msg_t *out);
+void cmq_store_msg_release(cmq_store_msg_t *msg); /* free copy from get */
 size_t cmq_store_count(cmq_store_t *store);
 uint64_t cmq_store_first_seq(cmq_store_t *store);
 uint64_t cmq_store_last_seq(cmq_store_t *store);

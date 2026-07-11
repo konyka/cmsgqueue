@@ -8,7 +8,7 @@ typedef struct cmq_stream cmq_stream_t;
 
 typedef struct {
     uint64_t seq;
-    const uint8_t *data;
+    uint8_t *data;                  /* owned copy from read; release with cmq_stream_msg_release */
     size_t len;
     uint64_t timestamp_ms;
 } cmq_stream_msg_t;
@@ -24,6 +24,7 @@ void cmq_stream_destroy(cmq_stream_t *stream);
 const char *cmq_stream_name(cmq_stream_t *stream);
 uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len);
 int cmq_stream_read(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out);
+void cmq_stream_msg_release(cmq_stream_msg_t *msg);
 
 int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name);
 cmq_stream_consumer_t cmq_stream_consumer_state(cmq_stream_t *stream, const char *consumer_name);

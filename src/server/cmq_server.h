@@ -83,6 +83,7 @@ typedef struct cmq_client {
     int info_sent;
     int worker_id;
     uint64_t last_activity_ms;
+    uint64_t last_write_progress_ms; /* for write_timeout_ms stall detection */
     cmq_tls_session_t *tls;
 
     /* WebSocket receive reassembly (partial / multi-frame TCP reads). */

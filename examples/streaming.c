@@ -18,16 +18,24 @@ static void demo_memstore(void) {
            (unsigned long long)s1, (unsigned long long)s2, (unsigned long long)s3);
 
     cmq_store_msg_t msg;
-    if (cmq_store_get(store, s1, &msg) == 0)
+    if (cmq_store_get(store, s1, &msg) == 0) {
         printf("Get seq %llu: %.*s (len=%zu)\n", (unsigned long long)s1, (int)msg.len, msg.data, msg.len);
-    if (cmq_store_get(store, s2, &msg) == 0)
+        cmq_store_msg_release(&msg);
+    }
+    if (cmq_store_get(store, s2, &msg) == 0) {
         printf("Get seq %llu: %.*s (len=%zu)\n", (unsigned long long)s2, (int)msg.len, msg.data, msg.len);
+        cmq_store_msg_release(&msg);
+    }
 
     cmq_store_put(store, (const uint8_t *)"fourth", 6);
     cmq_store_put(store, (const uint8_t *)"fifth", 5);
     printf("After ring overflow (4 slots, 5 puts):\n");
-    printf("  seq 1 valid: %s\n", cmq_store_get(store, 1, &msg) == 0 ? "yes" : "no (overwritten)");
-    printf("  seq 2 valid: %s\n", cmq_store_get(store, 2, &msg) == 0 ? "yes" : "no (overwritten)");
+    int ok1 = cmq_store_get(store, 1, &msg) == 0;
+    if (ok1) cmq_store_msg_release(&msg);
+    int ok2 = cmq_store_get(store, 2, &msg) == 0;
+    if (ok2) cmq_store_msg_release(&msg);
+    printf("  seq 1 valid: %s\n", ok1 ? "yes" : "no (overwritten)");
+    printf("  seq 2 valid: %s\n", ok2 ? "yes" : "no (overwritten)");
 
     cmq_store_destroy(store);
     printf("\n");
@@ -50,8 +58,10 @@ static void demo_stream(void) {
            (unsigned long long)cmq_stream_first_seq(st));
 
     cmq_stream_msg_t msg;
-    if (cmq_stream_read(st, s1, &msg) == 0)
+    if (cmq_stream_read(st, s1, &msg) == 0) {
         printf("Read seq %llu: %.*s\n", (unsigned long long)s1, (int)msg.len, msg.data);
+        cmq_stream_msg_release(&msg);
+    }
 
     cmq_stream_consumer_ack(st, "processor-1", s2);
     printf("processor-1 acked up to seq %llu\n", (unsigned long long)s2);
