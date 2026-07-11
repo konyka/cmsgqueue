@@ -207,7 +207,19 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
             return -1;
         }
         for (size_t i = 0; i < n; i++) {
-            subjects[i] = leaf->subs[i];
+            /* Deep copy — unsubscribe may free leaf->subs[i] after unlock. */
+            subjects[i] = strdup(leaf->subs[i]);
+            if (!subjects[i]) {
+                for (size_t j = 0; j < i; j++) free(subjects[j]);
+                free(subjects);
+                free(ids);
+                leaf->hub_fd = -1;
+                leaf->connected = 0;
+                cmq_mutex_unlock(&leaf->lock);
+                cmq_mutex_unlock(&leaf->hub_io_lock);
+                close(fd);
+                return -1;
+            }
             ids[i] = leaf->sub_ids[i];
         }
     }
@@ -231,6 +243,7 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         size_t flen = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_SUBSCRIBE,
                                         0, payload, po);
         if (flen == 0 || write_all(fd, frame, flen) != 0) {
+            for (size_t j = 0; j < n; j++) free(subjects[j]);
             free(subjects);
             free(ids);
             cmq_mutex_lock(&leaf->lock);
@@ -245,6 +258,7 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         }
     }
     cmq_mutex_unlock(&leaf->hub_io_lock);
+    for (size_t j = 0; j < n; j++) free(subjects[j]);
     free(subjects);
     free(ids);
     return 0;

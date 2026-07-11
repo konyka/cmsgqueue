@@ -1909,13 +1909,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
-
-
-
-
-
-
-
+<div class="phase">
+<h2>Phase — WS overflow · bounded upgrade parse · leaf replay copy · gw slot io</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">WS serialize</span></td><td>✅</td><td>Reject <code>payload_len</code> wrap; send encodes header separately.</td></tr>
+<tr><td><span class="component-name">WS HTTP upgrade</span></td><td>✅</td><td>Bound by <code>req_len</code>; reject <code>key_len==0</code>.</td></tr>
+<tr><td><span class="component-name">leaf reconnect</span></td><td>✅</td><td>Deep-copy subjects before unlock (no unsubscribe UAF).</td></tr>
+<tr><td><span class="component-name">gateway slots</span></td><td>✅</td><td>Install/close under <code>io_lock</code>; forward skips unlocked <code>conn_count</code>.</td></tr>
+</table>
+</div>
 
 
 

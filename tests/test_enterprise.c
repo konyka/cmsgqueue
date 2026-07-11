@@ -5,6 +5,7 @@
 #include "cmq_test.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 TEST(account, create_destroy) {
     cmq_account_manager_t *mgr = cmq_account_manager_create();
@@ -322,6 +323,11 @@ TEST(ws, frame_serialize) {
     ASSERT_EQ(buf[0], 0x82);
     ASSERT_EQ(buf[1], 0x04);
     ASSERT(memcmp(&buf[2], "test", 4) == 0);
+
+    /* Overflow: payload_len near SIZE_MAX must not wrap past buf_len. */
+    frame.payload_len = SIZE_MAX - 1;
+    frame.payload = NULL;
+    ASSERT_EQ(cmq_ws_frame_serialize(&frame, buf, sizeof(buf)), -1);
 }
 
 TEST(ws, mask_unmask) {
@@ -344,6 +350,15 @@ TEST(ws, parse_http_upgrade) {
     int r = cmq_ws_parse_http_upgrade(req, strlen(req), key, sizeof(key));
     ASSERT_EQ(r, 0);
     ASSERT_STR_EQ(key, "dGhlIHNhbXBsZSBub25jZQ==");
+
+    /* Non-NUL-terminated buffer with exact req_len must still parse. */
+    char raw[128];
+    size_t n = strlen(req);
+    memcpy(raw, req, n);
+    memset(key, 0xAA, sizeof(key));
+    ASSERT_EQ(cmq_ws_parse_http_upgrade(raw, n, key, sizeof(key)), 0);
+    ASSERT_STR_EQ(key, "dGhlIHNhbXBsZSBub25jZQ==");
+    ASSERT_EQ(cmq_ws_parse_http_upgrade(req, n, key, 0), -1);
 }
 
 TEST(ws, build_response) {

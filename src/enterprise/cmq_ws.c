@@ -10,6 +10,7 @@
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <stdint.h>
+#include <limits.h>
 
 static const char WS_MAGIC[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -126,24 +127,19 @@ int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
     return (int)(header_len + (size_t)payload_len);
 }
 
-int cmq_ws_frame_serialize(const cmq_ws_frame_t *frame, uint8_t *buf,
-                            size_t buf_len) {
-    if (!frame || !buf) return -1;
+static size_t ws_header_len(size_t payload_len) {
+    if (payload_len <= 125) return 2;
+    if (payload_len <= 65535) return 4;
+    return 10;
+}
 
-    size_t header_len = 2;
-    if (frame->payload_len <= 125) {
-        header_len = 2;
-    } else if (frame->payload_len <= 65535) {
-        header_len = 4;
-    } else {
-        header_len = 10;
-    }
-
-    size_t total = header_len + frame->payload_len;
-    if (total > buf_len) return -1;
+/* Write header only into buf (must be >= header_len). Returns header_len or -1. */
+static int ws_encode_header(const cmq_ws_frame_t *frame, uint8_t *buf,
+                             size_t buf_len) {
+    size_t header_len = ws_header_len(frame->payload_len);
+    if (buf_len < header_len) return -1;
 
     buf[0] = (uint8_t)((frame->fin ? 0x80 : 0x00) | (frame->opcode & 0x0F));
-
     if (frame->payload_len <= 125) {
         buf[1] = (uint8_t)frame->payload_len;
     } else if (frame->payload_len <= 65535) {
@@ -155,6 +151,19 @@ int cmq_ws_frame_serialize(const cmq_ws_frame_t *frame, uint8_t *buf,
         for (int i = 0; i < 8; i++)
             buf[2 + i] = (uint8_t)((frame->payload_len >> (56 - i * 8)) & 0xFF);
     }
+    return (int)header_len;
+}
+
+int cmq_ws_frame_serialize(const cmq_ws_frame_t *frame, uint8_t *buf,
+                            size_t buf_len) {
+    if (!frame || !buf) return -1;
+
+    size_t header_len = ws_header_len(frame->payload_len);
+    if (frame->payload_len > SIZE_MAX - header_len) return -1;
+    size_t total = header_len + frame->payload_len;
+    if (total > buf_len || total > (size_t)INT_MAX) return -1;
+
+    if (ws_encode_header(frame, buf, buf_len) < 0) return -1;
 
     if (frame->payload && frame->payload_len > 0)
         memcpy(&buf[header_len], frame->payload, frame->payload_len);
@@ -213,12 +222,11 @@ int cmq_ws_send(int fd, const uint8_t *data, size_t len, cmq_ws_opcode_t opcode)
     frame.payload_len = len;
     frame.masked = 0;
 
+    /* Header-only encode — payload streamed separately (no size_t wrap / buf fit). */
     uint8_t hdr[10];
-    int total = cmq_ws_frame_serialize(&frame, hdr, sizeof(hdr));
-    if (total < 0) return -1;
-
-    size_t hdr_len = (size_t)total - len;
-    if (ws_write_all(fd, hdr, hdr_len) != 0) return -1;
+    int hdr_len = ws_encode_header(&frame, hdr, sizeof(hdr));
+    if (hdr_len < 0) return -1;
+    if (ws_write_all(fd, hdr, (size_t)hdr_len) != 0) return -1;
     if (len > 0 && ws_write_all(fd, data, len) != 0) return -1;
     return 0;
 }
@@ -255,19 +263,31 @@ int cmq_ws_accept_key(const char *client_key, char *out_key, size_t out_len) {
     return 0;
 }
 
-int cmq_ws_parse_http_upgrade(const char *req, size_t req_len __attribute__((unused)),
+int cmq_ws_parse_http_upgrade(const char *req, size_t req_len,
                                char *ws_key_out, size_t key_len) {
-    if (!req || !ws_key_out) return -1;
-    const char *marker = "Sec-WebSocket-Key: ";
-    const char *pos = strstr(req, marker);
-    if (!pos) return -1;
-    pos += strlen(marker);
-    const char *end = strchr(pos, '\r');
-    if (!end) end = strchr(pos, '\n');
-    if (!end) return -1;
-    size_t klen = (size_t)(end - pos);
+    if (!req || !ws_key_out || key_len == 0 || req_len == 0) return -1;
+
+    static const char marker[] = "Sec-WebSocket-Key: ";
+    const size_t mlen = sizeof(marker) - 1;
+    if (req_len < mlen) return -1;
+
+    size_t i = 0;
+    for (; i + mlen <= req_len; i++) {
+        if (memcmp(req + i, marker, mlen) == 0)
+            break;
+    }
+    if (i + mlen > req_len) return -1;
+    i += mlen;
+
+    size_t end = i;
+    while (end < req_len && req[end] != '\r' && req[end] != '\n')
+        end++;
+    if (end >= req_len) return -1;
+
+    size_t klen = end - i;
+    if (klen == 0) return -1;
     if (klen >= key_len) klen = key_len - 1;
-    memcpy(ws_key_out, pos, klen);
+    memcpy(ws_key_out, req + i, klen);
     ws_key_out[klen] = '\0';
     return 0;
 }
