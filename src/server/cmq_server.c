@@ -794,6 +794,55 @@ static void deliver_targets_sync(cmq_server_t *srv,
     free(frame);
 }
 
+/* REQUEST fan-out by client_id after sublist unlock (same safety as publish). */
+static void deliver_request_targets(cmq_server_t *srv,
+                                     cmq_deliver_tgt_t *tgts, size_t ntgt,
+                                     const char *subject, const char *reply_to,
+                                     const uint8_t *payload, size_t payload_len) {
+    if (!tgts || ntgt == 0) return;
+    for (size_t i = 0; i < ntgt; i++) {
+        cmq_deliver_tgt_t *t = &tgts[i];
+        cmq_client_t *target = NULL;
+        if (t->worker_id >= 0 && srv->workers &&
+            t->worker_id < srv->num_workers) {
+            cmq_worker_t *w = &srv->workers[t->worker_id];
+            cmq_mutex_lock(&w->clients_lock);
+            for (int ci = 0; ci < w->clients_count; ci++) {
+                cmq_client_t *c = w->clients[ci];
+                if (c && c->id == t->client_id &&
+                    c->state == CMQ_CLIENT_CONNECTED) {
+                    target = c;
+                    break;
+                }
+            }
+            if (target) {
+                cmq_send_request_message(target, t->sub_id, subject,
+                                          reply_to, payload, payload_len);
+                cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            }
+            cmq_mutex_unlock(&w->clients_lock);
+        } else {
+            cmq_mutex_lock(&srv->clients_lock);
+            for (int ci = 0; ci < srv->clients_count; ci++) {
+                cmq_client_t *c = srv->clients[ci];
+                if (c && c->id == t->client_id &&
+                    c->state == CMQ_CLIENT_CONNECTED) {
+                    target = c;
+                    break;
+                }
+            }
+            if (target) {
+                cmq_send_request_message(target, t->sub_id, subject,
+                                          reply_to, payload, payload_len);
+                cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            }
+            cmq_mutex_unlock(&srv->clients_lock);
+        }
+    }
+}
+
 typedef struct {
     cmq_server_t *srv;
     cmq_deliver_tgt_t *targets;
@@ -1364,35 +1413,15 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "match failed");
         return;
     }
-
-    const char **seen_qg = NULL;
-    int nseen = 0;
-    if (result.count > 0)
-        seen_qg = malloc(result.count * sizeof(const char *));
-    for (size_t i = 0; i < result.count; i++) {
-        cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result.entries[i];
-        if (!ref || !ref->client) continue;
-        if (ref->client->state != CMQ_CLIENT_CONNECTED) continue;
-        if (ref->queue_group[0] != '\0') {
-            if (!seen_qg) continue;
-            int skip = 0;
-            for (int s = 0; s < nseen; s++) {
-                if (strcmp(seen_qg[s], ref->queue_group) == 0) {
-                    skip = 1;
-                    break;
-                }
-            }
-            if (skip) continue;
-            seen_qg[nseen++] = ref->queue_group;
-        }
-        cmq_send_request_message(ref->client, ref->sub_id, subject,
-                                  reply_to, msg_payload, msg_len);
-        cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                  CMQ_ATOMIC_RELAXED);
-    }
-    free(seen_qg);
+    size_t ntgt = 0;
+    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(&result, &ntgt);
     cmq_sublist_result_free(&result);
     cmq_rwlock_unlock(&srv->sublist_lock);
+
+    if (tgts && ntgt > 0)
+        deliver_request_targets(srv, tgts, ntgt, subject, reply_to,
+                                 msg_payload, msg_len);
+    free(tgts);
 
     uint8_t ack[4] = {0};
     size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
@@ -1509,6 +1538,10 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
     uint16_t count = ((uint16_t)frame->payload[0] << 8) | frame->payload[1];
+    if (count == 0 || count > CMQ_BATCH_MAX) {
+        cmq_send_error(c, "invalid batch");
+        return;
+    }
     size_t offset = 2;
 
     /* Pass 1: validate the entire batch before any delivery (no partial fan-out). */

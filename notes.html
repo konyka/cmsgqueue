@@ -1150,6 +1150,19 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — Request unlock · WS length · parser off · batch cap · route reconnect</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">handle_request unlock</span></td><td>✅</td><td>Snapshot + <code>deliver_request_targets</code> after releasing sublist rdlock (aligned with publish).</td></tr>
+<tr><td><span class="component-name">WS 127 length</span></td><td>✅</td><td>Reject MSB=1 and payloads &gt; 16 MiB before <code>size_t</code> add (overflow / DoS).</td></tr>
+<tr><td><span class="component-name">parser inbuf_off</span></td><td>✅</td><td>Consume via offset; compact opportunistically — avoids O(n²) memmove on byte-at-a-time feeds.</td></tr>
+<tr><td><span class="component-name">CMQ_BATCH_MAX</span></td><td>✅</td><td>Reject count 0 or &gt; 256 before pass-1.</td></tr>
+<tr><td><span class="component-name">route/gateway reconnect</span></td><td>✅</td><td>Disconnected slot replaces fd instead of returning success on stale connection.</td></tr>
+</table>
+</div>
+
+
 
 </div>
 </body>

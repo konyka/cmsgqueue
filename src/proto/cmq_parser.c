@@ -16,7 +16,8 @@ typedef struct cmq_frame_node {
 struct cmq_parser {
     /* simple inbuf to accumulate incoming data */
     uint8_t *inbuf;
-    size_t inbuf_len;
+    size_t inbuf_off;               /* consume offset (avoid O(n²) memmove) */
+    size_t inbuf_len;               /* write end */
     size_t inbuf_cap;
 
     /* queue of parsed frames */
@@ -53,6 +54,7 @@ cmq_parser_t *cmq_parser_create(void) {
     p->inbuf_cap = 1024;
     p->inbuf = (uint8_t *)malloc(p->inbuf_cap);
     p->inbuf_len = 0;
+    p->inbuf_off = 0;
     p->head = p->tail = NULL;
     p->max_payload = CMQ_MAX_PAYLOAD;
     return p;
@@ -101,6 +103,7 @@ void cmq_parser_reset(cmq_parser_t *p) {
     p->inbuf_cap = 1024;
     p->inbuf = (uint8_t *)malloc(p->inbuf_cap);
     p->inbuf_len = 0;
+    p->inbuf_off = 0;
 }
 
 static int ensure_inbuf(cmq_parser_t *p, size_t need) {
@@ -119,7 +122,14 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
         return 0;
     }
 
-    /* fast-path: push into inbuf */
+    /* Compact before append if remaining + new won't fit without sliding. */
+    size_t used = p->inbuf_len - p->inbuf_off;
+    if (p->inbuf_off > 0 && p->inbuf_off + used + len > p->inbuf_cap) {
+        if (used > 0)
+            memmove(p->inbuf, p->inbuf + p->inbuf_off, used);
+        p->inbuf_len = used;
+        p->inbuf_off = 0;
+    }
     if (p->inbuf_len + len > p->inbuf_cap) {
         if (ensure_inbuf(p, p->inbuf_len + len) != 0) {
             return -1;
@@ -129,20 +139,17 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
     p->inbuf_len += len;
 
     int produced = 0;
-    /* Defensive pre-validation to catch obviously wrong frames early */
-    if (p->inbuf_len >= 3) {
-        if (p->inbuf[0] != CMQ_PROTO_MAGIC_0 || p->inbuf[1] != CMQ_PROTO_MAGIC_1) {
-            /* invalid magic */
+    /* Early reject on unconsumed prefix (even before a full header). */
+    if (p->inbuf_len - p->inbuf_off >= 3) {
+        const uint8_t *peek = p->inbuf + p->inbuf_off;
+        if (peek[0] != CMQ_PROTO_MAGIC_0 || peek[1] != CMQ_PROTO_MAGIC_1)
             return -1;
-        }
-        if (p->inbuf[2] != CMQ_PROTO_VERSION) {
+        if (peek[2] != CMQ_PROTO_VERSION)
             return -1;
-        }
     }
 
-    while (p->inbuf_len >= CMQ_HEADER_LEN) {
-        const uint8_t *hb = p->inbuf;
-        /* validate header basic fields */
+    while (p->inbuf_len - p->inbuf_off >= CMQ_HEADER_LEN) {
+        const uint8_t *hb = p->inbuf + p->inbuf_off;
         if (hb[0] != CMQ_PROTO_MAGIC_0 || hb[1] != CMQ_PROTO_MAGIC_1) {
             return -1;
         }
@@ -150,7 +157,6 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
             return -1;
         }
 
-        /* payload length is stored in next 4 bytes (little-endian in memory) starting at offset 5 */
         uint32_t payload_len = (uint32_t)hb[5] | ((uint32_t)hb[6] << 8) |
                                ((uint32_t)hb[7] << 16) | ((uint32_t)hb[8] << 24);
 
@@ -159,25 +165,24 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
         }
 
         size_t total = CMQ_HEADER_LEN + (size_t)payload_len;
-        if (p->inbuf_len < total) {
+        if (p->inbuf_len - p->inbuf_off < total) {
             break; /* need more data */
         }
 
-        /* Build frame */
         cmq_frame_t frame;
         frame.hdr.magic[0] = hb[0];
         frame.hdr.magic[1] = hb[1];
         frame.hdr.version = hb[2];
         frame.hdr.flags = hb[3];
         frame.hdr.op = hb[4];
-        frame.hdr.length = payload_len; /* keep numeric length in header in host byte order */
+        frame.hdr.length = payload_len;
         frame.payload_len = (size_t)payload_len;
         if (payload_len > 0) {
             frame.payload = (uint8_t *)malloc(payload_len);
             if (!frame.payload) {
                 return -1;
             }
-            memcpy(frame.payload, p->inbuf + CMQ_HEADER_LEN, payload_len);
+            memcpy(frame.payload, hb + CMQ_HEADER_LEN, payload_len);
         } else {
             frame.payload = NULL;
         }
@@ -187,11 +192,18 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
             return -1;
         }
 
-        /* consume bytes from inbuf */
-        memmove(p->inbuf, p->inbuf + total, p->inbuf_len - total);
-        p->inbuf_len -= total;
+        p->inbuf_off += total;
         produced = 1;
-        /* continue loop to possibly parse more frames */
+    }
+
+    /* Opportunistic compact when offset grows large. */
+    if (p->inbuf_off > 0 &&
+        (p->inbuf_off >= 4096 || p->inbuf_off * 2 >= p->inbuf_len)) {
+        size_t rem = p->inbuf_len - p->inbuf_off;
+        if (rem > 0)
+            memmove(p->inbuf, p->inbuf + p->inbuf_off, rem);
+        p->inbuf_len = rem;
+        p->inbuf_off = 0;
     }
 
     return produced ? 1 : 0;

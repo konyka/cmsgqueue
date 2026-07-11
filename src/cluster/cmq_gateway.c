@@ -101,6 +101,30 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
 
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0) {
+            if (gw->conns[i].connected) {
+                cmq_mutex_unlock(&gw->lock);
+                return 0;
+            }
+            if (gw->conns[i].fd >= 0) close(gw->conns[i].fd);
+            int fd = socket(AF_INET, SOCK_STREAM, 0);
+            if (fd < 0) {
+                cmq_mutex_unlock(&gw->lock);
+                return -1;
+            }
+            struct sockaddr_in sa = {0};
+            sa.sin_family = AF_INET;
+            sa.sin_port = htons((uint16_t)port);
+            inet_pton(AF_INET, addr, &sa.sin_addr);
+            if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+                close(fd);
+                gw->conns[i].fd = -1;
+                cmq_mutex_unlock(&gw->lock);
+                return -1;
+            }
+            gw->conns[i].fd = fd;
+            gw->conns[i].connected = 1;
+            strncpy(gw->conns[i].remote_addr, addr, CMQ_NODE_ADDR_SIZE - 1);
+            gw->conns[i].remote_port = port;
             cmq_mutex_unlock(&gw->lock);
             return 0;
         }

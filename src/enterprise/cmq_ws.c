@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <stdint.h>
 
 static const char WS_MAGIC[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -87,11 +88,18 @@ int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
         header_len = 4;
     } else if (payload_len == 127) {
         if (buf_len < 10) return -1;
+        /* RFC 6455: most significant bit of 64-bit length MUST be 0. */
+        if (buf[2] & 0x80) return -1;
         payload_len = 0;
         for (int i = 0; i < 8; i++)
             payload_len = (payload_len << 8) | buf[2 + i];
         header_len = 10;
     }
+
+    /* Cap before size_t add — reject absurd / overflowing lengths. */
+    if (payload_len > (16ull * 1024 * 1024)) return -1;
+    if (payload_len > (uint64_t)(SIZE_MAX - header_len - (out_frame->masked ? 4 : 0)))
+        return -1;
 
     if (out_frame->masked) {
         if (buf_len < header_len + 4) return -1;

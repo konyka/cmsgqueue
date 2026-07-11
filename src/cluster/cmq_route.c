@@ -68,6 +68,29 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
 
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
+            if (pool->conns[i].connected) {
+                cmq_mutex_unlock(&pool->lock);
+                return 0;
+            }
+            /* Stale slot: replace fd instead of silently succeeding. */
+            if (pool->conns[i].fd >= 0) close(pool->conns[i].fd);
+            int fd = socket(AF_INET, SOCK_STREAM, 0);
+            if (fd < 0) {
+                cmq_mutex_unlock(&pool->lock);
+                return -1;
+            }
+            struct sockaddr_in sa = {0};
+            sa.sin_family = AF_INET;
+            sa.sin_port = htons((uint16_t)port);
+            inet_pton(AF_INET, addr, &sa.sin_addr);
+            if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+                close(fd);
+                pool->conns[i].fd = -1;
+                cmq_mutex_unlock(&pool->lock);
+                return -1;
+            }
+            pool->conns[i].fd = fd;
+            pool->conns[i].connected = 1;
             cmq_mutex_unlock(&pool->lock);
             return 0;
         }
