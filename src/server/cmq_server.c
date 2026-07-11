@@ -2650,6 +2650,26 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
             free(doomed_ids);
         }
     }
+
+    /* Reconnect at most one dead outbound route per tick (bounds handshake stall). */
+    if (srv->routes && srv->config.route_count > 0) {
+        for (int i = 0; i < srv->config.route_count; i++) {
+            char nid[CMQ_NODE_ID_SIZE];
+            snprintf(nid, sizeof(nid), "r%d", i);
+            cmq_route_conn_t *rc = cmq_route_get_conn(srv->routes, nid);
+            if (rc && rc->connected) continue;
+            if (cmq_route_connect(srv->routes, nid,
+                                  srv->config.routes[i].addr,
+                                  srv->config.routes[i].port,
+                                  srv->config.auth_username,
+                                  srv->config.auth_password) == 0) {
+                cmq_log_info(srv->log, "Route reconnected to %s:%d",
+                             srv->config.routes[i].addr,
+                             srv->config.routes[i].port);
+            }
+            break;
+        }
+    }
 }
 
 static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {

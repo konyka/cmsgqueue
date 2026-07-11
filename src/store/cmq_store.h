@@ -23,5 +23,7 @@ size_t cmq_store_count(cmq_store_t *store);
 uint64_t cmq_store_first_seq(cmq_store_t *store);
 uint64_t cmq_store_last_seq(cmq_store_t *store);
 void cmq_store_truncate(cmq_store_t *store, uint64_t before_seq);
+/* O(1) invalidate a single sequence (ring eviction). Returns 0 on success. */
+int cmq_store_evict_seq(cmq_store_t *store, uint64_t seq);
 
 #endif

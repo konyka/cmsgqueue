@@ -64,7 +64,8 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
                 break; /* cannot account bytes — stop eviction */
             stream->total_bytes -= msg.len;
             cmq_store_msg_release(&msg);
-            cmq_store_truncate(stream->store, first + 1);
+            if (cmq_store_evict_seq(stream->store, first) != 0)
+                break;
             first++;
         }
         if (stream->total_bytes + len > stream->max_bytes) {

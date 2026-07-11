@@ -22,6 +22,7 @@ struct cmq_leaf_node {
     int connected;
 
     char *subs[CMQ_LEAF_MAX_SUBS];
+    uint32_t sub_ids[CMQ_LEAF_MAX_SUBS];
     size_t sub_count;
     uint32_t next_sub_id;
 
@@ -171,10 +172,14 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
         cmq_mutex_unlock(&leaf->lock);
         return -1;
     }
-
+    /* Claim local slot before hub I/O so capacity races cannot desync. */
+    size_t idx = leaf->sub_count;
+    uint32_t sub_id = leaf->next_sub_id++;
+    leaf->subs[idx] = copy;
+    leaf->sub_ids[idx] = sub_id;
+    leaf->sub_count++;
     int hub_fd = leaf->hub_fd;
     int connected = leaf->connected;
-    uint32_t sub_id = leaf->next_sub_id++;
     cmq_mutex_unlock(&leaf->lock);
 
     if (connected && hub_fd >= 0) {
@@ -192,19 +197,22 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
         size_t flen = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_SUBSCRIBE,
                                         0, payload, po);
         if (flen == 0 || write_all(hub_fd, frame, flen) != 0) {
-            free(copy);
+            cmq_mutex_lock(&leaf->lock);
+            for (size_t i = 0; i < leaf->sub_count; i++) {
+                if (leaf->subs[i] == copy) {
+                    free(leaf->subs[i]);
+                    memmove(&leaf->subs[i], &leaf->subs[i + 1],
+                            (leaf->sub_count - i - 1) * sizeof(char *));
+                    memmove(&leaf->sub_ids[i], &leaf->sub_ids[i + 1],
+                            (leaf->sub_count - i - 1) * sizeof(uint32_t));
+                    leaf->sub_count--;
+                    break;
+                }
+            }
+            cmq_mutex_unlock(&leaf->lock);
             return -1;
         }
     }
-
-    cmq_mutex_lock(&leaf->lock);
-    if (leaf->sub_count >= CMQ_LEAF_MAX_SUBS) {
-        cmq_mutex_unlock(&leaf->lock);
-        free(copy);
-        return -1;
-    }
-    leaf->subs[leaf->sub_count++] = copy;
-    cmq_mutex_unlock(&leaf->lock);
     return 0;
 }
 
@@ -213,11 +221,30 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
     cmq_mutex_lock(&leaf->lock);
     for (size_t i = 0; i < leaf->sub_count; i++) {
         if (strcmp(leaf->subs[i], subject) == 0) {
+            uint32_t sub_id = leaf->sub_ids[i];
+            int hub_fd = leaf->hub_fd;
+            int connected = leaf->connected;
             free(leaf->subs[i]);
             memmove(&leaf->subs[i], &leaf->subs[i + 1],
                     (leaf->sub_count - i - 1) * sizeof(char *));
+            memmove(&leaf->sub_ids[i], &leaf->sub_ids[i + 1],
+                    (leaf->sub_count - i - 1) * sizeof(uint32_t));
             leaf->sub_count--;
             cmq_mutex_unlock(&leaf->lock);
+
+            if (connected && hub_fd >= 0) {
+                uint8_t payload[4];
+                payload[0] = (uint8_t)(sub_id >> 24);
+                payload[1] = (uint8_t)(sub_id >> 16);
+                payload[2] = (uint8_t)(sub_id >> 8);
+                payload[3] = (uint8_t)sub_id;
+                uint8_t frame[16];
+                size_t flen = cmq_frame_encode(frame, sizeof(frame),
+                                                CMQ_OP_UNSUBSCRIBE, 0,
+                                                payload, 4);
+                if (flen == 0 || write_all(hub_fd, frame, flen) != 0)
+                    return -1;
+            }
             return 0;
         }
     }

@@ -162,3 +162,19 @@ void cmq_store_truncate(cmq_store_t *store, uint64_t before_seq) {
     }
     cmq_mutex_unlock(&store->lock);
 }
+
+int cmq_store_evict_seq(cmq_store_t *store, uint64_t seq) {
+    if (!store || seq == 0) return -1;
+    cmq_mutex_lock(&store->lock);
+    size_t idx = (size_t)(seq - 1) % store->cap;
+    if (store->ring[idx].seq != seq || !store->ring[idx].valid) {
+        cmq_mutex_unlock(&store->lock);
+        return -1;
+    }
+    free(store->ring[idx].data);
+    store->ring[idx].data = NULL;
+    store->ring[idx].valid = 0;
+    if (store->count > 0) store->count--;
+    cmq_mutex_unlock(&store->lock);
+    return 0;
+}
