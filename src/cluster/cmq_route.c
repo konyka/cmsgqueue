@@ -513,17 +513,23 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
     size_t idxs[CMQ_ROUTE_MAX_CONNS];
     char ids[CMQ_ROUTE_MAX_CONNS][CMQ_NODE_ID_SIZE];
     size_t n = 0;
+    size_t nslots;
     cmq_mutex_lock(&pool->lock);
-    for (size_t i = 0; i < pool->conn_count; i++) {
-        cmq_route_conn_t *c = &pool->conns[i];
-        if (!c->connected || c->fd < 0) continue;
-        if (exclude_id && strcmp(c->remote_id, exclude_id) == 0) continue;
-        fds[n] = c->fd;
-        idxs[n] = i;
-        memcpy(ids[n], c->remote_id, CMQ_NODE_ID_SIZE);
-        n++;
-    }
+    nslots = pool->conn_count;
     cmq_mutex_unlock(&pool->lock);
+    /* Read fd/connected/identity under io_lock (same as write-fail clears). */
+    for (size_t i = 0; i < nslots && n < CMQ_ROUTE_MAX_CONNS; i++) {
+        cmq_mutex_lock(&pool->io_locks[i]);
+        cmq_route_conn_t *c = &pool->conns[i];
+        if (c->connected && c->fd >= 0 &&
+            !(exclude_id && strcmp(c->remote_id, exclude_id) == 0)) {
+            fds[n] = c->fd;
+            idxs[n] = i;
+            memcpy(ids[n], c->remote_id, CMQ_NODE_ID_SIZE);
+            n++;
+        }
+        cmq_mutex_unlock(&pool->io_locks[i]);
+    }
 
     size_t sent = 0;
     size_t deferred = 0;
@@ -580,13 +586,17 @@ size_t cmq_route_pool_count(cmq_route_pool_t *pool) {
 
 size_t cmq_route_live_count(cmq_route_pool_t *pool) {
     if (!pool) return 0;
+    size_t nslots;
     cmq_mutex_lock(&pool->lock);
+    nslots = pool->conn_count;
+    cmq_mutex_unlock(&pool->lock);
     size_t n = 0;
-    for (size_t i = 0; i < pool->conn_count; i++) {
+    for (size_t i = 0; i < nslots; i++) {
+        cmq_mutex_lock(&pool->io_locks[i]);
         if (pool->conns[i].connected && pool->conns[i].fd >= 0)
             n++;
+        cmq_mutex_unlock(&pool->io_locks[i]);
     }
-    cmq_mutex_unlock(&pool->lock);
     return n;
 }
 
@@ -606,15 +616,20 @@ cmq_route_conn_t *cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id
 
 int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return 0;
+    size_t nslots;
     cmq_mutex_lock(&pool->lock);
+    nslots = pool->conn_count;
+    cmq_mutex_unlock(&pool->lock);
     int live = 0;
-    for (size_t i = 0; i < pool->conn_count; i++) {
+    for (size_t i = 0; i < nslots; i++) {
+        cmq_mutex_lock(&pool->io_locks[i]);
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
             live = (pool->conns[i].connected && pool->conns[i].fd >= 0) ? 1 : 0;
+            cmq_mutex_unlock(&pool->io_locks[i]);
             break;
         }
+        cmq_mutex_unlock(&pool->io_locks[i]);
     }
-    cmq_mutex_unlock(&pool->lock);
     return live;
 }
 

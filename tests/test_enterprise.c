@@ -32,6 +32,16 @@ TEST(account, create_delete) {
     ASSERT_EQ(cmq_account_count(mgr), (size_t)1);
     ASSERT_NULL(cmq_account_get(mgr, "tenant-a"));
 
+    /* Soft-deleted slot must not be reused for a different name. */
+    cmq_account_t *old = NULL;
+    cmq_account_create(mgr, "keep-ptr");
+    old = cmq_account_get(mgr, "keep-ptr");
+    ASSERT_NOT_NULL(old);
+    ASSERT_EQ(cmq_account_delete(mgr, "keep-ptr"), 0);
+    ASSERT_EQ(cmq_account_create(mgr, "other-name"), 0);
+    ASSERT_STR_EQ(old->name, "keep-ptr"); /* pointer still names keep-ptr */
+    ASSERT_EQ(old->active, 0);
+
     ASSERT_EQ(cmq_account_delete(mgr, "nonexistent"), -1);
 
     char too_long[CMQ_ACCOUNT_NAME_SIZE + 8];

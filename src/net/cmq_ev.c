@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_ev.h"
 #include "cmq_types.h"
+#include "cmq_atomic.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -31,7 +32,7 @@ struct cmq_ev_loop {
     int backend_fd;
     int wakeup_fd;   /* eventfd, or pipe read end */
     int wakeup_wfd;  /* write end; same as wakeup_fd for eventfd */
-    int running;
+    cmq_atomic_int running;
     int next_timer_id;
     cmq_ev_watcher_t *watchers;
     int watchers_cap;
@@ -66,7 +67,7 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
         loop->timers[i].active = 0;
     }
 
-    loop->running = 0;
+    cmq_atomic_store_int(&loop->running, 0, CMQ_ATOMIC_RELAXED);
     loop->next_timer_id = 1;
 
 #if CMQ_OS_LINUX
@@ -218,11 +219,11 @@ int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
 
 int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
     if (!loop) return -1;
-    loop->running = 1;
+    cmq_atomic_store_int(&loop->running, 1, CMQ_ATOMIC_RELEASE);
 
     struct epoll_event events[CMQ_EV_MAX_EVENTS];
 
-    while (loop->running) {
+    while (cmq_atomic_load_int(&loop->running, CMQ_ATOMIC_ACQUIRE)) {
         int wait_ms = timeout_ms;
 
         uint64_t now = cmq_ev_now_ms();
@@ -355,11 +356,11 @@ int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
 
 int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
     if (!loop) return -1;
-    loop->running = 1;
+    cmq_atomic_store_int(&loop->running, 1, CMQ_ATOMIC_RELEASE);
 
     struct kevent events[CMQ_EV_MAX_EVENTS];
 
-    while (loop->running) {
+    while (cmq_atomic_load_int(&loop->running, CMQ_ATOMIC_ACQUIRE)) {
         int wait_ms = timeout_ms;
 
         uint64_t now = cmq_ev_now_ms();
@@ -460,7 +461,7 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
 
 void cmq_ev_stop(cmq_ev_loop_t *loop) {
     if (!loop) return;
-    loop->running = 0;
+    cmq_atomic_store_int(&loop->running, 0, CMQ_ATOMIC_RELEASE);
     if (loop->wakeup_wfd >= 0) {
         uint64_t val = 1;
         (void)write(loop->wakeup_wfd, &val, sizeof(val));

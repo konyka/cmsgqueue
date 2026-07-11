@@ -38,11 +38,10 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     size_t nlen = strnlen(name, CMQ_ACCOUNT_NAME_SIZE);
     if (nlen == 0 || nlen >= CMQ_ACCOUNT_NAME_SIZE) return -1;
     cmq_mutex_lock(&mgr->lock);
-    int free_slot = -1;
     for (size_t i = 0; i < mgr->count; i++) {
         if (strcmp(mgr->accounts[i].name, name) == 0) {
             if (!mgr->accounts[i].active) {
-                /* Reactivate soft-deleted slot (stable pointer). */
+                /* Reactivate soft-deleted slot (stable pointer for same name). */
                 mgr->accounts[i].active = 1;
                 mgr->accounts[i].connections = 0;
                 mgr->accounts[i].subscriptions = 0;
@@ -54,18 +53,14 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
             cmq_mutex_unlock(&mgr->lock);
             return 0;
         }
-        if (!mgr->accounts[i].active && free_slot < 0)
-            free_slot = (int)i;
     }
-    cmq_account_t *a;
-    if (free_slot >= 0) {
-        a = &mgr->accounts[free_slot];
-    } else if (mgr->count < CMQ_ACCOUNT_MAX) {
-        a = &mgr->accounts[mgr->count++];
-    } else {
+    /* Never reuse a soft-deleted slot for a different name — get()+inc_*
+       callers may still hold the old pointer. */
+    if (mgr->count >= CMQ_ACCOUNT_MAX) {
         cmq_mutex_unlock(&mgr->lock);
         return -1;
     }
+    cmq_account_t *a = &mgr->accounts[mgr->count++];
     strncpy(a->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
     a->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
     a->active = 1;

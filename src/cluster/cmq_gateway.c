@@ -402,8 +402,12 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
     size_t idxs[CMQ_GW_MAX_CONNECTIONS];
     char clusters[CMQ_GW_MAX_CONNECTIONS][64];
     size_t n = 0;
+    size_t nslots;
     cmq_mutex_lock(&gw->lock);
-    for (size_t i = 0; i < gw->conn_count && n < CMQ_GW_MAX_CONNECTIONS; i++) {
+    nslots = gw->conn_count;
+    cmq_mutex_unlock(&gw->lock);
+    for (size_t i = 0; i < nslots && n < CMQ_GW_MAX_CONNECTIONS; i++) {
+        cmq_mutex_lock(&gw->io_locks[i]);
         if (strcmp(gw->conns[i].remote_cluster, target_cluster) == 0 &&
             gw->conns[i].connected && gw->conns[i].fd >= 0) {
             fds[n] = gw->conns[i].fd;
@@ -411,8 +415,8 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
             memcpy(clusters[n], gw->conns[i].remote_cluster, 64);
             n++;
         }
+        cmq_mutex_unlock(&gw->io_locks[i]);
     }
-    cmq_mutex_unlock(&gw->lock);
 
     size_t sent = 0;
     size_t deferred = 0;
@@ -461,15 +465,20 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
     size_t idxs[CMQ_GW_MAX_CONNECTIONS];
     char clusters[CMQ_GW_MAX_CONNECTIONS][64];
     size_t n = 0;
+    size_t nslots;
     cmq_mutex_lock(&gw->lock);
-    for (size_t i = 0; i < gw->conn_count && n < CMQ_GW_MAX_CONNECTIONS; i++) {
-        if (!gw->conns[i].connected || gw->conns[i].fd < 0) continue;
-        fds[n] = gw->conns[i].fd;
-        idxs[n] = i;
-        memcpy(clusters[n], gw->conns[i].remote_cluster, 64);
-        n++;
-    }
+    nslots = gw->conn_count;
     cmq_mutex_unlock(&gw->lock);
+    for (size_t i = 0; i < nslots && n < CMQ_GW_MAX_CONNECTIONS; i++) {
+        cmq_mutex_lock(&gw->io_locks[i]);
+        if (gw->conns[i].connected && gw->conns[i].fd >= 0) {
+            fds[n] = gw->conns[i].fd;
+            idxs[n] = i;
+            memcpy(clusters[n], gw->conns[i].remote_cluster, 64);
+            n++;
+        }
+        cmq_mutex_unlock(&gw->io_locks[i]);
+    }
 
     size_t sent = 0;
     size_t deferred = 0;

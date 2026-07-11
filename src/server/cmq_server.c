@@ -3741,6 +3741,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
 
 cmq_status_t cmq_server_run(cmq_server_t *srv) {
     if (!srv) return CMQ_ERR_INVALID_ARG;
+    /* Reject re-entry while a prior run's loop/workers still exist. */
+    if (srv->listen_fd >= 0 || srv->ev_loop || srv->workers)
+        return CMQ_ERR_INVALID_ARG;
 
     srv->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (srv->listen_fd < 0) return CMQ_ERR_IO;
@@ -3750,6 +3753,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
 
     if (set_nonblocking(srv->listen_fd) != 0) {
         close(srv->listen_fd);
+        srv->listen_fd = -1;
         return CMQ_ERR_IO;
     }
 
@@ -3760,22 +3764,26 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     if (!srv->config.host ||
         inet_pton(AF_INET, srv->config.host, &addr.sin_addr) != 1) {
         close(srv->listen_fd);
+        srv->listen_fd = -1;
         return CMQ_ERR_INVALID_ARG;
     }
 
     if (bind(srv->listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         close(srv->listen_fd);
+        srv->listen_fd = -1;
         return CMQ_ERR_IO;
     }
 
     if (listen(srv->listen_fd, 512) != 0) {
         close(srv->listen_fd);
+        srv->listen_fd = -1;
         return CMQ_ERR_IO;
     }
 
     srv->ev_loop = cmq_ev_loop_create(1024);
     if (!srv->ev_loop) {
         close(srv->listen_fd);
+        srv->listen_fd = -1;
         return CMQ_ERR_NO_MEMORY;
     }
 
@@ -3810,6 +3818,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         srv->workers = calloc((size_t)nthreads, sizeof(cmq_worker_t));
         if (!srv->workers) {
             close(srv->listen_fd);
+            srv->listen_fd = -1;
             return CMQ_ERR_NO_MEMORY;
         }
         for (int i = 0; i < nthreads; i++) {
@@ -3826,6 +3835,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 free(srv->workers);
                 srv->workers = NULL;
                 close(srv->listen_fd);
+                srv->listen_fd = -1;
                 return CMQ_ERR_NO_MEMORY;
             }
             w->wakeup_fd = -1;
@@ -3839,6 +3849,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 free(srv->workers);
                 srv->workers = NULL;
                 close(srv->listen_fd);
+                srv->listen_fd = -1;
                 return CMQ_ERR_NO_MEMORY;
             }
             if (cmq_ev_add(w->ev_loop, w->wakeup_fd, CMQ_EV_READ,
@@ -3852,6 +3863,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 free(srv->workers);
                 srv->workers = NULL;
                 close(srv->listen_fd);
+                srv->listen_fd = -1;
                 return CMQ_ERR_IO;
             }
             w->clients_cap = 64;
@@ -3872,6 +3884,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 free(srv->workers);
                 srv->workers = NULL;
                 close(srv->listen_fd);
+                srv->listen_fd = -1;
                 return CMQ_ERR_NO_MEMORY;
             }
             cmq_mutex_init(&w->clients_lock);
@@ -3897,6 +3910,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 free(srv->workers);
                 srv->workers = NULL;
                 close(srv->listen_fd);
+                srv->listen_fd = -1;
                 return CMQ_ERR_NO_MEMORY;
             }
         }
@@ -3969,6 +3983,12 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         for (int i = 0; i < srv->num_workers; i++) {
             cmq_thread_join(srv->workers[i].thread);
         }
+    }
+
+    /* Free the bind port; ev_loop/workers stay until destroy (clients still use them). */
+    if (srv->listen_fd >= 0) {
+        close(srv->listen_fd);
+        srv->listen_fd = -1;
     }
 
     return CMQ_OK;
