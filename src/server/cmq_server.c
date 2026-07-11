@@ -510,6 +510,14 @@ static cmq_worker_t *client_worker(cmq_server_t *srv, cmq_client_t *c) {
     return NULL;
 }
 
+static size_t cmq_client_frame_hard_cap(const cmq_server_t *srv) {
+    size_t max_pl = (srv && srv->config.max_payload_size > 0)
+                        ? (size_t)srv->config.max_payload_size
+                        : (size_t)CMQ_CLIENT_BUF_SIZE;
+    /* Match parser headroom: body + subjects/replies/BATCH framing. */
+    return max_pl + (256 * 1024);
+}
+
 static cmq_client_t *cmq_client_create(int fd, uint32_t id,
                                          cmq_ev_loop_t *loop,
                                          cmq_server_t *server) {
@@ -521,12 +529,7 @@ static cmq_client_t *cmq_client_create(int fd, uint32_t id,
     c->parser = cmq_parser_create();
     if (!c->parser) { free(c); return NULL; }
     if (server && server->config.max_payload_size > 0) {
-        /* max_payload_size is message-body; frames also carry subjects/replies
-           and BATCH envelopes. Allow 256 KiB framing headroom (still << 16 MiB
-           hard ceiling) so oversize bodies hit ERROR, not silent teardown. */
-        size_t body = (size_t)server->config.max_payload_size;
-        size_t frame_cap = body + (256 * 1024);
-        cmq_parser_set_max_payload(c->parser, frame_cap);
+        cmq_parser_set_max_payload(c->parser, cmq_client_frame_hard_cap(server));
     }
     c->ev_loop = loop;
     c->server = server;
@@ -2591,11 +2594,7 @@ static void client_read_cb(int fd, int events, void *data) {
             if (need > c->ws_recv_cap) {
                 size_t ncap = c->ws_recv_cap ? c->ws_recv_cap * 2 : 4096;
                 while (ncap < need) ncap *= 2;
-                /* Cap at max_payload_size + WS header overhead (~14) + slack. */
-                size_t max_pl = (size_t)(srv->config.max_payload_size > 0
-                                             ? srv->config.max_payload_size
-                                             : CMQ_CLIENT_BUF_SIZE);
-                size_t hard = max_pl + 64 + 65536; /* allow large CMQ frames */
+                size_t hard = cmq_client_frame_hard_cap(srv);
                 if (ncap > hard) ncap = hard;
                 if (need > ncap) { client_teardown(c); return; }
                 uint8_t *nb = realloc(c->ws_recv_buf, ncap);
@@ -2686,10 +2685,7 @@ static void client_read_cb(int fd, int events, void *data) {
                     if (need > c->ws_msg_cap) {
                         size_t ncap = c->ws_msg_cap ? c->ws_msg_cap * 2 : 4096;
                         while (ncap < need) ncap *= 2;
-                        size_t max_pl = (size_t)(srv->config.max_payload_size > 0
-                                                     ? srv->config.max_payload_size
-                                                     : CMQ_CLIENT_BUF_SIZE);
-                        size_t hard = max_pl + 65536;
+                        size_t hard = cmq_client_frame_hard_cap(srv);
                         if (ncap > hard) ncap = hard;
                         if (need > ncap) { client_teardown(c); return; }
                         uint8_t *nb = realloc(c->ws_msg_buf, ncap);
@@ -2870,26 +2866,39 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
             free(doomed_ids);
         }
     }
+}
 
-    /* Reconnect at most one dead outbound route per tick (bounds handshake stall). */
-    if (srv->routes && srv->config.route_count > 0) {
-        for (int i = 0; i < srv->config.route_count; i++) {
-            char nid[CMQ_NODE_ID_SIZE];
-            snprintf(nid, sizeof(nid), "r%d", i);
-            cmq_route_conn_t *rc = cmq_route_get_conn(srv->routes, nid);
-            if (rc && rc->connected) continue;
-            if (cmq_route_connect(srv->routes, nid,
-                                  srv->config.routes[i].addr,
-                                  srv->config.routes[i].port,
-                                  srv->config.auth_username,
-                                  srv->config.auth_password) == 0) {
-                cmq_log_info(srv->log, "Route reconnected to %s:%d",
-                             srv->config.routes[i].addr,
-                             srv->config.routes[i].port);
+static void *route_reconnect_thread(void *arg) {
+    cmq_server_t *srv = arg;
+    while (cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE)) {
+        if (srv->routes && srv->config.route_count > 0) {
+            for (int i = 0; i < srv->config.route_count; i++) {
+                if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE))
+                    break;
+                char nid[CMQ_NODE_ID_SIZE];
+                snprintf(nid, sizeof(nid), "r%d", i);
+                cmq_route_conn_t *rc = cmq_route_get_conn(srv->routes, nid);
+                if (rc && rc->connected) continue;
+                if (cmq_route_connect(srv->routes, nid,
+                                      srv->config.routes[i].addr,
+                                      srv->config.routes[i].port,
+                                      srv->config.auth_username,
+                                      srv->config.auth_password) == 0) {
+                    cmq_log_info(srv->log, "Route reconnected to %s:%d",
+                                 srv->config.routes[i].addr,
+                                 srv->config.routes[i].port);
+                }
+                break; /* one attempt per sleep interval */
             }
-            break;
+        }
+        for (int s = 0; s < 10; s++) {
+            if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE))
+                break;
+            struct timespec ts = {0, 100000000L};
+            nanosleep(&ts, NULL);
         }
     }
+    return NULL;
 }
 
 static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
@@ -3252,9 +3261,19 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                          srv->config.routes[i].addr,
                          srv->config.routes[i].port);
         }
+        /* Background reconnect — never block acceptor keepalive/accept. */
+        if (cmq_thread_create(&srv->route_reconn_thr, route_reconnect_thread,
+                               srv) == 0)
+            srv->route_reconn_started = 1;
     }
 
     cmq_ev_run(srv->ev_loop, -1);
+
+    cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
+    if (srv->route_reconn_started) {
+        cmq_thread_join(srv->route_reconn_thr);
+        srv->route_reconn_started = 0;
+    }
 
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {

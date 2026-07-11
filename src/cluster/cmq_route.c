@@ -16,10 +16,34 @@
 
 #define CMQ_ROUTE_MAX_CONNS 32
 #define CMQ_ROUTE_HANDSHAKE_MS 3000
+#define CMQ_ROUTE_CONNECT_MS 2000
 
 static void set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+static void set_block(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+}
+
+/* Nonblocking connect with poll deadline, then restore blocking for handshake. */
+static int connect_timeout(int fd, const struct sockaddr *sa, socklen_t slen,
+                            int timeout_ms) {
+    set_nonblock(fd);
+    int rc = connect(fd, sa, slen);
+    if (rc != 0 && errno != EINPROGRESS) return -1;
+    if (rc != 0) {
+        struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+        if (poll(&pfd, 1, timeout_ms) <= 0) return -1;
+        int err = 0;
+        socklen_t el = sizeof(err);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el) != 0 || err != 0)
+            return -1;
+    }
+    set_block(fd);
+    return 0;
 }
 
 /* Blocking CONNECT + CONNACK so the peer accepts subsequent PUBLISH frames.
@@ -190,7 +214,8 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
             sa.sin_family = AF_INET;
             sa.sin_port = htons((uint16_t)port);
             inet_pton(AF_INET, addr, &sa.sin_addr);
-            if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+            if (connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
+                                 CMQ_ROUTE_CONNECT_MS) != 0) {
                 close(fd);
                 pool->conns[i].fd = -1;
                 cmq_mutex_unlock(&pool->lock);
@@ -226,7 +251,8 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
     sa.sin_port = htons((uint16_t)port);
     inet_pton(AF_INET, addr, &sa.sin_addr);
 
-    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+    if (connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
+                         CMQ_ROUTE_CONNECT_MS) != 0) {
         close(fd);
         cmq_mutex_unlock(&pool->lock);
         return -1;

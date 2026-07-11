@@ -1380,6 +1380,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — async route reconnect · WS frame hard cap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route reconnect thread</span></td><td>✅</td><td>Dead routes reconnect off acceptor; keepalive no longer blocks on connect/handshake.</td></tr>
+<tr><td><span class="component-name">route connect timeout</span></td><td>✅</td><td>Nonblocking connect + 2s poll before handshake.</td></tr>
+<tr><td><span class="component-name">WS hard cap</span></td><td>✅</td><td>WS recv/msg caps match parser (<code>max_payload + 256KiB</code>).</td></tr>
+</table>
+</div>
+
 
 
 
