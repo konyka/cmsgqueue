@@ -1347,6 +1347,7 @@ All 15 test suites passing, 0 warnings.
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">leaf connect resubscribe</span></td><td>✅</td><td>Reconnect replays SUBSCRIBE for local interest; no next_sub_id reset.</td></tr>
 <tr><td><span class="component-name">stream ring wrap bytes</span></td><td>✅</td><td>Before put when full, subtract oldest message length from total_bytes.</td></tr>
+<tr><td><span class="component-name">leaf unsub hub-first</span></td><td>✅</td><td>UNSUBSCRIBE written to hub before local remove (no ghost interest).</td></tr>
 </table>
 </div>
 
