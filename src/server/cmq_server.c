@@ -23,23 +23,35 @@ static uint64_t srv_now_ms(void) {
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }
 
-static int wakeup_fd_create(void) {
+static int set_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1) return -1;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static int wakeup_fd_pair(int *rfd, int *wfd) {
 #ifdef CMQ_OS_LINUX
-    return eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    int fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (fd < 0) return -1;
+    *rfd = fd;
+    *wfd = fd;
+    return 0;
 #else
     int fds[2];
     if (pipe(fds) != 0) return -1;
     set_nonblocking(fds[0]);
     set_nonblocking(fds[1]);
-    return fds[0];
+    *rfd = fds[0];
+    *wfd = fds[1];
+    return 0;
 #endif
 }
 
-static int wakeup_fd_signal(int fd) {
+static int wakeup_fd_signal(int wfd) {
 #ifdef CMQ_OS_LINUX
     uint64_t val = 1;
     for (;;) {
-        ssize_t n = write(fd, &val, sizeof(val));
+        ssize_t n = write(wfd, &val, sizeof(val));
         if (n == (ssize_t)sizeof(val)) return 0;
         if (n < 0 && errno == EINTR) continue;
         /* Counter already saturated → fd is readable; worker will wake. */
@@ -49,7 +61,7 @@ static int wakeup_fd_signal(int fd) {
 #else
     char c = 1;
     for (;;) {
-        ssize_t n = write(fd + 1, &c, 1);
+        ssize_t n = write(wfd, &c, 1);
         if (n == 1) return 0;
         if (n < 0 && errno == EINTR) continue;
         /* Pipe full → pending bytes already wake the reader. */
@@ -59,29 +71,19 @@ static int wakeup_fd_signal(int fd) {
 #endif
 }
 
-static void wakeup_fd_drain(int fd) {
+static void wakeup_fd_drain(int rfd) {
 #ifdef CMQ_OS_LINUX
     uint64_t val;
-    while (read(fd, &val, sizeof(val)) > 0) {}
+    while (read(rfd, &val, sizeof(val)) > 0) {}
 #else
     char buf[64];
-    while (read(fd, buf, sizeof(buf)) > 0) {}
+    while (read(rfd, buf, sizeof(buf)) > 0) {}
 #endif
 }
 
-static void wakeup_fd_close(int fd) {
-#ifdef CMQ_OS_LINUX
-    close(fd);
-#else
-    close(fd);
-    close(fd + 1);
-#endif
-}
-
-static int set_nonblocking(int fd) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1) return -1;
-    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+static void wakeup_fd_close(int rfd, int wfd) {
+    if (rfd >= 0) close(rfd);
+    if (wfd >= 0 && wfd != rfd) close(wfd);
 }
 
 /* Open-addressing client_id → client* map (power-of-2, linear probe).
@@ -376,7 +378,7 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
         }
         if (!more) break;
         /* Prefer re-arm; if wakeup write fails keep draining here. */
-        if (w->wakeup_fd >= 0 && wakeup_fd_signal(w->wakeup_fd) == 0)
+        if (w->wakeup_wfd >= 0 && wakeup_fd_signal(w->wakeup_wfd) == 0)
             break;
     }
 }
@@ -441,7 +443,7 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
     w->msg_pending++;
     cmq_mutex_unlock(&w->msg_lock);
 
-    if (wakeup_fd_signal(w->wakeup_fd) == 0)
+    if (wakeup_fd_signal(w->wakeup_wfd) == 0)
         return 0;
 
     /* Wakeup hard-failed — unlink if still queued so callers can retry.
@@ -523,7 +525,7 @@ static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
     w->msg_pending++;
     cmq_mutex_unlock(&w->msg_lock);
 
-    if (wakeup_fd_signal(w->wakeup_fd) == 0)
+    if (wakeup_fd_signal(w->wakeup_wfd) == 0)
         return 0;
 
     cmq_mutex_lock(&w->msg_lock);
@@ -572,14 +574,15 @@ static cmq_worker_t *cmq_worker_create(cmq_server_t *srv, int id) {
     w->ev_loop = cmq_ev_loop_create(1024);
     if (!w->ev_loop) { free(w); return NULL; }
 
-    w->wakeup_fd = wakeup_fd_create();
-    if (w->wakeup_fd < 0) {
+    w->wakeup_fd = -1;
+    w->wakeup_wfd = -1;
+    if (wakeup_fd_pair(&w->wakeup_fd, &w->wakeup_wfd) != 0) {
         cmq_ev_loop_destroy(w->ev_loop);
         free(w);
         return NULL;
     }
     if (cmq_ev_add(w->ev_loop, w->wakeup_fd, CMQ_EV_READ, worker_wakeup_cb, w) != 0) {
-        wakeup_fd_close(w->wakeup_fd);
+        wakeup_fd_close(w->wakeup_fd, w->wakeup_wfd);
         cmq_ev_loop_destroy(w->ev_loop);
         free(w);
         return NULL;
@@ -592,7 +595,7 @@ static cmq_worker_t *cmq_worker_create(cmq_server_t *srv, int id) {
     if (!w->clients || !w->idmap) {
         free(w->clients);
         cmq_idmap_destroy(w->idmap);
-        wakeup_fd_close(w->wakeup_fd);
+        wakeup_fd_close(w->wakeup_fd, w->wakeup_wfd);
         cmq_ev_loop_destroy(w->ev_loop);
         free(w);
         return NULL;
@@ -626,7 +629,11 @@ static void cmq_worker_destroy(cmq_worker_t *w) {
         free(msg);
         msg = next;
     }
-    if (w->wakeup_fd >= 0) { wakeup_fd_close(w->wakeup_fd); w->wakeup_fd = -1; }
+    if (w->wakeup_fd >= 0 || w->wakeup_wfd >= 0) {
+        wakeup_fd_close(w->wakeup_fd, w->wakeup_wfd);
+        w->wakeup_fd = -1;
+        w->wakeup_wfd = -1;
+    }
     if (w->coro_pool) {
         for (int i = 0; i < w->coro_count; i++) {
             if (w->coro_pool[i]) {
@@ -3789,8 +3796,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 close(srv->listen_fd);
                 return CMQ_ERR_NO_MEMORY;
             }
-            w->wakeup_fd = wakeup_fd_create();
-            if (w->wakeup_fd < 0) {
+            w->wakeup_fd = -1;
+            w->wakeup_wfd = -1;
+            if (wakeup_fd_pair(&w->wakeup_fd, &w->wakeup_wfd) != 0) {
                 cmq_ev_loop_destroy(w->ev_loop);
                 for (int j = 0; j < i; j++) {
                     cmq_ev_stop(srv->workers[j].ev_loop);
@@ -3803,7 +3811,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             }
             if (cmq_ev_add(w->ev_loop, w->wakeup_fd, CMQ_EV_READ,
                            worker_wakeup_cb, w) != 0) {
-                wakeup_fd_close(w->wakeup_fd);
+                wakeup_fd_close(w->wakeup_fd, w->wakeup_wfd);
                 cmq_ev_loop_destroy(w->ev_loop);
                 for (int j = 0; j < i; j++) {
                     cmq_ev_stop(srv->workers[j].ev_loop);
@@ -3824,7 +3832,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 w->clients = NULL;
                 w->idmap = NULL;
                 cmq_ev_loop_destroy(w->ev_loop);
-                wakeup_fd_close(w->wakeup_fd);
+                wakeup_fd_close(w->wakeup_fd, w->wakeup_wfd);
                 for (int j = 0; j < i; j++) {
                     cmq_ev_stop(srv->workers[j].ev_loop);
                     cmq_worker_destroy(&srv->workers[j]);

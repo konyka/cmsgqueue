@@ -229,6 +229,8 @@ TEST(mqtt, encode_publish) {
                                        payload, 5, 0);
     ASSERT(len > 0);
     ASSERT_EQ(cmq_mqtt_decode_packet_type(buf, (size_t)len), 3);
+    len = cmq_mqtt_encode_publish(buf, sizeof(buf), "empty/topic", NULL, 0, 0);
+    ASSERT(len > 0);
 }
 
 TEST(mqtt, encode_subscribe) {

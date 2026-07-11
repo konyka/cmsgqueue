@@ -6,6 +6,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <errno.h>
+#include <poll.h>
 
 #define CMQ_MQTT_MAX_MAPPINGS 64
 
@@ -46,6 +48,47 @@ void cmq_mqtt_bridge_destroy(cmq_mqtt_bridge_t *br) {
     free(br);
 }
 
+static int mqtt_write_all(int fd, const uint8_t *data, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, data + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        off += (size_t)n;
+    }
+    return 0;
+}
+
+static int mqtt_read_connack(int fd) {
+    uint8_t buf[8];
+    size_t got = 0;
+    int waited = 0;
+    while (got < 4 && waited < 3000) {
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        int pr = poll(&pfd, 1, 100);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (pr == 0) {
+            waited += 100;
+            continue;
+        }
+        ssize_t n = read(fd, buf + got, sizeof(buf) - got);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        got += (size_t)n;
+    }
+    if (got < 4) return -1;
+    return cmq_mqtt_decode_connack(buf, got);
+}
+
 int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (!br || !addr) return -1;
     if (br->connected) return 0;
@@ -62,6 +105,17 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     }
 
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        close(fd);
+        return -1;
+    }
+
+    uint8_t cbuf[256];
+    int keepalive_s = br->keepalive_ms > 0 ? br->keepalive_ms / 1000 : 60;
+    if (keepalive_s < 1) keepalive_s = 1;
+    int clen = cmq_mqtt_encode_connect(cbuf, sizeof(cbuf), br->client_id,
+                                        keepalive_s, br->clean_session);
+    if (clen < 0 || mqtt_write_all(fd, cbuf, (size_t)clen) != 0 ||
+        mqtt_read_connack(fd) != 0) {
         close(fd);
         return -1;
     }
@@ -221,7 +275,8 @@ int cmq_mqtt_encode_connect(uint8_t *buf, size_t len, const char *client_id,
 
 int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
                              const uint8_t *payload, size_t payload_len, int qos) {
-    if (!buf || !topic || !payload) return -1;
+    if (!buf || !topic) return -1;
+    if (payload_len > 0 && !payload) return -1;
     size_t topic_len = strlen(topic);
     if (topic_len > 0xFFFFu || topic_len > SIZE_MAX - 2) return -1;
     size_t var_len = 2 + topic_len;
@@ -249,7 +304,8 @@ int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
         buf[pos++] = 0x01;
     }
 
-    memcpy(&buf[pos], payload, payload_len);
+    if (payload_len > 0)
+        memcpy(&buf[pos], payload, payload_len);
     return (int)(pos + payload_len);
 }
 

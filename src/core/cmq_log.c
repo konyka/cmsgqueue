@@ -114,22 +114,26 @@ void cmq_log_set_level(cmq_log_t *log, cmq_log_level_t level) {
     pthread_mutex_unlock(&log->lock);
 }
 
-void cmq_log_add_appender(cmq_log_t *log, cmq_log_appender_fn fn, void *ctx) {
-    if (!log || !fn) return;
+int cmq_log_add_appender(cmq_log_t *log, cmq_log_appender_fn fn, void *ctx) {
+    if (!log || !fn) return -1;
+    int rc = -1;
     pthread_mutex_lock(&log->lock);
     if (log->appender_count < CMQ_LOG_MAX_APPENDERS) {
         log->appenders[log->appender_count].fn = fn;
         log->appenders[log->appender_count].ctx = ctx;
         log->appender_count++;
+        rc = 0;
     }
     pthread_mutex_unlock(&log->lock);
+    return rc;
 }
 
 void cmq_log_add_file(cmq_log_t *log, const char *path) {
     if (!log || !path) return;
     FILE *f = fopen(path, "a");
     if (!f) return;
-    cmq_log_add_appender(log, cmq_log_file_appender, f);
+    if (cmq_log_add_appender(log, cmq_log_file_appender, f) != 0)
+        fclose(f);
 }
 
 void cmq_log_add_stdout(cmq_log_t *log) {

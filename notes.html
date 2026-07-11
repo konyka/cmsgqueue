@@ -1876,6 +1876,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — MQTT CONNECT handshake · empty publish · log FILE · wakeup_wfd</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">mqtt bridge connect</span></td><td>✅</td><td>Send CONNECT + require CONNACK before <code>connected=1</code>.</td></tr>
+<tr><td><span class="component-name">mqtt empty publish</span></td><td>✅</td><td>Allow <code>payload==NULL</code> with zero length.</td></tr>
+<tr><td><span class="component-name">log add_file</span></td><td>✅</td><td><code>add_appender</code> returns status; fclose on full table.</td></tr>
+<tr><td><span class="component-name">worker wakeup_wfd</span></td><td>✅</td><td>Store pipe write end explicitly (no <code>fd+1</code> assumption).</td></tr>
+</table>
+</div>
+
 
 
 

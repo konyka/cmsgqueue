@@ -122,6 +122,7 @@ typedef struct cmq_worker {
     cmq_mutex_t clients_lock;
 
     int wakeup_fd;
+    int wakeup_wfd;                 /* write end; same as wakeup_fd on eventfd */
     cmq_thread_t thread;
     cmq_server_t *server;
     int worker_id;

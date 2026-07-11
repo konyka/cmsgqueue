@@ -19,7 +19,8 @@ typedef void (*cmq_log_appender_fn)(const char *msg, size_t len, void *ctx);
 cmq_log_t *cmq_log_create(cmq_log_level_t level);
 void cmq_log_destroy(cmq_log_t *log);
 void cmq_log_set_level(cmq_log_t *log, cmq_log_level_t level);
-void cmq_log_add_appender(cmq_log_t *log, cmq_log_appender_fn fn, void *ctx);
+/* Returns 0 on success, -1 if full or invalid. */
+int cmq_log_add_appender(cmq_log_t *log, cmq_log_appender_fn fn, void *ctx);
 void cmq_log_add_file(cmq_log_t *log, const char *path);
 void cmq_log_add_stdout(cmq_log_t *log);
 void cmq_log_write(cmq_log_t *log, cmq_log_level_t level, const char *file, int line, const char *fmt, ...);
