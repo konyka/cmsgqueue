@@ -809,4 +809,122 @@ TEST(server_ops, ws_pipelined_upgrade) {
     cmq_server_destroy(srv);
 }
 
+/* Resubscribe same sub_id must replace, not double-deliver. */
+TEST(server_ops, subscribe_replace_same_id) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 10;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(100);
+
+    int sub_fd = connect_to(config.port);
+    ASSERT(sub_fd >= 0);
+    cmq_parser_t *sp = cmq_parser_create();
+    do_connect(sub_fd, sp);
+    ASSERT_EQ(do_subscribe(sub_fd, sp, "rep.old", 1), 0);
+    ASSERT_EQ(do_subscribe(sub_fd, sp, "rep.new", 1), 0); /* replace sub_id=1 */
+
+    int pub_fd = connect_to(config.port);
+    ASSERT(pub_fd >= 0);
+    cmq_parser_t *pp = cmq_parser_create();
+    do_connect(pub_fd, pp);
+
+    const char *old_s = "rep.old";
+    const char *new_s = "rep.new";
+    uint16_t olen = (uint16_t)strlen(old_s);
+    uint16_t nlen = (uint16_t)strlen(new_s);
+    uint8_t pbuf[128];
+    size_t off = 0;
+    pbuf[off++] = (olen >> 8) & 0xFF; pbuf[off++] = olen & 0xFF;
+    memcpy(pbuf + off, old_s, olen); off += olen;
+    pbuf[off++] = 0; pbuf[off++] = 0;
+    memcpy(pbuf + off, "x", 1); off += 1;
+    send_frame(pub_fd, CMQ_OP_PUBLISH, pbuf, off);
+    wait_ms(80);
+
+    /* Old subject must not deliver. */
+    cmq_frame_t f;
+    int got_old = (recv_frame(sub_fd, &f, sp) == 0);
+    if (got_old) free_frame(&f);
+    ASSERT(!got_old);
+
+    off = 0;
+    pbuf[off++] = (nlen >> 8) & 0xFF; pbuf[off++] = nlen & 0xFF;
+    memcpy(pbuf + off, new_s, nlen); off += nlen;
+    pbuf[off++] = 0; pbuf[off++] = 0;
+    memcpy(pbuf + off, "y", 1); off += 1;
+    send_frame(pub_fd, CMQ_OP_PUBLISH, pbuf, off);
+    wait_ms(80);
+    ASSERT_EQ(recv_frame(sub_fd, &f, sp), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_MESSAGE);
+    free_frame(&f);
+
+    cmq_parser_destroy(pp);
+    cmq_parser_destroy(sp);
+    close(pub_fd);
+    close(sub_fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+/* Truncated batch must ERROR with no partial delivery. */
+TEST(server_ops, batch_invalid_rejected) {
+    cmq_config_t config = {0};
+    config.host = "127.0.0.1";
+    config.port = STATS_PORT + 11;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_ms(100);
+
+    int sub_fd = connect_to(config.port);
+    ASSERT(sub_fd >= 0);
+    cmq_parser_t *sp = cmq_parser_create();
+    do_connect(sub_fd, sp);
+    ASSERT_EQ(do_subscribe(sub_fd, sp, "batch.bad", 1), 0);
+
+    int pub_fd = connect_to(config.port);
+    ASSERT(pub_fd >= 0);
+    cmq_parser_t *pp = cmq_parser_create();
+    do_connect(pub_fd, pp);
+
+    /* count=2 but only one complete entry */
+    const char *subj = "batch.bad";
+    uint16_t slen = (uint16_t)strlen(subj);
+    uint8_t batch[128];
+    size_t off = 0;
+    batch[off++] = 0; batch[off++] = 2;
+    batch[off++] = (slen >> 8) & 0xFF; batch[off++] = slen & 0xFF;
+    memcpy(batch + off, subj, slen); off += slen;
+    batch[off++] = 0; batch[off++] = 0; /* reply */
+    batch[off++] = 0; batch[off++] = 0; batch[off++] = 0; batch[off++] = 1;
+    batch[off++] = 'z';
+    send_frame(pub_fd, CMQ_OP_BATCH, batch, off);
+    wait_ms(80);
+
+    cmq_frame_t f;
+    ASSERT_EQ(recv_frame(pub_fd, &f, pp), 0);
+    ASSERT_EQ(f.hdr.op, CMQ_OP_ERROR);
+    free_frame(&f);
+
+    int got = (recv_frame(sub_fd, &f, sp) == 0);
+    if (got) free_frame(&f);
+    ASSERT(!got);
+
+    cmq_parser_destroy(pp);
+    cmq_parser_destroy(sp);
+    close(pub_fd);
+    close(sub_fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

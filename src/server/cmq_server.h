@@ -36,6 +36,7 @@
 #define CMQ_CORO_DELIVER_BATCH 16
 #define CMQ_CORO_MAX_PER_WORKER 256
 #define CMQ_WRITE_BUF_LIMIT   (4 * 1024 * 1024)
+#define CMQ_WORKER_MSG_QUEUE_MAX 8192
 
 typedef enum {
     CMQ_CLIENT_INIT = 0,
@@ -123,6 +124,7 @@ typedef struct cmq_worker {
     cmq_worker_msg_t *msg_head;
     cmq_worker_msg_t *msg_tail;
     cmq_mutex_t msg_lock;
+    size_t msg_pending;             /* queued SEND+TEARDOWN under msg_lock */
 
     cmq_coro_t **coro_pool;
     int coro_count;
@@ -165,6 +167,7 @@ struct cmq_server {
     cmq_atomic_u64 stat_subscriptions;
     cmq_atomic_u64 stat_publishes_rejected;
     cmq_atomic_u64 stat_subscribes_rejected;
+    cmq_atomic_u64 stat_messages_dropped;   /* worker queue full / push OOM */
 };
 
 #endif

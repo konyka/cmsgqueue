@@ -1063,6 +1063,23 @@ All 15 test suites passing, 0 warnings.
 </div>
 </div>
 
+<div class="phase">
+<div class="phase-header">
+<span class="phase-title">Subscribe Replace &amp; Worker Queue Cap</span>
+<span class="status status-done">DONE</span>
+</div>
+<table>
+<tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">SUBSCRIBE replace</span></td><td>✅</td><td>Same <code>sub_id</code> removes the prior sublist ref + entry before insert — no leak / double-delivery. Replace does not consume an extra sub-cap slot.</td></tr>
+<tr><td><span class="component-name">CMQ_WORKER_MSG_QUEUE_MAX</span></td><td>✅</td><td>8192 pending SEND cap per worker; overflow increments <code>stat_messages_dropped</code>. TEARDOWN bypasses the cap.</td></tr>
+<tr><td><span class="component-name">BATCH validate-then-deliver</span></td><td>✅</td><td>Two-pass parse: reject malformed/truncated batches with ERROR before any fan-out.</td></tr>
+<tr><td><span class="component-name">test_server_ops</span></td><td>✅</td><td><code>subscribe_replace_same_id</code>, <code>batch_invalid_rejected</code>. Suite now 12 tests.</td></tr>
+</table>
+<div class="log-entry success">
+<span class="log-date">Pending commit</span> — Subscribe replace + worker queue cap + atomic batch. <strong>21/21 test suites pass.</strong>
+</div>
+</div>
+
 </div>
 </body>
 </html>

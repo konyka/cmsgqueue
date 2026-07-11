@@ -82,6 +82,7 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
     cmq_worker_msg_t *msg = w->msg_head;
     w->msg_head = NULL;
     w->msg_tail = NULL;
+    w->msg_pending = 0;
     cmq_mutex_unlock(&w->msg_lock);
 
     while (msg) {
@@ -122,26 +123,61 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
     }
 }
 
-/* Returns 0 on success, -1 on OOM (message dropped). */
+/* Returns 0 on success, -1 on OOM or queue-full (message dropped). */
 static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
                              const uint8_t *buf, size_t len) {
+    cmq_mutex_lock(&w->msg_lock);
+    if (w->msg_pending >= CMQ_WORKER_MSG_QUEUE_MAX) {
+        cmq_mutex_unlock(&w->msg_lock);
+        if (w->server) {
+            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        }
+        return -1;
+    }
+    cmq_mutex_unlock(&w->msg_lock);
+
     cmq_worker_msg_t *msg = malloc(sizeof(cmq_worker_msg_t));
-    if (!msg) return -1;
+    if (!msg) {
+        if (w->server) {
+            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        }
+        return -1;
+    }
     msg->target_id = target_id;
     msg->kind = CMQ_WORKER_MSG_SEND;
     msg->buf = malloc(len);
-    if (!msg->buf) { free(msg); return -1; }
+    if (!msg->buf) {
+        free(msg);
+        if (w->server) {
+            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        }
+        return -1;
+    }
     memcpy(msg->buf, buf, len);
     msg->len = len;
     msg->next = NULL;
 
     cmq_mutex_lock(&w->msg_lock);
+    if (w->msg_pending >= CMQ_WORKER_MSG_QUEUE_MAX) {
+        cmq_mutex_unlock(&w->msg_lock);
+        free(msg->buf);
+        free(msg);
+        if (w->server) {
+            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        }
+        return -1;
+    }
     if (w->msg_tail) {
         w->msg_tail->next = msg;
     } else {
         w->msg_head = msg;
     }
     w->msg_tail = msg;
+    w->msg_pending++;
     cmq_mutex_unlock(&w->msg_lock);
 
     wakeup_fd_signal(w->wakeup_fd);
@@ -149,6 +185,7 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
 }
 
 /* Schedule client teardown on the owning worker thread (never cross-thread free).
+   Teardown bypasses the SEND queue cap so backpressure cannot strand clients.
    Returns 0 on success, -1 on OOM. */
 static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
     cmq_worker_msg_t *msg = malloc(sizeof(cmq_worker_msg_t));
@@ -166,6 +203,7 @@ static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
         w->msg_head = msg;
     }
     w->msg_tail = msg;
+    w->msg_pending++;
     cmq_mutex_unlock(&w->msg_lock);
 
     wakeup_fd_signal(w->wakeup_fd);
@@ -1092,7 +1130,36 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     int sub_cap = srv->config.max_subs_per_client > 0
                       ? srv->config.max_subs_per_client
                       : CMQ_MAX_SUBS_PER_CLIENT;
-    if (c->sub_count >= sub_cap) {
+
+    /* Replace existing sub_id: remove old sublist ref to avoid leak/double-delivery. */
+    int replacing = 0;
+    cmq_sub_entry_t **pp = &c->subs;
+    while (*pp) {
+        if ((*pp)->sub_id == sub_id) {
+            cmq_sub_entry_t *old = *pp;
+            *pp = old->next;
+            cmq_rwlock_wrlock(&srv->sublist_lock);
+            if (old->ref) {
+                cmq_sublist_remove(srv->sublist, old->subject, old->ref);
+                free(old->ref);
+                old->ref = NULL;
+            }
+            cmq_rwlock_unlock(&srv->sublist_lock);
+            free(old);
+            if (c->sub_count > 0) c->sub_count--;
+            uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
+                                                CMQ_ATOMIC_RELAXED);
+            if (cur > 0) {
+                cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            }
+            replacing = 1;
+            break;
+        }
+        pp = &(*pp)->next;
+    }
+
+    if (!replacing && c->sub_count >= sub_cap) {
         cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_suback(c, sub_id, 1);
@@ -1361,33 +1428,46 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
     uint16_t count = ((uint16_t)frame->payload[0] << 8) | frame->payload[1];
     size_t offset = 2;
 
-    for (uint16_t msg = 0; msg < count && offset < frame->payload_len; msg++) {
-        if (offset + 2 > frame->payload_len) break;
+    /* Pass 1: validate the entire batch before any delivery (no partial fan-out). */
+    for (uint16_t msg = 0; msg < count; msg++) {
+        if (offset + 2 > frame->payload_len) {
+            cmq_send_error(c, "invalid batch");
+            return;
+        }
         uint16_t subject_len = ((uint16_t)frame->payload[offset] << 8) |
                                 frame->payload[offset + 1];
         offset += 2;
-        if (offset + subject_len > frame->payload_len) break;
-        char subject[CMQ_MAX_SUBJECT];
-        size_t copy_len = subject_len;
-        if (copy_len >= CMQ_MAX_SUBJECT) copy_len = CMQ_MAX_SUBJECT - 1;
-        memcpy(subject, frame->payload + offset, copy_len);
-        subject[copy_len] = '\0';
+        if (offset + subject_len > frame->payload_len) {
+            cmq_send_error(c, "invalid batch");
+            return;
+        }
         offset += subject_len;
 
-        if (offset + 2 > frame->payload_len) break;
+        if (offset + 2 > frame->payload_len) {
+            cmq_send_error(c, "invalid batch");
+            return;
+        }
         uint16_t reply_len = ((uint16_t)frame->payload[offset] << 8) |
                               frame->payload[offset + 1];
-        if (offset + 2 + (size_t)reply_len > frame->payload_len) break;
+        if (offset + 2 + (size_t)reply_len > frame->payload_len) {
+            cmq_send_error(c, "invalid batch");
+            return;
+        }
         offset += 2 + (size_t)reply_len;
 
-        if (offset + 4 > frame->payload_len) break;
+        if (offset + 4 > frame->payload_len) {
+            cmq_send_error(c, "invalid batch");
+            return;
+        }
         uint32_t payload_len = ((uint32_t)frame->payload[offset] << 24) |
                                 ((uint32_t)frame->payload[offset + 1] << 16) |
                                 ((uint32_t)frame->payload[offset + 2] << 8) |
                                 (uint32_t)frame->payload[offset + 3];
         offset += 4;
-        if (offset > frame->payload_len) break;
-        if (offset + payload_len > frame->payload_len) break;
+        if (offset + payload_len > frame->payload_len) {
+            cmq_send_error(c, "invalid batch");
+            return;
+        }
         if (srv->config.max_payload_size > 0 &&
             payload_len > (uint32_t)srv->config.max_payload_size) {
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
@@ -1395,6 +1475,35 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_error(c, "payload too large");
             return;
         }
+        offset += payload_len;
+    }
+    if (offset != frame->payload_len) {
+        cmq_send_error(c, "invalid batch");
+        return;
+    }
+
+    /* Pass 2: deliver. */
+    offset = 2;
+    for (uint16_t msg = 0; msg < count; msg++) {
+        uint16_t subject_len = ((uint16_t)frame->payload[offset] << 8) |
+                                frame->payload[offset + 1];
+        offset += 2;
+        char subject[CMQ_MAX_SUBJECT];
+        size_t copy_len = subject_len;
+        if (copy_len >= CMQ_MAX_SUBJECT) copy_len = CMQ_MAX_SUBJECT - 1;
+        memcpy(subject, frame->payload + offset, copy_len);
+        subject[copy_len] = '\0';
+        offset += subject_len;
+
+        uint16_t reply_len = ((uint16_t)frame->payload[offset] << 8) |
+                              frame->payload[offset + 1];
+        offset += 2 + (size_t)reply_len;
+
+        uint32_t payload_len = ((uint32_t)frame->payload[offset] << 24) |
+                                ((uint32_t)frame->payload[offset + 1] << 16) |
+                                ((uint32_t)frame->payload[offset + 2] << 8) |
+                                (uint32_t)frame->payload[offset + 3];
+        offset += 4;
         const uint8_t *msg_payload = frame->payload + offset;
         offset += payload_len;
 
