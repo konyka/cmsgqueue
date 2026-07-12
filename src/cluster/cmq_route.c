@@ -58,7 +58,8 @@ int cmq_connect_timeout(int fd, const struct sockaddr *sa, socklen_t slen,
 
 /* Blocking CONNECT + CONNACK so the peer accepts subsequent PUBLISH frames.
    Must run before set_nonblock. Skips INFO (sent before CONNACK). */
-int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass) {
+int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
+                        uint16_t flags) {
     uint8_t payload[520];
     uint16_t ulen = 0, pwen = 0;
     if (auth_user) {
@@ -79,7 +80,7 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass) {
 
     uint8_t buf[600];
     size_t len = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_CONNECT,
-                                   CMQ_FLAG_ROUTE, payload, plen);
+                                   flags, payload, plen);
     if (len == 0) return -1;
 
     size_t off = 0;
@@ -309,7 +310,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         close(fd);
         return -1;
     }
-    if (cmq_peer_handshake(fd, auth_user, auth_pass) != 0) {
+    if (cmq_peer_handshake(fd, auth_user, auth_pass, CMQ_FLAG_ROUTE) != 0) {
         close(fd);
         return -1;
     }
@@ -375,7 +376,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
     cmq_mutex_unlock(&pool->lock);
 
     if (fd >= 0) {
-        if (cmq_peer_handshake(fd, auth_user, auth_pass) != 0) {
+        if (cmq_peer_handshake(fd, auth_user, auth_pass, CMQ_FLAG_ROUTE) != 0) {
             close(fd);
             return -1;
         }

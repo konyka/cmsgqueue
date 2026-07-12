@@ -157,6 +157,14 @@ TEST(sublist, match_fwc_gt) {
     ASSERT_EQ((intptr_t)result.entries[0], (intptr_t)1);
 
     cmq_sublist_result_free(&result);
+    memset(&result, 0, sizeof(result));
+
+    /* NATS: foo.> also matches the exact prefix "foo". */
+    cmq_sublist_match(sl, "foo", &result);
+    ASSERT_EQ(result.count, (size_t)1);
+    ASSERT_EQ((intptr_t)result.entries[0], (intptr_t)1);
+
+    cmq_sublist_result_free(&result);
     cmq_sublist_destroy(sl);
 }
 

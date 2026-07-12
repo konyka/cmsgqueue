@@ -2111,6 +2111,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — peer handshake flags · FWC prefix match · timer_del reschedule</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">peer handshake</span></td><td>✅</td><td>Gateway/leaf CONNECT with flags=0; only routes send <code>CMQ_FLAG_ROUTE</code>.</td></tr>
+<tr><td><span class="component-name">FWC match</span></td><td>✅</td><td><code>foo.&gt;</code> matches subject <code>foo</code> (NATS zero-token remainder).</td></tr>
+<tr><td><span class="component-name">timer_del</span></td><td>✅</td><td>Clear repeat/cb; fire path only reschedules if still active.</td></tr>
+</table>
+</div>
+
 
 
 

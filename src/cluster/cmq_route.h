@@ -19,8 +19,10 @@ typedef struct {
     uint64_t bytes_recv;
 } cmq_route_conn_t;
 
-/* Blocking CONNECT+CONNACK (optionally with auth). Call before set_nonblock. */
-int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass);
+/* Blocking CONNECT+CONNACK (optionally with auth). Call before set_nonblock.
+   flags: CMQ_FLAG_ROUTE for cluster route peers; 0 for gateway/leaf clients. */
+int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
+                        uint16_t flags);
 
 /* Nonblocking connect with poll deadline (timeout_ms). Restores blocking mode. */
 int cmq_connect_timeout(int fd, const struct sockaddr *sa, socklen_t slen,

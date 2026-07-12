@@ -273,9 +273,10 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             if (!t->active) continue;
             if (t->expire_ms <= now) {
                 if (t->cb) t->cb(t->timer_id, CMQ_EV_TIMER, t->data);
-                if (t->repeat) {
+                /* Callback may have called timer_del — only reschedule if live. */
+                if (t->active && t->repeat) {
                     t->expire_ms = now + t->interval_ms;
-                } else {
+                } else if (t->active) {
                     t->active = 0;
                 }
             }
@@ -423,9 +424,9 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             if (!t->active) continue;
             if (t->expire_ms <= now) {
                 if (t->cb) t->cb(t->timer_id, CMQ_EV_TIMER, t->data);
-                if (t->repeat) {
+                if (t->active && t->repeat) {
                     t->expire_ms = now + t->interval_ms;
-                } else {
+                } else if (t->active) {
                     t->active = 0;
                 }
             }
@@ -470,6 +471,9 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         if (loop->timers[i].active && loop->timers[i].timer_id == timer_id) {
             loop->timers[i].active = 0;
+            loop->timers[i].repeat = 0;
+            loop->timers[i].cb = NULL;
+            loop->timers[i].data = NULL;
             return 0;
         }
     }

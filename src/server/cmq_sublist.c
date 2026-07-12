@@ -311,6 +311,13 @@ static int match_recursive(cmq_sl_node_t *node, char tokens[][256], int ntokens,
         for (size_t i = 0; i < node->sub_count; i++) {
             if (result_append(result, node->subs[i]) != 0) return -1;
         }
+        /* NATS: foo.> matches foo (zero remaining tokens after prefix). */
+        for (cmq_sl_node_t *ch = node->children; ch; ch = ch->next) {
+            if (!ch->is_fwc) continue;
+            for (size_t i = 0; i < ch->sub_count; i++) {
+                if (result_append(result, ch->subs[i]) != 0) return -1;
+            }
+        }
         return 0;
     }
 

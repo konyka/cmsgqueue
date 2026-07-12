@@ -131,7 +131,7 @@ static int leaf_handshake(cmq_leaf_node_t *leaf, int fd) {
     strncpy(pass, leaf->auth_pass, sizeof(pass) - 1);
     pass[sizeof(pass) - 1] = '\0';
     cmq_mutex_unlock(&leaf->lock);
-    return cmq_peer_handshake(fd, user[0] ? user : NULL, pass[0] ? pass : NULL);
+    return cmq_peer_handshake(fd, user[0] ? user : NULL, pass[0] ? pass : NULL, 0);
 }
 
 const char *cmq_leaf_hub_addr(cmq_leaf_node_t *leaf) {

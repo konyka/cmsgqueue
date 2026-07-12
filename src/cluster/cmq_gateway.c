@@ -141,7 +141,7 @@ static void gw_auth_copy(cmq_gateway_t *gw, char *user, size_t ulen,
 static int gw_handshake(cmq_gateway_t *gw, int fd) {
     char user[256], pass[256];
     gw_auth_copy(gw, user, sizeof(user), pass, sizeof(pass));
-    return cmq_peer_handshake(fd, user[0] ? user : NULL, pass[0] ? pass : NULL);
+    return cmq_peer_handshake(fd, user[0] ? user : NULL, pass[0] ? pass : NULL, 0);
 }
 
 int cmq_gateway_add_remote(cmq_gateway_t *gw, const char *cluster_name,
