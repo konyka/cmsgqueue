@@ -63,6 +63,7 @@ typedef struct cmq_server cmq_server_t;
 typedef struct cmq_client {
     int fd;
     uint32_t id;
+    uint32_t conn_gen;              /* distinguishes id reuse after wrap */
     cmq_client_state_t state;
     cmq_parser_t *parser;
     cmq_ev_loop_t *ev_loop;
@@ -106,7 +107,8 @@ typedef struct cmq_client {
 } cmq_client_t;
 
 typedef struct cmq_worker_msg {
-    uint32_t target_id;             /* stable client id (not fd — avoids reuse) */
+    uint32_t target_id;             /* client id */
+    uint32_t target_gen;            /* must match client->conn_gen */
     int kind;                       /* 0=send data, 1=teardown client */
     uint32_t require_sub_id;        /* 0 = no check; else skip if sub gone */
     uint8_t *buf;
@@ -156,6 +158,7 @@ struct cmq_server {
     int clients_cap;
     struct cmq_idmap *idmap;        /* acceptor-thread clients */
     cmq_atomic_u32 next_client_id;
+    cmq_atomic_u32 next_conn_gen;   /* per-connection generation (id wrap safe) */
     cmq_mutex_t clients_lock;
 
     cmq_sublist_t *sublist;

@@ -137,13 +137,18 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
 
 int cmq_stream_read(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out) {
     if (!stream || !out) return -1;
+    cmq_mutex_lock(&stream->lock);
     cmq_store_msg_t msg;
     int rc = cmq_store_get(stream->store, seq, &msg);
-    if (rc != 0) return rc;
+    if (rc != 0) {
+        cmq_mutex_unlock(&stream->lock);
+        return rc;
+    }
     out->seq = msg.seq;
     out->data = msg.data; /* ownership transferred */
     out->len = msg.len;
     out->timestamp_ms = msg.timestamp_ms;
+    cmq_mutex_unlock(&stream->lock);
     return 0;
 }
 
@@ -250,13 +255,25 @@ int cmq_stream_consumer_ack(cmq_stream_t *stream, const char *consumer_name,
 }
 
 size_t cmq_stream_msg_count(cmq_stream_t *stream) {
-    return stream ? cmq_store_count(stream->store) : 0;
+    if (!stream) return 0;
+    cmq_mutex_lock(&stream->lock);
+    size_t n = cmq_store_count(stream->store);
+    cmq_mutex_unlock(&stream->lock);
+    return n;
 }
 
 uint64_t cmq_stream_first_seq(cmq_stream_t *stream) {
-    return stream ? cmq_store_first_seq(stream->store) : 0;
+    if (!stream) return 0;
+    cmq_mutex_lock(&stream->lock);
+    uint64_t s = cmq_store_first_seq(stream->store);
+    cmq_mutex_unlock(&stream->lock);
+    return s;
 }
 
 uint64_t cmq_stream_last_seq(cmq_stream_t *stream) {
-    return stream ? cmq_store_last_seq(stream->store) : 0;
+    if (!stream) return 0;
+    cmq_mutex_lock(&stream->lock);
+    uint64_t s = cmq_store_last_seq(stream->store);
+    cmq_mutex_unlock(&stream->lock);
+    return s;
 }
