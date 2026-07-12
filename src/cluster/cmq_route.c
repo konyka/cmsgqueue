@@ -272,8 +272,20 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) == 0 &&
             pool->conns[i].connected && pool->conns[i].fd >= 0) {
+            int fd = pool->conns[i].fd;
+            size_t idx = i;
             cmq_mutex_unlock(&pool->lock);
-            return 0;
+            /* Light liveness probe — avoid sticky connected after peer death. */
+            struct pollfd pfd = { .fd = fd, .events = 0 };
+            int pr = poll(&pfd, 1, 0);
+            if (pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+                return 0;
+            cmq_mutex_lock(&pool->lock);
+            if (idx < pool->conn_count &&
+                strcmp(pool->conns[idx].remote_id, node_id) == 0 &&
+                pool->conns[idx].fd == fd)
+                route_slot_close(pool, idx);
+            break;
         }
     }
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {

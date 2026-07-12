@@ -208,8 +208,22 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             if (gw->conns[i].connected && gw->conns[i].fd >= 0 &&
                 gw->conns[i].remote_port == port &&
                 strncmp(gw->conns[i].remote_addr, addr, CMQ_NODE_ADDR_SIZE) == 0) {
+                int fd = gw->conns[i].fd;
+                size_t idx = i;
                 cmq_mutex_unlock(&gw->lock);
-                return 0;
+                /* Light liveness probe — avoid sticky connected after peer death. */
+                struct pollfd pfd = { .fd = fd, .events = 0 };
+                int pr = poll(&pfd, 1, 0);
+                if (pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+                    return 0;
+                cmq_mutex_lock(&gw->lock);
+                if (idx < gw->conn_count &&
+                    strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
+                    gw->conns[idx].fd == fd)
+                    gw_slot_close_fd(gw, idx);
+                /* Rescan — avoid closing a peer installed while unlocked. */
+                i = (size_t)-1;
+                continue;
             }
             gw_slot_close_fd(gw, i);
             char addr_copy[CMQ_NODE_ADDR_SIZE];

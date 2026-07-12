@@ -2265,6 +2265,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route/gateway connect probe · PUBLISH reply_to NUL</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/gw connect</span></td><td>✅</td><td>Early-return on live slot probes POLLERR/HUP and closes sticky dead fds before redial (leaf-style).</td></tr>
+<tr><td><span class="component-name">PUBLISH/BATCH reply-to</span></td><td>✅</td><td>Reject length-prefixed reply-to with embedded NUL or invalid subject (align with REQUEST).</td></tr>
+</table>
+</div>
+
 
 
 

@@ -1896,6 +1896,20 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_error(c, "invalid publish");
             return;
         }
+        if (reply_len > 0) {
+            if (reply_len >= CMQ_MAX_SUBJECT) {
+                cmq_send_error(c, "invalid reply-to");
+                return;
+            }
+            char reply_to[CMQ_MAX_SUBJECT];
+            memcpy(reply_to, frame->payload + offset + 2, reply_len);
+            reply_to[reply_len] = '\0';
+            if (!wire_cstr_exact(reply_to, reply_len) ||
+                cmq_sublist_publish_subject_valid(reply_to) != 0) {
+                cmq_send_error(c, "invalid reply-to");
+                return;
+            }
+        }
         offset += 2 + (size_t)reply_len;
     }
 
@@ -2654,6 +2668,20 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         if (offset + 2 + (size_t)reply_len > frame->payload_len) {
             cmq_send_error(c, "invalid batch");
             return;
+        }
+        if (reply_len > 0) {
+            if (reply_len >= CMQ_MAX_SUBJECT) {
+                cmq_send_error(c, "invalid reply-to");
+                return;
+            }
+            char reply_to[CMQ_MAX_SUBJECT];
+            memcpy(reply_to, frame->payload + offset + 2, reply_len);
+            reply_to[reply_len] = '\0';
+            if (!wire_cstr_exact(reply_to, reply_len) ||
+                cmq_sublist_publish_subject_valid(reply_to) != 0) {
+                cmq_send_error(c, "invalid reply-to");
+                return;
+            }
         }
         offset += 2 + (size_t)reply_len;
 
