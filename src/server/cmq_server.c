@@ -490,9 +490,10 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
 }
 
 /* Schedule client teardown on the owning worker thread (never cross-thread free).
-   Dedupes pending TEARDOWN for the same id; respects queue cap (callers fall
-   back to SHUT_RDWR on -1 so clients are not stranded).
-   Returns 0 on success, -1 on OOM or queue-full. */
+   Dedupes pending TEARDOWN for the same id. Bypasses the SEND queue cap so
+   keepalive/close cannot stall behind a full fan-out backlog (callers still
+   fall back to SHUT_RDWR on OOM).
+   Returns 0 on success, -1 on OOM. */
 static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
     cmq_mutex_lock(&w->msg_lock);
     for (cmq_worker_msg_t *m = w->msg_head; m; m = m->next) {
@@ -500,10 +501,6 @@ static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
             cmq_mutex_unlock(&w->msg_lock);
             return 0;
         }
-    }
-    if (w->msg_pending >= CMQ_WORKER_MSG_QUEUE_MAX) {
-        cmq_mutex_unlock(&w->msg_lock);
-        return -1;
     }
     cmq_mutex_unlock(&w->msg_lock);
 
@@ -523,11 +520,6 @@ static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
             free(msg);
             return 0;
         }
-    }
-    if (w->msg_pending >= CMQ_WORKER_MSG_QUEUE_MAX) {
-        cmq_mutex_unlock(&w->msg_lock);
-        free(msg);
-        return -1;
     }
     if (w->msg_tail) {
         w->msg_tail->next = msg;
@@ -1459,6 +1451,8 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             delivered_n++;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                       CMQ_ATOMIC_RELAXED);
+            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
+            if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)payload_len);
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -2174,6 +2168,9 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
+    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
+    if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
+
     size_t route_sent = 0;
     int route_rc = 0;
 
@@ -2276,6 +2273,10 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
+    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
+    if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
+
     size_t route_sent = 0;
     int route_rc = 0;
 
@@ -2332,6 +2333,8 @@ static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
                                              CMQ_ATOMIC_RELAXED);
     uint64_t sub_rej = cmq_atomic_load_u64(&srv->stat_subscribes_rejected,
                                              CMQ_ATOMIC_RELAXED);
+    uint64_t drops = cmq_atomic_load_u64(&srv->stat_messages_dropped,
+                                           CMQ_ATOMIC_RELAXED);
 
     int active = 0;
     cmq_mutex_lock(&srv->clients_lock);
@@ -2362,6 +2365,7 @@ static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
     payload[off++] = active & 0xFF;
     WRITE_U64(pub_rej);
     WRITE_U64(sub_rej);
+    WRITE_U64(drops);
     #undef WRITE_U64
 
     uint8_t buf[96];

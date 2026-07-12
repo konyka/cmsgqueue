@@ -193,7 +193,7 @@ TEST(server_ops, stats_query) {
     cmq_frame_t f;
     ASSERT_EQ(recv_frame(fd, &f, parser), 0);
     ASSERT_EQ(f.hdr.op, CMQ_OP_STATS);
-    ASSERT(f.payload_len >= 68);
+    ASSERT(f.payload_len >= 76);
 
     uint64_t conn = 0, msg_in = 0, msg_out = 0;
     for (int b = 0; b < 8; b++) conn = (conn << 8) | f.payload[b];
@@ -442,7 +442,7 @@ TEST(server_ops, stats_reject_counters) {
     cmq_frame_t f;
     ASSERT_EQ(recv_frame(fd, &f, parser), 0);
     ASSERT_EQ(f.hdr.op, CMQ_OP_STATS);
-    ASSERT(f.payload_len >= 68);
+    ASSERT(f.payload_len >= 76);
 
     /* publishes_rejected at offset 52, subscribes_rejected at offset 60 */
     uint64_t pub_rej = 0, sub_rej = 0;
