@@ -988,8 +988,8 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
         rc = cmq_client_send_direct(c, wsbuf, total);
         free(wsbuf);
     }
-    /* Outbound traffic keeps pure subscribers alive under keepalive. */
-    if (rc == 0)
+    /* Outbound keepalive refresh only for CONNECTED (INIT must stay frozen). */
+    if (rc == 0 && c->state == CMQ_CLIENT_CONNECTED)
         c->last_activity_ms = srv_now_ms();
     return rc;
 }
@@ -2711,6 +2711,11 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_connack(c, 0);
         break;
     case CMQ_OP_PING:
+        if (!client_account_live(srv, c)) {
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            break;
+        }
         cmq_send_pong(c);
         break;
     case CMQ_OP_PUBLISH:
@@ -2740,6 +2745,11 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         c->state = CMQ_CLIENT_CLOSING;
         break;
     case CMQ_OP_STATS:
+        if (!client_account_live(srv, c)) {
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            break;
+        }
         handle_stats(srv, c);
         break;
     default:
@@ -2902,34 +2912,41 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
     }
     if (hdr_end == 0) return 1; /* incomplete HTTP headers */
 
-    char req[4096];
-    size_t copy = hdr_end;
-    if (copy > sizeof(req) - 1) copy = sizeof(req) - 1;
-    memcpy(req, data, copy);
-    req[copy] = '\0';
+    /* Full header buffer (up to ws_recv_cap) — do not truncate Key/Origin. */
+    char *req = malloc(hdr_end + 1);
+    if (!req) return -1;
+    memcpy(req, data, hdr_end);
+    req[hdr_end] = '\0';
 
-    if (strncmp(req, "GET ", 4) != 0) return -1;
+    if (strncmp(req, "GET ", 4) != 0) { free(req); return -1; }
     if (strstr(req, "Upgrade: websocket") == NULL &&
-        strstr(req, "Upgrade: WebSocket") == NULL) return -1;
+        strstr(req, "Upgrade: WebSocket") == NULL) { free(req); return -1; }
     if (strstr(req, "Sec-WebSocket-Version: 13") == NULL &&
-        strstr(req, "Sec-WebSocket-Version:13") == NULL) return -1;
+        strstr(req, "Sec-WebSocket-Version:13") == NULL) { free(req); return -1; }
 
     /* CSWSH: if Origin is present it must match Host. Native clients may omit Origin. */
     char origin_raw[256] = {0}, host_raw[256] = {0};
     char origin_host[256] = {0}, host_host[256] = {0};
     if (http_header_value(req, "Origin", origin_raw, sizeof(origin_raw)) == 0) {
-        if (http_header_value(req, "Host", host_raw, sizeof(host_raw)) != 0)
+        if (http_header_value(req, "Host", host_raw, sizeof(host_raw)) != 0) {
+            free(req);
             return -1;
+        }
         http_host_from_value(origin_raw, origin_host, sizeof(origin_host));
         http_host_from_value(host_raw, host_host, sizeof(host_host));
         if (origin_host[0] == '\0' || host_host[0] == '\0' ||
-            strcmp(origin_host, host_host) != 0)
+            strcmp(origin_host, host_host) != 0) {
+            free(req);
             return -1;
+        }
     }
 
     char ws_key[128] = {0};
-    if (cmq_ws_parse_http_upgrade(req, copy, ws_key, sizeof(ws_key)) != 0)
+    if (cmq_ws_parse_http_upgrade(req, hdr_end, ws_key, sizeof(ws_key)) != 0) {
+        free(req);
         return -1;
+    }
+    free(req);
 
     char accept_key[64] = {0};
     if (cmq_ws_accept_key(ws_key, accept_key, sizeof(accept_key)) != 0)
@@ -3872,9 +3889,16 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     }
 
     if (srv->config.ping_interval_ms > 0) {
-        cmq_ev_timer_add(srv->ev_loop, (uint64_t)srv->config.ping_interval_ms,
-                          (uint64_t)srv->config.ping_interval_ms,
-                          keepalive_timer_cb, srv);
+        if (cmq_ev_timer_add(srv->ev_loop, (uint64_t)srv->config.ping_interval_ms,
+                              (uint64_t)srv->config.ping_interval_ms,
+                              keepalive_timer_cb, srv) < 0) {
+            cmq_log_error(srv->log, "keepalive timer registration failed");
+            cmq_ev_loop_destroy(srv->ev_loop);
+            srv->ev_loop = NULL;
+            close(srv->listen_fd);
+            srv->listen_fd = -1;
+            return CMQ_ERR_IO;
+        }
     }
 
     int nthreads = srv->config.num_threads;
