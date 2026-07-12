@@ -118,6 +118,25 @@ static void fs_unlock_pair(cmq_filestore_t *fs) {
     if (fs->data_fp) fs_flock(fs->data_fp, LOCK_UN);
 }
 
+/* Under flock: idx length is the cross-process authority for next_seq.
+   may_truncate: only under LOCK_EX — drop a torn trailing partial entry. */
+static int fs_refresh_next_seq(cmq_filestore_t *fs, int may_truncate) {
+    if (!fs || !fs->idx_fp) return -1;
+    if (fs_seek_end(fs->idx_fp) != 0) return -1;
+    uint64_t idx_sz;
+    if (fs_tell(fs->idx_fp, &idx_sz) != 0) return -1;
+    if ((idx_sz % 8u) != 0) {
+        idx_sz -= idx_sz % 8u;
+        if (may_truncate) {
+            if (ftruncate(fileno(fs->idx_fp), (off_t)idx_sz) != 0)
+                return -1;
+            if (fs_seek_end(fs->idx_fp) != 0) return -1;
+        }
+    }
+    fs->next_seq = (idx_sz / 8u) + 1;
+    return 0;
+}
+
 static void build_paths(cmq_filestore_t *fs) {
     snprintf(fs->data_path, sizeof(fs->data_path), "%s/%s.data", fs->dir, fs->prefix);
     snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx", fs->dir, fs->prefix);
@@ -300,6 +319,13 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
         return -1;
     }
 
+    /* Re-sync next_seq from idx — another process may have appended. */
+    if (fs_refresh_next_seq(fs, 1) != 0) {
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+
     /* Always append at EOF — read() leaves the stream mid-file. */
     if (fs_seek_end(fs->data_fp) != 0 || fs_seek_end(fs->idx_fp) != 0) {
         fs_unlock_pair(fs);
@@ -382,6 +408,12 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
     if (!fs || !out_data || !out_len || seq == 0) return -1;
     cmq_mutex_lock(&fs->lock);
     if (fs_lock_pair(fs, LOCK_SH) != 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+
+    if (fs_refresh_next_seq(fs, 0) != 0) {
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -498,7 +530,12 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
 uint64_t cmq_filestore_last_seq(cmq_filestore_t *fs) {
     if (!fs) return 0;
     cmq_mutex_lock(&fs->lock);
-    uint64_t last = fs->next_seq > 0 ? fs->next_seq - 1 : 0;
+    uint64_t last = 0;
+    if (fs_lock_pair(fs, LOCK_SH) == 0) {
+        if (fs_refresh_next_seq(fs, 0) == 0)
+            last = fs->next_seq > 0 ? fs->next_seq - 1 : 0;
+        fs_unlock_pair(fs);
+    }
     cmq_mutex_unlock(&fs->lock);
     return last;
 }

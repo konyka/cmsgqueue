@@ -38,6 +38,8 @@
 #define CMQ_CORO_MAX_PER_WORKER 256
 #define CMQ_WRITE_BUF_LIMIT   (4 * 1024 * 1024)
 #define CMQ_WORKER_MSG_QUEUE_MAX 8192
+/* TEARDOWN may exceed SEND cap so closes are not starved; hard ceiling still. */
+#define CMQ_WORKER_TEARDOWN_SLACK 4096
 
 typedef enum {
     CMQ_CLIENT_INIT = 0,

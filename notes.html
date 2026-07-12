@@ -2179,6 +2179,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — filestore cross-proc seq · drain waits workers · TEARDOWN hard cap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">filestore seq</span></td><td>✅</td><td>Under flock, refresh <code>next_seq</code> from idx size (append/read/last_seq) so multi-process writers do not collide.</td></tr>
+<tr><td><span class="component-name">drain wait</span></td><td>✅</td><td>Wait until acceptor <em>and</em> all worker <code>clients_count</code> are 0 (or timeout).</td></tr>
+<tr><td><span class="component-name">TEARDOWN cap</span></td><td>✅</td><td>Still bypasses SEND-only cap; hard ceiling <code>QUEUE_MAX + TEARDOWN_SLACK</code>; overflow → <code>shutdown</code>.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -524,10 +524,10 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
 }
 
 /* Schedule client teardown on the owning worker thread (never cross-thread free).
-   Dedupes pending TEARDOWN for the same id. Bypasses the SEND queue cap so
-   keepalive/close cannot stall behind a full fan-out backlog (callers still
-   fall back to SHUT_RDWR on OOM).
-   Returns 0 on success, -1 on OOM. */
+   Dedupes pending TEARDOWN for the same id. May exceed the SEND-only queue cap
+   (keepalive/close must not stall behind fan-out), but still hard-capped by
+   CMQ_WORKER_TEARDOWN_SLACK so mass-timeout cannot unbounded-malloc.
+   Returns 0 on success, -1 on OOM / hard-full (callers fall back to SHUT_RDWR). */
 static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
     cmq_mutex_lock(&w->msg_lock);
     for (cmq_worker_msg_t *m = w->msg_head; m; m = m->next) {
@@ -535,6 +535,10 @@ static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
             cmq_mutex_unlock(&w->msg_lock);
             return 0;
         }
+    }
+    if (w->msg_pending >= CMQ_WORKER_MSG_QUEUE_MAX + CMQ_WORKER_TEARDOWN_SLACK) {
+        cmq_mutex_unlock(&w->msg_lock);
+        return -1;
     }
     cmq_mutex_unlock(&w->msg_lock);
 
@@ -554,6 +558,11 @@ static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id) {
             free(msg);
             return 0;
         }
+    }
+    if (w->msg_pending >= CMQ_WORKER_MSG_QUEUE_MAX + CMQ_WORKER_TEARDOWN_SLACK) {
+        cmq_mutex_unlock(&w->msg_lock);
+        free(msg);
+        return -1;
     }
     if (w->msg_tail) {
         w->msg_tail->next = msg;
@@ -4339,9 +4348,17 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
     int timeout = drain_timeout_ms > 0 ? drain_timeout_ms : 0;
     uint64_t start = srv_now_ms();
     for (;;) {
+        int n = 0;
         cmq_mutex_lock(&srv->clients_lock);
-        int n = srv->clients_count;
+        n += srv->clients_count;
         cmq_mutex_unlock(&srv->clients_lock);
+        if (srv->workers) {
+            for (int i = 0; i < srv->num_workers; i++) {
+                cmq_mutex_lock(&srv->workers[i].clients_lock);
+                n += srv->workers[i].clients_count;
+                cmq_mutex_unlock(&srv->workers[i].clients_lock);
+            }
+        }
         if (n == 0)
             break;
         if ((int)(srv_now_ms() - start) >= timeout)
