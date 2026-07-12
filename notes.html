@@ -2121,6 +2121,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route io_lock fail-closed · CONNECT timing pad · truncate prefix</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route write lock</span></td><td>✅</td><td>Send/flush fail-closed if <code>io_lock_fd</code> misses (no unlocked route write).</td></tr>
+<tr><td><span class="component-name">CONNECT timing</span></td><td>✅</td><td>Malformed auth still runs padded <code>ct_memeq</code> before CONNACK.</td></tr>
+<tr><td><span class="component-name">store truncate</span></td><td>✅</td><td>Prefix-only eviction keeps <code>first_seq</code>/<code>count</code> hole-free.</td></tr>
+</table>
+</div>
+
 
 
 

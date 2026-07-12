@@ -870,8 +870,16 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
         return -1;
 
     int route_io_idx = -1;
-    if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+    if (c->is_route && c->server && c->server->routes && c->fd >= 0) {
         route_io_idx = cmq_route_io_lock_fd(c->server->routes, c->fd);
+        /* Fail-closed: never write a route fd unlocked (broadcast may hold it). */
+        if (route_io_idx < 0) {
+            c->state = CMQ_CLIENT_CLOSING;
+            if (c->fd >= 0)
+                (void)shutdown(c->fd, SHUT_RDWR);
+            return -1;
+        }
+    }
 
     /* Mark CLOSING without teardown — callers may hold clients_lock. */
     #define CMQ_SEND_FORCE_CLOSE() do { \
@@ -2618,43 +2626,36 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             break;
         }
         if (auth_configured(srv)) {
-            if (!frame->payload || frame->payload_len < 4) {
-                cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
-                break;
-            }
-            uint16_t ulen = ((uint16_t)frame->payload[0] << 8) |
-                             frame->payload[1];
-            uint16_t plen = ((uint16_t)frame->payload[2] << 8) |
-                             frame->payload[3];
-            if ((size_t)(4 + ulen + plen) > frame->payload_len) {
-                cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
-                break;
-            }
-            /* Cred pads are 256 bytes; reject overlong fields (no silent truncate). */
-            if (ulen >= 256 || plen >= 256) {
-                cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
-                break;
-            }
             char uname[256] = {0};
             char passwd[256] = {0};
             char expect_u[256] = {0};
             char expect_p[256] = {0};
-            if (ulen > 0) memcpy(uname, frame->payload + 4, ulen);
-            if (plen > 0) memcpy(passwd, frame->payload + 4 + ulen, plen);
+            int malformed = 0;
+            if (!frame->payload || frame->payload_len < 4) {
+                malformed = 1;
+            } else {
+                uint16_t ulen = ((uint16_t)frame->payload[0] << 8) |
+                                 frame->payload[1];
+                uint16_t plen = ((uint16_t)frame->payload[2] << 8) |
+                                 frame->payload[3];
+                if ((size_t)(4 + ulen + plen) > frame->payload_len ||
+                    ulen >= 256 || plen >= 256) {
+                    malformed = 1;
+                } else {
+                    if (ulen > 0) memcpy(uname, frame->payload + 4, ulen);
+                    if (plen > 0) memcpy(passwd, frame->payload + 4 + ulen, plen);
+                }
+            }
             if (srv->config.auth_username && srv->config.auth_username[0])
                 strncpy(expect_u, srv->config.auth_username, sizeof(expect_u) - 1);
             if (srv->config.auth_password && srv->config.auth_password[0])
                 strncpy(expect_p, srv->config.auth_password, sizeof(expect_p) - 1);
-            /* Password-only auth: any CONNECT username selects the account.
-               Username+password: both must match (shared single-tenant creds). */
+            /* Always run padded compares so early rejects share timing with auth. */
             int need_user = (srv->config.auth_username &&
                              srv->config.auth_username[0]);
             int need_pass = (srv->config.auth_password &&
                              srv->config.auth_password[0]);
-            int bad = 0;
+            int bad = malformed;
             if (need_user)
                 bad |= !ct_memeq(uname, expect_u, sizeof(uname));
             else
@@ -2664,7 +2665,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             else
                 bad |= !ct_memeq(passwd, passwd, sizeof(passwd));
             if (bad) {
-                cmq_send_connack(c, 2);
+                cmq_send_connack(c, malformed ? 1 : 2);
                 c->state = CMQ_CLIENT_CLOSING;
                 break;
             }
@@ -2794,8 +2795,17 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
 
 static void client_flush_write(cmq_client_t *c) {
     int route_io_idx = -1;
-    if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+    if (c->is_route && c->server && c->server->routes && c->fd >= 0) {
         route_io_idx = cmq_route_io_lock_fd(c->server->routes, c->fd);
+        if (route_io_idx < 0) {
+            c->write_len = 0;
+            c->write_pos = 0;
+            c->state = CMQ_CLIENT_CLOSING;
+            if (c->fd >= 0)
+                (void)shutdown(c->fd, SHUT_RDWR);
+            return;
+        }
+    }
 
     if (!c->write_buf || c->write_pos >= c->write_len) {
         c->write_len = 0;

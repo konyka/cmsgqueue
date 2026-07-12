@@ -168,17 +168,19 @@ uint64_t cmq_store_last_seq(cmq_store_t *store) {
 void cmq_store_truncate(cmq_store_t *store, uint64_t before_seq) {
     if (!store || before_seq <= 1) return;
     cmq_mutex_lock(&store->lock);
-    /* Only scan the live ring window (≤ cap), not all historical seq numbers. */
-    uint64_t oldest = (store->head_seq > store->cap) ? store->head_seq - store->cap : 1;
-    if (oldest < 1) oldest = 1;
-    for (uint64_t seq = oldest; seq < before_seq && seq < store->head_seq; seq++) {
-        size_t idx = (size_t)(seq - 1) % store->cap;
-        if (store->ring[idx].seq == seq && store->ring[idx].valid) {
-            free(store->ring[idx].data);
-            store->ring[idx].data = NULL;
-            store->ring[idx].valid = 0;
-            if (store->count > 0) store->count--;
-        }
+    /* Prefix-only: walk first_seq upward so count/first_seq stay hole-free. */
+    while (store->count > 0) {
+        uint64_t first = (store->head_seq > store->count)
+                             ? store->head_seq - store->count : 1;
+        if (first >= before_seq)
+            break;
+        size_t idx = (size_t)(first - 1) % store->cap;
+        if (store->ring[idx].seq != first || !store->ring[idx].valid)
+            break;
+        free(store->ring[idx].data);
+        store->ring[idx].data = NULL;
+        store->ring[idx].valid = 0;
+        store->count--;
     }
     cmq_mutex_unlock(&store->lock);
 }
