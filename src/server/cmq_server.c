@@ -919,6 +919,31 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
         c->write_len = new_len;
         if (c->last_write_progress_ms == 0)
             c->last_write_progress_ms = srv_now_ms();
+        /* Re-arm WRITE in case interest was dropped after a prior flush. */
+        if (cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE,
+                       client_read_cb, c) != 0) {
+            size_t rem = c->write_len - c->write_pos;
+            ssize_t n = client_sock_write(c, c->write_buf + c->write_pos, rem);
+            if (n > 0) {
+                c->write_pos += (size_t)n;
+                if (c->server)
+                    cmq_atomic_fetch_add_u64(&c->server->stat_bytes_out, (uint64_t)n,
+                                              CMQ_ATOMIC_RELAXED);
+                if (c->write_pos >= c->write_len) {
+                    c->write_len = 0;
+                    c->write_pos = 0;
+                    rc = 0;
+                    goto out;
+                }
+            }
+            c->write_len = 0;
+            c->write_pos = 0;
+            c->state = CMQ_CLIENT_CLOSING;
+            if (c->fd >= 0)
+                (void)shutdown(c->fd, SHUT_RDWR);
+            rc = -1;
+            goto out;
+        }
         rc = 0;
         goto out;
     }
@@ -3533,8 +3558,13 @@ static void accept_cb(int fd, int events, void *data) {
     cmq_server_t *srv = (cmq_server_t *)data;
     if (!(events & CMQ_EV_READ)) return;
 
-    /* Drain the listen backlog — one accept per epoll wake stalls under bursts. */
+    /* Drain the listen backlog — one accept per epoll wake stalls under bursts.
+       Cap per wake so keepalive / existing clients stay responsive. */
+    enum { CMQ_ACCEPT_PER_WAKE = 64 };
+    int accepted = 0;
     for (;;) {
+        if (accepted >= CMQ_ACCEPT_PER_WAKE)
+            return;
         struct sockaddr_in addr;
         socklen_t addrlen = sizeof(addr);
         int client_fd = accept(fd, (struct sockaddr *)&addr, &addrlen);
@@ -3542,6 +3572,7 @@ static void accept_cb(int fd, int events, void *data) {
             if (errno == EINTR) continue;
             return; /* EAGAIN / EWOULDBLOCK / fatal */
         }
+        accepted++;
 
         if (set_nonblocking(client_fd) != 0) {
             close(client_fd);

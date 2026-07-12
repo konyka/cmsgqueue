@@ -2131,6 +2131,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — accept per-wake cap · write_buf re-arm WRITE</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">accept drain</span></td><td>✅</td><td>At most 64 accepts per epoll wake (keepalive stays responsive).</td></tr>
+<tr><td><span class="component-name">write append</span></td><td>✅</td><td>Pending-buffer append re-arms <code>READ|WRITE</code> (or one-shot drain/close).</td></tr>
+</table>
+</div>
+
 
 
 
