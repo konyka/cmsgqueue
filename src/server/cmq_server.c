@@ -2137,8 +2137,9 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "delivery failed");
         return;
     }
-    /* Forward only after local match/snapshot succeeded (no OOM ghosts). */
-    if (!c->is_route)
+    /* Only forward REQUEST when no local responders — otherwise peers
+       also answer the same _INBOX and the client sees duplicate replies. */
+    if (!c->is_route && ntgt == 0)
         route_rc = cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
                                          frame->payload, frame->payload_len,
                                          &route_sent);
@@ -2149,10 +2150,6 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                             msg_payload, msg_len);
         free(tgts);
         if (n > 0) {
-            uint8_t ack[4] = {0};
-            size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
-            if (ack_len > 0) cmq_client_send(c, ack, ack_len);
-        } else if (route_sent > 0) {
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
@@ -2213,7 +2210,10 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    if (!cmq_account_can_export(srv->accounts, c->account_name, subject)) {
+    /* Inbox replies are not published subjects — skip export ACL; may_deliver
+       still gates cross-account delivery on the fan-out path. */
+    if (strncmp(subject, "_INBOX.", 7) != 0 &&
+        !cmq_account_can_export(srv->accounts, c->account_name, subject)) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "permission denied");
@@ -3785,11 +3785,15 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             return CMQ_ERR_INVALID_ARG;
         }
         srv->tls_config = cmq_tls_config_create();
-        if (srv->tls_config) {
-            cmq_tls_set_cert(srv->tls_config, srv->config.tls_cert);
-            cmq_tls_set_key(srv->tls_config, srv->config.tls_key);
-            cmq_log_info(srv->log, "TLS enabled: cert=%s", srv->config.tls_cert);
+        if (!srv->tls_config) {
+            cmq_log_error(srv->log, "TLS config allocation failed — refusing plaintext");
+            cmq_server_destroy(srv);
+            *server = NULL;
+            return CMQ_ERR_NO_MEMORY;
         }
+        cmq_tls_set_cert(srv->tls_config, srv->config.tls_cert);
+        cmq_tls_set_key(srv->tls_config, srv->config.tls_key);
+        cmq_log_info(srv->log, "TLS enabled: cert=%s", srv->config.tls_cert);
     }
 
     if (srv->config.cluster_name && srv->config.cluster_node_id) {

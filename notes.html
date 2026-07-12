@@ -2047,6 +2047,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST local-only · RESPONSE inbox ACL · TLS OOM · filestore flock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">REQUEST route</span></td><td>✅</td><td>Forward only when no local responders (no duplicate _INBOX replies).</td></tr>
+<tr><td><span class="component-name">RESPONSE ACL</span></td><td>✅</td><td><code>_INBOX.*</code> skips export whitelist (may_deliver still applies).</td></tr>
+<tr><td><span class="component-name">TLS OOM</span></td><td>✅</td><td><code>tls_config_create</code> failure aborts create (no plaintext). </td></tr>
+<tr><td><span class="component-name">filestore flock</span></td><td>✅</td><td>Cross-process <code>flock</code> on append/read around data file.</td></tr>
+</table>
+</div>
+
+
 
 
 
