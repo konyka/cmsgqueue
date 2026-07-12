@@ -151,9 +151,20 @@ int cmq_gateway_add_remote(cmq_gateway_t *gw, const char *cluster_name,
 
     for (size_t i = 0; i < gw->cluster_count; i++) {
         if (strcmp(gw->clusters[i].name, cluster_name) == 0) {
+            int addr_changed =
+                (strncmp(gw->clusters[i].addr, addr, CMQ_NODE_ADDR_SIZE) != 0) ||
+                (gw->clusters[i].port != port);
             strncpy(gw->clusters[i].addr, addr, CMQ_NODE_ADDR_SIZE - 1);
+            gw->clusters[i].addr[CMQ_NODE_ADDR_SIZE - 1] = '\0';
             gw->clusters[i].port = port;
             gw->clusters[i].known = 1;
+            if (addr_changed) {
+                /* Invalidate live TCP so connect_remote must dial the new endpoint. */
+                for (size_t j = 0; j < gw->conn_count; j++) {
+                    if (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0)
+                        gw_slot_close_fd(gw, j);
+                }
+            }
             cmq_mutex_unlock(&gw->lock);
             return 0;
         }
@@ -194,7 +205,9 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
 
     for (size_t i = 0; i < gw->conn_count; i++) {
         if (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0) {
-            if (gw->conns[i].connected && gw->conns[i].fd >= 0) {
+            if (gw->conns[i].connected && gw->conns[i].fd >= 0 &&
+                gw->conns[i].remote_port == port &&
+                strncmp(gw->conns[i].remote_addr, addr, CMQ_NODE_ADDR_SIZE) == 0) {
                 cmq_mutex_unlock(&gw->lock);
                 return 0;
             }

@@ -477,6 +477,13 @@ TEST(ws, parse_http_upgrade) {
     ASSERT_EQ(cmq_ws_parse_http_upgrade(raw, n, key, sizeof(key)), 0);
     ASSERT_STR_EQ(key, "dGhlIHNhbXBsZSBub25jZQ==");
     ASSERT_EQ(cmq_ws_parse_http_upgrade(req, n, key, 0), -1);
+
+    /* Header names are case-insensitive. */
+    const char *req_lc = "GET /ws HTTP/1.1\r\n"
+                          "sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                          "\r\n";
+    ASSERT_EQ(cmq_ws_parse_http_upgrade(req_lc, strlen(req_lc), key, sizeof(key)), 0);
+    ASSERT_STR_EQ(key, "dGhlIHNhbXBsZSBub25jZQ==");
 }
 
 TEST(ws, build_response) {

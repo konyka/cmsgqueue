@@ -2238,6 +2238,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — gateway addr change reconnect · WS key case-insensitive</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">gateway add_remote</span></td><td>✅</td><td>Addr/port change closes live conn slots; <code>connect_remote</code> also refuses stale addr/port matches.</td></tr>
+<tr><td><span class="component-name">WS upgrade key</span></td><td>✅</td><td><code>Sec-WebSocket-Key</code> parsed case-insensitively (RFC 7230).</td></tr>
+</table>
+</div>
+
 
 
 

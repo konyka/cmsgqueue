@@ -271,29 +271,38 @@ int cmq_ws_parse_http_upgrade(const char *req, size_t req_len,
                                char *ws_key_out, size_t key_len) {
     if (!req || !ws_key_out || key_len == 0 || req_len == 0) return -1;
 
-    static const char marker[] = "Sec-WebSocket-Key: ";
-    const size_t mlen = sizeof(marker) - 1;
-    if (req_len < mlen) return -1;
-
+    /* Header names are case-insensitive (RFC 7230); match Sec-WebSocket-Key. */
+    static const char name[] = "sec-websocket-key";
+    const size_t nlen = sizeof(name) - 1;
     size_t i = 0;
-    for (; i + mlen <= req_len; i++) {
-        if (memcmp(req + i, marker, mlen) == 0)
-            break;
+    while (i < req_len) {
+        size_t line = i;
+        while (i < req_len && req[i] != '\r' && req[i] != '\n')
+            i++;
+        size_t llen = i - line;
+        if (llen > nlen + 1) {
+            int match = 1;
+            for (size_t k = 0; k < nlen; k++) {
+                char a = req[line + k];
+                if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                if (a != name[k]) { match = 0; break; }
+            }
+            if (match && req[line + nlen] == ':') {
+                size_t v = line + nlen + 1;
+                while (v < line + llen && (req[v] == ' ' || req[v] == '\t'))
+                    v++;
+                size_t klen = (line + llen) - v;
+                if (klen == 0) return -1;
+                if (klen >= key_len) klen = key_len - 1;
+                memcpy(ws_key_out, req + v, klen);
+                ws_key_out[klen] = '\0';
+                return 0;
+            }
+        }
+        while (i < req_len && (req[i] == '\r' || req[i] == '\n'))
+            i++;
     }
-    if (i + mlen > req_len) return -1;
-    i += mlen;
-
-    size_t end = i;
-    while (end < req_len && req[end] != '\r' && req[end] != '\n')
-        end++;
-    if (end >= req_len) return -1;
-
-    size_t klen = end - i;
-    if (klen == 0) return -1;
-    if (klen >= key_len) klen = key_len - 1;
-    memcpy(ws_key_out, req + i, klen);
-    ws_key_out[klen] = '\0';
-    return 0;
+    return -1;
 }
 
 int cmq_ws_build_response(const char *accept_key, char *out, size_t out_len) {
