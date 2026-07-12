@@ -61,6 +61,16 @@ TEST(mpool, reset) {
     cmq_mpool_reset(pool);
     void *p = cmq_mpool_alloc(pool, 4000);
     ASSERT_NOT_NULL(p);
+    size_t used_after = cmq_mpool_used(pool);
+    /* Force overflow blocks then reset — used bytes must not keep growing. */
+    for (int i = 0; i < 8; i++) {
+        ASSERT_NOT_NULL(cmq_mpool_alloc(pool, 3000));
+    }
+    size_t used_grown = cmq_mpool_used(pool);
+    ASSERT(used_grown > used_after);
+    cmq_mpool_reset(pool);
+    ASSERT_NOT_NULL(cmq_mpool_alloc(pool, 4000));
+    ASSERT_EQ(cmq_mpool_used(pool), used_grown); /* reuses existing blocks */
     cmq_mpool_destroy(pool);
 }
 

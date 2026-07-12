@@ -1983,6 +1983,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — mpool reset reuse · store prefix evict · truncate window</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">mpool reset</span></td><td>✅</td><td>Reset rewinds <code>tail</code> to <code>head</code> (reuses early blocks).</td></tr>
+<tr><td><span class="component-name">store evict</span></td><td>✅</td><td>Only oldest seq (prefix) — keeps <code>first_seq</code> continuous.</td></tr>
+<tr><td><span class="component-name">store truncate</span></td><td>✅</td><td>Scan live ring window only (≤ capacity), not full history.</td></tr>
+</table>
+</div>
+
+
 
 
 

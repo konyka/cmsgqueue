@@ -152,6 +152,8 @@ void cmq_mpool_reset(cmq_mpool_t *pool) {
         cur->offset = 0;
         cur = cur->next;
     }
+    /* Allocations resume from the first block so reset actually reclaims space. */
+    pool->tail = pool->head;
 }
 
 size_t cmq_mpool_used(cmq_mpool_t *pool) {

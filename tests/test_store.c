@@ -74,6 +74,18 @@ TEST(store, truncate) {
     cmq_store_destroy(s);
 }
 
+TEST(store, evict_prefix_only) {
+    cmq_store_t *s = cmq_store_create(8);
+    for (int i = 0; i < 4; i++)
+        cmq_store_put(s, (const uint8_t *)"x", 1);
+    ASSERT_EQ(cmq_store_first_seq(s), (uint64_t)1);
+    ASSERT_EQ(cmq_store_evict_seq(s, 2), -1); /* hole not allowed */
+    ASSERT_EQ(cmq_store_evict_seq(s, 1), 0);
+    ASSERT_EQ(cmq_store_first_seq(s), (uint64_t)2);
+    ASSERT_EQ(cmq_store_count(s), (size_t)3);
+    cmq_store_destroy(s);
+}
+
 TEST(store, empty_get) {
     cmq_store_t *s = cmq_store_create(16);
     cmq_store_msg_t msg;
