@@ -308,7 +308,12 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
     }
     /* Claim local slot before hub I/O so capacity races cannot desync. */
     size_t idx = leaf->sub_count;
+    /* Server rejects sub_id 0; skip wraparound to 0 after UINT32_MAX. */
+    if (leaf->next_sub_id == 0)
+        leaf->next_sub_id = 1;
     uint32_t sub_id = leaf->next_sub_id++;
+    if (leaf->next_sub_id == 0)
+        leaf->next_sub_id = 1;
     leaf->subs[idx] = copy;
     leaf->sub_ids[idx] = sub_id;
     leaf->sub_count++;

@@ -3418,155 +3418,161 @@ static void accept_cb(int fd, int events, void *data) {
     cmq_server_t *srv = (cmq_server_t *)data;
     if (!(events & CMQ_EV_READ)) return;
 
-    struct sockaddr_in addr;
-    socklen_t addrlen = sizeof(addr);
-    int client_fd = accept(fd, (struct sockaddr *)&addr, &addrlen);
-    if (client_fd < 0) return;
+    /* Drain the listen backlog — one accept per epoll wake stalls under bursts. */
+    for (;;) {
+        struct sockaddr_in addr;
+        socklen_t addrlen = sizeof(addr);
+        int client_fd = accept(fd, (struct sockaddr *)&addr, &addrlen);
+        if (client_fd < 0) {
+            if (errno == EINTR) continue;
+            return; /* EAGAIN / EWOULDBLOCK / fatal */
+        }
 
-    if (set_nonblocking(client_fd) != 0) {
-        close(client_fd);
-        return;
-    }
-
-    if (srv->config.max_clients > 0) {
-        uint32_t cur = cmq_atomic_fetch_add_u32(&srv->active_clients, 1,
-                                                 CMQ_ATOMIC_SEQ_CST);
-        if ((int)(cur + 1) > srv->config.max_clients) {
-            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_SEQ_CST);
+        if (set_nonblocking(client_fd) != 0) {
             close(client_fd);
-            return;
+            continue;
         }
-    } else {
-        cmq_atomic_fetch_add_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-    }
 
-    uint32_t cid = 0;
-    for (int id_try = 0; id_try < 16; id_try++) {
-        uint32_t cand = cmq_atomic_fetch_add_u32(&srv->next_client_id, 1,
-                                                  CMQ_ATOMIC_SEQ_CST);
-        /* 0 = empty slot; UINT32_MAX = tombstone — never assign as client id. */
-        if (cand != 0 && cand != CMQ_IDMAP_TOMB) {
-            cid = cand;
-            break;
+        if (srv->config.max_clients > 0) {
+            uint32_t cur = cmq_atomic_fetch_add_u32(&srv->active_clients, 1,
+                                                     CMQ_ATOMIC_SEQ_CST);
+            if ((int)(cur + 1) > srv->config.max_clients) {
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_SEQ_CST);
+                close(client_fd);
+                continue;
+            }
+        } else {
+            cmq_atomic_fetch_add_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
         }
-    }
-    if (cid == 0) {
-        close(client_fd);
-        cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-        return;
-    }
 
-    if (srv->workers && srv->num_workers > 0) {
-        uint32_t wi = cmq_atomic_fetch_add_u32(&srv->next_worker, 1,
-                                                CMQ_ATOMIC_RELAXED);
-        int idx = (int)(wi % (uint32_t)srv->num_workers);
-        cmq_worker_t *w = &srv->workers[idx];
-        cmq_client_t *client = cmq_client_create(client_fd, cid,
-                                                    w->ev_loop, srv);
-        if (!client) {
+        uint32_t cid = 0;
+        for (int id_try = 0; id_try < 16; id_try++) {
+            uint32_t cand = cmq_atomic_fetch_add_u32(&srv->next_client_id, 1,
+                                                      CMQ_ATOMIC_SEQ_CST);
+            /* 0 = empty slot; UINT32_MAX = tombstone — never assign as client id. */
+            if (cand != 0 && cand != CMQ_IDMAP_TOMB) {
+                cid = cand;
+                break;
+            }
+        }
+        if (cid == 0) {
             close(client_fd);
             cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-            return;
-        }
-        client->worker_id = idx;
-        if (client_tls_handshake(srv, client) != 0) {
-            cmq_client_destroy(client);
-            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-            return;
+            continue;
         }
 
-        cmq_mutex_lock(&w->clients_lock);
-        if (w->clients_count >= w->clients_cap) {
-            int new_cap = w->clients_cap * 2;
-            cmq_client_t **new_arr = realloc(w->clients,
-                                              (size_t)new_cap * sizeof(cmq_client_t *));
-            if (!new_arr) {
+        if (srv->workers && srv->num_workers > 0) {
+            uint32_t wi = cmq_atomic_fetch_add_u32(&srv->next_worker, 1,
+                                                    CMQ_ATOMIC_RELAXED);
+            int idx = (int)(wi % (uint32_t)srv->num_workers);
+            cmq_worker_t *w = &srv->workers[idx];
+            cmq_client_t *client = cmq_client_create(client_fd, cid,
+                                                        w->ev_loop, srv);
+            if (!client) {
+                close(client_fd);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            client->worker_id = idx;
+            if (client_tls_handshake(srv, client) != 0) {
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+
+            cmq_mutex_lock(&w->clients_lock);
+            if (w->clients_count >= w->clients_cap) {
+                int new_cap = w->clients_cap * 2;
+                cmq_client_t **new_arr = realloc(w->clients,
+                                                  (size_t)new_cap * sizeof(cmq_client_t *));
+                if (!new_arr) {
+                    cmq_mutex_unlock(&w->clients_lock);
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                    continue;
+                }
+                w->clients = new_arr;
+                w->clients_cap = new_cap;
+            }
+            w->clients[w->clients_count++] = client;
+            if (cmq_idmap_put(w->idmap, client->id, client) != 0) {
+                w->clients_count--;
                 cmq_mutex_unlock(&w->clients_lock);
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                return;
+                continue;
             }
-            w->clients = new_arr;
-            w->clients_cap = new_cap;
-        }
-        w->clients[w->clients_count++] = client;
-        if (cmq_idmap_put(w->idmap, client->id, client) != 0) {
-            w->clients_count--;
             cmq_mutex_unlock(&w->clients_lock);
-            cmq_client_destroy(client);
-            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-            return;
-        }
-        cmq_mutex_unlock(&w->clients_lock);
 
-        if (cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
-                       client) != 0) {
-            cmq_mutex_lock(&w->clients_lock);
-            for (int i = w->clients_count - 1; i >= 0; i--) {
-                if (w->clients[i] == client) {
-                    w->clients[i] = w->clients[--w->clients_count];
-                    break;
+            if (cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
+                           client) != 0) {
+                cmq_mutex_lock(&w->clients_lock);
+                for (int i = w->clients_count - 1; i >= 0; i--) {
+                    if (w->clients[i] == client) {
+                        w->clients[i] = w->clients[--w->clients_count];
+                        break;
+                    }
                 }
+                cmq_idmap_del(w->idmap, client->id);
+                cmq_mutex_unlock(&w->clients_lock);
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
             }
-            cmq_idmap_del(w->idmap, client->id);
-            cmq_mutex_unlock(&w->clients_lock);
-            cmq_client_destroy(client);
-            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-            return;
-        }
-    } else {
-        cmq_client_t *client = cmq_client_create(client_fd, cid,
-                                                    srv->ev_loop, srv);
-        if (!client) {
-            close(client_fd);
-            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-            return;
-        }
-        client->worker_id = -1;
-        if (client_tls_handshake(srv, client) != 0) {
-            cmq_client_destroy(client);
-            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-            return;
-        }
+        } else {
+            cmq_client_t *client = cmq_client_create(client_fd, cid,
+                                                        srv->ev_loop, srv);
+            if (!client) {
+                close(client_fd);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            client->worker_id = -1;
+            if (client_tls_handshake(srv, client) != 0) {
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
 
-        cmq_mutex_lock(&srv->clients_lock);
-        if (srv->clients_count >= srv->clients_cap) {
-            int new_cap = srv->clients_cap * 2;
-            cmq_client_t **new_arr = realloc(srv->clients,
-                                              (size_t)new_cap * sizeof(cmq_client_t *));
-            if (!new_arr) {
+            cmq_mutex_lock(&srv->clients_lock);
+            if (srv->clients_count >= srv->clients_cap) {
+                int new_cap = srv->clients_cap * 2;
+                cmq_client_t **new_arr = realloc(srv->clients,
+                                                  (size_t)new_cap * sizeof(cmq_client_t *));
+                if (!new_arr) {
+                    cmq_mutex_unlock(&srv->clients_lock);
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                    continue;
+                }
+                srv->clients = new_arr;
+                srv->clients_cap = new_cap;
+            }
+            srv->clients[srv->clients_count++] = client;
+            if (cmq_idmap_put(srv->idmap, client->id, client) != 0) {
+                srv->clients_count--;
                 cmq_mutex_unlock(&srv->clients_lock);
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                return;
+                continue;
             }
-            srv->clients = new_arr;
-            srv->clients_cap = new_cap;
-        }
-        srv->clients[srv->clients_count++] = client;
-        if (cmq_idmap_put(srv->idmap, client->id, client) != 0) {
-            srv->clients_count--;
             cmq_mutex_unlock(&srv->clients_lock);
-            cmq_client_destroy(client);
-            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-            return;
-        }
-        cmq_mutex_unlock(&srv->clients_lock);
 
-        if (cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
-                       client) != 0) {
-            cmq_mutex_lock(&srv->clients_lock);
-            for (int i = srv->clients_count - 1; i >= 0; i--) {
-                if (srv->clients[i] == client) {
-                    srv->clients[i] = srv->clients[--srv->clients_count];
-                    break;
+            if (cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
+                           client) != 0) {
+                cmq_mutex_lock(&srv->clients_lock);
+                for (int i = srv->clients_count - 1; i >= 0; i--) {
+                    if (srv->clients[i] == client) {
+                        srv->clients[i] = srv->clients[--srv->clients_count];
+                        break;
+                    }
                 }
+                cmq_idmap_del(srv->idmap, client->id);
+                cmq_mutex_unlock(&srv->clients_lock);
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
             }
-            cmq_idmap_del(srv->idmap, client->id);
-            cmq_mutex_unlock(&srv->clients_lock);
-            cmq_client_destroy(client);
-            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-            return;
         }
     }
 }

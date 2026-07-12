@@ -92,6 +92,9 @@ int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
     uint64_t payload_len = (uint64_t)(buf[1] & 0x7F);
     size_t header_len = 2;
 
+    /* RFC 6455 §5.5: control frames MUST have payload ≤ 125 (7-bit length only). */
+    if (opcode >= 0x08 && payload_len > 125) return -1;
+
     if (payload_len == 126) {
         if (buf_len < 4) return 0;
         payload_len = ((uint64_t)buf[2] << 8) | buf[3];

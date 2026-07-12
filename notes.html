@@ -1993,6 +1993,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS control ≤125 · parser queued-bytes · accept drain · leaf sub_id wrap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">ws control</span></td><td>✅</td><td>Reject control frames with length encoding &gt;125 (RFC 6455).</td></tr>
+<tr><td><span class="component-name">parser queue</span></td><td>✅</td><td>Queued payload budget ≤ 2× <code>max_payload</code> (not 64×).</td></tr>
+<tr><td><span class="component-name">accept drain</span></td><td>✅</td><td><code>accept_cb</code> loops until EAGAIN under connection bursts.</td></tr>
+<tr><td><span class="component-name">leaf sub_id</span></td><td>✅</td><td>Skip wrap to 0 so hub never rejects after UINT32_MAX.</td></tr>
+</table>
+</div>
+
+
 
 
 

@@ -152,6 +152,30 @@ TEST(parser, frame_queue_cap) {
     cmq_parser_destroy(p);
 }
 
+/* Queued payload bytes capped at ~2× max_payload (not 64×). */
+TEST(parser, queued_bytes_budget) {
+    cmq_parser_t *p = cmq_parser_create();
+    cmq_parser_set_max_payload(p, 64);
+    uint8_t body[64];
+    memset(body, 'Q', sizeof(body));
+    uint8_t frame[sizeof(cmq_frame_hdr_t) + 64];
+    cmq_frame_hdr_t h;
+    h.magic[0] = CMQ_PROTO_MAGIC_0;
+    h.magic[1] = CMQ_PROTO_MAGIC_1;
+    h.version = CMQ_PROTO_VERSION;
+    h.flags = 0;
+    h.op = CMQ_OP_PUBLISH;
+    h.length = 64;
+    memcpy(frame, &h, sizeof(h));
+    memcpy(frame + sizeof(h), body, 64);
+
+    ASSERT(cmq_parser_feed(p, frame, sizeof(frame)) >= 0);
+    ASSERT(cmq_parser_feed(p, frame, sizeof(frame)) >= 0);
+    /* Third 64-byte frame would exceed 2×64 budget. */
+    ASSERT_EQ(cmq_parser_feed(p, frame, sizeof(frame)), -1);
+    cmq_parser_destroy(p);
+}
+
 TEST(parser, invalid_magic) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[8] = {0xDE, 0xAD, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00};

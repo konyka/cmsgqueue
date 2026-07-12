@@ -26,6 +26,7 @@ struct cmq_parser {
     cmq_frame_node_t *head;
     cmq_frame_node_t *tail;
     size_t queued;
+    size_t queued_bytes;            /* sum of queued payload lengths */
 
     size_t max_payload;             /* per-connection payload cap */
 };
@@ -33,9 +34,19 @@ struct cmq_parser {
 #define CMQ_MAX_PAYLOAD (16 * 1024 * 1024) /* 16 MB hard ceiling */
 #define CMQ_HEADER_LEN (sizeof(cmq_frame_hdr_t))
 #define CMQ_PARSER_FRAME_QUEUE_MAX 64
+/* Bound queued payload memory ≈ 2× max_payload (not 64×). */
+#define CMQ_PARSER_QUEUED_BYTES_FACTOR 2
 
 static cmq_frame_node_t *cmq_push_frame(cmq_parser_t *p, cmq_frame_t *frame) {
     if (p->queued >= CMQ_PARSER_FRAME_QUEUE_MAX) return NULL;
+    size_t budget = p->max_payload;
+    if (budget <= SIZE_MAX / CMQ_PARSER_QUEUED_BYTES_FACTOR)
+        budget *= CMQ_PARSER_QUEUED_BYTES_FACTOR;
+    else
+        budget = SIZE_MAX;
+    if (p->queued_bytes > budget ||
+        frame->payload_len > budget - p->queued_bytes)
+        return NULL;
     cmq_frame_node_t *node = (cmq_frame_node_t *)malloc(sizeof(*node));
     if (!node) return NULL;
     node->frame = *frame;
@@ -47,6 +58,7 @@ static cmq_frame_node_t *cmq_push_frame(cmq_parser_t *p, cmq_frame_t *frame) {
         p->tail = node;
     }
     p->queued++;
+    p->queued_bytes += frame->payload_len;
     return node;
 }
 
@@ -62,6 +74,8 @@ cmq_parser_t *cmq_parser_create(void) {
     p->inbuf_len = 0;
     p->inbuf_off = 0;
     p->head = p->tail = NULL;
+    p->queued = 0;
+    p->queued_bytes = 0;
     p->max_payload = CMQ_MAX_PAYLOAD;
     return p;
 }
@@ -86,6 +100,7 @@ void cmq_parser_destroy(cmq_parser_t *p) {
     }
     p->head = p->tail = NULL;
     p->queued = 0;
+    p->queued_bytes = 0;
     if (p->inbuf) free(p->inbuf);
     free(p);
 }
@@ -102,6 +117,7 @@ void cmq_parser_reset(cmq_parser_t *p) {
     }
     p->head = p->tail = NULL;
     p->queued = 0;
+    p->queued_bytes = 0;
     /* reset inbuf */
     if (p->inbuf) {
         free(p->inbuf);
@@ -238,6 +254,10 @@ int cmq_parser_next(cmq_parser_t *p) {
     p->head = n->next;
     if (!p->head) p->tail = NULL;
     if (p->queued > 0) p->queued--;
+    if (p->queued_bytes >= n->frame.payload_len)
+        p->queued_bytes -= n->frame.payload_len;
+    else
+        p->queued_bytes = 0;
     if (n->frame.payload) free(n->frame.payload);
     free(n);
     return (p->head != NULL) ? 1 : 0;

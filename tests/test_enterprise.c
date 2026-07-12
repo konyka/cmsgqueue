@@ -459,4 +459,14 @@ TEST(ws, reject_rsv_and_fragmented_control) {
     ASSERT_EQ(cmq_ws_frame_parse(frag_ping, sizeof(frag_ping), &frame), -1);
 }
 
+TEST(ws, reject_oversized_control) {
+    cmq_ws_frame_t frame = {0};
+    /* CLOSE with 126 extended length — control frames must use 7-bit ≤125. */
+    uint8_t close126[] = {0x88, 0x7E, 0x00, 0x80};
+    ASSERT_EQ(cmq_ws_frame_parse(close126, sizeof(close126), &frame), -1);
+    /* PING claiming 126 via 7-bit field alone (invalid encoding path). */
+    uint8_t ping_big[] = {0x89, 0x7E, 0x00, 0x01, 0x00};
+    ASSERT_EQ(cmq_ws_frame_parse(ping_big, sizeof(ping_big), &frame), -1);
+}
+
 TEST_MAIN()
