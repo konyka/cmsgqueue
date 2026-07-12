@@ -1225,7 +1225,7 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
             continue;
         }
 
-        /* Collect all live members of this (subject, queue_group). */
+        /* Collect live members of this (account, subject, queue_group). */
         size_t mn = 0;
         for (size_t j = i; j < result->count; j++) {
             if (used[j]) continue;
@@ -1234,6 +1234,8 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
             if (rj->queue_group[0] == '\0') continue;
             if (strcmp(rj->queue_group, ref->queue_group) != 0) continue;
             if (strcmp(rj->subject, ref->subject) != 0) continue;
+            if (strcmp(rj->client->account_name, ref->client->account_name) != 0)
+                continue;
             memb[mn++] = j;
             used[j] = 1;
         }
@@ -3237,17 +3239,23 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
     if (count <= 0) return;
     for (int i = 0; i < count; i++) {
         cmq_client_t *c = clients[i];
-        if (!c || c->state == CMQ_CLIENT_CLOSED ||
-            c->state == CMQ_CLIENT_CLOSING)
+        if (!c || c->state == CMQ_CLIENT_CLOSED)
             continue;
-        int idle = (c->state == CMQ_CLIENT_CONNECTED ||
-                    c->state == CMQ_CLIENT_INIT) &&
-                   (now - c->last_activity_ms) > timeout_ms;
         int stalled = write_timeout_ms > 0 &&
-                      c->state == CMQ_CLIENT_CONNECTED &&
+                      (c->state == CMQ_CLIENT_CONNECTED ||
+                       c->state == CMQ_CLIENT_CLOSING) &&
                       c->write_pos < c->write_len &&
                       c->last_write_progress_ms > 0 &&
                       (now - c->last_write_progress_ms) > write_timeout_ms;
+        /* CLOSING with a stuck write_buf must not leak fd/slots forever. */
+        if (c->state == CMQ_CLIENT_CLOSING) {
+            if (stalled)
+                client_teardown(c);
+            continue;
+        }
+        int idle = (c->state == CMQ_CLIENT_CONNECTED ||
+                    c->state == CMQ_CLIENT_INIT) &&
+                   (now - c->last_activity_ms) > timeout_ms;
         if (!idle && !stalled) continue;
         if (c->state == CMQ_CLIENT_CONNECTED) {
             uint8_t disc[16];
@@ -3286,17 +3294,22 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
             /* OOM: force-close idle/stalled without heap snapshot. */
             for (int i = 0; i < n; i++) {
                 cmq_client_t *c = srv->clients[i];
-                if (!c || c->state == CMQ_CLIENT_CLOSED ||
-                    c->state == CMQ_CLIENT_CLOSING)
+                if (!c || c->state == CMQ_CLIENT_CLOSED)
                     continue;
-                int idle = (c->state == CMQ_CLIENT_CONNECTED ||
-                            c->state == CMQ_CLIENT_INIT) &&
-                           (now - c->last_activity_ms) > timeout_ms;
                 int stalled = write_timeout_ms > 0 &&
-                              c->state == CMQ_CLIENT_CONNECTED &&
+                              (c->state == CMQ_CLIENT_CONNECTED ||
+                               c->state == CMQ_CLIENT_CLOSING) &&
                               c->write_pos < c->write_len &&
                               c->last_write_progress_ms > 0 &&
                               (now - c->last_write_progress_ms) > write_timeout_ms;
+                if (c->state == CMQ_CLIENT_CLOSING) {
+                    if (stalled && c->fd >= 0)
+                        shutdown(c->fd, SHUT_RDWR);
+                    continue;
+                }
+                int idle = (c->state == CMQ_CLIENT_CONNECTED ||
+                            c->state == CMQ_CLIENT_INIT) &&
+                           (now - c->last_activity_ms) > timeout_ms;
                 if ((idle || stalled) && c->fd >= 0)
                     shutdown(c->fd, SHUT_RDWR);
             }
@@ -3320,34 +3333,44 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                 if (doomed_ids) {
                     for (int i = 0; i < wn; i++) {
                         cmq_client_t *c = w->clients[i];
-                        if (!c || c->state == CMQ_CLIENT_CLOSED ||
-                            c->state == CMQ_CLIENT_CLOSING)
+                        if (!c || c->state == CMQ_CLIENT_CLOSED)
                             continue;
-                        int idle = (c->state == CMQ_CLIENT_CONNECTED ||
-                                    c->state == CMQ_CLIENT_INIT) &&
-                                   (now - c->last_activity_ms) > timeout_ms;
                         int stalled = write_timeout_ms > 0 &&
-                                      c->state == CMQ_CLIENT_CONNECTED &&
+                                      (c->state == CMQ_CLIENT_CONNECTED ||
+                                       c->state == CMQ_CLIENT_CLOSING) &&
                                       c->write_pos < c->write_len &&
                                       c->last_write_progress_ms > 0 &&
                                       (now - c->last_write_progress_ms) > write_timeout_ms;
+                        if (c->state == CMQ_CLIENT_CLOSING) {
+                            if (stalled)
+                                doomed_ids[ndoomed++] = c->id;
+                            continue;
+                        }
+                        int idle = (c->state == CMQ_CLIENT_CONNECTED ||
+                                    c->state == CMQ_CLIENT_INIT) &&
+                                   (now - c->last_activity_ms) > timeout_ms;
                         if (idle || stalled)
                             doomed_ids[ndoomed++] = c->id;
                     }
                 } else {
                     for (int i = 0; i < wn; i++) {
                         cmq_client_t *c = w->clients[i];
-                        if (!c || c->state == CMQ_CLIENT_CLOSED ||
-                            c->state == CMQ_CLIENT_CLOSING)
+                        if (!c || c->state == CMQ_CLIENT_CLOSED)
                             continue;
-                        int idle = (c->state == CMQ_CLIENT_CONNECTED ||
-                                    c->state == CMQ_CLIENT_INIT) &&
-                                   (now - c->last_activity_ms) > timeout_ms;
                         int stalled = write_timeout_ms > 0 &&
-                                      c->state == CMQ_CLIENT_CONNECTED &&
+                                      (c->state == CMQ_CLIENT_CONNECTED ||
+                                       c->state == CMQ_CLIENT_CLOSING) &&
                                       c->write_pos < c->write_len &&
                                       c->last_write_progress_ms > 0 &&
                                       (now - c->last_write_progress_ms) > write_timeout_ms;
+                        if (c->state == CMQ_CLIENT_CLOSING) {
+                            if (stalled && c->fd >= 0)
+                                shutdown(c->fd, SHUT_RDWR);
+                            continue;
+                        }
+                        int idle = (c->state == CMQ_CLIENT_CONNECTED ||
+                                    c->state == CMQ_CLIENT_INIT) &&
+                                   (now - c->last_activity_ms) > timeout_ms;
                         if ((idle || stalled) && c->fd >= 0)
                             shutdown(c->fd, SHUT_RDWR);
                     }

@@ -199,6 +199,8 @@ void cmq_slab_free(cmq_slab_t *slab, void *obj) {
         *((uint32_t *)obj) = next;
         page->freelist.head_index = (int)idx;
     }
+    if (slab->total_allocated > 0)
+        slab->total_allocated--;
 }
 
 size_t cmq_slab_count(cmq_slab_t *slab) {

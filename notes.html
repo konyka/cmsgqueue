@@ -2015,6 +2015,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — queue-group account · CLOSING write timeout · filestore EOF · slab count</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">queue group</span></td><td>✅</td><td>RR members scoped by account+subject+group (no cross-tenant drop).</td></tr>
+<tr><td><span class="component-name">CLOSING stall</span></td><td>✅</td><td>Write-timeout applies to <code>CLOSING</code>; teardown stuck write_buf.</td></tr>
+<tr><td><span class="component-name">filestore read</span></td><td>✅</td><td>Reject idx offsets / lengths past data EOF before malloc.</td></tr>
+<tr><td><span class="component-name">slab count</span></td><td>✅</td><td><code>cmq_slab_free</code> decrements live allocation count.</td></tr>
+</table>
+</div>
+
+
 
 
 

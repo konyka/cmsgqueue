@@ -52,10 +52,14 @@ TEST(slab, free_null_safe) {
 TEST(slab, count) {
     cmq_slab_t *slab = cmq_slab_create(sizeof(int), 4);
     ASSERT_EQ(cmq_slab_count(slab), (size_t)0);
-    cmq_slab_alloc(slab);
+    void *a = cmq_slab_alloc(slab);
     ASSERT_EQ(cmq_slab_count(slab), (size_t)1);
-    cmq_slab_alloc(slab);
+    void *b = cmq_slab_alloc(slab);
     ASSERT_EQ(cmq_slab_count(slab), (size_t)2);
+    cmq_slab_free(slab, a);
+    ASSERT_EQ(cmq_slab_count(slab), (size_t)1);
+    cmq_slab_free(slab, b);
+    ASSERT_EQ(cmq_slab_count(slab), (size_t)0);
     cmq_slab_destroy(slab);
 }
 

@@ -352,6 +352,20 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
     }
     uint64_t data_offset = get_le64(idxb);
 
+    if (fs_seek_end(fs->data_fp) != 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    uint64_t data_sz;
+    if (fs_tell(fs->data_fp, &data_sz) != 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    if (data_offset + (uint64_t)CMQ_FS_HDR_SIZE > data_sz) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+
     if (fs_seek(fs->data_fp, data_offset) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
@@ -375,6 +389,10 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
     }
 
     if (hlen == 0 || hlen > (16u * 1024 * 1024)) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    if (data_offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen > data_sz) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
