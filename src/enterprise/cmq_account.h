@@ -40,16 +40,18 @@ void cmq_account_manager_destroy(cmq_account_manager_t *mgr);
 
 int cmq_account_create(cmq_account_manager_t *mgr, const char *name);
 int cmq_account_delete(cmq_account_manager_t *mgr, const char *name);
-cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name);
+/* out_epoch (optional): snapshot under lock — pass to inc/dec to reject reclaim races. */
+cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name,
+                                uint32_t *out_epoch);
 size_t cmq_account_count(cmq_account_manager_t *mgr);
 
 void cmq_account_inc_stat(cmq_account_t *acc, size_t field_offset, uint64_t delta);
-void cmq_account_inc_connections(cmq_account_t *acc);
-void cmq_account_dec_connections(cmq_account_t *acc);
-void cmq_account_inc_subscriptions(cmq_account_t *acc);
-void cmq_account_dec_subscriptions(cmq_account_t *acc);
-void cmq_account_inc_msgs_in(cmq_account_t *acc, uint64_t bytes);
-void cmq_account_inc_msgs_out(cmq_account_t *acc, uint64_t bytes);
+void cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch);
+void cmq_account_dec_connections(cmq_account_t *acc, uint32_t epoch);
+void cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch);
+void cmq_account_dec_subscriptions(cmq_account_t *acc, uint32_t epoch);
+void cmq_account_inc_msgs_in(cmq_account_t *acc, uint32_t epoch, uint64_t bytes);
+void cmq_account_inc_msgs_out(cmq_account_t *acc, uint32_t epoch, uint64_t bytes);
 
 int cmq_account_add_export(cmq_account_manager_t *mgr, const char *account,
                             const char *subject, const char *dest_account);

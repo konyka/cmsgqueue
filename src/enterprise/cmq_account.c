@@ -128,7 +128,8 @@ int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
     return -1;
 }
 
-cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name) {
+cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name,
+                                uint32_t *out_epoch) {
     if (!mgr || !name) return NULL;
     if (strnlen(name, CMQ_ACCOUNT_NAME_SIZE) >= CMQ_ACCOUNT_NAME_SIZE) return NULL;
     cmq_mutex_lock(&mgr->lock);
@@ -137,6 +138,8 @@ cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name) {
         if (__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE) &&
             strcmp(mgr->accounts[i].name, name) == 0) {
             found = &mgr->accounts[i];
+            if (out_epoch)
+                *out_epoch = found->epoch;
             break;
         }
     }
@@ -155,12 +158,14 @@ size_t cmq_account_count(cmq_account_manager_t *mgr) {
     return c;
 }
 
-void cmq_account_inc_connections(cmq_account_t *acc) {
-    if (acc && __atomic_load_n(&acc->active, __ATOMIC_ACQUIRE))
+void cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch) {
+    if (acc && acc->epoch == epoch &&
+        __atomic_load_n(&acc->active, __ATOMIC_ACQUIRE))
         __atomic_fetch_add(&acc->connections, 1, __ATOMIC_RELAXED);
 }
-void cmq_account_dec_connections(cmq_account_t *acc) {
-    if (!acc || !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+void cmq_account_dec_connections(cmq_account_t *acc, uint32_t epoch) {
+    if (!acc || acc->epoch != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
     uint64_t cur = __atomic_load_n(&acc->connections, __ATOMIC_RELAXED);
     while (cur > 0) {
         if (__atomic_compare_exchange_n(&acc->connections, &cur, cur - 1,
@@ -168,12 +173,14 @@ void cmq_account_dec_connections(cmq_account_t *acc) {
             return;
     }
 }
-void cmq_account_inc_subscriptions(cmq_account_t *acc) {
-    if (acc && __atomic_load_n(&acc->active, __ATOMIC_ACQUIRE))
+void cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch) {
+    if (acc && acc->epoch == epoch &&
+        __atomic_load_n(&acc->active, __ATOMIC_ACQUIRE))
         __atomic_fetch_add(&acc->subscriptions, 1, __ATOMIC_RELAXED);
 }
-void cmq_account_dec_subscriptions(cmq_account_t *acc) {
-    if (!acc || !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+void cmq_account_dec_subscriptions(cmq_account_t *acc, uint32_t epoch) {
+    if (!acc || acc->epoch != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
     uint64_t cur = __atomic_load_n(&acc->subscriptions, __ATOMIC_RELAXED);
     while (cur > 0) {
         if (__atomic_compare_exchange_n(&acc->subscriptions, &cur, cur - 1,
@@ -181,13 +188,15 @@ void cmq_account_dec_subscriptions(cmq_account_t *acc) {
             return;
     }
 }
-void cmq_account_inc_msgs_in(cmq_account_t *acc, uint64_t bytes) {
-    if (!acc || !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+void cmq_account_inc_msgs_in(cmq_account_t *acc, uint32_t epoch, uint64_t bytes) {
+    if (!acc || acc->epoch != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
     __atomic_fetch_add(&acc->messages_in, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&acc->bytes_in, bytes, __ATOMIC_RELAXED);
 }
-void cmq_account_inc_msgs_out(cmq_account_t *acc, uint64_t bytes) {
-    if (!acc || !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+void cmq_account_inc_msgs_out(cmq_account_t *acc, uint32_t epoch, uint64_t bytes) {
+    if (!acc || acc->epoch != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
     __atomic_fetch_add(&acc->messages_out, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&acc->bytes_out, bytes, __ATOMIC_RELAXED);
 }

@@ -2209,6 +2209,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — inbox wildcard deny · account epoch counters · sub replace order</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">_INBOX wildcards</span></td><td>✅</td><td>Reject <code>_INBOX</code> subjects containing <code>*</code>/<code>&gt;</code> (same-account reply sniffing).</td></tr>
+<tr><td><span class="component-name">account counters</span></td><td>✅</td><td><code>get</code> snapshots epoch under lock; <code>inc</code>/<code>dec</code> require matching epoch (reclaim-safe).</td></tr>
+<tr><td><span class="component-name">SUBSCRIBE replace</span></td><td>✅</td><td>Remove old sublist entry before insert; restore on insert failure.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -20,11 +20,12 @@ static int auth_configured(const cmq_server_t *srv) {
 /* Soft-deleted then reactivated accounts bump epoch — old sessions stay denied. */
 static int client_account_live(cmq_server_t *srv, const cmq_client_t *c) {
     if (!srv || !c || !c->account_name[0]) return 0;
-    cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
+    uint32_t ep = 0;
+    cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name, &ep);
     if (!a) return 0;
     /* Re-check active after get() unlock (TOCTOU with soft-delete). */
     if (!__atomic_load_n(&a->active, __ATOMIC_ACQUIRE)) return 0;
-    return a->epoch == c->account_epoch;
+    return ep == c->account_epoch && a->epoch == c->account_epoch;
 }
 
 static uint64_t srv_now_ms(void) {
@@ -853,8 +854,9 @@ static void client_teardown(cmq_client_t *c) {
                                           CMQ_ATOMIC_RELAXED);
             }
             {
-                cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
-                if (a) cmq_account_dec_subscriptions(a);
+                uint32_t aep = 0;
+                cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name, &aep);
+                if (a) cmq_account_dec_subscriptions(a, aep);
             }
         }
         free(s);
@@ -904,8 +906,9 @@ static void client_teardown(cmq_client_t *c) {
             cmq_atomic_fetch_sub_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
         }
         if (c->account_name[0] != '\0') {
-            cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
-            if (acc) cmq_account_dec_connections(acc);
+            uint32_t aep = 0;
+            cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
+            if (acc) cmq_account_dec_connections(acc, aep);
         }
     }
 
@@ -1457,8 +1460,9 @@ static int deliver_targets_sync(cmq_server_t *srv,
         if (delivered) {
             any = 1;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
-            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
-            if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)payload_len);
+            uint32_t oep = 0;
+            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, &oep);
+            if (oacc) cmq_account_inc_msgs_out(oacc, oep, (uint64_t)payload_len);
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -1529,8 +1533,9 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             delivered_n++;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                       CMQ_ATOMIC_RELAXED);
-            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
-            if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)payload_len);
+            uint32_t oep = 0;
+            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, &oep);
+            if (oacc) cmq_account_inc_msgs_out(oacc, oep, (uint64_t)payload_len);
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -1596,8 +1601,9 @@ static void deliver_coro_func(void *arg) {
             ctx->delivered_any = 1;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                       CMQ_ATOMIC_RELAXED);
-            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name);
-            if (oacc) cmq_account_inc_msgs_out(oacc, (uint64_t)ctx->payload_len);
+            uint32_t oep = 0;
+            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, &oep);
+            if (oacc) cmq_account_inc_msgs_out(oacc, oep, (uint64_t)ctx->payload_len);
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -1914,8 +1920,9 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
-    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
-    if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
+    uint32_t aep = 0;
+    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
+    if (acc) cmq_account_inc_msgs_in(acc, aep, (uint64_t)frame->payload_len);
 
     size_t route_sent = 0;
     int route_rc = 0;
@@ -2044,6 +2051,17 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_suback(c, sub_id, 1);
         return;
     }
+    /* Reject _INBOX wildcards — same-account _INBOX.> would steal replies. */
+    if (strncmp(subject, "_INBOX.", 7) == 0 || strcmp(subject, "_INBOX") == 0) {
+        for (const char *p = subject; *p; p++) {
+            if (*p == '*' || *p == '>') {
+                cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_send_suback(c, sub_id, 1);
+                return;
+            }
+        }
+    }
     if (!cmq_account_can_import(srv->accounts, c->account_name, subject)) {
         cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
@@ -2118,11 +2136,25 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     ref->queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
 
     cmq_rwlock_wrlock(&srv->sublist_lock);
+    /* Remove old first so publish cannot briefly match both subjects. */
+    cmq_sub_ref_t *old_ref = (old && old->ref) ? old->ref : NULL;
+    char old_subject[CMQ_MAX_SUBJECT];
+    if (old_ref) {
+        memcpy(old_subject, old->subject, CMQ_MAX_SUBJECT);
+        cmq_sublist_remove(srv->sublist, old_subject, old_ref);
+    }
     int irc = cmq_sublist_insert(srv->sublist, subject, ref);
-    if (irc == 0 && old && old->ref) {
-        cmq_sublist_remove(srv->sublist, old->subject, old->ref);
-        free(old->ref);
+    if (irc != 0 && old_ref) {
+        /* Restore previous registration so the client keeps a live sub. */
+        if (cmq_sublist_insert(srv->sublist, old_subject, old_ref) != 0) {
+            free(old_ref);
+            if (old) old->ref = NULL;
+            old_ref = NULL;
+        }
+    } else if (irc == 0 && old_ref) {
+        free(old_ref);
         old->ref = NULL;
+        old_ref = NULL;
     }
     cmq_rwlock_unlock(&srv->sublist_lock);
     if (irc != 0) {
@@ -2151,8 +2183,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     if (!replacing) {
         cmq_atomic_fetch_add_u64(&srv->stat_subscriptions, 1, CMQ_ATOMIC_RELAXED);
         c->sub_count++;
-        cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
-        if (a) cmq_account_inc_subscriptions(a);
+        uint32_t aep = 0;
+        cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name, &aep);
+        if (a) cmq_account_inc_subscriptions(a, aep);
     }
     cmq_send_suback(c, sub_id, 0);
 }
@@ -2193,8 +2226,9 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
                                           CMQ_ATOMIC_RELAXED);
             }
             {
-                cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
-                if (a) cmq_account_dec_subscriptions(a);
+                uint32_t aep = 0;
+                cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name, &aep);
+                if (a) cmq_account_dec_subscriptions(a, aep);
             }
             found = 1;
             break;
@@ -2286,8 +2320,9 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
-    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
-    if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
+    uint32_t aep = 0;
+    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
+    if (acc) cmq_account_inc_msgs_in(acc, aep, (uint64_t)frame->payload_len);
 
     size_t route_sent = 0;
     int route_rc = 0;
@@ -2392,8 +2427,9 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     }
 
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
-    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
-    if (acc) cmq_account_inc_msgs_in(acc, (uint64_t)frame->payload_len);
+    uint32_t aep = 0;
+    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
+    if (acc) cmq_account_inc_msgs_in(acc, aep, (uint64_t)frame->payload_len);
 
     size_t route_sent = 0;
     int route_rc = 0;
@@ -2725,17 +2761,19 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 any_delivered = 1;
                 cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1,
                                           CMQ_ATOMIC_RELAXED);
+                uint32_t aep = 0;
                 cmq_account_t *acc =
-                    cmq_account_get(srv->accounts, c->account_name);
+                    cmq_account_get(srv->accounts, c->account_name, &aep);
                 if (acc)
-                    cmq_account_inc_msgs_in(acc, (uint64_t)payload_len);
+                    cmq_account_inc_msgs_in(acc, aep, (uint64_t)payload_len);
             }
         } else if (!batch_fail) {
             /* Remote-only success path: count ingress when cluster pass OK. */
             cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
-            cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
+            uint32_t aep = 0;
+            cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
             if (acc)
-                cmq_account_inc_msgs_in(acc, (uint64_t)payload_len);
+                cmq_account_inc_msgs_in(acc, aep, (uint64_t)payload_len);
         }
         free(prep[msg].tgts);
         prep[msg].tgts = NULL;
@@ -2883,9 +2921,10 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         c->state = CMQ_CLIENT_CONNECTED;
         c->last_activity_ms = srv_now_ms();
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
-        cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
-        c->account_epoch = acc ? acc->epoch : 0;
-        cmq_account_inc_connections(acc);
+        uint32_t aep = 0;
+        cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
+        c->account_epoch = acc ? aep : 0;
+        if (acc) cmq_account_inc_connections(acc, aep);
         /* INFO only after successful CONNECT (never on INIT). */
         if (!c->is_websocket)
             send_info_frame(srv, c);

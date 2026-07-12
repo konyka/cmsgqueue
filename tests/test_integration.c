@@ -104,7 +104,7 @@ TEST(integration, account_stats_on_connect) {
     ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
     ASSERT_NOT_NULL(srv->accounts);
 
-    cmq_account_t *def_acc = cmq_account_get(srv->accounts, "$default");
+    cmq_account_t *def_acc = cmq_account_get(srv->accounts, "$default", NULL);
     ASSERT_NOT_NULL(def_acc);
     ASSERT_EQ(def_acc->connections, (uint64_t)0);
 
@@ -119,7 +119,7 @@ TEST(integration, account_stats_on_connect) {
     cmq_parser_t *parser = cmq_parser_create();
     do_connect(fd, parser);
 
-    cmq_account_t *acc_after = cmq_account_get(srv->accounts, "$default");
+    cmq_account_t *acc_after = cmq_account_get(srv->accounts, "$default", NULL);
     ASSERT_NOT_NULL(acc_after);
     ASSERT(acc_after->connections >= 1);
 
@@ -190,7 +190,7 @@ TEST(integration, account_stats_on_pubsub) {
     send_frame(pub_fd, CMQ_OP_PUBLISH, pub_payload, off);
     wait_ms(200);
 
-    cmq_account_t *acc = cmq_account_get(srv->accounts, "$default");
+    cmq_account_t *acc = cmq_account_get(srv->accounts, "$default", NULL);
     ASSERT_NOT_NULL(acc);
     ASSERT(acc->messages_in >= 1);
     ASSERT(acc->subscriptions >= 1);
@@ -200,7 +200,7 @@ TEST(integration, account_stats_on_pubsub) {
     ASSERT_EQ(msg_frame.hdr.op, CMQ_OP_MESSAGE);
     free_frame_payload(&msg_frame);
 
-    acc = cmq_account_get(srv->accounts, "$default");
+    acc = cmq_account_get(srv->accounts, "$default", NULL);
     ASSERT(acc->messages_out >= 1);
 
     cmq_parser_destroy(pub_parser);
@@ -270,13 +270,13 @@ TEST(integration, account_create_delete_via_api) {
     ASSERT_EQ(cmq_account_create(srv->accounts, "tenant-globex"), 0);
     ASSERT_EQ(cmq_account_count(srv->accounts), (size_t)3);
 
-    cmq_account_t *acme = cmq_account_get(srv->accounts, "tenant-acme");
+    cmq_account_t *acme = cmq_account_get(srv->accounts, "tenant-acme", NULL);
     ASSERT_NOT_NULL(acme);
     ASSERT_EQ(acme->active, 1);
 
     ASSERT_EQ(cmq_account_delete(srv->accounts, "tenant-acme"), 0);
     ASSERT_EQ(cmq_account_count(srv->accounts), (size_t)2);
-    ASSERT_NULL(cmq_account_get(srv->accounts, "tenant-acme"));
+    ASSERT_NULL(cmq_account_get(srv->accounts, "tenant-acme", NULL));
 
     cmq_server_destroy(srv);
 }

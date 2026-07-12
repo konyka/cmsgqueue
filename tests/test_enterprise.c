@@ -23,20 +23,20 @@ TEST(account, create_delete) {
     ASSERT_EQ(cmq_account_create(mgr, "tenant-a"), 0);
     ASSERT_EQ(cmq_account_count(mgr), (size_t)2);
 
-    cmq_account_t *a = cmq_account_get(mgr, "tenant-a");
+    cmq_account_t *a = cmq_account_get(mgr, "tenant-a", NULL);
     ASSERT_NOT_NULL(a);
     ASSERT_STR_EQ(a->name, "tenant-a");
     ASSERT_EQ(a->active, 1);
 
     ASSERT_EQ(cmq_account_delete(mgr, "tenant-a"), 0);
     ASSERT_EQ(cmq_account_count(mgr), (size_t)1);
-    ASSERT_NULL(cmq_account_get(mgr, "tenant-a"));
+    ASSERT_NULL(cmq_account_get(mgr, "tenant-a", NULL));
 
     /* Soft-deleted slot must not be reused for a different name while
        capacity remains (stable pointer for stale holders). */
     cmq_account_t *old = NULL;
     cmq_account_create(mgr, "keep-ptr");
-    old = cmq_account_get(mgr, "keep-ptr");
+    old = cmq_account_get(mgr, "keep-ptr", NULL);
     ASSERT_NOT_NULL(old);
     ASSERT_EQ(cmq_account_delete(mgr, "keep-ptr"), 0);
     ASSERT_EQ(cmq_account_create(mgr, "other-name"), 0);
@@ -54,8 +54,8 @@ TEST(account, create_delete) {
         ASSERT_EQ(cmq_account_create(full, "overflow"), -1);
         ASSERT_EQ(cmq_account_delete(full, "u0"), 0);
         ASSERT_EQ(cmq_account_create(full, "reclaimed"), 0);
-        ASSERT_NOT_NULL(cmq_account_get(full, "reclaimed"));
-        ASSERT_NULL(cmq_account_get(full, "u0"));
+        ASSERT_NOT_NULL(cmq_account_get(full, "reclaimed", NULL));
+        ASSERT_NULL(cmq_account_get(full, "u0", NULL));
         cmq_account_manager_destroy(full);
     }
 
@@ -65,7 +65,7 @@ TEST(account, create_delete) {
     memset(too_long, 'a', sizeof(too_long) - 1);
     too_long[sizeof(too_long) - 1] = '\0';
     ASSERT_EQ(cmq_account_create(mgr, too_long), -1);
-    ASSERT_NULL(cmq_account_get(mgr, too_long));
+    ASSERT_NULL(cmq_account_get(mgr, too_long, NULL));
 
     cmq_account_manager_destroy(mgr);
 }
@@ -73,24 +73,24 @@ TEST(account, create_delete) {
 TEST(account, stats) {
     cmq_account_manager_t *mgr = cmq_account_manager_create();
     cmq_account_create(mgr, "s1");
-    cmq_account_t *a = cmq_account_get(mgr, "s1");
+    cmq_account_t *a = cmq_account_get(mgr, "s1", NULL);
 
-    cmq_account_inc_connections(a);
-    cmq_account_inc_connections(a);
+    cmq_account_inc_connections(a, a->epoch);
+    cmq_account_inc_connections(a, a->epoch);
     ASSERT_EQ(a->connections, (uint64_t)2);
 
-    cmq_account_dec_connections(a);
+    cmq_account_dec_connections(a, a->epoch);
     ASSERT_EQ(a->connections, (uint64_t)1);
 
-    cmq_account_inc_subscriptions(a);
+    cmq_account_inc_subscriptions(a, a->epoch);
     ASSERT_EQ(a->subscriptions, (uint64_t)1);
 
-    cmq_account_inc_msgs_in(a, 100);
-    cmq_account_inc_msgs_in(a, 200);
+    cmq_account_inc_msgs_in(a, a->epoch, 100);
+    cmq_account_inc_msgs_in(a, a->epoch, 200);
     ASSERT_EQ(a->messages_in, (uint64_t)2);
     ASSERT_EQ(a->bytes_in, (uint64_t)300);
 
-    cmq_account_inc_msgs_out(a, 50);
+    cmq_account_inc_msgs_out(a, a->epoch, 50);
     ASSERT_EQ(a->messages_out, (uint64_t)1);
     ASSERT_EQ(a->bytes_out, (uint64_t)50);
 
@@ -179,16 +179,16 @@ TEST(account, may_deliver_cross_account) {
     {
         cmq_account_manager_t *m2 = cmq_account_manager_create();
         ASSERT_EQ(cmq_account_create(m2, "ep"), 0);
-        cmq_account_t *a = cmq_account_get(m2, "ep");
+        cmq_account_t *a = cmq_account_get(m2, "ep", NULL);
         ASSERT_NOT_NULL(a);
         uint32_t e0 = a->epoch;
         ASSERT_EQ(cmq_account_delete(m2, "ep"), 0);
-        ASSERT_EQ(cmq_account_get(m2, "ep"), NULL); /* inactive */
+        ASSERT_EQ(cmq_account_get(m2, "ep", NULL), NULL); /* inactive */
         /* Soft-delete itself bumps epoch so stale sessions cannot linger. */
         ASSERT(a->epoch != e0);
         e0 = a->epoch;
         ASSERT_EQ(cmq_account_create(m2, "ep"), 0);
-        a = cmq_account_get(m2, "ep");
+        a = cmq_account_get(m2, "ep", NULL);
         ASSERT_NOT_NULL(a);
         ASSERT(a->epoch != e0);
         (void)before;
