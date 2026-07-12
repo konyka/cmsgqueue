@@ -34,6 +34,11 @@ static uint64_t srv_now_ms(void) {
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }
 
+/* Length-prefixed wire subject must match C-string length (no embedded NUL). */
+static int wire_cstr_exact(const char *s, size_t wire_len) {
+    return s && strnlen(s, wire_len) == wire_len;
+}
+
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) return -1;
@@ -1876,7 +1881,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     char subject[CMQ_MAX_SUBJECT];
     memcpy(subject, frame->payload + 2, subject_len);
     subject[subject_len] = '\0';
-    if (cmq_sublist_publish_subject_valid(subject) != 0) {
+    if (!wire_cstr_exact(subject, subject_len) ||
+        cmq_sublist_publish_subject_valid(subject) != 0) {
         cmq_send_error(c, "invalid subject");
         return;
     }
@@ -2062,7 +2068,8 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     char subject[CMQ_MAX_SUBJECT];
     memcpy(subject, frame->payload + 6, subject_len);
     subject[subject_len] = '\0';
-    if (cmq_sublist_subject_valid(subject) != 0) {
+    if (!wire_cstr_exact(subject, subject_len) ||
+        cmq_sublist_subject_valid(subject) != 0) {
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -2326,7 +2333,8 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     memcpy(subject, frame->payload + offset, wire_subj);
     subject[wire_subj] = '\0';
     offset += wire_subj;
-    if (cmq_sublist_publish_subject_valid(subject) != 0) {
+    if (!wire_cstr_exact(subject, wire_subj) ||
+        cmq_sublist_publish_subject_valid(subject) != 0) {
         cmq_send_error(c, "invalid subject");
         return;
     }
@@ -2347,7 +2355,8 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             }
             memcpy(reply_to, frame->payload + offset, wire_reply);
             reply_to[wire_reply] = '\0';
-            if (cmq_sublist_publish_subject_valid(reply_to) != 0) {
+            if (!wire_cstr_exact(reply_to, wire_reply) ||
+                cmq_sublist_publish_subject_valid(reply_to) != 0) {
                 cmq_send_error(c, "invalid reply-to");
                 return;
             }
@@ -2455,7 +2464,8 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     memcpy(subject, frame->payload + offset, wire_subj);
     subject[wire_subj] = '\0';
     offset += wire_subj;
-    if (cmq_sublist_publish_subject_valid(subject) != 0) {
+    if (!wire_cstr_exact(subject, wire_subj) ||
+        cmq_sublist_publish_subject_valid(subject) != 0) {
         cmq_send_error(c, "invalid subject");
         return;
     }
@@ -2617,7 +2627,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             char subj[CMQ_MAX_SUBJECT];
             memcpy(subj, frame->payload + offset, subject_len);
             subj[subject_len] = '\0';
-            if (cmq_sublist_publish_subject_valid(subj) != 0) {
+            if (!wire_cstr_exact(subj, subject_len) ||
+                cmq_sublist_publish_subject_valid(subj) != 0) {
                 cmq_send_error(c, "invalid subject");
                 return;
             }

@@ -43,6 +43,21 @@ static void set_nonblock(int fd) {
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
+/* Drop dead hub TCP under hub_io_lock. Keeps local interest for reconnect replay.
+   expect_fd < 0 clears any hub; otherwise only if hub_fd still matches. */
+static void leaf_hub_drop(cmq_leaf_node_t *leaf, int expect_fd) {
+    cmq_mutex_lock(&leaf->lock);
+    if (expect_fd >= 0 && leaf->hub_fd != expect_fd) {
+        cmq_mutex_unlock(&leaf->lock);
+        return;
+    }
+    int fd = leaf->hub_fd;
+    leaf->hub_fd = -1;
+    leaf->connected = 0;
+    cmq_mutex_unlock(&leaf->lock);
+    if (fd >= 0) close(fd);
+}
+
 /* Complete write on nonblocking hub fd (poll on EAGAIN). */
 static int write_all(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
@@ -147,8 +162,21 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     cmq_mutex_lock(&leaf->lock);
 
     if (leaf->connected && leaf->hub_fd >= 0) {
+        int fd = leaf->hub_fd;
         cmq_mutex_unlock(&leaf->lock);
-        return 0;
+        /* Light liveness probe — avoid sticky connected after hub death. */
+        struct pollfd pfd = { .fd = fd, .events = 0 };
+        int pr = poll(&pfd, 1, 0);
+        if (pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+            return 0;
+        cmq_mutex_lock(&leaf->hub_io_lock);
+        leaf_hub_drop(leaf, fd);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        cmq_mutex_lock(&leaf->lock);
+        if (leaf->connected && leaf->hub_fd >= 0) {
+            cmq_mutex_unlock(&leaf->lock);
+            return 0;
+        }
     }
 
     char addr_copy[CMQ_NODE_ADDR_SIZE];
@@ -340,6 +368,8 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
         int still = (leaf->connected && leaf->hub_fd == hub_fd);
         cmq_mutex_unlock(&leaf->lock);
         int wr = (still && flen > 0) ? write_all(hub_fd, frame, flen) : -1;
+        if (flen == 0 || wr != 0)
+            leaf_hub_drop(leaf, hub_fd);
         cmq_mutex_unlock(&leaf->hub_io_lock);
         if (flen == 0 || wr != 0) {
             cmq_mutex_lock(&leaf->lock);
@@ -388,6 +418,8 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
                 int still = (leaf->connected && leaf->hub_fd == hub_fd);
                 cmq_mutex_unlock(&leaf->lock);
                 int wr = (still && flen > 0) ? write_all(hub_fd, frame, flen) : -1;
+                if (flen == 0 || wr != 0)
+                    leaf_hub_drop(leaf, hub_fd);
                 cmq_mutex_unlock(&leaf->hub_io_lock);
                 if (flen == 0 || wr != 0)
                     return -1;

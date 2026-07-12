@@ -2247,6 +2247,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf hub drop on write fail · wire subject no embedded NUL</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf hub_drop</span></td><td>✅</td><td>SUBSCRIBE/UNSUBSCRIBE hub write hard-fail clears <code>connected</code> and closes <code>hub_fd</code>; connect probes POLLERR/HUP before sticky early-return.</td></tr>
+<tr><td><span class="component-name">wire subject NUL</span></td><td>✅</td><td>PUBLISH/SUBSCRIBE/REQUEST/RESPONSE/BATCH reject length-prefixed subjects (and reply-to) containing embedded NUL.</td></tr>
+</table>
+</div>
+
 
 
 
