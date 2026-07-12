@@ -20,6 +20,8 @@ struct cmq_account_manager {
     cmq_mutex_t lock;
 };
 
+static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char *name);
+
 cmq_account_manager_t *cmq_account_manager_create(void) {
     cmq_account_manager_t *mgr = calloc(1, sizeof(cmq_account_manager_t));
     if (!mgr) return NULL;
@@ -58,11 +60,37 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
             return 0;
         }
     }
-    /* Never reuse a soft-deleted slot for a different name — get()+inc_*
-       callers may still hold the old pointer. */
+    /* Prefer appending while capacity remains so soft-deleted slots keep
+       their name (stable pointer for stale holders). When the table is
+       full, reclaim an inactive slot for a new name — bump epoch so any
+       leftover pointer fails client_account_live / get(old_name). */
     if (mgr->count >= CMQ_ACCOUNT_MAX) {
+        cmq_account_t *slot = NULL;
+        for (size_t i = 0; i < mgr->count; i++) {
+            if (!__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE)) {
+                slot = &mgr->accounts[i];
+                break;
+            }
+        }
+        if (!slot) {
+            cmq_mutex_unlock(&mgr->lock);
+            return -1;
+        }
+        clear_account_perms_unlocked(mgr, slot->name);
+        slot->epoch++;
+        if (slot->epoch == 0)
+            slot->epoch = 1;
+        strncpy(slot->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
+        slot->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+        slot->connections = 0;
+        slot->subscriptions = 0;
+        slot->messages_in = 0;
+        slot->messages_out = 0;
+        slot->bytes_in = 0;
+        slot->bytes_out = 0;
+        __atomic_store_n(&slot->active, 1, __ATOMIC_RELEASE);
         cmq_mutex_unlock(&mgr->lock);
-        return -1;
+        return 0;
     }
     cmq_account_t *a = &mgr->accounts[mgr->count++];
     strncpy(a->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
@@ -78,8 +106,6 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     cmq_mutex_unlock(&mgr->lock);
     return 0;
 }
-
-static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char *name);
 
 int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
     if (!mgr || !name) return -1;

@@ -2189,6 +2189,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — account slot reclaim · max_clients CAS · coro OOM sync</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">account reclaim</span></td><td>✅</td><td>Soft-delete keeps name while capacity remains; when table is full, inactive slots are reused (epoch bump).</td></tr>
+<tr><td><span class="component-name">max_clients</span></td><td>✅</td><td>Admit with CAS so concurrent accepts cannot overshoot the limit.</td></tr>
+<tr><td><span class="component-name">coro OOM</span></td><td>✅</td><td><code>calloc</code>/<code>cmq_coro_create</code> failure uses the same bounded sync deliver path as pool-full.</td></tr>
+</table>
+</div>
+
 
 
 

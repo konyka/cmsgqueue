@@ -1661,12 +1661,28 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
                                        uint32_t publisher_id,
                                        int publisher_worker_id,
                                        int suppress_fail_error) {
+    /* Bounded sync fan-out used when coro pool is full or coro alloc fails. */
+    #define CMQ_CORO_SYNC_CAP ((size_t)CMQ_CORO_DELIVER_BATCH * 8u)
+    #define CMQ_CORO_SYNC_FALLBACK(tgts, n, subj, pub, pay, plen, hdr, hlen) do { \
+        size_t _lim = (n); \
+        if (_lim > CMQ_CORO_SYNC_CAP) { \
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, \
+                                      (uint64_t)(_lim - CMQ_CORO_SYNC_CAP), \
+                                      CMQ_ATOMIC_RELAXED); \
+            _lim = CMQ_CORO_SYNC_CAP; \
+        } \
+        int _rc = deliver_targets_sync(srv, (tgts), _lim, (subj), (pub), \
+                                        (pay), (plen), (hdr), (hlen)); \
+        free(tgts); \
+        free((void *)(pay)); \
+        if (hdr) free((void *)(hdr)); \
+        return _rc == 0 ? 0 : -1; \
+    } while (0)
+
     cmq_deliver_ctx_t *ctx = calloc(1, sizeof(cmq_deliver_ctx_t));
     if (!ctx) {
-        free(targets);
-        free((void *)payload);
-        if (headers) free((void *)headers);
-        return -1;
+        CMQ_CORO_SYNC_FALLBACK(targets, target_count, subject, pub_account,
+                               payload, payload_len, headers, headers_len);
     }
     ctx->srv = srv;
     ctx->targets = targets;
@@ -1685,8 +1701,20 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
 
     cmq_coro_t *coro = cmq_coro_create(deliver_coro_func, ctx, 32768);
     if (!coro) {
-        deliver_ctx_free(ctx);
-        return -1;
+        /* Steal owned buffers out of ctx so sync path can free them once. */
+        cmq_deliver_tgt_t *tgts = ctx->targets;
+        size_t n = ctx->target_count;
+        const uint8_t *pay = ctx->payload;
+        size_t plen = ctx->payload_len;
+        const uint8_t *hdr = ctx->headers;
+        size_t hlen = ctx->headers_len;
+        char subj[CMQ_MAX_SUBJECT];
+        char pub[CMQ_ACCOUNT_NAME_SIZE];
+        memcpy(subj, ctx->subject, sizeof(subj));
+        memcpy(pub, ctx->pub_account, sizeof(pub));
+        free(ctx);
+        CMQ_CORO_SYNC_FALLBACK(tgts, n, subj, pub[0] ? pub : NULL,
+                               pay, plen, hdr, hlen);
     }
     ctx->coro = coro;
 
@@ -1696,12 +1724,11 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
         /* Pool full: bounded sync fan-out — avoid stalling the worker loop. */
         cmq_coro_destroy(coro);
         size_t lim = ctx->target_count;
-        size_t sync_cap = (size_t)CMQ_CORO_DELIVER_BATCH * 8u;
-        if (lim > sync_cap) {
+        if (lim > CMQ_CORO_SYNC_CAP) {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped,
-                                      (uint64_t)(lim - sync_cap),
+                                      (uint64_t)(lim - CMQ_CORO_SYNC_CAP),
                                       CMQ_ATOMIC_RELAXED);
-            lim = sync_cap;
+            lim = CMQ_CORO_SYNC_CAP;
         }
         int rc = deliver_targets_sync(srv, ctx->targets, lim,
                                        ctx->subject, ctx->pub_account,
@@ -1711,6 +1738,8 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
         return rc == 0 ? 0 : -1;
     }
     return 0;
+#undef CMQ_CORO_SYNC_FALLBACK
+#undef CMQ_CORO_SYNC_CAP
 }
 
 /* Forward a framed op to cluster routes (heap-sized encode).
@@ -3634,10 +3663,21 @@ static void accept_cb(int fd, int events, void *data) {
         }
 
         if (srv->config.max_clients > 0) {
-            uint32_t cur = cmq_atomic_fetch_add_u32(&srv->active_clients, 1,
-                                                     CMQ_ATOMIC_SEQ_CST);
-            if ((int)(cur + 1) > srv->config.max_clients) {
-                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_SEQ_CST);
+            /* CAS so concurrent accepts cannot overshoot max_clients. */
+            uint32_t max = (uint32_t)srv->config.max_clients;
+            uint32_t cur = cmq_atomic_load_u32(&srv->active_clients,
+                                                CMQ_ATOMIC_SEQ_CST);
+            int admitted = 0;
+            for (;;) {
+                if (cur >= max)
+                    break;
+                if (cmq_atomic_cas_u32(&srv->active_clients, &cur, cur + 1,
+                                        CMQ_ATOMIC_SEQ_CST)) {
+                    admitted = 1;
+                    break;
+                }
+            }
+            if (!admitted) {
                 close(client_fd);
                 continue;
             }

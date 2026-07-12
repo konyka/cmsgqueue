@@ -32,7 +32,8 @@ TEST(account, create_delete) {
     ASSERT_EQ(cmq_account_count(mgr), (size_t)1);
     ASSERT_NULL(cmq_account_get(mgr, "tenant-a"));
 
-    /* Soft-deleted slot must not be reused for a different name. */
+    /* Soft-deleted slot must not be reused for a different name while
+       capacity remains (stable pointer for stale holders). */
     cmq_account_t *old = NULL;
     cmq_account_create(mgr, "keep-ptr");
     old = cmq_account_get(mgr, "keep-ptr");
@@ -41,6 +42,22 @@ TEST(account, create_delete) {
     ASSERT_EQ(cmq_account_create(mgr, "other-name"), 0);
     ASSERT_STR_EQ(old->name, "keep-ptr"); /* pointer still names keep-ptr */
     ASSERT_EQ(old->active, 0);
+
+    /* When the table is full, inactive slots are reclaimed for new names. */
+    {
+        cmq_account_manager_t *full = cmq_account_manager_create();
+        char name[CMQ_ACCOUNT_NAME_SIZE];
+        for (size_t i = 0; i < CMQ_ACCOUNT_MAX; i++) {
+            snprintf(name, sizeof(name), "u%zu", i);
+            ASSERT_EQ(cmq_account_create(full, name), 0);
+        }
+        ASSERT_EQ(cmq_account_create(full, "overflow"), -1);
+        ASSERT_EQ(cmq_account_delete(full, "u0"), 0);
+        ASSERT_EQ(cmq_account_create(full, "reclaimed"), 0);
+        ASSERT_NOT_NULL(cmq_account_get(full, "reclaimed"));
+        ASSERT_NULL(cmq_account_get(full, "u0"));
+        cmq_account_manager_destroy(full);
+    }
 
     ASSERT_EQ(cmq_account_delete(mgr, "nonexistent"), -1);
 
