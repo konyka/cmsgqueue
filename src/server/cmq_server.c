@@ -1427,6 +1427,15 @@ static int deliver_via_worker(cmq_server_t *srv, int worker_id,
     return 0;
 }
 
+/* Inbox payloads must not fan out to '>' / other wildcards (sniff). */
+static int deliver_tgt_accepts_subject(const cmq_deliver_tgt_t *t,
+                                        const char *subject) {
+    if (!t || !subject) return 0;
+    if (strncmp(subject, "_INBOX.", 7) == 0)
+        return strcmp(t->subject, subject) == 0;
+    return 1;
+}
+
 /* Sync fan-out by stable client_id — no sublist lock held (teardown-safe).
    Returns 0 if at least one delivery was queued/sent, -1 on total failure. */
 static int deliver_targets_sync(cmq_server_t *srv,
@@ -1444,6 +1453,8 @@ static int deliver_targets_sync(cmq_server_t *srv,
     int any = 0;
     for (size_t i = 0; i < ntgt; i++) {
         cmq_deliver_tgt_t *t = &tgts[i];
+        if (!deliver_tgt_accepts_subject(t, subject))
+            continue;
         if (!cmq_account_may_deliver(srv->accounts, pub_account,
                                       t->account_name, subject))
             continue;
@@ -1483,6 +1494,8 @@ static size_t deliver_request_targets(cmq_server_t *srv,
     size_t delivered_n = 0;
     for (size_t i = 0; i < ntgt; i++) {
         cmq_deliver_tgt_t *t = &tgts[i];
+        if (!deliver_tgt_accepts_subject(t, subject))
+            continue;
         if (!cmq_account_may_deliver(srv->accounts, pub_account,
                                       t->account_name, subject))
             continue;
@@ -1579,6 +1592,8 @@ static void deliver_coro_func(void *arg) {
 
     for (size_t i = ctx->idx; i < ctx->target_count; i++) {
         cmq_deliver_tgt_t *t = &ctx->targets[i];
+        if (!deliver_tgt_accepts_subject(t, ctx->subject))
+            continue;
         if (!cmq_account_may_deliver(srv->accounts, ctx->pub_account,
                                       t->account_name, ctx->subject))
             continue;
@@ -2136,9 +2151,32 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     ref->queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
 
     cmq_rwlock_wrlock(&srv->sublist_lock);
+    /* Exact _INBOX.* is first-claim: another client's exact sub wins. */
+    if (strncmp(subject, "_INBOX.", 7) == 0) {
+        cmq_sublist_result_t claim;
+        if (cmq_sublist_match(srv->sublist, subject, &claim) == 0) {
+            for (size_t i = 0; i < claim.count; i++) {
+                cmq_sub_ref_t *cr = (cmq_sub_ref_t *)claim.entries[i];
+                if (!cr || !cr->client) continue;
+                if (strcmp(cr->subject, subject) != 0) continue;
+                if (cr->client != c) {
+                    cmq_sublist_result_free(&claim);
+                    cmq_rwlock_unlock(&srv->sublist_lock);
+                    free(ref);
+                    free(entry);
+                    cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
+                                              CMQ_ATOMIC_RELAXED);
+                    cmq_send_suback(c, sub_id, 1);
+                    return;
+                }
+            }
+            cmq_sublist_result_free(&claim);
+        }
+    }
     /* Remove old first so publish cannot briefly match both subjects. */
     cmq_sub_ref_t *old_ref = (old && old->ref) ? old->ref : NULL;
     char old_subject[CMQ_MAX_SUBJECT];
+    int ghost_drop = 0;
     if (old_ref) {
         memcpy(old_subject, old->subject, CMQ_MAX_SUBJECT);
         cmq_sublist_remove(srv->sublist, old_subject, old_ref);
@@ -2150,6 +2188,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
             free(old_ref);
             if (old) old->ref = NULL;
             old_ref = NULL;
+            ghost_drop = 1;
         }
     } else if (irc == 0 && old_ref) {
         free(old_ref);
@@ -2160,6 +2199,26 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     if (irc != 0) {
         free(ref);
         free(entry);
+        if (ghost_drop && old) {
+            cmq_sub_entry_t **q = &c->subs;
+            while (*q) {
+                if (*q == old) {
+                    *q = old->next;
+                    break;
+                }
+                q = &(*q)->next;
+            }
+            free(old);
+            if (c->sub_count > 0) c->sub_count--;
+            uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
+                                                CMQ_ATOMIC_RELAXED);
+            if (cur > 0)
+                cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            uint32_t aep = 0;
+            cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name, &aep);
+            if (a) cmq_account_dec_subscriptions(a, aep);
+        }
         cmq_send_suback(c, sub_id, 1);
         return;
     }

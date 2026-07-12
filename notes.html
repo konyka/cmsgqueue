@@ -2219,6 +2219,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — inbox exact deliver · inbox first-claim · ghost sub drop</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">inbox deliver</span></td><td>✅</td><td><code>_INBOX.*</code> fan-out only to exact subscription subjects (not <code>&gt;</code> sniffers).</td></tr>
+<tr><td><span class="component-name">inbox claim</span></td><td>✅</td><td>Exact <code>_INBOX.*</code> SUBSCRIBE is first-claim per subject across clients.</td></tr>
+<tr><td><span class="component-name">sub replace OOM</span></td><td>✅</td><td>If restore after failed replace also fails, drop the ghost client sub and adjust counts.</td></tr>
+</table>
+</div>
+
 
 
 
