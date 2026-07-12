@@ -167,6 +167,7 @@ struct cmq_server {
     cmq_tls_config_t *tls_config;
 
     cmq_atomic_u32 active_clients;  /* accept/teardown gate for max_clients */
+    cmq_atomic_int acceptor_drain;  /* 1: acceptor loop must DISCONNECT locals */
 
     cmq_atomic_u64 stat_connections;
     cmq_atomic_u64 stat_messages_in;

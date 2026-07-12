@@ -39,6 +39,8 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id);
 
 int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms);
 void cmq_ev_stop(cmq_ev_loop_t *loop);
+/* Wake a running loop without stopping (e.g. cross-thread drain request). */
+void cmq_ev_wakeup(cmq_ev_loop_t *loop);
 void cmq_ev_set_post_tick(cmq_ev_loop_t *loop, cmq_ev_tick_t tick, void *data);
 
 int cmq_ev_fd(cmq_ev_loop_t *loop);

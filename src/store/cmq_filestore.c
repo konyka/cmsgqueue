@@ -266,8 +266,19 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     fs->idx_fp = fopen(fs->idx_path, "a+b");
     if (!fs->idx_fp) { fclose(fs->data_fp); cmq_mutex_destroy(&fs->lock); free(fs); return NULL; }
 
-    uint64_t n = repair_idx(fs);
-    truncate_orphan_data(fs, n);
+    uint64_t n = 0;
+    if (fs_lock_pair(fs, LOCK_EX) == 0) {
+        n = repair_idx(fs);
+        truncate_orphan_data(fs, n);
+        fs_unlock_pair(fs);
+    } else {
+        /* Fail closed: do not repair unlocked against a live writer. */
+        fclose(fs->idx_fp);
+        fclose(fs->data_fp);
+        cmq_mutex_destroy(&fs->lock);
+        free(fs);
+        return NULL;
+    }
     fs->next_seq = n + 1;
     return fs;
 }

@@ -242,6 +242,7 @@ static void client_read_cb(int fd, int events, void *data);
 static void cmq_client_destroy(cmq_client_t *c);
 static void client_teardown(cmq_client_t *c);
 static void client_finish_closing(cmq_client_t *c);
+static void acceptor_post_tick(void *data);
 static void worker_purge_send_for_id(cmq_worker_t *w, uint32_t target_id);
 static int client_has_sub(const cmq_client_t *c, uint32_t sub_id);
 static void send_info_frame(cmq_server_t *srv, cmq_client_t *c);
@@ -4010,6 +4011,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         return CMQ_ERR_IO;
     }
 
+    /* Acceptor-thread drain of local clients (single-thread / num_threads<=1). */
+    cmq_ev_set_post_tick(srv->ev_loop, acceptor_post_tick, srv);
+
     if (srv->config.ping_interval_ms > 0) {
         if (cmq_ev_timer_add(srv->ev_loop, (uint64_t)srv->config.ping_interval_ms,
                               (uint64_t)srv->config.ping_interval_ms,
@@ -4215,14 +4219,10 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     return CMQ_OK;
 }
 
-void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
-    if (!srv) return;
-
-    if (srv->listen_fd >= 0) {
-        cmq_ev_del(srv->ev_loop, srv->listen_fd);
-        close(srv->listen_fd);
-        srv->listen_fd = -1;
-    }
+/* Run only on the acceptor event-loop thread (via post_tick after wakeup). */
+static void acceptor_process_drain(cmq_server_t *srv) {
+    if (!srv || !cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
+        return;
 
     uint8_t disc[16];
     size_t disc_len = cmq_frame_encode(disc, sizeof(disc), CMQ_OP_DISCONNECT, 0, NULL, 0);
@@ -4242,7 +4242,6 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
                 }
             }
         } else {
-            /* OOM: do not leave CLOSING without finish — force EOF instead. */
             for (int i = 0; i < nacc; i++) {
                 cmq_client_t *c = srv->clients[i];
                 if (c && c->state == CMQ_CLIENT_CONNECTED && c->fd >= 0) {
@@ -4261,6 +4260,35 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
         }
         free(acc_snap);
     }
+
+    cmq_mutex_lock(&srv->clients_lock);
+    int left = srv->clients_count;
+    cmq_mutex_unlock(&srv->clients_lock);
+    if (left == 0)
+        cmq_atomic_store_int(&srv->acceptor_drain, 0, CMQ_ATOMIC_RELEASE);
+}
+
+static void acceptor_post_tick(void *data) {
+    acceptor_process_drain((cmq_server_t *)data);
+}
+
+void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
+    if (!srv) return;
+
+    if (srv->listen_fd >= 0) {
+        cmq_ev_del(srv->ev_loop, srv->listen_fd);
+        close(srv->listen_fd);
+        srv->listen_fd = -1;
+    }
+
+    uint8_t disc[16];
+    size_t disc_len = cmq_frame_encode(disc, sizeof(disc), CMQ_OP_DISCONNECT, 0, NULL, 0);
+
+    /* Acceptor-owned clients live on srv->ev_loop — never send_local /
+       finish_closing from this (possibly foreign) thread. */
+    cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
+    if (srv->ev_loop)
+        cmq_ev_wakeup(srv->ev_loop);
 
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
@@ -4308,8 +4336,19 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
         }
     }
 
-    struct timespec ts = {0, (long)drain_timeout_ms * 1000000L};
-    nanosleep(&ts, NULL);
+    int timeout = drain_timeout_ms > 0 ? drain_timeout_ms : 0;
+    uint64_t start = srv_now_ms();
+    for (;;) {
+        cmq_mutex_lock(&srv->clients_lock);
+        int n = srv->clients_count;
+        cmq_mutex_unlock(&srv->clients_lock);
+        if (n == 0)
+            break;
+        if ((int)(srv_now_ms() - start) >= timeout)
+            break;
+        struct timespec ts = {0, 1000000L}; /* 1ms */
+        nanosleep(&ts, NULL);
+    }
 
     cmq_server_stop(srv);
 }

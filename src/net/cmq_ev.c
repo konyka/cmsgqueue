@@ -483,6 +483,11 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
 void cmq_ev_stop(cmq_ev_loop_t *loop) {
     if (!loop) return;
     cmq_atomic_store_int(&loop->running, 0, CMQ_ATOMIC_RELEASE);
+    cmq_ev_wakeup(loop);
+}
+
+void cmq_ev_wakeup(cmq_ev_loop_t *loop) {
+    if (!loop) return;
     if (loop->wakeup_wfd >= 0) {
         uint64_t val = 1;
         (void)write(loop->wakeup_wfd, &val, sizeof(val));
