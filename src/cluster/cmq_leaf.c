@@ -344,7 +344,8 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
         if (flen == 0 || wr != 0) {
             cmq_mutex_lock(&leaf->lock);
             for (size_t i = 0; i < leaf->sub_count; i++) {
-                if (leaf->subs[i] == copy) {
+                if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&
+                    strcmp(leaf->subs[i], subject) == 0) {
                     free(leaf->subs[i]);
                     memmove(&leaf->subs[i], &leaf->subs[i + 1],
                             (leaf->sub_count - i - 1) * sizeof(char *));
@@ -369,7 +370,6 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
             uint32_t sub_id = leaf->sub_ids[i];
             int hub_fd = leaf->hub_fd;
             int connected = leaf->connected;
-            char *kept = leaf->subs[i];
             cmq_mutex_unlock(&leaf->lock);
 
             /* Notify hub first — avoid ghost interest if write fails. */
@@ -393,11 +393,11 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
                     return -1;
             }
 
+            /* Re-locate by sub_id+subject — never keep a dangling char*. */
             cmq_mutex_lock(&leaf->lock);
             for (size_t j = 0; j < leaf->sub_count; j++) {
-                if (leaf->subs[j] == kept ||
-                    (leaf->subs[j] && strcmp(leaf->subs[j], subject) == 0 &&
-                     leaf->sub_ids[j] == sub_id)) {
+                if (leaf->sub_ids[j] == sub_id && leaf->subs[j] &&
+                    strcmp(leaf->subs[j], subject) == 0) {
                     free(leaf->subs[j]);
                     memmove(&leaf->subs[j], &leaf->subs[j + 1],
                             (leaf->sub_count - j - 1) * sizeof(char *));

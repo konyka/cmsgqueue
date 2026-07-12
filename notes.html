@@ -2150,6 +2150,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — CLOSING finish flush · leaf sub_id relocate · purge SEND dead letters</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CLOSING idle</span></td><td>✅</td><td>Idle CLOSING uses <code>finish_closing</code>; write stall still force-teardown.</td></tr>
+<tr><td><span class="component-name">leaf unsub</span></td><td>✅</td><td>Relocate by <code>sub_id</code>+subject after hub I/O (no dangling char*).</td></tr>
+<tr><td><span class="component-name">worker purge</span></td><td>✅</td><td>TEARDOWN/teardown splice out queued SEND for the client id.</td></tr>
+</table>
+</div>
+
 
 
 

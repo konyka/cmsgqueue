@@ -239,6 +239,7 @@ static void client_read_cb(int fd, int events, void *data);
 static void cmq_client_destroy(cmq_client_t *c);
 static void client_teardown(cmq_client_t *c);
 static void client_finish_closing(cmq_client_t *c);
+static void worker_purge_send_for_id(cmq_worker_t *w, uint32_t target_id);
 static int client_has_sub(const cmq_client_t *c, uint32_t sub_id);
 static void send_info_frame(cmq_server_t *srv, cmq_client_t *c);
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len);
@@ -342,6 +343,8 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
         while (msg) {
             cmq_worker_msg_t *next = msg->next;
             if (msg->kind == CMQ_WORKER_MSG_TEARDOWN) {
+                /* Drop queued SEND dead letters before reclaiming the client. */
+                worker_purge_send_for_id(w, msg->target_id);
                 cmq_mutex_lock(&w->clients_lock);
                 cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
                 cmq_mutex_unlock(&w->clients_lock);
@@ -394,6 +397,33 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
         if (w->wakeup_wfd >= 0 && wakeup_fd_signal(w->wakeup_wfd) == 0)
             break;
     }
+}
+
+/* Drop queued SEND frames for a gone client so the queue does not stay full
+   of dead letters (TEARDOWN still bypasses the SEND cap). */
+static void worker_purge_send_for_id(cmq_worker_t *w, uint32_t target_id) {
+    if (!w || target_id == 0) return;
+    cmq_mutex_lock(&w->msg_lock);
+    cmq_worker_msg_t **pp = &w->msg_head;
+    cmq_worker_msg_t *tail = NULL;
+    while (*pp) {
+        cmq_worker_msg_t *m = *pp;
+        if (m->kind != CMQ_WORKER_MSG_TEARDOWN && m->target_id == target_id) {
+            *pp = m->next;
+            if (w->msg_pending > 0)
+                w->msg_pending--;
+            if (w->server)
+                cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            free(m->buf);
+            free(m);
+            continue;
+        }
+        tail = m;
+        pp = &m->next;
+    }
+    w->msg_tail = tail;
+    cmq_mutex_unlock(&w->msg_lock);
 }
 
 /* Returns 0 on success, -1 on OOM or queue-full (message dropped).
@@ -800,6 +830,8 @@ static void client_teardown(cmq_client_t *c) {
     c->sub_count = 0;
 
     /* Detach from worker or acceptor client array (swap-with-last). */
+    int wid = c->worker_id;
+    uint32_t cid = c->id;
     if (c->worker_id >= 0 && srv->workers) {
         cmq_worker_t *w = &srv->workers[c->worker_id];
         cmq_mutex_lock(&w->clients_lock);
@@ -824,6 +856,9 @@ static void client_teardown(cmq_client_t *c) {
         }
         cmq_mutex_unlock(&srv->clients_lock);
     }
+    /* After clients_lock: purge SEND dead letters (avoid AB-BA with wakeup). */
+    if (wid >= 0 && srv->workers && wid < srv->num_workers)
+        worker_purge_send_for_id(&srv->workers[wid], cid);
 
     uint32_t active = cmq_atomic_load_u32(&srv->active_clients, CMQ_ATOMIC_RELAXED);
     if (active > 0) {
@@ -3361,11 +3396,13 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
                       c->write_pos < c->write_len &&
                       c->last_write_progress_ms > 0 &&
                       (now - c->last_write_progress_ms) > write_timeout_ms;
-        /* CLOSING: reclaim on write stall or idle (empty write_buf half-open). */
+        /* CLOSING: stall → force teardown; idle → finish flush then teardown. */
         if (c->state == CMQ_CLIENT_CLOSING) {
             int closing_idle = (now - c->last_activity_ms) > timeout_ms;
-            if (stalled || closing_idle)
+            if (stalled)
                 client_teardown(c);
+            else if (closing_idle)
+                client_finish_closing(c);
             continue;
         }
         int idle = (c->state == CMQ_CLIENT_CONNECTED ||
