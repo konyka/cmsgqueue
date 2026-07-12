@@ -2104,6 +2104,10 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
             }
             memcpy(queue_group, frame->payload + qg_offset + 2, qg_len);
             queue_group[qg_len] = '\0';
+            if (!wire_cstr_exact(queue_group, qg_len)) {
+                cmq_send_suback(c, sub_id, 1);
+                return;
+            }
         }
     }
 

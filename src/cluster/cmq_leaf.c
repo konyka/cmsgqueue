@@ -308,9 +308,18 @@ int cmq_leaf_disconnect(cmq_leaf_node_t *leaf) {
 int cmq_leaf_is_connected(cmq_leaf_node_t *leaf) {
     if (!leaf) return 0;
     cmq_mutex_lock(&leaf->lock);
-    int c = leaf->connected;
+    int fd = leaf->hub_fd;
+    int c = leaf->connected && fd >= 0;
     cmq_mutex_unlock(&leaf->lock);
-    return c;
+    if (!c) return 0;
+    /* Same light probe as connect — clear sticky connected on dead hub. */
+    struct pollfd pfd = { .fd = fd, .events = 0 };
+    if (poll(&pfd, 1, 0) >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+        return 1;
+    cmq_mutex_lock(&leaf->hub_io_lock);
+    leaf_hub_drop(leaf, fd);
+    cmq_mutex_unlock(&leaf->hub_io_lock);
+    return 0;
 }
 
 int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {

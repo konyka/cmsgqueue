@@ -2256,6 +2256,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — queue_group NUL · leaf is_connected probe</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">queue_group NUL</span></td><td>✅</td><td>SUBSCRIBE rejects length-prefixed queue groups with embedded NUL (avoids strcmp collapse into wrong RR group).</td></tr>
+<tr><td><span class="component-name">leaf is_connected</span></td><td>✅</td><td>Probes hub fd for POLLERR/HUP and drops sticky <code>connected</code> (matches connect path).</td></tr>
+</table>
+</div>
+
 
 
 
