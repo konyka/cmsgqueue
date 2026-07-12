@@ -2238,15 +2238,16 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "delivery failed");
         return;
     }
-    if (!c->is_route)
+    /* Only forward RESPONSE when no local inbox — avoid broadcasting
+       private _INBOX payloads to every cluster peer. */
+    if (!c->is_route && ntgt == 0)
         route_rc = cmq_route_forward_op(srv, CMQ_OP_RESPONSE, frame->hdr.flags,
                                          frame->payload, frame->payload_len,
                                          &route_sent);
 
     if (tgts && ntgt > 0) {
         if (deliver_targets_sync(srv, tgts, ntgt, subject, c->account_name,
-                                  msg_payload, msg_len, NULL, 0) != 0 &&
-            route_sent == 0)
+                                  msg_payload, msg_len, NULL, 0) != 0)
             cmq_send_error(c, "delivery failed");
     } else if (!c->is_route) {
         if (route_sent == 0) {
@@ -3767,7 +3768,15 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->cluster = NULL;
     srv->tls_config = NULL;
 
-    if (srv->config.tls_enabled && srv->config.tls_cert && srv->config.tls_key) {
+    if (srv->config.tls_enabled) {
+        if (!srv->config.tls_cert || !srv->config.tls_key ||
+            srv->config.tls_cert[0] == '\0' || srv->config.tls_key[0] == '\0') {
+            cmq_log_error(srv->log,
+                "TLS enabled but tls_cert/tls_key missing — refusing plaintext");
+            cmq_server_destroy(srv);
+            *server = NULL;
+            return CMQ_ERR_INVALID_ARG;
+        }
         if (!cmq_tls_backend_secure()) {
             cmq_log_error(srv->log,
                 "TLS requested but no secure backend linked — refusing plaintext stub");

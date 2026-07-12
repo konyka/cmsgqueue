@@ -600,18 +600,19 @@ size_t cmq_route_live_count(cmq_route_pool_t *pool) {
     return n;
 }
 
-cmq_route_conn_t *cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id) {
-    if (!pool || !node_id) return NULL;
+int cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id,
+                        cmq_route_conn_t *out) {
+    if (!pool || !node_id || !out) return -1;
     cmq_mutex_lock(&pool->lock);
-    cmq_route_conn_t *found = NULL;
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
-            found = &pool->conns[i];
-            break;
+            *out = pool->conns[i];
+            cmq_mutex_unlock(&pool->lock);
+            return 0;
         }
     }
     cmq_mutex_unlock(&pool->lock);
-    return found;
+    return -1;
 }
 
 int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id) {

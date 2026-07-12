@@ -2037,6 +2037,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — RESPONSE local-only forward · route conn copy · TLS cert required</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">RESPONSE route</span></td><td>✅</td><td>Forward only when no local inbox (no cluster-wide _INBOX leak).</td></tr>
+<tr><td><span class="component-name">route get_conn</span></td><td>✅</td><td>Copy-out under lock (no unlocked live pointer).</td></tr>
+<tr><td><span class="component-name">tls_enabled</span></td><td>✅</td><td>Require cert+key; refuse plaintext pretend-TLS.</td></tr>
+</table>
+</div>
+
+
 
 
 

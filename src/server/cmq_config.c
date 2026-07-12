@@ -198,6 +198,12 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->auth_password &&
         strnlen(config->auth_password, 256) >= 256)
         return CMQ_ERR_INVALID_ARG;
+    /* tls_enabled without cert/key would listen in plaintext — fail closed. */
+    if (config->tls_enabled) {
+        if (!config->tls_cert || !config->tls_key ||
+            config->tls_cert[0] == '\0' || config->tls_key[0] == '\0')
+            return CMQ_ERR_INVALID_ARG;
+    }
     {
         const char *host = config->host ? config->host : CMQ_DEFAULT_HOST;
         struct in_addr ha;

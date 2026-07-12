@@ -185,6 +185,18 @@ TEST(config, validate_auth_cred_length) {
     ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
 }
 
+TEST(config, validate_tls_requires_certs) {
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.port = 7654;
+    config.tls_enabled = 1;
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+    config.tls_cert = "/tmp/cert.pem";
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+    config.tls_key = "/tmp/key.pem";
+    ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
+}
+
 TEST(config, validate_max_payload_cap) {
     cmq_config_t config;
     memset(&config, 0, sizeof(config));

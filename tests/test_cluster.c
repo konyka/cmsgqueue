@@ -97,14 +97,14 @@ TEST(route, add_remove_conn) {
     ASSERT_EQ(cmq_route_add_conn(rp, "n3", -1, NULL, NULL), 0);
     ASSERT_EQ(cmq_route_pool_count(rp), (size_t)2);
 
-    cmq_route_conn_t *conn = cmq_route_get_conn(rp, "n2");
-    ASSERT_NOT_NULL(conn);
-    ASSERT_STR_EQ(conn->remote_id, "n2");
-    ASSERT_EQ(conn->connected, 1);
+    cmq_route_conn_t conn;
+    ASSERT_EQ(cmq_route_get_conn(rp, "n2", &conn), 0);
+    ASSERT_STR_EQ(conn.remote_id, "n2");
+    ASSERT_EQ(conn.connected, 1);
 
     ASSERT_EQ(cmq_route_disconnect(rp, "n2"), 0);
     ASSERT_EQ(cmq_route_pool_count(rp), (size_t)1);
-    ASSERT_NULL(cmq_route_get_conn(rp, "n2"));
+    ASSERT_EQ(cmq_route_get_conn(rp, "n2", &conn), -1);
 
     ASSERT_EQ(cmq_route_disconnect(rp, "nonexistent"), -1);
 
@@ -143,16 +143,15 @@ TEST(route, attach_inbound_borrow) {
 
     ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", a[1]), 0);
     ASSERT_EQ(cmq_route_live_count(rp), (size_t)1);
-    cmq_route_conn_t *conn = cmq_route_get_conn(rp, "r0");
-    ASSERT_NOT_NULL(conn);
-    ASSERT_EQ(conn->fd, a[1]);
-    ASSERT_EQ(conn->fd_owned, 0);
+    cmq_route_conn_t conn;
+    ASSERT_EQ(cmq_route_get_conn(rp, "r0", &conn), 0);
+    ASSERT_EQ(conn.fd, a[1]);
+    ASSERT_EQ(conn.fd_owned, 0);
 
     /* Live egress already present — reject redundant inbound (do not replace). */
     ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", b[1]), -1);
-    conn = cmq_route_get_conn(rp, "r0");
-    ASSERT_NOT_NULL(conn);
-    ASSERT_EQ(conn->fd, a[1]);
+    ASSERT_EQ(cmq_route_get_conn(rp, "r0", &conn), 0);
+    ASSERT_EQ(conn.fd, a[1]);
     /* Rejected fd must still be usable by caller. */
     ASSERT_EQ(write(b[1], "y", 1), 1);
 
@@ -176,10 +175,10 @@ TEST(route, connect_replaces_placeholder) {
     cmq_cluster_t *c = cmq_cluster_create("c1", "n1");
     cmq_route_pool_t *rp = cmq_route_pool_create(c);
     ASSERT_EQ(cmq_route_add_conn(rp, "r0", -1, NULL, NULL), 0);
-    cmq_route_conn_t *conn = cmq_route_get_conn(rp, "r0");
-    ASSERT_NOT_NULL(conn);
-    ASSERT_EQ(conn->connected, 1);
-    ASSERT_EQ(conn->fd, -1);
+    cmq_route_conn_t conn;
+    ASSERT_EQ(cmq_route_get_conn(rp, "r0", &conn), 0);
+    ASSERT_EQ(conn.connected, 1);
+    ASSERT_EQ(conn.fd, -1);
     ASSERT_EQ(cmq_route_live_count(rp), (size_t)0);
     /* Unreachable peer: must attempt connect (not early-return success). */
     ASSERT_EQ(cmq_route_connect(rp, "r0", "127.0.0.1", 1, NULL, NULL), -1);

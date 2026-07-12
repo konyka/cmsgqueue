@@ -41,8 +41,9 @@ static void demo_routing(void) {
     cmq_route_add_conn(routes, "node-3", -1, NULL, NULL);
     printf("Added 2 route connections. Pool size: %zu\n", cmq_route_pool_count(routes));
 
-    cmq_route_conn_t *c = cmq_route_get_conn(routes, "node-2");
-    if (c) printf("Route to node-2: connected=%d\n", c->connected);
+    cmq_route_conn_t c;
+    if (cmq_route_get_conn(routes, "node-2", &c) == 0)
+        printf("Route to node-2: connected=%d\n", c.connected);
 
     cmq_route_disconnect(routes, "node-2");
     printf("After disconnect node-2: pool size=%zu\n", cmq_route_pool_count(routes));
