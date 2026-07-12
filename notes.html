@@ -2101,6 +2101,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS frag keepalive · $default CONNECT · keepalive stack doom</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">WS fragments</span></td><td>✅</td><td>Activity only on complete WS frames; max 256 fragments per message.</td></tr>
+<tr><td><span class="component-name">$default CONNECT</span></td><td>✅</td><td>Anonymous path calls <code>account_create</code> (soft-delete fails CONNACK).</td></tr>
+<tr><td><span class="component-name">keepalive OOM</span></td><td>✅</td><td>Stack buffer of 128 doomed ids when malloc fails; overflow still <code>shutdown</code>.</td></tr>
+</table>
+</div>
+
 
 
 

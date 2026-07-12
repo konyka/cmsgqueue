@@ -98,6 +98,7 @@ typedef struct cmq_client {
     size_t ws_msg_len;
     size_t ws_msg_cap;
     int ws_msg_active;              /* 1 while assembling a fragmented message */
+    uint16_t ws_frag_count;         /* fragments in current message; caps DoS */
 
     struct cmq_client *next;
 } cmq_client_t;

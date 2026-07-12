@@ -2722,6 +2722,15 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         } else {
             strncpy(c->account_name, "$default", CMQ_ACCOUNT_NAME_SIZE - 1);
             c->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+            /* Soft-delete must deny anonymous CONNECT until reactivated. */
+            if (cmq_account_create(srv->accounts, "$default") != 0) {
+                if (c->is_route && srv->routes)
+                    route_detach_under_io_lock(srv, c->fd);
+                c->is_route = 0;
+                cmq_send_connack(c, 1);
+                c->state = CMQ_CLIENT_CLOSING;
+                break;
+            }
         }
         c->state = CMQ_CLIENT_CONNECTED;
         c->last_activity_ms = srv_now_ms();
@@ -3064,8 +3073,10 @@ static void client_read_cb(int fd, int events, void *data) {
         }
         return;
     }
-    /* INIT: do not refresh on TCP traffic — PING/junk must not hold slots. */
-    if (c->state == CMQ_CLIENT_CONNECTED)
+    /* INIT: do not refresh on TCP traffic — PING/junk must not hold slots.
+       WS: only complete frames / control refresh (see below) — FIN=0 spam
+       must not bypass idle keepalive. */
+    if (c->state == CMQ_CLIENT_CONNECTED && !c->is_websocket)
         c->last_activity_ms = srv_now_ms();
 
     /* HTTP upgrade may arrive fragmented or pipelined with the first WS frame.
@@ -3214,6 +3225,11 @@ static void client_read_cb(int fd, int events, void *data) {
                 if (ws_frame.opcode != CMQ_WS_OPCODE_CONTINUATION)
                     c->ws_msg_active = 1;
 
+                if (++c->ws_frag_count > 256) {
+                    client_teardown(c);
+                    return;
+                }
+
                 if (ws_frame.payload_len > 0) {
                     size_t need = c->ws_msg_len + ws_frame.payload_len;
                     if (need > c->ws_msg_cap) {
@@ -3237,6 +3253,8 @@ static void client_read_cb(int fd, int events, void *data) {
                 }
 
                 if (ws_frame.fin) {
+                    if (c->state == CMQ_CLIENT_CONNECTED)
+                        c->last_activity_ms = srv_now_ms();
                     if (c->ws_msg_len > 0) {
                         int rc = cmq_parser_feed(c->parser, c->ws_msg_buf,
                                                   c->ws_msg_len);
@@ -3254,6 +3272,7 @@ static void client_read_cb(int fd, int events, void *data) {
                     }
                     c->ws_msg_len = 0;
                     c->ws_msg_active = 0;
+                    c->ws_frag_count = 0;
                 }
             }
             offset += (size_t)parsed;
@@ -3384,56 +3403,48 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
             cmq_worker_t *w = &srv->workers[wi];
             cmq_mutex_lock(&w->clients_lock);
             int wn = w->clients_count;
+            enum { CMQ_KA_STACK = 128 };
+            uint32_t stack_doomed[CMQ_KA_STACK];
             uint32_t *doomed_ids = NULL;
             int ndoomed = 0;
+            int doomed_heap = 0;
             if (wn > 0) {
-                doomed_ids = malloc((size_t)wn * sizeof(uint32_t));
-                if (doomed_ids) {
-                    for (int i = 0; i < wn; i++) {
-                        cmq_client_t *c = w->clients[i];
-                        if (!c || c->state == CMQ_CLIENT_CLOSED)
-                            continue;
-                        int stalled = write_timeout_ms > 0 &&
-                                      (c->state == CMQ_CLIENT_CONNECTED ||
-                                       c->state == CMQ_CLIENT_CLOSING) &&
-                                      c->write_pos < c->write_len &&
-                                      c->last_write_progress_ms > 0 &&
-                                      (now - c->last_write_progress_ms) > write_timeout_ms;
-                        if (c->state == CMQ_CLIENT_CLOSING) {
-                            int closing_idle = (now - c->last_activity_ms) > timeout_ms;
-                            if (stalled || closing_idle)
-                                doomed_ids[ndoomed++] = c->id;
-                            continue;
-                        }
+                doomed_ids = stack_doomed;
+                int doomed_cap = CMQ_KA_STACK;
+                if (wn > CMQ_KA_STACK) {
+                    uint32_t *heap = malloc((size_t)wn * sizeof(uint32_t));
+                    if (heap) {
+                        doomed_ids = heap;
+                        doomed_cap = wn;
+                        doomed_heap = 1;
+                    }
+                }
+                for (int i = 0; i < wn; i++) {
+                    cmq_client_t *c = w->clients[i];
+                    if (!c || c->state == CMQ_CLIENT_CLOSED)
+                        continue;
+                    int stalled = write_timeout_ms > 0 &&
+                                  (c->state == CMQ_CLIENT_CONNECTED ||
+                                   c->state == CMQ_CLIENT_CLOSING) &&
+                                  c->write_pos < c->write_len &&
+                                  c->last_write_progress_ms > 0 &&
+                                  (now - c->last_write_progress_ms) > write_timeout_ms;
+                    int doom = 0;
+                    if (c->state == CMQ_CLIENT_CLOSING) {
+                        int closing_idle = (now - c->last_activity_ms) > timeout_ms;
+                        doom = stalled || closing_idle;
+                    } else {
                         int idle = (c->state == CMQ_CLIENT_CONNECTED ||
                                     c->state == CMQ_CLIENT_INIT) &&
                                    (now - c->last_activity_ms) > timeout_ms;
-                        if (idle || stalled)
-                            doomed_ids[ndoomed++] = c->id;
+                        doom = idle || stalled;
                     }
-                } else {
-                    for (int i = 0; i < wn; i++) {
-                        cmq_client_t *c = w->clients[i];
-                        if (!c || c->state == CMQ_CLIENT_CLOSED)
-                            continue;
-                        int stalled = write_timeout_ms > 0 &&
-                                      (c->state == CMQ_CLIENT_CONNECTED ||
-                                       c->state == CMQ_CLIENT_CLOSING) &&
-                                      c->write_pos < c->write_len &&
-                                      c->last_write_progress_ms > 0 &&
-                                      (now - c->last_write_progress_ms) > write_timeout_ms;
-                        if (c->state == CMQ_CLIENT_CLOSING) {
-                            int closing_idle = (now - c->last_activity_ms) > timeout_ms;
-                            if ((stalled || closing_idle) && c->fd >= 0)
-                                shutdown(c->fd, SHUT_RDWR);
-                            continue;
-                        }
-                        int idle = (c->state == CMQ_CLIENT_CONNECTED ||
-                                    c->state == CMQ_CLIENT_INIT) &&
-                                   (now - c->last_activity_ms) > timeout_ms;
-                        if ((idle || stalled) && c->fd >= 0)
-                            shutdown(c->fd, SHUT_RDWR);
-                    }
+                    if (!doom)
+                        continue;
+                    if (ndoomed < doomed_cap)
+                        doomed_ids[ndoomed++] = c->id;
+                    else if (c->fd >= 0)
+                        shutdown(c->fd, SHUT_RDWR);
                 }
             }
             cmq_mutex_unlock(&w->clients_lock);
@@ -3456,7 +3467,8 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                     cmq_mutex_unlock(&w->clients_lock);
                 }
             }
-            free(doomed_ids);
+            if (doomed_heap)
+                free(doomed_ids);
         }
     }
 }
