@@ -680,8 +680,10 @@ static size_t cmq_client_frame_hard_cap(const cmq_server_t *srv) {
     size_t max_pl = (srv && srv->config.max_payload_size > 0)
                         ? (size_t)srv->config.max_payload_size
                         : (size_t)CMQ_CLIENT_BUF_SIZE;
-    /* Match parser headroom: body + subjects/replies/BATCH framing. */
-    return max_pl + (256 * 1024);
+    /* Subject + reply + headers (uint16) + framing — not a free 256KiB pad. */
+    size_t overhead = (size_t)CMQ_MAX_SUBJECT * 2u + 65536u + 64u;
+    if (max_pl > SIZE_MAX - overhead) return SIZE_MAX;
+    return max_pl + overhead;
 }
 
 static cmq_client_t *cmq_client_create(int fd, uint32_t id,
@@ -1583,9 +1585,17 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
     if (w->coro_pool && w->coro_count < w->coro_cap) {
         w->coro_pool[w->coro_count++] = coro;
     } else {
-        /* Pool full or OOM at init: sync fan-out instead of spinning resume. */
+        /* Pool full: bounded sync fan-out — avoid stalling the worker loop. */
         cmq_coro_destroy(coro);
-        int rc = deliver_targets_sync(srv, ctx->targets, ctx->target_count,
+        size_t lim = ctx->target_count;
+        size_t sync_cap = (size_t)CMQ_CORO_DELIVER_BATCH * 8u;
+        if (lim > sync_cap) {
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped,
+                                      (uint64_t)(lim - sync_cap),
+                                      CMQ_ATOMIC_RELAXED);
+            lim = sync_cap;
+        }
+        int rc = deliver_targets_sync(srv, ctx->targets, lim,
                                        ctx->subject, ctx->pub_account,
                                        ctx->payload, ctx->payload_len,
                                        ctx->headers, ctx->headers_len);

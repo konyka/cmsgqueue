@@ -162,7 +162,31 @@ int cmq_mqtt_bridge_disconnect(cmq_mqtt_bridge_t *br) {
 }
 
 int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br) {
-    return br ? br->connected : 0;
+    if (!br || !br->connected || br->fd < 0) return 0;
+    struct pollfd pfd = { .fd = br->fd, .events = POLLIN | POLLERR | POLLHUP };
+    int pr = poll(&pfd, 1, 0);
+    if (pr < 0) {
+        if (errno == EINTR) return 1;
+        cmq_mqtt_bridge_disconnect(br);
+        return 0;
+    }
+    if (pr > 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+        cmq_mqtt_bridge_disconnect(br);
+        return 0;
+    }
+    if (pr > 0 && (pfd.revents & POLLIN)) {
+        char b;
+        ssize_t n = recv(br->fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (n == 0) {
+            cmq_mqtt_bridge_disconnect(br);
+            return 0;
+        }
+        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            cmq_mqtt_bridge_disconnect(br);
+            return 0;
+        }
+    }
+    return 1;
 }
 
 const char *cmq_mqtt_client_id(cmq_mqtt_bridge_t *br) {
@@ -188,18 +212,25 @@ int cmq_mqtt_add_mapping(cmq_mqtt_bridge_t *br, const char *cmq_subject,
                           const char *mqtt_topic, int qos) {
     if (!br || !cmq_subject || !mqtt_topic) return -1;
     if (qos < 0 || qos > 2) return -1;
+    if (strnlen(cmq_subject, CMQ_MQTT_TOPIC_MAX) >= CMQ_MQTT_TOPIC_MAX)
+        return -1;
+    if (strnlen(mqtt_topic, CMQ_MQTT_TOPIC_MAX) >= CMQ_MQTT_TOPIC_MAX)
+        return -1;
     if (br->mapping_count >= CMQ_MQTT_MAX_MAPPINGS) return -1;
     for (size_t i = 0; i < br->mapping_count; i++) {
         if (strcmp(br->mappings[i].mqtt_topic, mqtt_topic) == 0) {
             strncpy(br->mappings[i].cmq_subject, cmq_subject,
                     CMQ_MQTT_TOPIC_MAX - 1);
+            br->mappings[i].cmq_subject[CMQ_MQTT_TOPIC_MAX - 1] = '\0';
             br->mappings[i].qos = qos;
             return 0;
         }
     }
     cmq_mqtt_mapping_t *m = &br->mappings[br->mapping_count++];
     strncpy(m->cmq_subject, cmq_subject, CMQ_MQTT_TOPIC_MAX - 1);
+    m->cmq_subject[CMQ_MQTT_TOPIC_MAX - 1] = '\0';
     strncpy(m->mqtt_topic, mqtt_topic, CMQ_MQTT_TOPIC_MAX - 1);
+    m->mqtt_topic[CMQ_MQTT_TOPIC_MAX - 1] = '\0';
     m->qos = qos;
     m->active = 1;
     return 0;
@@ -369,6 +400,8 @@ int cmq_mqtt_encode_pingreq(uint8_t *buf, size_t len) {
 int cmq_mqtt_decode_connack(const uint8_t *buf, size_t len) {
     if (!buf || len < 4) return -1;
     if ((buf[0] & 0xF0) != CMQ_MQTT_CONNACK) return -1;
+    /* MQTT 3.1.1 CONNACK: fixed header + remaining length 2. */
+    if (buf[1] != 0x02) return -1;
     return buf[3];
 }
 

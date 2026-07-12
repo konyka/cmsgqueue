@@ -260,6 +260,12 @@ TEST(mqtt, mapping) {
     ASSERT_EQ(cmq_mqtt_add_mapping(br, "bad", "bad/qos", 3), -1);
     ASSERT_EQ(cmq_mqtt_mapping_count(br), (size_t)2);
 
+    char too_long[CMQ_MQTT_TOPIC_MAX + 8];
+    memset(too_long, 't', sizeof(too_long) - 1);
+    too_long[sizeof(too_long) - 1] = '\0';
+    ASSERT_EQ(cmq_mqtt_add_mapping(br, "ok", too_long, 0), -1);
+    ASSERT_EQ(cmq_mqtt_add_mapping(br, too_long, "ok/topic", 0), -1);
+
     cmq_mqtt_mapping_t *m = cmq_mqtt_find_mapping(br, "sensor/temp");
     ASSERT_NOT_NULL(m);
     ASSERT_STR_EQ(m->cmq_subject, "sensor.temp");
@@ -290,6 +296,15 @@ TEST(mqtt, encode_connect) {
     int len = cmq_mqtt_encode_connect(buf, sizeof(buf), "client1", 60, 1);
     ASSERT(len > 0);
     ASSERT_EQ(cmq_mqtt_decode_packet_type(buf, (size_t)len), 1);
+}
+
+TEST(mqtt, decode_connack) {
+    uint8_t ok[] = {0x20, 0x02, 0x00, 0x00};
+    ASSERT_EQ(cmq_mqtt_decode_connack(ok, sizeof(ok)), 0);
+    uint8_t bad_rl[] = {0x20, 0x03, 0x00, 0x00};
+    ASSERT_EQ(cmq_mqtt_decode_connack(bad_rl, sizeof(bad_rl)), -1);
+    uint8_t refused[] = {0x20, 0x02, 0x00, 0x05};
+    ASSERT_EQ(cmq_mqtt_decode_connack(refused, sizeof(refused)), 5);
 }
 
 TEST(mqtt, encode_publish) {

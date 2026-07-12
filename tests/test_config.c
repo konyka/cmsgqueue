@@ -185,6 +185,16 @@ TEST(config, validate_auth_cred_length) {
     ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
 }
 
+TEST(config, validate_max_payload_cap) {
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.port = 7654;
+    config.max_payload_size = 16 * 1024 * 1024;
+    ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
+    config.max_payload_size = 16 * 1024 * 1024 + 1;
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+}
+
 TEST(config, load_skip_sections) {
     const char *path = write_test_config(
         "[server]\n"

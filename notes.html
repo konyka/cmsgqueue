@@ -2004,6 +2004,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — payload config cap · MQTT map/CONNACK/live · coro sync bound</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">max_payload_size</span></td><td>✅</td><td>Validate ≤16MB; frame hard-cap = payload + subject/reply/headers.</td></tr>
+<tr><td><span class="component-name">mqtt mapping</span></td><td>✅</td><td>Reject overlong topics; always NUL-terminate.</td></tr>
+<tr><td><span class="component-name">mqtt live</span></td><td>✅</td><td>CONNACK remaining-length=2; <code>is_connected</code> polls EOF/errors.</td></tr>
+<tr><td><span class="component-name">coro pool full</span></td><td>✅</td><td>Sync fallback capped at 8× <code>CMQ_CORO_DELIVER_BATCH</code>.</td></tr>
+</table>
+</div>
+
+
 
 
 
