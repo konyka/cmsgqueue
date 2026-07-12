@@ -44,7 +44,8 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
 
 size_t cmq_gateway_connection_count(cmq_gateway_t *gw);
 size_t cmq_gateway_known_cluster_count(cmq_gateway_t *gw);
-cmq_gw_cluster_info_t *cmq_gateway_get_cluster(cmq_gateway_t *gw,
-                                                  const char *name);
+/* Copy cluster metadata under lock (avoids TOCTOU on returned pointers). */
+int cmq_gateway_get_cluster(cmq_gateway_t *gw, const char *name,
+                             cmq_gw_cluster_info_t *out);
 
 #endif

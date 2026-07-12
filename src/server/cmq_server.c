@@ -17,6 +17,14 @@ static int auth_configured(const cmq_server_t *srv) {
     return (u && u[0] != '\0') || (p && p[0] != '\0');
 }
 
+/* Soft-deleted then reactivated accounts bump epoch — old sessions stay denied. */
+static int client_account_live(cmq_server_t *srv, const cmq_client_t *c) {
+    if (!srv || !c || !c->account_name[0]) return 0;
+    if (strcmp(c->account_name, "$default") == 0) return 1;
+    cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
+    return a && a->epoch == c->account_epoch;
+}
+
 static uint64_t srv_now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -2695,6 +2703,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         c->last_activity_ms = srv_now_ms();
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
         cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name);
+        c->account_epoch = acc ? acc->epoch : 0;
         cmq_account_inc_connections(acc);
         /* INFO only after successful CONNECT (never on INIT). */
         if (!c->is_websocket)
@@ -2705,28 +2714,33 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_pong(c);
         break;
     case CMQ_OP_PUBLISH:
-        handle_publish(srv, c, frame);
-        break;
     case CMQ_OP_REQUEST:
-        handle_request(srv, c, frame);
-        break;
     case CMQ_OP_RESPONSE:
-        handle_response(srv, c, frame);
-        break;
     case CMQ_OP_SUBSCRIBE:
-        handle_subscribe(srv, c, frame);
-        break;
     case CMQ_OP_UNSUBSCRIBE:
-        handle_unsubscribe(srv, c, frame);
+    case CMQ_OP_BATCH:
+        if (!client_account_live(srv, c)) {
+            cmq_send_error(c, "account inactive");
+            break;
+        }
+        if (frame->hdr.op == CMQ_OP_PUBLISH)
+            handle_publish(srv, c, frame);
+        else if (frame->hdr.op == CMQ_OP_REQUEST)
+            handle_request(srv, c, frame);
+        else if (frame->hdr.op == CMQ_OP_RESPONSE)
+            handle_response(srv, c, frame);
+        else if (frame->hdr.op == CMQ_OP_SUBSCRIBE)
+            handle_subscribe(srv, c, frame);
+        else if (frame->hdr.op == CMQ_OP_UNSUBSCRIBE)
+            handle_unsubscribe(srv, c, frame);
+        else
+            handle_batch(srv, c, frame);
         break;
     case CMQ_OP_DISCONNECT:
         c->state = CMQ_CLIENT_CLOSING;
         break;
     case CMQ_OP_STATS:
         handle_stats(srv, c);
-        break;
-    case CMQ_OP_BATCH:
-        handle_batch(srv, c, frame);
         break;
     default:
         cmq_send_error(c, "unknown op");
@@ -3247,9 +3261,10 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
                       c->write_pos < c->write_len &&
                       c->last_write_progress_ms > 0 &&
                       (now - c->last_write_progress_ms) > write_timeout_ms;
-        /* CLOSING with a stuck write_buf must not leak fd/slots forever. */
+        /* CLOSING: reclaim on write stall or idle (empty write_buf half-open). */
         if (c->state == CMQ_CLIENT_CLOSING) {
-            if (stalled)
+            int closing_idle = (now - c->last_activity_ms) > timeout_ms;
+            if (stalled || closing_idle)
                 client_teardown(c);
             continue;
         }
@@ -3303,7 +3318,8 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                               c->last_write_progress_ms > 0 &&
                               (now - c->last_write_progress_ms) > write_timeout_ms;
                 if (c->state == CMQ_CLIENT_CLOSING) {
-                    if (stalled && c->fd >= 0)
+                    int closing_idle = (now - c->last_activity_ms) > timeout_ms;
+                    if ((stalled || closing_idle) && c->fd >= 0)
                         shutdown(c->fd, SHUT_RDWR);
                     continue;
                 }
@@ -3342,7 +3358,8 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                                       c->last_write_progress_ms > 0 &&
                                       (now - c->last_write_progress_ms) > write_timeout_ms;
                         if (c->state == CMQ_CLIENT_CLOSING) {
-                            if (stalled)
+                            int closing_idle = (now - c->last_activity_ms) > timeout_ms;
+                            if (stalled || closing_idle)
                                 doomed_ids[ndoomed++] = c->id;
                             continue;
                         }
@@ -3364,7 +3381,8 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                                       c->last_write_progress_ms > 0 &&
                                       (now - c->last_write_progress_ms) > write_timeout_ms;
                         if (c->state == CMQ_CLIENT_CLOSING) {
-                            if (stalled && c->fd >= 0)
+                            int closing_idle = (now - c->last_activity_ms) > timeout_ms;
+                            if ((stalled || closing_idle) && c->fd >= 0)
                                 shutdown(c->fd, SHUT_RDWR);
                             continue;
                         }

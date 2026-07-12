@@ -109,6 +109,12 @@ TEST(account, exports_imports) {
     ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.prod.other"), 0);
     ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.*.events"), 0);
 
+    /* Mid-pattern '>' must not match everything (NATS: '>' is final only). */
+    ASSERT_EQ(cmq_account_add_export(mgr, "acme", "acme.>.secret", "globex"), 0);
+    ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.prod.secret"), 0);
+    ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.anything"), 0);
+    ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.>.secret"), 0);
+
     ASSERT_EQ(cmq_account_remove_import(mgr, "globex", "acme.>"), 0);
     ASSERT_EQ(cmq_account_import_count(mgr, "globex"), (size_t)0);
 
@@ -150,6 +156,23 @@ TEST(account, may_deliver_cross_account) {
     ASSERT_EQ(cmq_account_delete(mgr, "acme"), 0);
     ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "globex", "acme.data"), 0);
     ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.data"), 0);
+
+    /* Reactivate bumps epoch so callers can detect stale sessions. */
+    cmq_account_t *before = NULL;
+    {
+        cmq_account_manager_t *m2 = cmq_account_manager_create();
+        ASSERT_EQ(cmq_account_create(m2, "ep"), 0);
+        cmq_account_t *a = cmq_account_get(m2, "ep");
+        ASSERT_NOT_NULL(a);
+        uint32_t e0 = a->epoch;
+        ASSERT_EQ(cmq_account_delete(m2, "ep"), 0);
+        ASSERT_EQ(cmq_account_create(m2, "ep"), 0);
+        a = cmq_account_get(m2, "ep");
+        ASSERT_NOT_NULL(a);
+        ASSERT(a->epoch != e0);
+        (void)before;
+        cmq_account_manager_destroy(m2);
+    }
 
     cmq_account_manager_destroy(mgr);
 }

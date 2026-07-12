@@ -78,6 +78,7 @@ typedef struct cmq_client {
     int sub_count;
     char *username;
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
+    uint32_t account_epoch;         /* must match account->epoch after CONNECT */
     int is_websocket;
     int is_route;                   /* 1 = cluster route ingress (no re-forward) */
     int ws_upgrade_done;

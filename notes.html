@@ -2026,6 +2026,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — account epoch · ACL mid-> · gateway copy · CLOSING idle</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">account epoch</span></td><td>✅</td><td>Reactivate bumps epoch; pre-delete sessions denied on pub/sub.</td></tr>
+<tr><td><span class="component-name">ACL &gt;</span></td><td>✅</td><td>Mid-pattern <code>&gt;</code> no longer matches entire subtree.</td></tr>
+<tr><td><span class="component-name">gateway get</span></td><td>✅</td><td><code>get_cluster</code> copies under lock (no stale pointer).</td></tr>
+<tr><td><span class="component-name">CLOSING idle</span></td><td>✅</td><td>Idle CLOSING (empty write_buf) also teardown on keepalive.</td></tr>
+</table>
+</div>
+
+
 
 
 

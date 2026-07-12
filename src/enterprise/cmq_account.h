@@ -20,6 +20,7 @@ typedef struct {
     uint64_t bytes_in;
     uint64_t bytes_out;
     int active;
+    uint32_t epoch; /* bumps on soft-delete reactivate; stale clients must not revive */
 } cmq_account_t;
 
 typedef struct {

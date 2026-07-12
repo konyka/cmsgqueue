@@ -199,14 +199,15 @@ TEST(gateway, add_remote) {
     ASSERT_EQ(cmq_gateway_add_remote(gw, "remote-1", "10.0.1.1", 7654), 0);
     ASSERT_EQ(cmq_gateway_known_cluster_count(gw), (size_t)1);
 
-    cmq_gw_cluster_info_t *ci = cmq_gateway_get_cluster(gw, "remote-1");
-    ASSERT_NOT_NULL(ci);
-    ASSERT_STR_EQ(ci->addr, "10.0.1.1");
-    ASSERT_EQ(ci->port, 7654);
+    cmq_gw_cluster_info_t ci;
+    ASSERT_EQ(cmq_gateway_get_cluster(gw, "remote-1", &ci), 0);
+    ASSERT_STR_EQ(ci.addr, "10.0.1.1");
+    ASSERT_EQ(ci.port, 7654);
 
     ASSERT_EQ(cmq_gateway_add_remote(gw, "remote-1", "10.0.1.1", 7655), 0);
     ASSERT_EQ(cmq_gateway_known_cluster_count(gw), (size_t)1);
-    ASSERT_EQ(ci->port, 7655);
+    ASSERT_EQ(cmq_gateway_get_cluster(gw, "remote-1", &ci), 0);
+    ASSERT_EQ(ci.port, 7655);
 
     cmq_gateway_destroy(gw);
 }

@@ -41,7 +41,11 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     for (size_t i = 0; i < mgr->count; i++) {
         if (strcmp(mgr->accounts[i].name, name) == 0) {
             if (!__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE)) {
-                /* Reactivate soft-deleted slot (stable pointer for same name). */
+                /* Reactivate soft-deleted slot (stable pointer for same name).
+                   Bump epoch so pre-delete TCP sessions stay denied. */
+                mgr->accounts[i].epoch++;
+                if (mgr->accounts[i].epoch == 0)
+                    mgr->accounts[i].epoch = 1;
                 __atomic_store_n(&mgr->accounts[i].active, 1, __ATOMIC_RELEASE);
                 mgr->accounts[i].connections = 0;
                 mgr->accounts[i].subscriptions = 0;
@@ -63,6 +67,7 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     cmq_account_t *a = &mgr->accounts[mgr->count++];
     strncpy(a->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
     a->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+    a->epoch = 1;
     __atomic_store_n(&a->active, 1, __ATOMIC_RELEASE);
     a->connections = 0;
     a->subscriptions = 0;
@@ -345,14 +350,15 @@ size_t cmq_account_import_count(cmq_account_manager_t *mgr, const char *account)
 static int subject_match(const char *pattern, const char *subject) {
     if (strcmp(pattern, ">") == 0) return 1;
     if (strcmp(pattern, subject) == 0) return 1;
-    /* Token-wise: '*' matches one token; '>' matches rest (NATS-like). */
+    /* Token-wise: '*' matches one token; '>' matches the rest and MUST be last. */
     const char *p = pattern, *s = subject;
     while (*p && *s) {
-        if (*p == '>') return 1;
         const char *pe = p, *se = s;
         while (*pe && *pe != '.') pe++;
         while (*se && *se != '.') se++;
         size_t plen = (size_t)(pe - p), slen = (size_t)(se - s);
+        if (plen == 1 && p[0] == '>')
+            return (*pe == '\0'); /* '>' only valid as final token */
         int is_star = (plen == 1 && p[0] == '*');
         if (!is_star && (plen != slen || memcmp(p, s, plen) != 0))
             return 0;

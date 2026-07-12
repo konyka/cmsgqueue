@@ -537,17 +537,17 @@ size_t cmq_gateway_known_cluster_count(cmq_gateway_t *gw) {
     return c;
 }
 
-cmq_gw_cluster_info_t *cmq_gateway_get_cluster(cmq_gateway_t *gw,
-                                                  const char *name) {
-    if (!gw || !name) return NULL;
+int cmq_gateway_get_cluster(cmq_gateway_t *gw, const char *name,
+                             cmq_gw_cluster_info_t *out) {
+    if (!gw || !name || !out) return -1;
     cmq_mutex_lock(&gw->lock);
-    cmq_gw_cluster_info_t *found = NULL;
     for (size_t i = 0; i < gw->cluster_count; i++) {
         if (strcmp(gw->clusters[i].name, name) == 0) {
-            found = &gw->clusters[i];
-            break;
+            *out = gw->clusters[i];
+            cmq_mutex_unlock(&gw->lock);
+            return 0;
         }
     }
     cmq_mutex_unlock(&gw->lock);
-    return found;
+    return -1;
 }

@@ -60,8 +60,9 @@ static void demo_gateway(void) {
     cmq_gateway_add_remote(gw, "dc3", "10.2.0.1", 7654);
     printf("Registered %zu remote clusters\n", cmq_gateway_known_cluster_count(gw));
 
-    cmq_gw_cluster_info_t *ci = cmq_gateway_get_cluster(gw, "dc2");
-    if (ci) printf("  dc2 @ %s:%d\n", ci->addr, ci->port);
+    cmq_gw_cluster_info_t ci;
+    if (cmq_gateway_get_cluster(gw, "dc2", &ci) == 0)
+        printf("  dc2 @ %s:%d\n", ci.addr, ci.port);
 
     cmq_gateway_destroy(gw);
     printf("\n");
