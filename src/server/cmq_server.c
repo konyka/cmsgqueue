@@ -3660,11 +3660,13 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
             cmq_worker_t *w = &srv->workers[wi];
             cmq_mutex_lock(&w->clients_lock);
             int wn = w->clients_count;
-            enum { CMQ_KA_STACK = 128 };
+            enum { CMQ_KA_STACK = 128, CMQ_KA_OVERFLOW = 64 };
             typedef struct { uint32_t id; uint32_t gen; } cmq_doom_t;
             cmq_doom_t stack_doomed[CMQ_KA_STACK];
+            cmq_doom_t stack_overflow[CMQ_KA_OVERFLOW];
             cmq_doom_t *doomed = NULL;
             int ndoomed = 0;
+            int noverflow = 0;
             int doomed_heap = 0;
             if (wn > 0) {
                 doomed = stack_doomed;
@@ -3703,6 +3705,13 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                         doomed[ndoomed].id = c->id;
                         doomed[ndoomed].gen = c->conn_gen;
                         ndoomed++;
+                    } else if (noverflow < CMQ_KA_OVERFLOW) {
+                        /* Heap snapshot failed — still TEARDOWN after unlock. */
+                        stack_overflow[noverflow].id = c->id;
+                        stack_overflow[noverflow].gen = c->conn_gen;
+                        noverflow++;
+                        if (c->fd >= 0)
+                            shutdown(c->fd, SHUT_RDWR);
                     } else if (c->fd >= 0)
                         shutdown(c->fd, SHUT_RDWR);
                 }
@@ -3728,6 +3737,10 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                     }
                     cmq_mutex_unlock(&w->clients_lock);
                 }
+            }
+            for (int i = 0; i < noverflow; i++) {
+                (void)worker_push_teardown(w, stack_overflow[i].id,
+                                            stack_overflow[i].gen);
             }
             if (doomed_heap)
                 free(doomed);

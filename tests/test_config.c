@@ -91,6 +91,27 @@ TEST(config, load_file_not_found) {
     ASSERT(rc != CMQ_OK);
 }
 
+TEST(config, load_resets_unspecified) {
+    const char *path = "/tmp/cmq_test_config_reset.conf";
+    FILE *fp = fopen(path, "w");
+    ASSERT(fp != NULL);
+    fprintf(fp, "host = 127.0.0.1\n");
+    fclose(fp);
+
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.port = 65535;
+    config.max_clients = 12345;
+    config.num_threads = 9;
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_EQ(config.port, 0);
+    ASSERT_EQ(config.max_clients, 0);
+    ASSERT_EQ(config.num_threads, 0);
+    ASSERT(config.host && strcmp(config.host, "127.0.0.1") == 0);
+    cmq_config_free(&config);
+    unlink(path);
+}
+
 TEST(config, load_null_args) {
     cmq_status_t rc = cmq_config_load(NULL, NULL);
     ASSERT_EQ(rc, CMQ_ERR_INVALID_ARG);

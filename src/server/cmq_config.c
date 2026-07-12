@@ -133,6 +133,12 @@ void cmq_config_free(cmq_config_t *config) {
 cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
     if (!path || !config) return CMQ_ERR_INVALID_ARG;
 
+    /* Reset so unspecified keys are never left as caller stack garbage.
+       Free first so reload does not leak prior strdup'd strings (config must
+       be zeroed or previously load/free'd — same contract as error paths). */
+    cmq_config_free(config);
+    memset(config, 0, sizeof(*config));
+
     FILE *fp = fopen(path, "r");
     if (!fp) return CMQ_ERR_IO;
 

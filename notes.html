@@ -2229,6 +2229,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — config load reset · keepalive overflow TEARDOWN</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">config load</span></td><td>✅</td><td><code>cmq_config_load</code> frees prior strings and zero-fills so unspecified keys are never stack garbage.</td></tr>
+<tr><td><span class="component-name">keepalive overflow</span></td><td>✅</td><td>When doomed snapshot is full (malloc fail), still queue TEARDOWN for up to 64 overflow clients after <code>shutdown</code>.</td></tr>
+</table>
+</div>
+
 
 
 
