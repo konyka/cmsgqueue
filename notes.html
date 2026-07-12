@@ -2080,6 +2080,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — deliver epoch · inactive CLOSING · ev_del · config line length</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">inbound epoch</span></td><td>✅</td><td><code>client_send_by_id</code> / worker mailbox require live account; stale → CLOSING.</td></tr>
+<tr><td><span class="component-name">inactive CLOSING</span></td><td>✅</td><td>PUBLISH/SUBSCRIBE/BATCH/etc. inactive → ERROR + CLOSING (not zombie).</td></tr>
+<tr><td><span class="component-name">cmq_ev_del</span></td><td>✅</td><td>Check DEL failure; clear watcher; ADD retries after EEXIST.</td></tr>
+<tr><td><span class="component-name">config line</span></td><td>✅</td><td>Reject silently truncated config lines (&gt;1023 bytes).</td></tr>
+</table>
+</div>
+
 
 
 

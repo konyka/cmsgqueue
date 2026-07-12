@@ -362,8 +362,14 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
             /* Owning worker thread: wrap WS here so coro/drain can push raw CMQ. */
             if (target && target->state != CMQ_CLIENT_CLOSED &&
                 target->state != CMQ_CLIENT_CLOSING) {
-                if (msg->require_sub_id == 0 ||
-                    client_has_sub(target, msg->require_sub_id)) {
+                if (!client_account_live(w->server, target)) {
+                    /* Soft-delete/reactivate: stop inbound delivery to stale epoch. */
+                    target->state = CMQ_CLIENT_CLOSING;
+                    if (w->server)
+                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                                  CMQ_ATOMIC_RELAXED);
+                } else if (msg->require_sub_id == 0 ||
+                           client_has_sub(target, msg->require_sub_id)) {
                     if (cmq_client_send_local(target, msg->buf, msg->len) != 0 &&
                         w->server) {
                         cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
@@ -1269,8 +1275,12 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         cmq_client_t *c = cmq_idmap_get(w->idmap, client_id);
         int ok = 0;
         if (c && c->state == CMQ_CLIENT_CONNECTED &&
+            client_account_live(srv, c) &&
             (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
             if (cmq_client_send_local(c, frame, flen) == 0) ok = 1;
+        } else if (c && c->state == CMQ_CLIENT_CONNECTED &&
+                   !client_account_live(srv, c)) {
+            c->state = CMQ_CLIENT_CLOSING;
         }
         cmq_mutex_unlock(&w->clients_lock);
         return ok;
@@ -1279,8 +1289,12 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
     cmq_client_t *c = cmq_idmap_get(srv->idmap, client_id);
     int ok = 0;
     if (c && c->state == CMQ_CLIENT_CONNECTED &&
+        client_account_live(srv, c) &&
         (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
         if (cmq_client_send_local(c, frame, flen) == 0) ok = 1;
+    } else if (c && c->state == CMQ_CLIENT_CONNECTED &&
+               !client_account_live(srv, c)) {
+        c->state = CMQ_CLIENT_CLOSING;
     }
     cmq_mutex_unlock(&srv->clients_lock);
     return ok;
@@ -2726,6 +2740,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
     case CMQ_OP_BATCH:
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
             break;
         }
         if (frame->hdr.op == CMQ_OP_PUBLISH)

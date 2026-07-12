@@ -177,8 +177,14 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     ev.events = (uint32_t)cmq_to_epoll_events(events);
     ev.data.fd = fd;
 
-    if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0)
-        return -1;
+    if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
+        /* Stale epoll entry after a failed DEL + fd reuse — clear and retry. */
+        if (errno != EEXIST)
+            return -1;
+        (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
+        if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0)
+            return -1;
+    }
 
     loop->watchers[fd].fd = fd;
     loop->watchers[fd].events = events;
@@ -212,8 +218,14 @@ int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
     if (loop->watchers[fd].fd < 0) return -1;
 
-    epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
+    if (epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL) != 0 &&
+        errno != ENOENT)
+        return -1;
+
     loop->watchers[fd].fd = -1;
+    loop->watchers[fd].events = 0;
+    loop->watchers[fd].cb = NULL;
+    loop->watchers[fd].data = NULL;
     return 0;
 }
 
@@ -348,9 +360,14 @@ int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
         EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
     if (loop->watchers[fd].events & CMQ_EV_WRITE)
         EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-    if (n > 0) kevent(loop->backend_fd, ev, n, NULL, 0, NULL);
+    if (n > 0 && kevent(loop->backend_fd, ev, n, NULL, 0, NULL) != 0 &&
+        errno != ENOENT)
+        return -1;
 
     loop->watchers[fd].fd = -1;
+    loop->watchers[fd].events = 0;
+    loop->watchers[fd].cb = NULL;
+    loop->watchers[fd].data = NULL;
     return 0;
 }
 

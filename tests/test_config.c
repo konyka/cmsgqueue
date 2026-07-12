@@ -256,4 +256,18 @@ TEST(config, load_empty_file) {
     ASSERT_EQ(rc, CMQ_OK);
 }
 
+TEST(config, reject_overlong_line) {
+    char buf[1200];
+    memset(buf, 'a', sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    /* key= + 1100-char value without newline mid-stream → truncated fgets. */
+    char content[1300];
+    snprintf(content, sizeof(content), "tls_cert = %s\nport = 4222\n", buf);
+    const char *path = write_test_config(content);
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    cmq_status_t rc = cmq_config_load(path, &config);
+    ASSERT_EQ(rc, CMQ_ERR_INVALID_ARG);
+}
+
 TEST_MAIN()

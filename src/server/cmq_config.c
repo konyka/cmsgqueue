@@ -140,6 +140,16 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
     int lineno __attribute__((unused)) = 0;
     while (fgets(line, sizeof(line), fp)) {
         lineno++;
+        /* Refuse silently truncated lines (long cert paths / passwords / routes). */
+        size_t llen = strlen(line);
+        if (llen == sizeof(line) - 1 && line[llen - 1] != '\n') {
+            int ch = fgetc(fp);
+            if (ch != EOF) {
+                fclose(fp);
+                cmq_config_free(config);
+                return CMQ_ERR_INVALID_ARG;
+            }
+        }
         strip_comments(line);
         trim(line);
         if (line[0] == '\0' || line[0] == '[') continue;
