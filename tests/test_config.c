@@ -207,6 +207,16 @@ TEST(config, validate_max_payload_cap) {
     ASSERT(cmq_config_validate(&config) != CMQ_OK);
 }
 
+TEST(config, validate_max_subs_cap) {
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.port = 7654;
+    config.max_subs_per_client = CMQ_DEFAULT_MAX_SUBS_PER_CLIENT;
+    ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
+    config.max_subs_per_client = CMQ_DEFAULT_MAX_SUBS_PER_CLIENT + 1;
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+}
+
 TEST(config, load_skip_sections) {
     const char *path = write_test_config(
         "[server]\n"

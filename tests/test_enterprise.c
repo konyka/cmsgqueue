@@ -166,6 +166,10 @@ TEST(account, may_deliver_cross_account) {
         ASSERT_NOT_NULL(a);
         uint32_t e0 = a->epoch;
         ASSERT_EQ(cmq_account_delete(m2, "ep"), 0);
+        ASSERT_EQ(cmq_account_get(m2, "ep"), NULL); /* inactive */
+        /* Soft-delete itself bumps epoch so stale sessions cannot linger. */
+        ASSERT(a->epoch != e0);
+        e0 = a->epoch;
         ASSERT_EQ(cmq_account_create(m2, "ep"), 0);
         a = cmq_account_get(m2, "ep");
         ASSERT_NOT_NULL(a);

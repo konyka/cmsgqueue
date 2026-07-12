@@ -21,7 +21,10 @@ static int auth_configured(const cmq_server_t *srv) {
 static int client_account_live(cmq_server_t *srv, const cmq_client_t *c) {
     if (!srv || !c || !c->account_name[0]) return 0;
     cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
-    return a && a->epoch == c->account_epoch;
+    if (!a) return 0;
+    /* Re-check active after get() unlock (TOCTOU with soft-delete). */
+    if (!__atomic_load_n(&a->active, __ATOMIC_ACQUIRE)) return 0;
+    return a->epoch == c->account_epoch;
 }
 
 static uint64_t srv_now_ms(void) {

@@ -101,6 +101,23 @@ static int fs_flock(FILE *fp, int op) {
     }
 }
 
+/* Always lock data then idx (unlock reverse) to cover torn idx reads. */
+static int fs_lock_pair(cmq_filestore_t *fs, int op) {
+    if (!fs || !fs->data_fp) return -1;
+    if (fs_flock(fs->data_fp, op) != 0) return -1;
+    if (fs->idx_fp && fs_flock(fs->idx_fp, op) != 0) {
+        fs_flock(fs->data_fp, LOCK_UN);
+        return -1;
+    }
+    return 0;
+}
+
+static void fs_unlock_pair(cmq_filestore_t *fs) {
+    if (!fs) return;
+    if (fs->idx_fp) fs_flock(fs->idx_fp, LOCK_UN);
+    if (fs->data_fp) fs_flock(fs->data_fp, LOCK_UN);
+}
+
 static void build_paths(cmq_filestore_t *fs) {
     snprintf(fs->data_path, sizeof(fs->data_path), "%s/%s.data", fs->dir, fs->prefix);
     snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx", fs->dir, fs->prefix);
@@ -267,25 +284,25 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
                           uint64_t *out_seq) {
     if (!fs || !data || len == 0 || len > (16u * 1024 * 1024)) return -1;
     cmq_mutex_lock(&fs->lock);
-    if (fs_flock(fs->data_fp, LOCK_EX) != 0) {
+    if (fs_lock_pair(fs, LOCK_EX) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     /* Always append at EOF — read() leaves the stream mid-file. */
     if (fs_seek_end(fs->data_fp) != 0 || fs_seek_end(fs->idx_fp) != 0) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     uint64_t offset;
     if (fs_tell(fs->data_fp, &offset) != 0) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     if (offset > UINT64_MAX - (uint64_t)CMQ_FS_HDR_SIZE - (uint64_t)len) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -302,14 +319,14 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
         fflush(fs->data_fp);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     if (fflush(fs->data_fp) != 0) {
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -320,7 +337,7 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     if (fs_tell(fs->idx_fp, &idx_off) != 0) {
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -328,7 +345,7 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
         fflush(fs->idx_fp);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -336,7 +353,7 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
         ftruncate(fileno(fs->idx_fp), (off_t)idx_off);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -344,7 +361,7 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     if (out_seq) *out_seq = fs->next_seq;
     fs->next_seq++;
 
-    fs_flock(fs->data_fp, LOCK_UN);
+    fs_unlock_pair(fs);
     cmq_mutex_unlock(&fs->lock);
     return 0;
 }
@@ -353,64 +370,64 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
                         uint8_t **out_data, size_t *out_len) {
     if (!fs || !out_data || !out_len || seq == 0) return -1;
     cmq_mutex_lock(&fs->lock);
-    if (fs_flock(fs->data_fp, LOCK_SH) != 0) {
+    if (fs_lock_pair(fs, LOCK_SH) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     if (seq >= fs->next_seq) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     uint64_t target_idx = seq - 1;
     if (target_idx > UINT64_MAX / 8u) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     if (fs_seek(fs->idx_fp, target_idx * 8u) != 0) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     uint8_t idxb[8];
     if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     uint64_t data_offset = get_le64(idxb);
 
     if (fs_seek_end(fs->data_fp) != 0) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     uint64_t data_sz;
     if (fs_tell(fs->data_fp, &data_sz) != 0) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     if (data_offset + (uint64_t)CMQ_FS_HDR_SIZE > data_sz) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     if (fs_seek(fs->data_fp, data_offset) != 0) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     uint8_t hdr[CMQ_FS_HDR_SIZE];
     if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -422,39 +439,39 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
     uint32_t hcrc = get_le32(hdr + 18);
 
     if (magic != CMQ_FS_MAGIC || version != CMQ_FS_VERSION || hseq != seq) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     if (hlen == 0 || hlen > (16u * 1024 * 1024)) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     if (data_offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen > data_sz) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     uint8_t *buf = malloc(hlen);
     if (!buf) {
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     if (fread(buf, 1, hlen, fs->data_fp) != hlen) {
         free(buf);
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
 
     if (crc32_compute(buf, hlen) != hcrc) {
         free(buf);
-        fs_flock(fs->data_fp, LOCK_UN);
+        fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -462,7 +479,7 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
     *out_data = buf;
     *out_len = hlen;
 
-    fs_flock(fs->data_fp, LOCK_UN);
+    fs_unlock_pair(fs);
     cmq_mutex_unlock(&fs->lock);
     return 0;
 }
@@ -478,7 +495,7 @@ uint64_t cmq_filestore_last_seq(cmq_filestore_t *fs) {
 int cmq_filestore_sync(cmq_filestore_t *fs) {
     if (!fs) return -1;
     cmq_mutex_lock(&fs->lock);
-    if (!fs->data_fp || fs_flock(fs->data_fp, LOCK_EX) != 0) {
+    if (!fs->data_fp || fs_lock_pair(fs, LOCK_EX) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
@@ -487,7 +504,7 @@ int cmq_filestore_sync(cmq_filestore_t *fs) {
     if (fs->idx_fp && fflush(fs->idx_fp) != 0) rc = -1;
     if (fsync(fileno(fs->data_fp)) != 0) rc = -1;
     if (fs->idx_fp && fsync(fileno(fs->idx_fp)) != 0) rc = -1;
-    fs_flock(fs->data_fp, LOCK_UN);
+    fs_unlock_pair(fs);
     cmq_mutex_unlock(&fs->lock);
     return rc;
 }

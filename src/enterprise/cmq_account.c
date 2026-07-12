@@ -87,7 +87,11 @@ int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
     for (size_t i = 0; i < mgr->count; i++) {
         if (__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE) &&
             strcmp(mgr->accounts[i].name, name) == 0) {
-            /* Soft-delete: keep slot so concurrent get()+inc_* pointers stay valid. */
+            /* Soft-delete: bump epoch so live sessions fail client_account_live
+               immediately (even across get→use TOCTOU), then clear active. */
+            mgr->accounts[i].epoch++;
+            if (mgr->accounts[i].epoch == 0)
+                mgr->accounts[i].epoch = 1;
             __atomic_store_n(&mgr->accounts[i].active, 0, __ATOMIC_RELEASE);
             clear_account_perms_unlocked(mgr, name);
             cmq_mutex_unlock(&mgr->lock);

@@ -2160,6 +2160,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — soft-delete epoch · max_subs cap · filestore idx flock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">account delete</span></td><td>✅</td><td>Soft-delete bumps epoch; <code>client_account_live</code> rechecks active.</td></tr>
+<tr><td><span class="component-name">max_subs validate</span></td><td>✅</td><td>Reject <code>max_subs_per_client</code> above default/compile cap (1024).</td></tr>
+<tr><td><span class="component-name">filestore flock</span></td><td>✅</td><td>Cross-process lock covers data+idx pair (no torn idx reads).</td></tr>
+</table>
+</div>
+
 
 
 
