@@ -39,6 +39,32 @@ TEST(sublist, remove_basic) {
     int rc = cmq_sublist_remove(sl, "foo.bar", (void *)1);
     ASSERT_EQ(rc, 0);
     ASSERT_EQ(cmq_sublist_count(sl), (size_t)0);
+    /* Pruned path must not leave ghost matches. */
+    cmq_sublist_result_t result;
+    ASSERT_EQ(cmq_sublist_match(sl, "foo.bar", &result), 0);
+    ASSERT_EQ(result.count, (size_t)0);
+    cmq_sublist_result_free(&result);
+    /* Re-insert after prune works. */
+    ASSERT_EQ(cmq_sublist_insert(sl, "foo.bar", (void *)2), 0);
+    ASSERT_EQ(cmq_sublist_count(sl), (size_t)1);
+    cmq_sublist_destroy(sl);
+}
+
+TEST(sublist, remove_prunes_nested) {
+    cmq_sublist_t *sl = cmq_sublist_create();
+    ASSERT_EQ(cmq_sublist_insert(sl, "a.b.c", (void *)1), 0);
+    ASSERT_EQ(cmq_sublist_insert(sl, "a.b.d", (void *)2), 0);
+    ASSERT_EQ(cmq_sublist_remove(sl, "a.b.c", (void *)1), 0);
+    /* Sibling keeps shared prefix; only leaf c pruned. */
+    cmq_sublist_result_t result;
+    ASSERT_EQ(cmq_sublist_match(sl, "a.b.d", &result), 0);
+    ASSERT_EQ(result.count, (size_t)1);
+    cmq_sublist_result_free(&result);
+    ASSERT_EQ(cmq_sublist_remove(sl, "a.b.d", (void *)2), 0);
+    ASSERT_EQ(cmq_sublist_count(sl), (size_t)0);
+    ASSERT_EQ(cmq_sublist_match(sl, "a.b.d", &result), 0);
+    ASSERT_EQ(result.count, (size_t)0);
+    cmq_sublist_result_free(&result);
     cmq_sublist_destroy(sl);
 }
 

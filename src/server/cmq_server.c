@@ -20,7 +20,6 @@ static int auth_configured(const cmq_server_t *srv) {
 /* Soft-deleted then reactivated accounts bump epoch — old sessions stay denied. */
 static int client_account_live(cmq_server_t *srv, const cmq_client_t *c) {
     if (!srv || !c || !c->account_name[0]) return 0;
-    if (strcmp(c->account_name, "$default") == 0) return 1;
     cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name);
     return a && a->epoch == c->account_epoch;
 }

@@ -57,20 +57,23 @@ TEST(mpool, reset) {
     cmq_mpool_alloc(pool, 128);
     cmq_mpool_alloc(pool, 256);
     cmq_mpool_alloc(pool, 512);
-    /* reset should reclaim all memory without freeing blocks */
+    /* reset rewinds to first block */
     cmq_mpool_reset(pool);
     void *p = cmq_mpool_alloc(pool, 4000);
     ASSERT_NOT_NULL(p);
     size_t used_after = cmq_mpool_used(pool);
-    /* Force overflow blocks then reset — used bytes must not keep growing. */
+    /* Force overflow blocks then reset — must free extras (RSS shrinks). */
     for (int i = 0; i < 8; i++) {
         ASSERT_NOT_NULL(cmq_mpool_alloc(pool, 3000));
     }
     size_t used_grown = cmq_mpool_used(pool);
     ASSERT(used_grown > used_after);
     cmq_mpool_reset(pool);
+    size_t used_trimmed = cmq_mpool_used(pool);
+    ASSERT(used_trimmed < used_grown);
+    ASSERT_EQ(used_trimmed, (size_t)4096);
     ASSERT_NOT_NULL(cmq_mpool_alloc(pool, 4000));
-    ASSERT_EQ(cmq_mpool_used(pool), used_grown); /* reuses existing blocks */
+    ASSERT_EQ(cmq_mpool_used(pool), used_trimmed);
     cmq_mpool_destroy(pool);
 }
 

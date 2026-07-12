@@ -260,6 +260,8 @@ int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject, void *data) {
 
     cmq_rwlock_wrlock(&sl->lock);
 
+    cmq_sl_node_t *parents[64];
+    int nparents = 0;
     cmq_sl_node_t *current = &sl->root;
     for (int i = 0; i < ntokens; i++) {
         int is_pwc = (strcmp(tokens[i], "*") == 0);
@@ -269,11 +271,24 @@ int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject, void *data) {
             cmq_rwlock_unlock(&sl->lock);
             return -1;
         }
+        if (nparents < 64)
+            parents[nparents++] = current;
         current = child;
     }
 
     int rc = node_remove_sub(current, data);
     if (rc == 0 && sl->count > 0) sl->count--;
+    /* Prune empty trie nodes (keep root). */
+    if (rc == 0) {
+        cmq_sl_node_t *node = current;
+        for (int i = nparents - 1; i >= 0; i--) {
+            if (node->sub_count > 0 || node->children != NULL)
+                break;
+            unlink_child(parents[i], node);
+            cmq_sl_node_destroy(node);
+            node = parents[i];
+        }
+    }
     cmq_rwlock_unlock(&sl->lock);
     return rc;
 }

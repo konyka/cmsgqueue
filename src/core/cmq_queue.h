@@ -17,7 +17,8 @@ typedef struct {
 
 void cmq_queue_init(cmq_queue_t *q);
 void cmq_queue_destroy(cmq_queue_t *q);
-void cmq_queue_push(cmq_queue_t *q, void *data);
+/* Returns 0 on success, -1 if queue unusable or OOM. */
+int cmq_queue_push(cmq_queue_t *q, void *data);
 void *cmq_queue_pop(cmq_queue_t *q);
 
 #endif

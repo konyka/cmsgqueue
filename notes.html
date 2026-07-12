@@ -2058,6 +2058,18 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — $default epoch · MPSC push status · mpool trim · sublist prune</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">$default epoch</span></td><td>✅</td><td>No special-case bypass — soft-delete/reactivate applies to default too.</td></tr>
+<tr><td><span class="component-name">MPSC push</span></td><td>✅</td><td>Returns -1 on OOM / uninit (callers can detect drops).</td></tr>
+<tr><td><span class="component-name">mpool reset</span></td><td>✅</td><td>Frees overflow blocks; keeps only the first block.</td></tr>
+<tr><td><span class="component-name">sublist prune</span></td><td>✅</td><td>Remove walks up and destroys empty trie nodes.</td></tr>
+</table>
+</div>
+
+
 
 
 

@@ -146,14 +146,18 @@ void *cmq_mpool_alloc(cmq_mpool_t *pool, size_t size) {
 }
 
 void cmq_mpool_reset(cmq_mpool_t *pool) {
-    if (!pool) return;
-    cmq_mpool_block_t *cur = pool->head;
-    while (cur) {
-        cur->offset = 0;
-        cur = cur->next;
-    }
-    /* Allocations resume from the first block so reset actually reclaims space. */
+    if (!pool || !pool->head) return;
+    /* Free overflow/growth blocks — keep only the first block. */
+    cmq_mpool_block_t *extra = pool->head->next;
+    pool->head->next = NULL;
+    pool->head->offset = 0;
     pool->tail = pool->head;
+    while (extra) {
+        cmq_mpool_block_t *n = extra->next;
+        free(extra->mem);
+        free(extra);
+        extra = n;
+    }
 }
 
 size_t cmq_mpool_used(cmq_mpool_t *pool) {

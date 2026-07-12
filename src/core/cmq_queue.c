@@ -27,15 +27,16 @@ void cmq_queue_destroy(cmq_queue_t *q) {
     q->tail = NULL;
 }
 
-void cmq_queue_push(cmq_queue_t *q, void *data) {
-    if (!q || !q->tail) return;
+int cmq_queue_push(cmq_queue_t *q, void *data) {
+    if (!q || !q->tail) return -1;
     cmq_queue_node_t *node = malloc(sizeof(cmq_queue_node_t));
-    if (!node) return;
+    if (!node) return -1;
     node->data = data;
     node->next = NULL;
 
     cmq_queue_node_t *prev = __atomic_exchange_n(&q->tail, node, __ATOMIC_RELEASE);
     __atomic_store_n(&prev->next, node, __ATOMIC_RELEASE);
+    return 0;
 }
 
 void *cmq_queue_pop(cmq_queue_t *q) {
