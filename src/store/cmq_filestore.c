@@ -478,11 +478,16 @@ uint64_t cmq_filestore_last_seq(cmq_filestore_t *fs) {
 int cmq_filestore_sync(cmq_filestore_t *fs) {
     if (!fs) return -1;
     cmq_mutex_lock(&fs->lock);
+    if (!fs->data_fp || fs_flock(fs->data_fp, LOCK_EX) != 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
     int rc = 0;
-    if (fs->data_fp && fflush(fs->data_fp) != 0) rc = -1;
+    if (fflush(fs->data_fp) != 0) rc = -1;
     if (fs->idx_fp && fflush(fs->idx_fp) != 0) rc = -1;
-    if (fs->data_fp && fsync(fileno(fs->data_fp)) != 0) rc = -1;
+    if (fsync(fileno(fs->data_fp)) != 0) rc = -1;
     if (fs->idx_fp && fsync(fileno(fs->idx_fp)) != 0) rc = -1;
+    fs_flock(fs->data_fp, LOCK_UN);
     cmq_mutex_unlock(&fs->lock);
     return rc;
 }

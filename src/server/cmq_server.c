@@ -1390,10 +1390,15 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             cmq_worker_t *w = &srv->workers[t->worker_id];
             cmq_mutex_lock(&w->clients_lock);
             target = cmq_idmap_get(w->idmap, t->client_id);
-            if (target &&
-                (target->state != CMQ_CLIENT_CONNECTED ||
-                 !client_has_sub(target, t->sub_id)))
+            if (target && target->state == CMQ_CLIENT_CONNECTED &&
+                !client_account_live(srv, target)) {
+                target->state = CMQ_CLIENT_CLOSING;
                 target = NULL;
+            } else if (target &&
+                       (target->state != CMQ_CLIENT_CONNECTED ||
+                        !client_has_sub(target, t->sub_id))) {
+                target = NULL;
+            }
             if (target &&
                 cmq_send_request_message(target, t->sub_id, subject,
                                           reply_to, payload, payload_len) == 0)
@@ -1402,10 +1407,15 @@ static size_t deliver_request_targets(cmq_server_t *srv,
         } else {
             cmq_mutex_lock(&srv->clients_lock);
             target = cmq_idmap_get(srv->idmap, t->client_id);
-            if (target &&
-                (target->state != CMQ_CLIENT_CONNECTED ||
-                 !client_has_sub(target, t->sub_id)))
+            if (target && target->state == CMQ_CLIENT_CONNECTED &&
+                !client_account_live(srv, target)) {
+                target->state = CMQ_CLIENT_CLOSING;
                 target = NULL;
+            } else if (target &&
+                       (target->state != CMQ_CLIENT_CONNECTED ||
+                        !client_has_sub(target, t->sub_id))) {
+                target = NULL;
+            }
             if (target &&
                 cmq_send_request_message(target, t->sub_id, subject,
                                           reply_to, payload, payload_len) == 0)

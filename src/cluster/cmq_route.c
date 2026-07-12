@@ -603,15 +603,20 @@ size_t cmq_route_live_count(cmq_route_pool_t *pool) {
 int cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id,
                         cmq_route_conn_t *out) {
     if (!pool || !node_id || !out) return -1;
+    size_t nslots;
     cmq_mutex_lock(&pool->lock);
-    for (size_t i = 0; i < pool->conn_count; i++) {
+    nslots = pool->conn_count;
+    cmq_mutex_unlock(&pool->lock);
+    /* Copy under io_lock so fd/connected match write-path death updates. */
+    for (size_t i = 0; i < nslots; i++) {
+        cmq_mutex_lock(&pool->io_locks[i]);
         if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
             *out = pool->conns[i];
-            cmq_mutex_unlock(&pool->lock);
+            cmq_mutex_unlock(&pool->io_locks[i]);
             return 0;
         }
+        cmq_mutex_unlock(&pool->io_locks[i]);
     }
-    cmq_mutex_unlock(&pool->lock);
     return -1;
 }
 
