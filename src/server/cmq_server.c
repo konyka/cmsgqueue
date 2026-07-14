@@ -3251,10 +3251,24 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
     req[hdr_end] = '\0';
 
     if (strncmp(req, "GET ", 4) != 0) { free(req); return -1; }
-    if (strstr(req, "Upgrade: websocket") == NULL &&
-        strstr(req, "Upgrade: WebSocket") == NULL) { free(req); return -1; }
-    if (strstr(req, "Sec-WebSocket-Version: 13") == NULL &&
-        strstr(req, "Sec-WebSocket-Version:13") == NULL) { free(req); return -1; }
+
+    /* Header names/values: RFC 7230 case-insensitive (align with WS Key parse). */
+    char upgrade[64] = {0}, version[32] = {0};
+    if (http_header_value(req, "Upgrade", upgrade, sizeof(upgrade)) != 0) {
+        free(req);
+        return -1;
+    }
+    for (char *p = upgrade; *p; p++) {
+        if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
+    }
+    if (strcmp(upgrade, "websocket") != 0) { free(req); return -1; }
+    if (http_header_value(req, "Sec-WebSocket-Version", version,
+                           sizeof(version)) != 0) {
+        free(req);
+        return -1;
+    }
+    /* Trim incidental spaces already handled by http_header_value. */
+    if (strcmp(version, "13") != 0) { free(req); return -1; }
 
     /* CSWSH: if Origin is present it must match Host. Native clients may omit Origin. */
     char origin_raw[256] = {0}, host_raw[256] = {0};
