@@ -2375,6 +2375,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — worker KA no cross-thread ev_mod · teardown OOM fallback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">worker keepalive</span></td><td>✅</td><td>Acceptor never <code>cmq_ev_mod</code>s worker loops; overflow uses <code>shutdown</code> + <code>worker_push_teardown</code> (beyond 192 posts TEARDOWN under lock).</td></tr>
+<tr><td><span class="component-name">inbox teardown OOM</span></td><td>✅</td><td>Recorded dead-list <code>worker_push_teardown</code> failure falls back to <code>shutdown(fd)</code>.</td></tr>
+</table>
+</div>
+
 
 
 

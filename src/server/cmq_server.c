@@ -2255,11 +2255,23 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                 cmq_rwlock_unlock(&srv->sublist_lock);
                 for (size_t di = 0; di < ndead; di++) {
                     if (deads[di].worker_id >= 0 && srv->workers &&
-                        deads[di].worker_id < srv->num_workers)
-                        (void)worker_push_teardown(
-                            &srv->workers[deads[di].worker_id],
-                            deads[di].client_id, deads[di].conn_gen);
-                    else if (deads[di].acceptor)
+                        deads[di].worker_id < srv->num_workers) {
+                        cmq_worker_t *ww = &srv->workers[deads[di].worker_id];
+                        if (worker_push_teardown(ww, deads[di].client_id,
+                                                  deads[di].conn_gen) != 0) {
+                            cmq_mutex_lock(&ww->clients_lock);
+                            for (int j = 0; j < ww->clients_count; j++) {
+                                cmq_client_t *dc = ww->clients[j];
+                                if (dc && dc->id == deads[di].client_id &&
+                                    dc->conn_gen == deads[di].conn_gen &&
+                                    dc->fd >= 0) {
+                                    shutdown(dc->fd, SHUT_RDWR);
+                                    break;
+                                }
+                            }
+                            cmq_mutex_unlock(&ww->clients_lock);
+                        }
+                    } else if (deads[di].acceptor)
                         client_finish_closing(deads[di].acceptor);
                 }
                 free(heap_deads);
@@ -2298,11 +2310,22 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     cmq_rwlock_unlock(&srv->sublist_lock);
     for (size_t di = 0; di < ndead; di++) {
         if (deads[di].worker_id >= 0 && srv->workers &&
-            deads[di].worker_id < srv->num_workers)
-            (void)worker_push_teardown(&srv->workers[deads[di].worker_id],
-                                        deads[di].client_id,
-                                        deads[di].conn_gen);
-        else if (deads[di].acceptor)
+            deads[di].worker_id < srv->num_workers) {
+            cmq_worker_t *ww = &srv->workers[deads[di].worker_id];
+            if (worker_push_teardown(ww, deads[di].client_id,
+                                      deads[di].conn_gen) != 0) {
+                cmq_mutex_lock(&ww->clients_lock);
+                for (int j = 0; j < ww->clients_count; j++) {
+                    cmq_client_t *dc = ww->clients[j];
+                    if (dc && dc->id == deads[di].client_id &&
+                        dc->conn_gen == deads[di].conn_gen && dc->fd >= 0) {
+                        shutdown(dc->fd, SHUT_RDWR);
+                        break;
+                    }
+                }
+                cmq_mutex_unlock(&ww->clients_lock);
+            }
+        } else if (deads[di].acceptor)
             client_finish_closing(deads[di].acceptor);
     }
     free(heap_deads);
@@ -3919,14 +3942,20 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                         doomed[ndoomed].gen = c->conn_gen;
                         ndoomed++;
                     } else if (noverflow < CMQ_KA_OVERFLOW) {
-                        /* Heap snapshot failed — still TEARDOWN after unlock. */
+                        /* Heap snapshot failed — still TEARDOWN after unlock.
+                           Do not cmq_ev_mod worker loops from the acceptor. */
                         stack_overflow[noverflow].id = c->id;
                         stack_overflow[noverflow].gen = c->conn_gen;
                         noverflow++;
-                        client_force_closing(c);
+                        if (c->fd >= 0)
+                            shutdown(c->fd, SHUT_RDWR);
                     } else {
-                        /* Beyond overflow slots — mark CLOSING under lock. */
-                        client_force_closing(c);
+                        /* Beyond overflow slots: shutdown + post TEARDOWN now
+                           (safe: worker never holds msg_lock across clients_lock). */
+                        uint32_t tid = c->id, tgen = c->conn_gen;
+                        if (c->fd >= 0)
+                            shutdown(c->fd, SHUT_RDWR);
+                        (void)worker_push_teardown(w, tid, tgen);
                     }
                 }
             }
@@ -3953,8 +3982,20 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                 }
             }
             for (int i = 0; i < noverflow; i++) {
-                (void)worker_push_teardown(w, stack_overflow[i].id,
-                                            stack_overflow[i].gen);
+                if (worker_push_teardown(w, stack_overflow[i].id,
+                                          stack_overflow[i].gen) != 0) {
+                    cmq_mutex_lock(&w->clients_lock);
+                    for (int j = 0; j < w->clients_count; j++) {
+                        cmq_client_t *c = w->clients[j];
+                        if (c && c->id == stack_overflow[i].id &&
+                            c->conn_gen == stack_overflow[i].gen &&
+                            c->fd >= 0) {
+                            shutdown(c->fd, SHUT_RDWR);
+                            break;
+                        }
+                    }
+                    cmq_mutex_unlock(&w->clients_lock);
+                }
             }
             if (doomed_heap)
                 free(doomed);
