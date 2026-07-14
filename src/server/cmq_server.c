@@ -373,8 +373,10 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
 
             cmq_mutex_lock(&w->clients_lock);
             cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
-            /* Owning worker thread: wrap WS here so coro/drain can push raw CMQ. */
+            /* Owning worker thread: validate under lock, send after unlock so
+               keepalive/teardown scans are not blocked on slow consumers. */
             int finish_dead = 0;
+            int do_send = 0;
             if (target && target->conn_gen == msg->target_gen &&
                 target->state != CMQ_CLIENT_CLOSED &&
                 target->state != CMQ_CLIENT_CLOSING) {
@@ -387,11 +389,7 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                                                   CMQ_ATOMIC_RELAXED);
                 } else if (msg->require_sub_id == 0 ||
                            client_has_sub(target, msg->require_sub_id)) {
-                    if (cmq_client_send_local(target, msg->buf, msg->len) != 0 &&
-                        w->server) {
-                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                                  CMQ_ATOMIC_RELAXED);
-                    }
+                    do_send = 1;
                 } else if (w->server) {
                     /* Queued while subscribed; drain after unsub — count as drop. */
                     cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
@@ -402,6 +400,14 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                                           CMQ_ATOMIC_RELAXED);
             }
             cmq_mutex_unlock(&w->clients_lock);
+            /* Same-thread ownership: TEARDOWN cannot free target until we
+               return to the mailbox loop. */
+            if (do_send && target &&
+                cmq_client_send_local(target, msg->buf, msg->len) != 0 &&
+                w->server) {
+                cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            }
             if (finish_dead && target)
                 client_finish_closing(target);
             free(msg->buf);
@@ -4193,6 +4199,9 @@ static void accept_cb(int fd, int events, void *data) {
                 continue;
             }
 
+            /* Hold clients_lock through idmap publish + ev_add so TEARDOWN /
+               keepalive cannot destroy the client mid-accept (they need the
+               same lock). epoll_ctl does not invoke callbacks. */
             cmq_mutex_lock(&w->clients_lock);
             if (w->clients_count >= w->clients_cap) {
                 int new_cap = w->clients_cap * 2;
@@ -4200,32 +4209,6 @@ static void accept_cb(int fd, int events, void *data) {
                                                   (size_t)new_cap * sizeof(cmq_client_t *));
                 if (!new_arr) {
                     cmq_mutex_unlock(&w->clients_lock);
-                    cmq_client_destroy(client);
-                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                    continue;
-                }
-                w->clients = new_arr;
-                w->clients_cap = new_cap;
-            }
-            cmq_mutex_unlock(&w->clients_lock);
-
-            /* Register fd before idmap/clients publish so TEARDOWN cannot
-               destroy the client while accept still holds the pointer. */
-            if (cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
-                           client) != 0) {
-                cmq_client_destroy(client);
-                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
-            }
-
-            cmq_mutex_lock(&w->clients_lock);
-            if (w->clients_count >= w->clients_cap) {
-                int new_cap = w->clients_cap * 2;
-                cmq_client_t **new_arr = realloc(w->clients,
-                                                  (size_t)new_cap * sizeof(cmq_client_t *));
-                if (!new_arr) {
-                    cmq_mutex_unlock(&w->clients_lock);
-                    (void)cmq_ev_del(w->ev_loop, client_fd);
                     cmq_client_destroy(client);
                     cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
                     continue;
@@ -4237,7 +4220,15 @@ static void accept_cb(int fd, int events, void *data) {
             if (cmq_idmap_put(w->idmap, client->id, client) != 0) {
                 w->clients_count--;
                 cmq_mutex_unlock(&w->clients_lock);
-                (void)cmq_ev_del(w->ev_loop, client_fd);
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            if (cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
+                           client) != 0) {
+                w->clients_count--;
+                cmq_idmap_del(w->idmap, client->id);
+                cmq_mutex_unlock(&w->clients_lock);
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
                 continue;
@@ -4272,35 +4263,19 @@ static void accept_cb(int fd, int events, void *data) {
                 srv->clients = new_arr;
                 srv->clients_cap = new_cap;
             }
-            cmq_mutex_unlock(&srv->clients_lock);
-
-            if (cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
-                           client) != 0) {
-                cmq_client_destroy(client);
-                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
-            }
-
-            cmq_mutex_lock(&srv->clients_lock);
-            if (srv->clients_count >= srv->clients_cap) {
-                int new_cap = srv->clients_cap * 2;
-                cmq_client_t **new_arr = realloc(srv->clients,
-                                                  (size_t)new_cap * sizeof(cmq_client_t *));
-                if (!new_arr) {
-                    cmq_mutex_unlock(&srv->clients_lock);
-                    (void)cmq_ev_del(srv->ev_loop, client_fd);
-                    cmq_client_destroy(client);
-                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                    continue;
-                }
-                srv->clients = new_arr;
-                srv->clients_cap = new_cap;
-            }
             srv->clients[srv->clients_count++] = client;
             if (cmq_idmap_put(srv->idmap, client->id, client) != 0) {
                 srv->clients_count--;
                 cmq_mutex_unlock(&srv->clients_lock);
-                (void)cmq_ev_del(srv->ev_loop, client_fd);
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            if (cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
+                           client) != 0) {
+                srv->clients_count--;
+                cmq_idmap_del(srv->idmap, client->id);
+                cmq_mutex_unlock(&srv->clients_lock);
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
                 continue;

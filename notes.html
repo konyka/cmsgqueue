@@ -2457,6 +2457,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — accept under clients_lock · mailbox unlock send · route io_lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">accept publish</span></td><td>✅</td><td>Hold <code>clients_lock</code> through <code>idmap</code>+<code>ev_add</code> so TEARDOWN cannot free mid-accept.</td></tr>
+<tr><td><span class="component-name">mailbox SEND</span></td><td>✅</td><td>Validate under lock; <code>send_local</code> after unlock (same-thread ownership).</td></tr>
+<tr><td><span class="component-name">route io_lock_fd</span></td><td>✅</td><td>Take <code>io_lock</code> before releasing <code>pool-&gt;lock</code> to close fd-reuse window.</td></tr>
+</table>
+</div>
+
 
 
 

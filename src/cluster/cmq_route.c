@@ -711,14 +711,19 @@ int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd) {
             break;
         }
     }
-    cmq_mutex_unlock(&pool->lock);
-    if (idx < 0) return -1;
-    cmq_mutex_lock(&pool->io_locks[idx]);
-    /* Recheck without nesting pool->lock under io_lock. */
-    if ((size_t)idx >= pool->conn_count || pool->conns[idx].fd != fd) {
-        cmq_mutex_unlock(&pool->io_locks[idx]);
+    if (idx < 0) {
+        cmq_mutex_unlock(&pool->lock);
         return -1;
     }
+    /* pool→io (never reverse). Hold pool until io_lock so close+reconnect
+       cannot reuse the same fd number into another slot mid-hand-off. */
+    cmq_mutex_lock(&pool->io_locks[idx]);
+    if ((size_t)idx >= pool->conn_count || pool->conns[idx].fd != fd) {
+        cmq_mutex_unlock(&pool->io_locks[idx]);
+        cmq_mutex_unlock(&pool->lock);
+        return -1;
+    }
+    cmq_mutex_unlock(&pool->lock);
     return idx;
 }
 
