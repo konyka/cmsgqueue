@@ -4101,6 +4101,10 @@ static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
 static void accept_cb(int fd, int events, void *data) {
     cmq_server_t *srv = (cmq_server_t *)data;
     if (!(events & CMQ_EV_READ)) return;
+    /* Drain/stop: never admit new sessions (covers backlog race after listen close). */
+    if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+        cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
+        return;
 
     /* Drain the listen backlog — one accept per epoll wake stalls under bursts.
        Cap per wake so keepalive / existing clients stay responsive. */
@@ -4108,6 +4112,9 @@ static void accept_cb(int fd, int events, void *data) {
     int accepted = 0;
     for (;;) {
         if (accepted >= CMQ_ACCEPT_PER_WAKE)
+            return;
+        if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+            cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
             return;
         struct sockaddr_in addr;
         socklen_t addrlen = sizeof(addr);
@@ -4117,6 +4124,11 @@ static void accept_cb(int fd, int events, void *data) {
             return; /* EAGAIN / EWOULDBLOCK / fatal */
         }
         accepted++;
+        if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+            cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
+            close(client_fd);
+            return;
+        }
 
         if (set_nonblocking(client_fd) != 0) {
             close(client_fd);
@@ -4796,6 +4808,11 @@ static void acceptor_post_tick(void *data) {
 void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
     if (!srv) return;
 
+    /* Raise drain before closing listen so concurrent accept_cb rejects. */
+    cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
+    if (srv->ev_loop)
+        cmq_ev_wakeup(srv->ev_loop);
+
     if (srv->listen_fd >= 0) {
         cmq_ev_del(srv->ev_loop, srv->listen_fd);
         close(srv->listen_fd);
@@ -4807,9 +4824,6 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
 
     /* Acceptor-owned clients live on srv->ev_loop — never send_local /
        finish_closing from this (possibly foreign) thread. */
-    cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
-    if (srv->ev_loop)
-        cmq_ev_wakeup(srv->ev_loop);
 
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
@@ -4888,6 +4902,10 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
             break;
         if ((int)(srv_now_ms() - start) >= timeout)
             break;
+        /* Re-kick acceptor drain in case a late accept slipped in. */
+        if (srv->ev_loop &&
+            cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
+            cmq_ev_wakeup(srv->ev_loop);
         struct timespec ts = {0, 1000000L}; /* 1ms */
         nanosleep(&ts, NULL);
     }

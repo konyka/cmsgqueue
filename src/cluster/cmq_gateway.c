@@ -68,16 +68,21 @@ static int gw_fd_alive(int fd) {
     return pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL));
 }
 
-/* Caller holds gw->lock on entry/exit. 1 = probed-live peer for cluster. */
+/* Caller holds gw->lock on entry/exit. 1 = probed-live peer for cluster.
+   Read fd/connected under io_lock (same as forward / route_peer_live). */
 static int gw_has_live_peer(cmq_gateway_t *gw, const char *cluster_name) {
     for (;;) {
         size_t idx = (size_t)-1;
         int efd = -1;
         for (size_t j = 0; j < gw->conn_count; j++) {
-            if (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0 &&
-                gw->conns[j].connected && gw->conns[j].fd >= 0) {
+            cmq_mutex_lock(&gw->io_locks[j]);
+            int match = (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0 &&
+                         gw->conns[j].connected && gw->conns[j].fd >= 0);
+            int fd = match ? gw->conns[j].fd : -1;
+            cmq_mutex_unlock(&gw->io_locks[j]);
+            if (match) {
                 idx = j;
-                efd = gw->conns[j].fd;
+                efd = fd;
                 break;
             }
         }
@@ -86,17 +91,25 @@ static int gw_has_live_peer(cmq_gateway_t *gw, const char *cluster_name) {
         int alive = gw_fd_alive(efd);
         cmq_mutex_lock(&gw->lock);
         if (alive) {
-            for (size_t j = 0; j < gw->conn_count; j++) {
-                if (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0 &&
-                    gw->conns[j].connected && gw->conns[j].fd >= 0)
-                    return 1;
+            if (idx < gw->conn_count) {
+                cmq_mutex_lock(&gw->io_locks[idx]);
+                int still =
+                    (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
+                     gw->conns[idx].connected && gw->conns[idx].fd == efd);
+                cmq_mutex_unlock(&gw->io_locks[idx]);
+                if (still) return 1;
             }
             continue;
         }
-        if (idx < gw->conn_count &&
-            strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
-            gw->conns[idx].fd == efd)
-            gw_slot_close_fd(gw, idx);
+        if (idx < gw->conn_count) {
+            cmq_mutex_lock(&gw->io_locks[idx]);
+            int same =
+                (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
+                 gw->conns[idx].fd == efd);
+            cmq_mutex_unlock(&gw->io_locks[idx]);
+            if (same)
+                gw_slot_close_fd(gw, idx);
+        }
     }
 }
 
