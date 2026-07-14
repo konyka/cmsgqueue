@@ -194,18 +194,10 @@ struct cmq_route_pool {
     cmq_mutex_t io_locks[CMQ_ROUTE_MAX_CONNS]; /* per-slot write serialization */
 };
 
+/* Drop slot fd. Owned → close; borrowed inbound → SHUT_RDWR so the server
+   client_read_cb sees EOF (same as write-path death). Slot replace/reconnect
+   must not leave zombie is_route clients. */
 static void conn_drop_fd(cmq_route_conn_t *c) {
-    if (!c) return;
-    if (c->fd >= 0 && c->fd_owned)
-        close(c->fd);
-    c->fd = -1;
-    c->connected = 0;
-    c->fd_owned = 0;
-}
-
-/* Write-path death: owned fds are closed; borrowed inbound fds get SHUT_RDWR
-   so the server client_read_cb sees EOF and tears down (no zombie route). */
-static void conn_drop_fd_dead(cmq_route_conn_t *c) {
     if (!c) return;
     if (c->fd >= 0) {
         if (c->fd_owned)
@@ -612,7 +604,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
         } else {
             /* Drop under io_lock so other writers cannot race close/shutdown. */
             if (pool->conns[idx].fd == fd)
-                conn_drop_fd_dead(&pool->conns[idx]);
+                conn_drop_fd(&pool->conns[idx]);
             cmq_mutex_unlock(&pool->io_locks[idx]);
         }
     }

@@ -2355,6 +2355,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route borrow shutdown · inbox dead heap · force_closing</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route_slot_close</span></td><td>✅</td><td>Borrowed inbound fds get <code>SHUT_RDWR</code> on replace (same as write-path death) so zombie <code>is_route</code> clients tear down.</td></tr>
+<tr><td><span class="component-name">_INBOX reclaim</span></td><td>✅</td><td>Epoch-dead teardown queue sized to match count (stack 16 + heap) — no silent 16-cap skip.</td></tr>
+<tr><td><span class="component-name">keepalive OOM</span></td><td>✅</td><td>Epoch-dead under <code>clients_lock</code> uses <code>client_force_closing</code> (CLOSING without teardown deadlock).</td></tr>
+</table>
+</div>
+
 
 
 

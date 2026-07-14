@@ -2211,18 +2211,28 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         uint32_t conn_gen;
         cmq_client_t *acceptor;
     } cmq_inbox_dead_t;
-    cmq_inbox_dead_t deads[16];
+    cmq_inbox_dead_t stack_deads[16];
+    cmq_inbox_dead_t *deads = stack_deads;
+    cmq_inbox_dead_t *heap_deads = NULL;
+    size_t dead_cap = sizeof(stack_deads) / sizeof(stack_deads[0]);
     size_t ndead = 0;
     if (strncmp(subject, "_INBOX.", 7) == 0) {
         cmq_sublist_result_t claim;
         if (cmq_sublist_match(srv->sublist, subject, &claim) == 0) {
+            if (claim.count > dead_cap) {
+                heap_deads = malloc(claim.count * sizeof(*heap_deads));
+                if (heap_deads) {
+                    deads = heap_deads;
+                    dead_cap = claim.count;
+                }
+            }
             for (size_t i = 0; i < claim.count; i++) {
                 cmq_sub_ref_t *cr = (cmq_sub_ref_t *)claim.entries[i];
                 if (!cr || !cr->client) continue;
                 if (strcmp(cr->subject, subject) != 0) continue;
                 if (cr->client == c) continue;
                 if (!client_account_live(srv, cr->client)) {
-                    if (ndead < sizeof(deads) / sizeof(deads[0])) {
+                    if (ndead < dead_cap) {
                         deads[ndead].worker_id = cr->client->worker_id;
                         deads[ndead].client_id = cr->client->id;
                         deads[ndead].conn_gen = cr->client->conn_gen;
@@ -2243,6 +2253,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                     else if (deads[di].acceptor)
                         client_finish_closing(deads[di].acceptor);
                 }
+                free(heap_deads);
                 free(ref);
                 free(entry);
                 cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
@@ -2285,6 +2296,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         else if (deads[di].acceptor)
             client_finish_closing(deads[di].acceptor);
     }
+    free(heap_deads);
     if (irc != 0) {
         free(ref);
         free(entry);
@@ -3814,8 +3826,8 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                     continue;
                 if (c->state == CMQ_CLIENT_CONNECTED &&
                     !client_account_live(srv, c)) {
-                    if (c->fd >= 0)
-                        shutdown(c->fd, SHUT_RDWR);
+                    /* Safe under clients_lock: mark CLOSING, no teardown. */
+                    client_force_closing(c);
                     continue;
                 }
                 int stalled = write_timeout_ms > 0 &&
