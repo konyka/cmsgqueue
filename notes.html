@@ -2346,6 +2346,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — mixed BATCH local deliver · keepalive OOM epoch</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">BATCH 2b-pre</span></td><td>✅</td><td>Dead-route refuse only when the whole batch has zero local targets; mixed batches still reach local pass 2c.</td></tr>
+<tr><td><span class="component-name">keepalive OOM</span></td><td>✅</td><td>Acceptor snap-malloc fallback also shuts down epoch-dead CONNECTED clients (matches scan path).</td></tr>
+</table>
+</div>
+
 
 
 

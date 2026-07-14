@@ -2842,17 +2842,23 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         prep[msg].ntgt = ntgt;
     }
 
-    /* Pass 2b-pre: refuse entire batch before any side effects when an entry
-       has no local targets and cluster peers are configured but none live. */
+    /* Pass 2b-pre: refuse entire batch only when NO entry has local targets and
+       cluster peers are configured but none live. Mixed batches (some local
+       subs) must reach pass 2c — align with single-PUBLISH local delivery. */
     if (srv->routes && !c->is_route && cmq_route_pool_count(srv->routes) > 0 &&
         cmq_route_live_count(srv->routes) == 0) {
+        int any_local = 0;
         for (uint16_t msg = 0; msg < count; msg++) {
-            if (!prep[msg].tgts || prep[msg].ntgt == 0) {
-                for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
-                free(prep);
-                cmq_send_error(c, "route failed");
-                return;
+            if (prep[msg].tgts && prep[msg].ntgt > 0) {
+                any_local = 1;
+                break;
             }
+        }
+        if (!any_local) {
+            for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
+            free(prep);
+            cmq_send_error(c, "route failed");
+            return;
         }
     }
 
@@ -3801,11 +3807,17 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
         if (snap) {
             memcpy(snap, srv->clients, (size_t)n * sizeof(cmq_client_t *));
         } else {
-            /* OOM: force-close idle/stalled without heap snapshot. */
+            /* OOM: force-close idle/stalled/epoch-dead without heap snapshot. */
             for (int i = 0; i < n; i++) {
                 cmq_client_t *c = srv->clients[i];
                 if (!c || c->state == CMQ_CLIENT_CLOSED)
                     continue;
+                if (c->state == CMQ_CLIENT_CONNECTED &&
+                    !client_account_live(srv, c)) {
+                    if (c->fd >= 0)
+                        shutdown(c->fd, SHUT_RDWR);
+                    continue;
+                }
                 int stalled = write_timeout_ms > 0 &&
                               (c->state == CMQ_CLIENT_CONNECTED ||
                                c->state == CMQ_CLIENT_CLOSING) &&
