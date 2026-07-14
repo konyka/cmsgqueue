@@ -80,11 +80,9 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
         while (first <= last && stream->total_bytes + len > stream->max_bytes) {
             if (first >= retain_floor)
                 break; /* unacked — refuse rather than drop */
-            cmq_store_msg_t msg;
-            if (cmq_store_get(stream->store, first, &msg) != 0)
+            size_t mlen = 0;
+            if (cmq_store_seq_len(stream->store, first, &mlen) != 0)
                 break; /* cannot account bytes — stop eviction */
-            size_t mlen = msg.len;
-            cmq_store_msg_release(&msg);
             if (cmq_store_evict_seq(stream->store, first) != 0)
                 break; /* leave total_bytes unchanged */
             if (stream->total_bytes >= mlen)
@@ -109,15 +107,14 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
             cmq_mutex_unlock(&stream->lock);
             return 0; /* would overwrite unacked */
         }
-        cmq_store_msg_t old;
-        if (cmq_store_get(stream->store, first, &old) != 0) {
+        size_t wrap_len = 0;
+        if (cmq_store_seq_len(stream->store, first, &wrap_len) != 0) {
             /* Cannot debit wrap — refuse rather than inflate total_bytes. */
             free(copy);
             cmq_mutex_unlock(&stream->lock);
             return 0;
         }
-        wrap_debit = old.len;
-        cmq_store_msg_release(&old);
+        wrap_debit = wrap_len;
     }
 
     uint64_t seq = cmq_store_put_owned(stream->store, copy, len);

@@ -2328,6 +2328,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — stream eviction without malloc</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_store_seq_len</span></td><td>✅</td><td>Byte accounting for max_bytes eviction / ring wrap uses metadata only (no OOM mid-evict hole).</td></tr>
+</table>
+</div>
+
 
 
 

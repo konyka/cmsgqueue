@@ -132,6 +132,29 @@ int cmq_store_get(cmq_store_t *store, uint64_t seq, cmq_store_msg_t *out) {
     return 0;
 }
 
+int cmq_store_seq_len(cmq_store_t *store, uint64_t seq, size_t *out_len) {
+    if (!store || !out_len || seq == 0) return -1;
+    cmq_mutex_lock(&store->lock);
+    if (seq >= store->head_seq) {
+        cmq_mutex_unlock(&store->lock);
+        return -1;
+    }
+    uint64_t oldest = (store->head_seq > store->cap) ? store->head_seq - store->cap : 1;
+    if (seq < oldest) {
+        cmq_mutex_unlock(&store->lock);
+        return -1;
+    }
+    size_t idx = (size_t)(seq - 1) % store->cap;
+    cmq_store_slot_t *slot = &store->ring[idx];
+    if (!slot->valid || slot->seq != seq) {
+        cmq_mutex_unlock(&store->lock);
+        return -1;
+    }
+    *out_len = slot->len;
+    cmq_mutex_unlock(&store->lock);
+    return 0;
+}
+
 void cmq_store_msg_release(cmq_store_msg_t *msg) {
     if (!msg) return;
     free(msg->data);
