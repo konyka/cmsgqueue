@@ -227,6 +227,14 @@ static void route_slot_close(cmq_route_pool_t *pool, size_t idx) {
     cmq_mutex_unlock(&pool->io_locks[idx]);
 }
 
+/* Zero-timeout TCP liveness — sticky connected after peer death. */
+static int route_fd_alive(int fd) {
+    if (fd < 0) return 0;
+    struct pollfd pfd = { .fd = fd, .events = 0 };
+    int pr = poll(&pfd, 1, 0);
+    return pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL));
+}
+
 /* Publish a live peer into a slot. Caller holds pool->lock. */
 static void route_slot_install(cmq_route_pool_t *pool, size_t idx,
                                 const char *node_id, int fd, int fd_owned) {
@@ -275,10 +283,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
             int fd = pool->conns[i].fd;
             size_t idx = i;
             cmq_mutex_unlock(&pool->lock);
-            /* Light liveness probe — avoid sticky connected after peer death. */
-            struct pollfd pfd = { .fd = fd, .events = 0 };
-            int pr = poll(&pfd, 1, 0);
-            if (pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+            if (route_fd_alive(fd))
                 return 0;
             cmq_mutex_lock(&pool->lock);
             if (idx < pool->conn_count &&
@@ -333,9 +338,21 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         if (strcmp(pool->conns[i].remote_id, node_id) != 0) continue;
         /* Another thread may have restored a live egress. */
         if (pool->conns[i].connected && pool->conns[i].fd >= 0) {
+            int efd = pool->conns[i].fd;
+            size_t idx = i;
             cmq_mutex_unlock(&pool->lock);
-            close(fd);
-            return 0;
+            if (route_fd_alive(efd)) {
+                close(fd);
+                return 0;
+            }
+            cmq_mutex_lock(&pool->lock);
+            if (idx < pool->conn_count &&
+                strcmp(pool->conns[idx].remote_id, node_id) == 0 &&
+                pool->conns[idx].fd == efd)
+                route_slot_close(pool, idx);
+            /* Rescan — peer may have been replaced while unlocked. */
+            i = (size_t)-1;
+            continue;
         }
         route_slot_close(pool, i);
         route_slot_install(pool, i, node_id, fd, 1);
@@ -437,9 +454,27 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
         if (strcmp(pool->conns[i].remote_id, node_id) != 0) continue;
-        /* Prefer existing live egress — reject redundant inbound (server
-           must not accept a route client that is not in the pool). */
+        /* Prefer existing live egress — reject redundant inbound. Drop zombies. */
         if (pool->conns[i].connected && pool->conns[i].fd >= 0) {
+            int efd = pool->conns[i].fd;
+            size_t idx = i;
+            cmq_mutex_unlock(&pool->lock);
+            if (route_fd_alive(efd))
+                return -1;
+            cmq_mutex_lock(&pool->lock);
+            if (idx >= pool->conn_count ||
+                strcmp(pool->conns[idx].remote_id, node_id) != 0) {
+                i = (size_t)-1;
+                continue;
+            }
+            if (pool->conns[idx].fd == efd ||
+                !(pool->conns[idx].connected && pool->conns[idx].fd >= 0)) {
+                route_slot_close(pool, idx);
+                route_slot_install(pool, idx, node_id, fd, 0);
+                cmq_mutex_unlock(&pool->lock);
+                return 0;
+            }
+            /* Fresh live egress appeared — reject inbound. */
             cmq_mutex_unlock(&pool->lock);
             return -1;
         }
@@ -606,9 +641,19 @@ size_t cmq_route_live_count(cmq_route_pool_t *pool) {
     size_t n = 0;
     for (size_t i = 0; i < nslots; i++) {
         cmq_mutex_lock(&pool->io_locks[i]);
-        if (pool->conns[i].connected && pool->conns[i].fd >= 0)
-            n++;
+        int fd = -1;
+        int cand = (pool->conns[i].connected && pool->conns[i].fd >= 0);
+        if (cand) fd = pool->conns[i].fd;
         cmq_mutex_unlock(&pool->io_locks[i]);
+        if (!cand) continue;
+        if (route_fd_alive(fd)) {
+            n++;
+            continue;
+        }
+        cmq_mutex_lock(&pool->lock);
+        if (i < pool->conn_count && pool->conns[i].fd == fd)
+            route_slot_close(pool, i);
+        cmq_mutex_unlock(&pool->lock);
     }
     return n;
 }
@@ -639,17 +684,29 @@ int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id) {
     cmq_mutex_lock(&pool->lock);
     nslots = pool->conn_count;
     cmq_mutex_unlock(&pool->lock);
-    int live = 0;
     for (size_t i = 0; i < nslots; i++) {
         cmq_mutex_lock(&pool->io_locks[i]);
-        if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
-            live = (pool->conns[i].connected && pool->conns[i].fd >= 0) ? 1 : 0;
-            cmq_mutex_unlock(&pool->io_locks[i]);
-            break;
+        int match = (strcmp(pool->conns[i].remote_id, node_id) == 0);
+        int fd = -1;
+        int cand = 0;
+        if (match) {
+            cand = (pool->conns[i].connected && pool->conns[i].fd >= 0);
+            if (cand) fd = pool->conns[i].fd;
         }
         cmq_mutex_unlock(&pool->io_locks[i]);
+        if (!match) continue;
+        if (!cand) return 0;
+        if (route_fd_alive(fd))
+            return 1;
+        cmq_mutex_lock(&pool->lock);
+        if (i < pool->conn_count &&
+            strcmp(pool->conns[i].remote_id, node_id) == 0 &&
+            pool->conns[i].fd == fd)
+            route_slot_close(pool, i);
+        cmq_mutex_unlock(&pool->lock);
+        return 0;
     }
-    return live;
+    return 0;
 }
 
 int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd) {

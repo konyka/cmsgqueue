@@ -2274,6 +2274,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route peer_live / attach_inbound probe</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">peer_live / live_count</span></td><td>✅</td><td>Zero-timeout poll; clears sticky dead slots so reconnect thread is not permanently skipped.</td></tr>
+<tr><td><span class="component-name">attach_inbound</span></td><td>✅</td><td>Rejects only probed-live egress; zombie outbound no longer blocks inbound recovery.</td></tr>
+<tr><td><span class="component-name">connect post-dial</span></td><td>✅</td><td>Dedup path also probes before discarding a fresh dial.</td></tr>
+</table>
+</div>
+
 
 
 
