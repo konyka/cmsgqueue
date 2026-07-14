@@ -1525,6 +1525,8 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             continue;
         cmq_client_t *target = NULL;
         int ok = 0;
+        int dead_acct = 0;
+        cmq_client_t *dead_acc = NULL;
         if (t->worker_id >= 0 && srv->workers &&
             t->worker_id < srv->num_workers) {
             cmq_worker_t *w = &srv->workers[t->worker_id];
@@ -1535,6 +1537,7 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             if (target && target->state == CMQ_CLIENT_CONNECTED &&
                 !client_account_live(srv, target)) {
                 target->state = CMQ_CLIENT_CLOSING;
+                dead_acct = 1;
                 target = NULL;
             } else if (target &&
                        (target->state != CMQ_CLIENT_CONNECTED ||
@@ -1546,6 +1549,8 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                                           reply_to, payload, payload_len) == 0)
                 ok = 1;
             cmq_mutex_unlock(&w->clients_lock);
+            if (dead_acct)
+                (void)worker_push_teardown(w, t->client_id, t->conn_gen);
         } else {
             cmq_mutex_lock(&srv->clients_lock);
             target = cmq_idmap_get(srv->idmap, t->client_id);
@@ -1554,6 +1559,7 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             if (target && target->state == CMQ_CLIENT_CONNECTED &&
                 !client_account_live(srv, target)) {
                 target->state = CMQ_CLIENT_CLOSING;
+                dead_acc = target;
                 target = NULL;
             } else if (target &&
                        (target->state != CMQ_CLIENT_CONNECTED ||
@@ -1565,6 +1571,8 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                                           reply_to, payload, payload_len) == 0)
                 ok = 1;
             cmq_mutex_unlock(&srv->clients_lock);
+            if (dead_acc)
+                client_finish_closing(dead_acc);
         }
         if (ok) {
             delivered_n++;
@@ -2195,7 +2203,16 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     ref->queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
 
     cmq_rwlock_wrlock(&srv->sublist_lock);
-    /* Exact _INBOX.* is first-claim: another client's exact sub wins. */
+    /* Exact _INBOX.* is first-claim: another live client's exact sub wins.
+       Soft-deleted (epoch-dead) holders do not block reclaim. */
+    typedef struct {
+        int worker_id;
+        uint32_t client_id;
+        uint32_t conn_gen;
+        cmq_client_t *acceptor;
+    } cmq_inbox_dead_t;
+    cmq_inbox_dead_t deads[16];
+    size_t ndead = 0;
     if (strncmp(subject, "_INBOX.", 7) == 0) {
         cmq_sublist_result_t claim;
         if (cmq_sublist_match(srv->sublist, subject, &claim) == 0) {
@@ -2203,16 +2220,35 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                 cmq_sub_ref_t *cr = (cmq_sub_ref_t *)claim.entries[i];
                 if (!cr || !cr->client) continue;
                 if (strcmp(cr->subject, subject) != 0) continue;
-                if (cr->client != c) {
-                    cmq_sublist_result_free(&claim);
-                    cmq_rwlock_unlock(&srv->sublist_lock);
-                    free(ref);
-                    free(entry);
-                    cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
-                                              CMQ_ATOMIC_RELAXED);
-                    cmq_send_suback(c, sub_id, 1);
-                    return;
+                if (cr->client == c) continue;
+                if (!client_account_live(srv, cr->client)) {
+                    if (ndead < sizeof(deads) / sizeof(deads[0])) {
+                        deads[ndead].worker_id = cr->client->worker_id;
+                        deads[ndead].client_id = cr->client->id;
+                        deads[ndead].conn_gen = cr->client->conn_gen;
+                        deads[ndead].acceptor =
+                            (cr->client->worker_id < 0) ? cr->client : NULL;
+                        ndead++;
+                    }
+                    continue;
                 }
+                cmq_sublist_result_free(&claim);
+                cmq_rwlock_unlock(&srv->sublist_lock);
+                for (size_t di = 0; di < ndead; di++) {
+                    if (deads[di].worker_id >= 0 && srv->workers &&
+                        deads[di].worker_id < srv->num_workers)
+                        (void)worker_push_teardown(
+                            &srv->workers[deads[di].worker_id],
+                            deads[di].client_id, deads[di].conn_gen);
+                    else if (deads[di].acceptor)
+                        client_finish_closing(deads[di].acceptor);
+                }
+                free(ref);
+                free(entry);
+                cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_send_suback(c, sub_id, 1);
+                return;
             }
             cmq_sublist_result_free(&claim);
         }
@@ -2240,6 +2276,15 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         old_ref = NULL;
     }
     cmq_rwlock_unlock(&srv->sublist_lock);
+    for (size_t di = 0; di < ndead; di++) {
+        if (deads[di].worker_id >= 0 && srv->workers &&
+            deads[di].worker_id < srv->num_workers)
+            (void)worker_push_teardown(&srv->workers[deads[di].worker_id],
+                                        deads[di].client_id,
+                                        deads[di].conn_gen);
+        else if (deads[di].acceptor)
+            client_finish_closing(deads[di].acceptor);
+    }
     if (irc != 0) {
         free(ref);
         free(entry);

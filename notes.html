@@ -2319,6 +2319,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — inbox reclaim · REQUEST dead-account teardown</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">_INBOX first-claim</span></td><td>✅</td><td>Epoch-dead holders no longer block reclaim; stale clients are torn down after unlock.</td></tr>
+<tr><td><span class="component-name">REQUEST deliver</span></td><td>✅</td><td>Soft-deleted responders finish/teardown like PUBLISH <code>client_send_by_id</code>.</td></tr>
+</table>
+</div>
+
 
 
 
