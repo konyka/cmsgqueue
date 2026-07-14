@@ -2239,6 +2239,15 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                         deads[ndead].acceptor =
                             (cr->client->worker_id < 0) ? cr->client : NULL;
                         ndead++;
+                    } else {
+                        /* Heap OOM: still nudge reclaim (no silent ghost skip). */
+                        if (cr->client->worker_id >= 0 && srv->workers &&
+                            cr->client->worker_id < srv->num_workers)
+                            (void)worker_push_teardown(
+                                &srv->workers[cr->client->worker_id],
+                                cr->client->id, cr->client->conn_gen);
+                        else
+                            client_force_closing(cr->client);
                     }
                     continue;
                 }
@@ -3845,8 +3854,8 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                 int idle = (c->state == CMQ_CLIENT_CONNECTED ||
                             c->state == CMQ_CLIENT_INIT) &&
                            (now - c->last_activity_ms) > timeout_ms;
-                if ((idle || stalled) && c->fd >= 0)
-                    shutdown(c->fd, SHUT_RDWR);
+                if (idle || stalled)
+                    client_force_closing(c);
             }
         }
     }
@@ -3914,10 +3923,11 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                         stack_overflow[noverflow].id = c->id;
                         stack_overflow[noverflow].gen = c->conn_gen;
                         noverflow++;
-                        if (c->fd >= 0)
-                            shutdown(c->fd, SHUT_RDWR);
-                    } else if (c->fd >= 0)
-                        shutdown(c->fd, SHUT_RDWR);
+                        client_force_closing(c);
+                    } else {
+                        /* Beyond overflow slots — mark CLOSING under lock. */
+                        client_force_closing(c);
+                    }
                 }
             }
             cmq_mutex_unlock(&w->clients_lock);

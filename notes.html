@@ -2365,6 +2365,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — OOM reclaim: inbox overflow · keepalive force_closing</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">inbox heap OOM</span></td><td>✅</td><td>Beyond recorded dead list: immediate <code>worker_push_teardown</code> / <code>client_force_closing</code> (no silent ghost skip).</td></tr>
+<tr><td><span class="component-name">worker KA overflow</span></td><td>✅</td><td>Doomed clients past 128+64 use <code>client_force_closing</code> under lock (not bare shutdown).</td></tr>
+<tr><td><span class="component-name">acceptor KA OOM</span></td><td>✅</td><td>Idle/stalled CONNECTED/INIT also <code>client_force_closing</code> (aligned with epoch-dead).</td></tr>
+</table>
+</div>
+
 
 
 
