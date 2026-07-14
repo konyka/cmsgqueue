@@ -2830,6 +2830,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         uint32_t payload_len;
         cmq_deliver_tgt_t *tgts;
         size_t ntgt;
+        int cluster_ok; /* 1 = remote-only ingress OK / no cluster miss */
     } batch_prep_t;
 
     batch_prep_t *prep = calloc((size_t)count, sizeof(batch_prep_t));
@@ -2908,7 +2909,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
 
     /* Pass 2b: cluster forward first (same order as single PUBLISH) so a
        remote-only failure cannot ERROR after local subscribers already got
-       the batch. */
+       the batch. Attempt every entry — do not skip the tail after a miss. */
     int batch_fail = 0;
     int any_delivered = 0;
     for (uint16_t msg = 0; msg < count; msg++) {
@@ -2946,6 +2947,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 if (prep[msg].ntgt == 0 &&
                     cmq_route_forward_missed(srv, route_rc, route_sent))
                     batch_fail = 1;
+                else
+                    prep[msg].cluster_ok = 1;
             } else {
                 /* Encode OOM — abort without local pass (no partial fan-out). */
                 cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
@@ -2955,10 +2958,9 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 cmq_send_error(c, "batch delivery failed");
                 return;
             }
+        } else {
+            prep[msg].cluster_ok = 1;
         }
-
-        if (batch_fail)
-            break; /* stop further cluster forwards; still run local pass 2c */
     }
 
     /* Pass 2c: always attempt local delivers — even after a remote-only cluster
@@ -2983,8 +2985,9 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 if (acc)
                     cmq_account_inc_msgs_in(acc, aep, (uint64_t)payload_len);
             }
-        } else if (!batch_fail) {
-            /* Remote-only success path: count ingress when cluster pass OK. */
+        } else if (prep[msg].cluster_ok) {
+            /* Remote-only success path: count ingress when this entry's
+               cluster pass OK (independent of earlier misses). */
             cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
             uint32_t aep = 0;
             cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
