@@ -619,6 +619,23 @@ static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id,
     return -1;
 }
 
+/* Teardown preferred; on OOM/queue-full nudge EOF so CLOSING cannot linger. */
+static void worker_teardown_or_shutdown(cmq_worker_t *w, uint32_t target_id,
+                                         uint32_t target_gen) {
+    if (worker_push_teardown(w, target_id, target_gen) == 0)
+        return;
+    cmq_mutex_lock(&w->clients_lock);
+    for (int j = 0; j < w->clients_count; j++) {
+        cmq_client_t *c = w->clients[j];
+        if (c && c->id == target_id && c->conn_gen == target_gen &&
+            c->fd >= 0) {
+            shutdown(c->fd, SHUT_RDWR);
+            break;
+        }
+    }
+    cmq_mutex_unlock(&w->clients_lock);
+}
+
 static void worker_coro_tick(cmq_worker_t *w);
 
 static void worker_post_tick(void *data) {
@@ -1352,7 +1369,9 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
             continue;
         }
 
-        /* Collect live members of this (account, subject, queue_group). */
+        /* Collect live members of this (account, subject, queue_group).
+           Skip epoch-dead holders so RR does not pick a member that send
+           paths will drop (one pick, no QG retry). */
         size_t mn = 0;
         for (size_t j = i; j < result->count; j++) {
             if (used[j]) continue;
@@ -1363,8 +1382,10 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
             if (strcmp(rj->subject, ref->subject) != 0) continue;
             if (strcmp(rj->client->account_name, ref->client->account_name) != 0)
                 continue;
-            memb[mn++] = j;
             used[j] = 1;
+            if (!client_account_live(srv, rj->client))
+                continue;
+            memb[mn++] = j;
         }
         if (mn == 0) continue;
         uint64_t tick = cmq_atomic_fetch_add_u64(&srv->qg_rr_counter, 1,
@@ -1402,7 +1423,7 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         cmq_mutex_unlock(&w->clients_lock);
         /* Soft-deleted account: drop ghost subs promptly via worker teardown. */
         if (dead_acct)
-            (void)worker_push_teardown(w, client_id, conn_gen);
+            worker_teardown_or_shutdown(w, client_id, conn_gen);
         return ok;
     }
     cmq_mutex_lock(&srv->clients_lock);
@@ -1550,7 +1571,7 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                 ok = 1;
             cmq_mutex_unlock(&w->clients_lock);
             if (dead_acct)
-                (void)worker_push_teardown(w, t->client_id, t->conn_gen);
+                worker_teardown_or_shutdown(w, t->client_id, t->conn_gen);
         } else {
             cmq_mutex_lock(&srv->clients_lock);
             target = cmq_idmap_get(srv->idmap, t->client_id);

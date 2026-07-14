@@ -2428,6 +2428,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — QG live filter · teardown SHUT_RDWR · leaf pending full</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">queue-group RR</span></td><td>✅</td><td>Skip epoch-dead members when building QG candidate set (no single-pick drop).</td></tr>
+<tr><td><span class="component-name">teardown OOM</span></td><td>✅</td><td><code>worker_teardown_or_shutdown</code> falls back to <code>SHUT_RDWR</code> when TEARDOWN queue is full.</td></tr>
+<tr><td><span class="component-name">leaf pending full</span></td><td>✅</td><td>Offline UNSUB fail-closes when pending queue is full (keeps local sub).</td></tr>
+</table>
+</div>
+
 
 
 

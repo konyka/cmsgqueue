@@ -550,6 +550,13 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
 
             /* Re-locate by sub_id+subject — never keep a dangling char*. */
             cmq_mutex_lock(&leaf->lock);
+            /* Offline: fail-closed if pending UNSUB queue is full — keep local
+               sub until we can schedule hub cleanup (avoid ghost interest). */
+            if (!(connected && hub_fd >= 0) &&
+                leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
+                cmq_mutex_unlock(&leaf->lock);
+                return -1;
+            }
             for (size_t j = 0; j < leaf->sub_count; j++) {
                 if (leaf->sub_ids[j] == sub_id && leaf->subs[j] &&
                     strcmp(leaf->subs[j], subject) == 0) {
@@ -564,10 +571,8 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
             }
             /* Offline (or already dropped): queue UNSUB for next connect so
                hub does not keep a ghost sub_id after local removal. */
-            if (!(connected && hub_fd >= 0)) {
-                if (leaf->pending_unsub_count < CMQ_LEAF_MAX_SUBS)
-                    leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
-            }
+            if (!(connected && hub_fd >= 0))
+                leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
             cmq_mutex_unlock(&leaf->lock);
             return 0;
         }
