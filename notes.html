@@ -2336,6 +2336,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — filestore chunk CRC · WS/keepalive epoch reclaim</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">filestore repair_idx</span></td><td>✅</td><td>CRC streamed in 8 KiB stack chunks (no <code>malloc(hlen)</code>); OOM no longer truncates a valid unread idx suffix.</td></tr>
+<tr><td><span class="component-name">WS PING/PONG</span></td><td>✅</td><td>Require live account epoch like native <code>CMQ_OP_PING</code>; soft-deleted clients finish/teardown instead of refreshing keepalive.</td></tr>
+<tr><td><span class="component-name">keepalive epoch</span></td><td>✅</td><td>Acceptor scan + worker doom reclaim soft-deleted CONNECTED clients without waiting for idle timeout.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -3579,6 +3579,14 @@ static void client_read_cb(int fd, int events, void *data) {
                     client_teardown(c);
                     return;
                 }
+                /* Soft-deleted / epoch-dead accounts must not refresh keepalive
+                   via WS ping (align with CMQ_OP_PING). */
+                if (c->state == CMQ_CLIENT_CONNECTED &&
+                    !client_account_live(srv, c)) {
+                    c->state = CMQ_CLIENT_CLOSING;
+                    client_finish_closing(c);
+                    return;
+                }
                 uint8_t pong[140];
                 uint8_t unmasked[125];
                 const uint8_t *app = ws_frame.payload;
@@ -3606,6 +3614,12 @@ static void client_read_cb(int fd, int events, void *data) {
                 continue;
             }
             if (ws_frame.opcode == CMQ_WS_OPCODE_PONG) {
+                if (c->state == CMQ_CLIENT_CONNECTED &&
+                    !client_account_live(srv, c)) {
+                    c->state = CMQ_CLIENT_CLOSING;
+                    client_finish_closing(c);
+                    return;
+                }
                 if (c->state == CMQ_CLIENT_CONNECTED)
                     c->last_activity_ms = srv_now_ms();
                 offset += (size_t)parsed;
@@ -3727,6 +3741,13 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
         cmq_client_t *c = clients[i];
         if (!c || c->state == CMQ_CLIENT_CLOSED)
             continue;
+        /* Soft-deleted accounts: reclaim slot without waiting for idle timeout. */
+        if (c->state == CMQ_CLIENT_CONNECTED && c->server &&
+            !client_account_live(c->server, c)) {
+            c->state = CMQ_CLIENT_CLOSING;
+            client_finish_closing(c);
+            continue;
+        }
         int stalled = write_timeout_ms > 0 &&
                       (c->state == CMQ_CLIENT_CONNECTED ||
                        c->state == CMQ_CLIENT_CLOSING) &&
@@ -3846,7 +3867,10 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                                   c->last_write_progress_ms > 0 &&
                                   (now - c->last_write_progress_ms) > write_timeout_ms;
                     int doom = 0;
-                    if (c->state == CMQ_CLIENT_CLOSING) {
+                    if (c->state == CMQ_CLIENT_CONNECTED &&
+                        !client_account_live(srv, c)) {
+                        doom = 1; /* soft-deleted — reclaim without idle wait */
+                    } else if (c->state == CMQ_CLIENT_CLOSING) {
                         int closing_idle = (now - c->last_activity_ms) > timeout_ms;
                         doom = stalled || closing_idle;
                     } else {

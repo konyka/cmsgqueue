@@ -32,15 +32,17 @@ struct cmq_filestore {
     cmq_mutex_t lock;
 };
 
-static uint32_t crc32_compute(const uint8_t *data, size_t len) {
-    uint32_t crc = 0xFFFFFFFF;
+static uint32_t crc32_update(uint32_t crc, const uint8_t *data, size_t len) {
     for (size_t i = 0; i < len; i++) {
         crc ^= data[i];
-        for (int j = 0; j < 8; j++) {
-            crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
-        }
+        for (int j = 0; j < 8; j++)
+            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)-(int)(crc & 1u));
     }
-    return ~crc;
+    return crc;
+}
+
+static uint32_t crc32_compute(const uint8_t *data, size_t len) {
+    return ~crc32_update(0xFFFFFFFFu, data, len);
 }
 
 static void put_le16(uint8_t *p, uint16_t v) {
@@ -234,17 +236,25 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
             break;
         if (offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen > data_sz)
             break;
-        uint8_t *buf = malloc(hlen);
-        if (!buf)
-            break;
-        if (fread(buf, 1, hlen, fs->data_fp) != hlen) {
-            free(buf);
-            break;
+        /* Stream CRC in fixed chunks — never malloc(hlen); OOM must not
+           truncate a still-valid unread suffix of the index. */
+        uint32_t crc = 0xFFFFFFFFu;
+        uint32_t left = hlen;
+        uint8_t chunk[8192];
+        int ok = 1;
+        while (left > 0) {
+            size_t chunk_n = left > (uint32_t)sizeof(chunk) ? sizeof(chunk) : (size_t)left;
+            if (fread(chunk, 1, chunk_n, fs->data_fp) != chunk_n) {
+                ok = 0;
+                break;
+            }
+            crc = crc32_update(crc, chunk, chunk_n);
+            left -= (uint32_t)chunk_n;
         }
-        uint32_t hcrc = get_le32(hdr + 18);
-        int ok = (crc32_compute(buf, hlen) == hcrc);
-        free(buf);
         if (!ok)
+            break;
+        uint32_t hcrc = get_le32(hdr + 18);
+        if (~crc != hcrc)
             break;
         valid = i + 1;
     }
