@@ -481,8 +481,20 @@ int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
         return 0;
     }
     if (strcmp(pub_account, sub_account) == 0) {
+        /* Same account still respects export allow-list (revoked mid-flight). */
+        cmq_account_perms_t *p = find_perms(mgr, pub_account);
+        int ok = 1;
+        if (p && p->export_count > 0) {
+            ok = 0;
+            for (size_t i = 0; i < p->export_count; i++) {
+                if (subject_match(p->exports[i].subject, subject)) {
+                    ok = 1;
+                    break;
+                }
+            }
+        }
         cmq_mutex_unlock(&mgr->lock);
-        return 1;
+        return ok;
     }
 
     cmq_account_perms_t *pub = find_perms(mgr, pub_account);

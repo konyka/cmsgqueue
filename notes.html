@@ -2419,6 +2419,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — _INBOX match OOM · same-account export recheck</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">_INBOX first-claim</span></td><td>✅</td><td><code>cmq_sublist_match</code> failure fail-closes SUBACK (no skip past live-holder check).</td></tr>
+<tr><td><span class="component-name">may_deliver export</span></td><td>✅</td><td>Same-account path also enforces export allow-list (revoked mid BATCH/coro still blocked).</td></tr>
+</table>
+</div>
+
 
 
 

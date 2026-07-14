@@ -2236,72 +2236,81 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     size_t ndead = 0;
     if (strncmp(subject, "_INBOX.", 7) == 0) {
         cmq_sublist_result_t claim;
-        if (cmq_sublist_match(srv->sublist, subject, &claim) == 0) {
-            if (claim.count > dead_cap) {
-                heap_deads = malloc(claim.count * sizeof(*heap_deads));
-                if (heap_deads) {
-                    deads = heap_deads;
-                    dead_cap = claim.count;
-                }
+        /* Fail-closed: match OOM must not skip first-claim (duplicate live
+           _INBOX holders). */
+        if (cmq_sublist_match(srv->sublist, subject, &claim) != 0) {
+            cmq_rwlock_unlock(&srv->sublist_lock);
+            free(ref);
+            free(entry);
+            cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_suback(c, sub_id, 1);
+            return;
+        }
+        if (claim.count > dead_cap) {
+            heap_deads = malloc(claim.count * sizeof(*heap_deads));
+            if (heap_deads) {
+                deads = heap_deads;
+                dead_cap = claim.count;
             }
-            for (size_t i = 0; i < claim.count; i++) {
-                cmq_sub_ref_t *cr = (cmq_sub_ref_t *)claim.entries[i];
-                if (!cr || !cr->client) continue;
-                if (strcmp(cr->subject, subject) != 0) continue;
-                if (cr->client == c) continue;
-                if (!client_account_live(srv, cr->client)) {
-                    if (ndead < dead_cap) {
-                        deads[ndead].worker_id = cr->client->worker_id;
-                        deads[ndead].client_id = cr->client->id;
-                        deads[ndead].conn_gen = cr->client->conn_gen;
-                        deads[ndead].acceptor =
-                            (cr->client->worker_id < 0) ? cr->client : NULL;
-                        ndead++;
-                    } else {
-                        /* Heap OOM: still nudge reclaim (no silent ghost skip). */
-                        if (cr->client->worker_id >= 0 && srv->workers &&
-                            cr->client->worker_id < srv->num_workers)
-                            (void)worker_push_teardown(
-                                &srv->workers[cr->client->worker_id],
-                                cr->client->id, cr->client->conn_gen);
-                        else
-                            client_force_closing(cr->client);
-                    }
-                    continue;
+        }
+        for (size_t i = 0; i < claim.count; i++) {
+            cmq_sub_ref_t *cr = (cmq_sub_ref_t *)claim.entries[i];
+            if (!cr || !cr->client) continue;
+            if (strcmp(cr->subject, subject) != 0) continue;
+            if (cr->client == c) continue;
+            if (!client_account_live(srv, cr->client)) {
+                if (ndead < dead_cap) {
+                    deads[ndead].worker_id = cr->client->worker_id;
+                    deads[ndead].client_id = cr->client->id;
+                    deads[ndead].conn_gen = cr->client->conn_gen;
+                    deads[ndead].acceptor =
+                        (cr->client->worker_id < 0) ? cr->client : NULL;
+                    ndead++;
+                } else {
+                    /* Heap OOM: still nudge reclaim (no silent ghost skip). */
+                    if (cr->client->worker_id >= 0 && srv->workers &&
+                        cr->client->worker_id < srv->num_workers)
+                        (void)worker_push_teardown(
+                            &srv->workers[cr->client->worker_id],
+                            cr->client->id, cr->client->conn_gen);
+                    else
+                        client_force_closing(cr->client);
                 }
-                cmq_sublist_result_free(&claim);
-                cmq_rwlock_unlock(&srv->sublist_lock);
-                for (size_t di = 0; di < ndead; di++) {
-                    if (deads[di].worker_id >= 0 && srv->workers &&
-                        deads[di].worker_id < srv->num_workers) {
-                        cmq_worker_t *ww = &srv->workers[deads[di].worker_id];
-                        if (worker_push_teardown(ww, deads[di].client_id,
-                                                  deads[di].conn_gen) != 0) {
-                            cmq_mutex_lock(&ww->clients_lock);
-                            for (int j = 0; j < ww->clients_count; j++) {
-                                cmq_client_t *dc = ww->clients[j];
-                                if (dc && dc->id == deads[di].client_id &&
-                                    dc->conn_gen == deads[di].conn_gen &&
-                                    dc->fd >= 0) {
-                                    shutdown(dc->fd, SHUT_RDWR);
-                                    break;
-                                }
-                            }
-                            cmq_mutex_unlock(&ww->clients_lock);
-                        }
-                    } else if (deads[di].acceptor)
-                        client_finish_closing(deads[di].acceptor);
-                }
-                free(heap_deads);
-                free(ref);
-                free(entry);
-                cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
-                                          CMQ_ATOMIC_RELAXED);
-                cmq_send_suback(c, sub_id, 1);
-                return;
+                continue;
             }
             cmq_sublist_result_free(&claim);
+            cmq_rwlock_unlock(&srv->sublist_lock);
+            for (size_t di = 0; di < ndead; di++) {
+                if (deads[di].worker_id >= 0 && srv->workers &&
+                    deads[di].worker_id < srv->num_workers) {
+                    cmq_worker_t *ww = &srv->workers[deads[di].worker_id];
+                    if (worker_push_teardown(ww, deads[di].client_id,
+                                              deads[di].conn_gen) != 0) {
+                        cmq_mutex_lock(&ww->clients_lock);
+                        for (int j = 0; j < ww->clients_count; j++) {
+                            cmq_client_t *dc = ww->clients[j];
+                            if (dc && dc->id == deads[di].client_id &&
+                                dc->conn_gen == deads[di].conn_gen &&
+                                dc->fd >= 0) {
+                                shutdown(dc->fd, SHUT_RDWR);
+                                break;
+                            }
+                        }
+                        cmq_mutex_unlock(&ww->clients_lock);
+                    }
+                } else if (deads[di].acceptor)
+                    client_finish_closing(deads[di].acceptor);
+            }
+            free(heap_deads);
+            free(ref);
+            free(entry);
+            cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_suback(c, sub_id, 1);
+            return;
         }
+        cmq_sublist_result_free(&claim);
     }
     /* Remove old first so publish cannot briefly match both subjects. */
     cmq_sub_ref_t *old_ref = (old && old->ref) ? old->ref : NULL;
