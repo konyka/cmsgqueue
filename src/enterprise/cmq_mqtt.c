@@ -35,6 +35,24 @@ struct cmq_mqtt_bridge {
     size_t mapping_count;
 };
 
+static int mqtt_fd_alive(int fd) {
+    if (fd < 0) return 0;
+    struct pollfd pfd = { .fd = fd, .events = POLLIN | POLLERR | POLLHUP };
+    int pr = poll(&pfd, 1, 0);
+    if (pr < 0)
+        return errno == EINTR;
+    if (pr > 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+        return 0;
+    if (pr > 0 && (pfd.revents & POLLIN)) {
+        char b;
+        ssize_t n = recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (n == 0) return 0;
+        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+            return 0;
+    }
+    return 1;
+}
+
 cmq_mqtt_bridge_t *cmq_mqtt_bridge_create(const char *client_id) {
     if (!client_id) return NULL;
     cmq_mqtt_bridge_t *br = calloc(1, sizeof(cmq_mqtt_bridge_t));
@@ -114,7 +132,12 @@ static int mqtt_read_connack(int fd) {
 
 int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (!br || !addr) return -1;
-    if (br->connected) return 0;
+    /* Sticky connected after peer death — probe like route/gateway/leaf. */
+    if (br->connected) {
+        if (br->fd >= 0 && mqtt_fd_alive(br->fd))
+            return 0;
+        cmq_mqtt_bridge_disconnect(br);
+    }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
@@ -163,28 +186,9 @@ int cmq_mqtt_bridge_disconnect(cmq_mqtt_bridge_t *br) {
 
 int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br) {
     if (!br || !br->connected || br->fd < 0) return 0;
-    struct pollfd pfd = { .fd = br->fd, .events = POLLIN | POLLERR | POLLHUP };
-    int pr = poll(&pfd, 1, 0);
-    if (pr < 0) {
-        if (errno == EINTR) return 1;
+    if (!mqtt_fd_alive(br->fd)) {
         cmq_mqtt_bridge_disconnect(br);
         return 0;
-    }
-    if (pr > 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
-        cmq_mqtt_bridge_disconnect(br);
-        return 0;
-    }
-    if (pr > 0 && (pfd.revents & POLLIN)) {
-        char b;
-        ssize_t n = recv(br->fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
-        if (n == 0) {
-            cmq_mqtt_bridge_disconnect(br);
-            return 0;
-        }
-        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-            cmq_mqtt_bridge_disconnect(br);
-            return 0;
-        }
     }
     return 1;
 }
