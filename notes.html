@@ -2293,6 +2293,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — drain INIT/CLOSING clients</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">server drain</span></td><td>✅</td><td>Teardown covers <code>INIT</code>/<code>CLOSING</code> as well as <code>CONNECTED</code>; half-open skips DISCONNECT but still closes.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -4486,16 +4486,26 @@ static void acceptor_process_drain(cmq_server_t *srv) {
             memcpy(acc_snap, srv->clients, (size_t)nacc * sizeof(cmq_client_t *));
             for (int i = 0; i < nacc; i++) {
                 cmq_client_t *c = srv->clients[i];
-                if (c && c->state == CMQ_CLIENT_CONNECTED) {
+                if (!c || c->state == CMQ_CLIENT_CLOSED)
+                    continue;
+                if (c->state == CMQ_CLIENT_CONNECTED) {
                     if (disc_len > 0) cmq_client_send_local(c, disc, disc_len);
                     c->state = CMQ_CLIENT_CLOSING;
+                } else if (c->state == CMQ_CLIENT_INIT) {
+                    /* Half-open: no CONNACK yet — skip DISCONNECT, still close. */
+                    c->state = CMQ_CLIENT_CLOSING;
                 }
+                /* Pre-existing CLOSING: finish below. */
             }
         } else {
             for (int i = 0; i < nacc; i++) {
                 cmq_client_t *c = srv->clients[i];
-                if (c && c->state == CMQ_CLIENT_CONNECTED && c->fd >= 0) {
-                    if (disc_len > 0) cmq_client_send_local(c, disc, disc_len);
+                if (c && c->fd >= 0 &&
+                    (c->state == CMQ_CLIENT_CONNECTED ||
+                     c->state == CMQ_CLIENT_INIT ||
+                     c->state == CMQ_CLIENT_CLOSING)) {
+                    if (c->state == CMQ_CLIENT_CONNECTED && disc_len > 0)
+                        cmq_client_send_local(c, disc, disc_len);
                     shutdown(c->fd, SHUT_RDWR);
                 }
             }
@@ -4545,7 +4555,7 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
             cmq_worker_t *w = &srv->workers[i];
             cmq_mutex_lock(&w->clients_lock);
             int wn = w->clients_count;
-            typedef struct { uint32_t id; uint32_t gen; } cmq_drain_key_t;
+            typedef struct { uint32_t id; uint32_t gen; uint8_t send_disc; } cmq_drain_key_t;
             cmq_drain_key_t *keys = NULL;
             int nids = 0;
             if (wn > 0) {
@@ -4553,23 +4563,32 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
                 if (keys) {
                     for (int j = 0; j < wn; j++) {
                         cmq_client_t *c = w->clients[j];
-                        if (c && c->state == CMQ_CLIENT_CONNECTED) {
+                        if (!c || c->state == CMQ_CLIENT_CLOSED)
+                            continue;
+                        if (c->state == CMQ_CLIENT_CONNECTED ||
+                            c->state == CMQ_CLIENT_INIT ||
+                            c->state == CMQ_CLIENT_CLOSING) {
                             keys[nids].id = c->id;
                             keys[nids].gen = c->conn_gen;
+                            keys[nids].send_disc =
+                                (c->state == CMQ_CLIENT_CONNECTED) ? 1 : 0;
                             nids++;
                         }
                     }
                 } else {
                     for (int j = 0; j < wn; j++) {
                         cmq_client_t *c = w->clients[j];
-                        if (c && c->state == CMQ_CLIENT_CONNECTED && c->fd >= 0)
+                        if (c && c->fd >= 0 &&
+                            (c->state == CMQ_CLIENT_CONNECTED ||
+                             c->state == CMQ_CLIENT_INIT ||
+                             c->state == CMQ_CLIENT_CLOSING))
                             shutdown(c->fd, SHUT_RDWR);
                     }
                 }
             }
             cmq_mutex_unlock(&w->clients_lock);
             for (int j = 0; j < nids; j++) {
-                if (disc_len > 0)
+                if (keys[j].send_disc && disc_len > 0)
                     worker_push_msg(w, keys[j].id, keys[j].gen, disc, disc_len, 0);
                 if (worker_push_teardown(w, keys[j].id, keys[j].gen) != 0) {
                     /* OOM: force-close fd so the worker notices EOF (same as
