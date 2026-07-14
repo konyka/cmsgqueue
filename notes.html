@@ -2284,6 +2284,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — gateway/leaf post-dial probe</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">gateway dedup</span></td><td>✅</td><td><code>gw_has_live_peer</code> probes and drops zombies before discarding a fresh dial (all post-dial paths).</td></tr>
+<tr><td><span class="component-name">leaf post-dial</span></td><td>✅</td><td>Hub publish/recheck probes <code>hub_fd</code>; sticky <code>connected</code> no longer discards a good dial.</td></tr>
+</table>
+</div>
+
 
 
 

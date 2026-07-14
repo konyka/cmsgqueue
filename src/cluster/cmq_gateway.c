@@ -60,6 +60,46 @@ static void gw_slot_install(cmq_gateway_t *gw, size_t idx, const char *cluster,
     cmq_mutex_unlock(&gw->io_locks[idx]);
 }
 
+/* Zero-timeout TCP liveness — sticky connected after peer death. */
+static int gw_fd_alive(int fd) {
+    if (fd < 0) return 0;
+    struct pollfd pfd = { .fd = fd, .events = 0 };
+    int pr = poll(&pfd, 1, 0);
+    return pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL));
+}
+
+/* Caller holds gw->lock on entry/exit. 1 = probed-live peer for cluster. */
+static int gw_has_live_peer(cmq_gateway_t *gw, const char *cluster_name) {
+    for (;;) {
+        size_t idx = (size_t)-1;
+        int efd = -1;
+        for (size_t j = 0; j < gw->conn_count; j++) {
+            if (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0 &&
+                gw->conns[j].connected && gw->conns[j].fd >= 0) {
+                idx = j;
+                efd = gw->conns[j].fd;
+                break;
+            }
+        }
+        if (idx == (size_t)-1) return 0;
+        cmq_mutex_unlock(&gw->lock);
+        int alive = gw_fd_alive(efd);
+        cmq_mutex_lock(&gw->lock);
+        if (alive) {
+            for (size_t j = 0; j < gw->conn_count; j++) {
+                if (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0 &&
+                    gw->conns[j].connected && gw->conns[j].fd >= 0)
+                    return 1;
+            }
+            continue;
+        }
+        if (idx < gw->conn_count &&
+            strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
+            gw->conns[idx].fd == efd)
+            gw_slot_close_fd(gw, idx);
+    }
+}
+
 /* 0 = full write, 1 = EAGAIN zero progress, -1 = hard failure. */
 static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
@@ -211,10 +251,7 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
                 int fd = gw->conns[i].fd;
                 size_t idx = i;
                 cmq_mutex_unlock(&gw->lock);
-                /* Light liveness probe — avoid sticky connected after peer death. */
-                struct pollfd pfd = { .fd = fd, .events = 0 };
-                int pr = poll(&pfd, 1, 0);
-                if (pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+                if (gw_fd_alive(fd))
                     return 0;
                 cmq_mutex_lock(&gw->lock);
                 if (idx < gw->conn_count &&
@@ -254,13 +291,10 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             set_nonblock(fd);
             cmq_mutex_lock(&gw->lock);
             /* Another thread may have published a live peer meanwhile. */
-            for (size_t j = 0; j < gw->conn_count; j++) {
-                if (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0 &&
-                    gw->conns[j].connected && gw->conns[j].fd >= 0) {
-                    cmq_mutex_unlock(&gw->lock);
-                    close(fd);
-                    return 0;
-                }
+            if (gw_has_live_peer(gw, cluster_name)) {
+                cmq_mutex_unlock(&gw->lock);
+                close(fd);
+                return 0;
             }
             if (slot < gw->conn_count &&
                 strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0) {
@@ -315,13 +349,10 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
         }
         set_nonblock(fd);
         cmq_mutex_lock(&gw->lock);
-        for (size_t j = 0; j < gw->conn_count; j++) {
-            if (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0 &&
-                gw->conns[j].connected && gw->conns[j].fd >= 0) {
-                cmq_mutex_unlock(&gw->lock);
-                close(fd);
-                return 0;
-            }
+        if (gw_has_live_peer(gw, cluster_name)) {
+            cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            return 0;
         }
         if ((size_t)slot < gw->conn_count &&
             (!gw->conns[slot].connected ||
@@ -369,13 +400,10 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
 
     cmq_mutex_lock(&gw->lock);
     /* Dedup after unlocked connect — avoid duplicate live peers. */
-    for (size_t i = 0; i < gw->conn_count; i++) {
-        if (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0 &&
-            gw->conns[i].connected && gw->conns[i].fd >= 0) {
-            cmq_mutex_unlock(&gw->lock);
-            close(fd);
-            return 0;
-        }
+    if (gw_has_live_peer(gw, cluster_name)) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        return 0;
     }
     for (size_t i = 0; i < gw->conn_count; i++) {
         int same = (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0);

@@ -58,6 +58,13 @@ static void leaf_hub_drop(cmq_leaf_node_t *leaf, int expect_fd) {
     if (fd >= 0) close(fd);
 }
 
+static int leaf_fd_alive(int fd) {
+    if (fd < 0) return 0;
+    struct pollfd pfd = { .fd = fd, .events = 0 };
+    int pr = poll(&pfd, 1, 0);
+    return pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL));
+}
+
 /* Complete write on nonblocking hub fd (poll on EAGAIN). */
 static int write_all(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
@@ -164,18 +171,21 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     if (leaf->connected && leaf->hub_fd >= 0) {
         int fd = leaf->hub_fd;
         cmq_mutex_unlock(&leaf->lock);
-        /* Light liveness probe — avoid sticky connected after hub death. */
-        struct pollfd pfd = { .fd = fd, .events = 0 };
-        int pr = poll(&pfd, 1, 0);
-        if (pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+        if (leaf_fd_alive(fd))
             return 0;
         cmq_mutex_lock(&leaf->hub_io_lock);
         leaf_hub_drop(leaf, fd);
         cmq_mutex_unlock(&leaf->hub_io_lock);
         cmq_mutex_lock(&leaf->lock);
         if (leaf->connected && leaf->hub_fd >= 0) {
+            int nfd = leaf->hub_fd;
             cmq_mutex_unlock(&leaf->lock);
-            return 0;
+            if (leaf_fd_alive(nfd))
+                return 0;
+            cmq_mutex_lock(&leaf->hub_io_lock);
+            leaf_hub_drop(leaf, nfd);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
+            cmq_mutex_lock(&leaf->lock);
         }
     }
 
@@ -210,11 +220,29 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     /* Publish hub_fd under hub_io_lock so disconnect cannot close mid-replay. */
     cmq_mutex_lock(&leaf->hub_io_lock);
     cmq_mutex_lock(&leaf->lock);
-    if (leaf->connected) {
+    if (leaf->connected && leaf->hub_fd >= 0) {
+        int efd = leaf->hub_fd;
         cmq_mutex_unlock(&leaf->lock);
         cmq_mutex_unlock(&leaf->hub_io_lock);
-        close(fd);
-        return 0;
+        if (leaf_fd_alive(efd)) {
+            close(fd);
+            return 0;
+        }
+        cmq_mutex_lock(&leaf->hub_io_lock);
+        leaf_hub_drop(leaf, efd);
+        cmq_mutex_lock(&leaf->lock);
+        if (leaf->connected && leaf->hub_fd >= 0) {
+            int nfd = leaf->hub_fd;
+            cmq_mutex_unlock(&leaf->lock);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
+            if (leaf_fd_alive(nfd)) {
+                close(fd);
+                return 0;
+            }
+            cmq_mutex_lock(&leaf->hub_io_lock);
+            leaf_hub_drop(leaf, nfd);
+            cmq_mutex_lock(&leaf->lock);
+        }
     }
     leaf->hub_fd = fd;
     leaf->connected = 1;
@@ -313,13 +341,13 @@ int cmq_leaf_is_connected(cmq_leaf_node_t *leaf) {
     cmq_mutex_unlock(&leaf->lock);
     if (!c) return 0;
     /* Same light probe as connect — clear sticky connected on dead hub. */
-    struct pollfd pfd = { .fd = fd, .events = 0 };
-    if (poll(&pfd, 1, 0) >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
-        return 1;
-    cmq_mutex_lock(&leaf->hub_io_lock);
-    leaf_hub_drop(leaf, fd);
-    cmq_mutex_unlock(&leaf->hub_io_lock);
-    return 0;
+    if (!leaf_fd_alive(fd)) {
+        cmq_mutex_lock(&leaf->hub_io_lock);
+        leaf_hub_drop(leaf, fd);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        return 0;
+    }
+    return 1;
 }
 
 int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
