@@ -1674,9 +1674,22 @@ done:
         if (elen > 0) {
             if (ctx->publisher_worker_id >= 0 && srv->workers &&
                 ctx->publisher_worker_id < srv->num_workers) {
-                (void)worker_push_msg(&srv->workers[ctx->publisher_worker_id],
-                                       ctx->publisher_id, ctx->publisher_gen,
-                                       ebuf, elen, 0);
+                cmq_worker_t *pw = &srv->workers[ctx->publisher_worker_id];
+                if (worker_push_msg(pw, ctx->publisher_id, ctx->publisher_gen,
+                                     ebuf, elen, 0) != 0) {
+                    /* Queue full — sync send or force EOF so publisher notices. */
+                    if (client_send_by_id(srv, ctx->publisher_worker_id,
+                                           ctx->publisher_id, ctx->publisher_gen,
+                                           0, ebuf, elen) != 0) {
+                        cmq_mutex_lock(&pw->clients_lock);
+                        cmq_client_t *pub =
+                            cmq_idmap_get(pw->idmap, ctx->publisher_id);
+                        if (pub && pub->conn_gen == ctx->publisher_gen &&
+                            pub->fd >= 0)
+                            shutdown(pub->fd, SHUT_RDWR);
+                        cmq_mutex_unlock(&pw->clients_lock);
+                    }
+                }
             } else {
                 (void)client_send_by_id(srv, -1, ctx->publisher_id,
                                          ctx->publisher_gen, 0, ebuf, elen);
@@ -1891,6 +1904,11 @@ static int cmq_route_forward_missed(cmq_server_t *srv, int route_rc,
 static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                             const cmq_frame_t *frame) {
     (void)c;
+    if (!client_account_live(srv, c)) {
+        cmq_send_error(c, "account inactive");
+        c->state = CMQ_CLIENT_CLOSING;
+        return;
+    }
     if (!frame->payload || frame->payload_len < 2) {
         cmq_send_error(c, "invalid publish");
         return;

@@ -31,6 +31,10 @@ struct cmq_leaf_node {
     size_t sub_count;
     uint32_t next_sub_id;
 
+    /* Offline UNSUBs to flush on next connect (before SUB replay). */
+    uint32_t pending_unsub[CMQ_LEAF_MAX_SUBS];
+    size_t pending_unsub_count;
+
     cmq_leaf_conn_t leaves[CMQ_LEAF_MAX_CONNECTIONS];
     size_t leaf_count;
 
@@ -246,6 +250,22 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     }
     leaf->hub_fd = fd;
     leaf->connected = 1;
+    /* Flush offline UNSUBs before replaying live interest. */
+    size_t pn = leaf->pending_unsub_count;
+    uint32_t *pending = NULL;
+    if (pn > 0) {
+        pending = malloc(pn * sizeof(uint32_t));
+        if (!pending) {
+            leaf->hub_fd = -1;
+            leaf->connected = 0;
+            cmq_mutex_unlock(&leaf->lock);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
+            close(fd);
+            return -1;
+        }
+        memcpy(pending, leaf->pending_unsub, pn * sizeof(uint32_t));
+        leaf->pending_unsub_count = 0;
+    }
     /* Keep next_sub_id; replay existing interest to the new hub. */
     size_t n = leaf->sub_count;
     char **subjects = NULL;
@@ -256,6 +276,16 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         if (!subjects || !ids) {
             free(subjects);
             free(ids);
+            if (pending) {
+                /* Restore pending so a later connect can retry. */
+                size_t restore = pn;
+                if (restore > CMQ_LEAF_MAX_SUBS - leaf->pending_unsub_count)
+                    restore = CMQ_LEAF_MAX_SUBS - leaf->pending_unsub_count;
+                memcpy(leaf->pending_unsub + leaf->pending_unsub_count, pending,
+                       restore * sizeof(uint32_t));
+                leaf->pending_unsub_count += restore;
+                free(pending);
+            }
             leaf->hub_fd = -1;
             leaf->connected = 0;
             cmq_mutex_unlock(&leaf->lock);
@@ -270,6 +300,15 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
                 for (size_t j = 0; j < i; j++) free(subjects[j]);
                 free(subjects);
                 free(ids);
+                if (pending) {
+                    size_t restore = pn;
+                    if (restore > CMQ_LEAF_MAX_SUBS - leaf->pending_unsub_count)
+                        restore = CMQ_LEAF_MAX_SUBS - leaf->pending_unsub_count;
+                    memcpy(leaf->pending_unsub + leaf->pending_unsub_count,
+                           pending, restore * sizeof(uint32_t));
+                    leaf->pending_unsub_count += restore;
+                    free(pending);
+                }
                 leaf->hub_fd = -1;
                 leaf->connected = 0;
                 cmq_mutex_unlock(&leaf->lock);
@@ -281,6 +320,39 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         }
     }
     cmq_mutex_unlock(&leaf->lock);
+
+    for (size_t i = 0; i < pn; i++) {
+        uint32_t uid = pending[i];
+        uint8_t upay[4] = {
+            (uint8_t)(uid >> 24), (uint8_t)(uid >> 16),
+            (uint8_t)(uid >> 8), (uint8_t)uid
+        };
+        uint8_t uframe[16];
+        size_t ulen = cmq_frame_encode(uframe, sizeof(uframe),
+                                        CMQ_OP_UNSUBSCRIBE, 0, upay, 4);
+        if (ulen == 0 || write_all(fd, uframe, ulen) != 0) {
+            cmq_mutex_lock(&leaf->lock);
+            /* Restore remaining pending UNSUBs for a later connect. */
+            for (size_t r = i; r < pn; r++) {
+                if (leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS)
+                    break;
+                leaf->pending_unsub[leaf->pending_unsub_count++] = pending[r];
+            }
+            if (leaf->hub_fd == fd) {
+                leaf->hub_fd = -1;
+                leaf->connected = 0;
+            }
+            cmq_mutex_unlock(&leaf->lock);
+            for (size_t j = 0; j < n; j++) free(subjects[j]);
+            free(subjects);
+            free(ids);
+            free(pending);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
+            close(fd);
+            return -1;
+        }
+    }
+    free(pending);
 
     for (size_t i = 0; i < n; i++) {
         const char *subject = subjects[i];
@@ -489,6 +561,12 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
                     leaf->sub_count--;
                     break;
                 }
+            }
+            /* Offline (or already dropped): queue UNSUB for next connect so
+               hub does not keep a ghost sub_id after local removal. */
+            if (!(connected && hub_fd >= 0)) {
+                if (leaf->pending_unsub_count < CMQ_LEAF_MAX_SUBS)
+                    leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
             }
             cmq_mutex_unlock(&leaf->lock);
             return 0;

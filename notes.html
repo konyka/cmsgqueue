@@ -2409,6 +2409,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf pending UNSUB · coro ERROR fallback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf offline UNSUB</span></td><td>✅</td><td>Queue <code>pending_unsub</code> when hub is down; flush before SUB replay on connect (no ghost hub interest).</td></tr>
+<tr><td><span class="component-name">coro ERROR</span></td><td>✅</td><td>If <code>worker_push_msg</code> fails, sync <code>client_send_by_id</code> then <code>shutdown</code> publisher fd so failure is not silent.</td></tr>
+<tr><td><span class="component-name">PUBLISH epoch</span></td><td>✅</td><td>Re-check <code>client_account_live</code> at <code>handle_publish</code> entry (narrow soft-delete TOCTOU after frame dispatch).</td></tr>
+</table>
+</div>
+
 
 
 
