@@ -2467,6 +2467,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — mailbox-only cross-thread send · watchers pre-size</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_send_by_id</span></td><td>✅</td><td>Foreign threads only <code>worker_push_msg</code> (no cross-thread <code>has_sub</code>/<code>send_local</code>).</td></tr>
+<tr><td><span class="component-name">REQUEST deliver</span></td><td>✅</td><td>Same mailbox path as PUBLISH via built request MESSAGE frame.</td></tr>
+<tr><td><span class="component-name">ev watchers</span></td><td>✅</td><td>Pre-size to <code>RLIMIT_NOFILE</code>; refuse runtime realloc (accept→worker safe).</td></tr>
+</table>
+</div>
+
 
 
 

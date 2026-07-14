@@ -1261,23 +1261,26 @@ static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
     free(buf);
 }
 
-static int cmq_send_request_message(cmq_client_t *c, uint32_t sub_id,
-                                       const char *subject,
-                                       const char *reply_to,
-                                       const uint8_t *payload, size_t payload_len) {
-    if (!subject) return -1;
+static uint8_t *cmq_build_request_message_frame(uint32_t sub_id,
+                                                 const char *subject,
+                                                 const char *reply_to,
+                                                 const uint8_t *payload,
+                                                 size_t payload_len,
+                                                 size_t *out_len) {
+    if (!subject || !out_len) return NULL;
+    *out_len = 0;
     size_t subject_len = strlen(subject);
     size_t reply_len = reply_to ? strlen(reply_to) : 0;
     if (subject_len == 0 || subject_len >= CMQ_MAX_SUBJECT ||
         subject_len > 0xFFFFu || reply_len > 0xFFFFu)
-        return -1;
+        return NULL;
     if (payload_len > SIZE_MAX - (4u + 2u + subject_len + 2u + reply_len + 4u))
-        return -1;
+        return NULL;
     size_t body_len = 4 + 2 + subject_len + 2 + reply_len + 4 + payload_len;
-    if (body_len > SIZE_MAX - sizeof(cmq_frame_hdr_t)) return -1;
+    if (body_len > SIZE_MAX - sizeof(cmq_frame_hdr_t)) return NULL;
     size_t buf_size = sizeof(cmq_frame_hdr_t) + body_len;
     uint8_t *buf = malloc(buf_size);
-    if (!buf) return -1;
+    if (!buf) return NULL;
 
     uint8_t *p = buf + sizeof(cmq_frame_hdr_t);
     p[0] = (sub_id >> 24) & 0xFF;
@@ -1303,15 +1306,13 @@ static int cmq_send_request_message(cmq_client_t *c, uint32_t sub_id,
     p[2] = ((uint32_t)payload_len >> 8) & 0xFF;
     p[3] = (uint32_t)payload_len & 0xFF;
     p += 4;
-    memcpy(p, payload, payload_len);
+    if (payload_len > 0 && payload) memcpy(p, payload, payload_len);
 
     size_t len = cmq_frame_encode(buf, buf_size, CMQ_OP_MESSAGE, 0,
-                                    buf + sizeof(cmq_frame_hdr_t), body_len);
-    int rc = -1;
-    if (len > 0)
-        rc = cmq_client_send_checked(c, buf, len, sub_id);
-    free(buf);
-    return rc;
+                                   buf + sizeof(cmq_frame_hdr_t), body_len);
+    if (len == 0) { free(buf); return NULL; }
+    *out_len = len;
+    return buf;
 }
 
 typedef struct {
@@ -1406,12 +1407,25 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
     return tgts;
 }
 
-/* Lookup by id+gen under the owning list lock and send_local. Returns 1 on send. */
+/* Lookup by id+gen and send. Worker targets: owning thread may send_local;
+   foreign threads only mailbox-push (never touch subs/write_buf off-owner). */
 static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_id,
                               uint32_t conn_gen, uint32_t require_sub_id,
                               const uint8_t *frame, size_t flen) {
     if (worker_id >= 0 && srv->workers && worker_id < srv->num_workers) {
         cmq_worker_t *w = &srv->workers[worker_id];
+        if (cmq_current_worker_id != worker_id) {
+            if (worker_push_msg(w, client_id, conn_gen, frame, flen,
+                                 require_sub_id) == 0)
+                return 1;
+            /* Queue full — nudge EOF; do not race write_buf/subs cross-thread. */
+            cmq_mutex_lock(&w->clients_lock);
+            cmq_client_t *c = cmq_idmap_get(w->idmap, client_id);
+            if (c && c->conn_gen == conn_gen && c->fd >= 0)
+                (void)shutdown(c->fd, SHUT_RDWR);
+            cmq_mutex_unlock(&w->clients_lock);
+            return 0;
+        }
         cmq_mutex_lock(&w->clients_lock);
         cmq_client_t *c = cmq_idmap_get(w->idmap, client_id);
         int ok = 0;
@@ -1542,6 +1556,11 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                                      const char *pub_account,
                                      const uint8_t *payload, size_t payload_len) {
     if (!tgts || ntgt == 0) return 0;
+    size_t flen = 0;
+    uint8_t *frame = cmq_build_request_message_frame(0, subject, reply_to,
+                                                      payload, payload_len, &flen);
+    if (!frame) return 0;
+
     size_t delivered_n = 0;
     for (size_t i = 0; i < ntgt; i++) {
         cmq_deliver_tgt_t *t = &tgts[i];
@@ -1550,58 +1569,18 @@ static size_t deliver_request_targets(cmq_server_t *srv,
         if (!cmq_account_may_deliver(srv->accounts, pub_account,
                                       t->account_name, subject))
             continue;
-        cmq_client_t *target = NULL;
-        int ok = 0;
-        int dead_acct = 0;
-        cmq_client_t *dead_acc = NULL;
+        cmq_patch_message_sub_id(frame, t->sub_id);
+        int delivered = 0;
         if (t->worker_id >= 0 && srv->workers &&
             t->worker_id < srv->num_workers) {
-            cmq_worker_t *w = &srv->workers[t->worker_id];
-            cmq_mutex_lock(&w->clients_lock);
-            target = cmq_idmap_get(w->idmap, t->client_id);
-            if (target && target->conn_gen != t->conn_gen)
-                target = NULL;
-            if (target && target->state == CMQ_CLIENT_CONNECTED &&
-                !client_account_live(srv, target)) {
-                target->state = CMQ_CLIENT_CLOSING;
-                dead_acct = 1;
-                target = NULL;
-            } else if (target &&
-                       (target->state != CMQ_CLIENT_CONNECTED ||
-                        !client_has_sub(target, t->sub_id))) {
-                target = NULL;
-            }
-            if (target &&
-                cmq_send_request_message(target, t->sub_id, subject,
-                                          reply_to, payload, payload_len) == 0)
-                ok = 1;
-            cmq_mutex_unlock(&w->clients_lock);
-            if (dead_acct)
-                worker_teardown_or_shutdown(w, t->client_id, t->conn_gen);
+            /* Mailbox path: has_sub / write_buf only on owning worker thread. */
+            delivered = deliver_via_worker(srv, t->worker_id, t->client_id,
+                                            t->conn_gen, t->sub_id, frame, flen, 0);
         } else {
-            cmq_mutex_lock(&srv->clients_lock);
-            target = cmq_idmap_get(srv->idmap, t->client_id);
-            if (target && target->conn_gen != t->conn_gen)
-                target = NULL;
-            if (target && target->state == CMQ_CLIENT_CONNECTED &&
-                !client_account_live(srv, target)) {
-                target->state = CMQ_CLIENT_CLOSING;
-                dead_acc = target;
-                target = NULL;
-            } else if (target &&
-                       (target->state != CMQ_CLIENT_CONNECTED ||
-                        !client_has_sub(target, t->sub_id))) {
-                target = NULL;
-            }
-            if (target &&
-                cmq_send_request_message(target, t->sub_id, subject,
-                                          reply_to, payload, payload_len) == 0)
-                ok = 1;
-            cmq_mutex_unlock(&srv->clients_lock);
-            if (dead_acc)
-                client_finish_closing(dead_acc);
+            delivered = client_send_by_id(srv, -1, t->client_id, t->conn_gen,
+                                           t->sub_id, frame, flen);
         }
-        if (ok) {
+        if (delivered) {
             delivered_n++;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -1613,6 +1592,7 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                                       CMQ_ATOMIC_RELAXED);
         }
     }
+    free(frame);
     return delivered_n;
 }
 

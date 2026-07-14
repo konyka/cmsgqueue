@@ -17,9 +17,13 @@
 #include <sys/event.h>
 #endif
 
+#include <sys/resource.h>
+
 #define CMQ_EV_MAX_EVENTS 64
 #define CMQ_EV_MAX_TIMERS 256
 #define CMQ_EV_INITIAL_WATCHERS 64
+/* Cap soft-limit pre-size so a huge RLIMIT_NOFILE cannot OOM the process. */
+#define CMQ_EV_WATCHERS_CAP_MAX 1048576
 
 typedef struct {
     int fd;
@@ -47,12 +51,28 @@ static uint64_t cmq_ev_now_ms(void) {
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }
 
+static int cmq_ev_watchers_presize(void) {
+    int cap = CMQ_EV_INITIAL_WATCHERS;
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY) {
+        if (rl.rlim_cur > (rlim_t)CMQ_EV_WATCHERS_CAP_MAX)
+            cap = CMQ_EV_WATCHERS_CAP_MAX;
+        else if (rl.rlim_cur > (rlim_t)cap)
+            cap = (int)rl.rlim_cur;
+    }
+    if (cap < 1024)
+        cap = 1024;
+    return cap;
+}
+
 cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
     (void)max_events;
     cmq_ev_loop_t *loop = calloc(1, sizeof(cmq_ev_loop_t));
     if (!loop) return NULL;
 
-    loop->watchers_cap = CMQ_EV_INITIAL_WATCHERS;
+    /* Pre-size to RLIMIT_NOFILE so cross-thread cmq_ev_add (accept→worker)
+       never reallocs watchers under a concurrent cmq_ev_run. */
+    loop->watchers_cap = cmq_ev_watchers_presize();
     loop->watchers = calloc((size_t)loop->watchers_cap, sizeof(cmq_ev_watcher_t));
     if (!loop->watchers) {
         free(loop);
@@ -136,18 +156,10 @@ void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
 }
 
 static int cmq_ev_ensure_watcher(cmq_ev_loop_t *loop, int fd) {
-    if (fd >= loop->watchers_cap) {
-        int new_cap = loop->watchers_cap;
-        while (new_cap <= fd) new_cap *= 2;
-        cmq_ev_watcher_t *new_w = realloc(loop->watchers, (size_t)new_cap * sizeof(cmq_ev_watcher_t));
-        if (!new_w) return -1;
-        for (int i = loop->watchers_cap; i < new_cap; i++) {
-            new_w[i].fd = -1;
-        }
-        loop->watchers = new_w;
-        loop->watchers_cap = new_cap;
-    }
-    return 0;
+    if (fd < loop->watchers_cap) return 0;
+    /* Refuse runtime grow: pre-sized at create. Growing here from a foreign
+       thread would UAF cmq_ev_run's watchers pointer. */
+    return -1;
 }
 
 #if CMQ_OS_LINUX
