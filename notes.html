@@ -2447,6 +2447,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — accept after ev_add · gateway full-table zombie reclaim</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">accept publish order</span></td><td>✅</td><td><code>cmq_ev_add</code> before <code>idmap</code>/<code>clients[]</code> so TEARDOWN cannot destroy while accept still holds the pointer.</td></tr>
+<tr><td><span class="component-name">acceptor_drain clear</span></td><td>✅</td><td>Only drain waiter clears flag (not when acceptor-local count is 0 in worker mode).</td></tr>
+<tr><td><span class="component-name">gateway full table</span></td><td>✅</td><td>Before failing full, <code>gw_fd_alive</code> sweep reclaim sticky <code>connected=1</code> dead TCP slots.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -323,14 +323,48 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
     }
 
     if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {
-        /* Reuse a dead/empty slot rather than failing when the table is full. */
+        /* Reuse a dead/empty slot rather than failing when the table is full.
+           Also reclaim sticky connected=1 slots whose TCP is already dead. */
         int slot = -1;
         for (size_t i = 0; i < gw->conn_count; i++) {
-            if (!gw->conns[i].connected ||
-                gw->conns[i].remote_cluster[0] == '\0') {
+            cmq_mutex_lock(&gw->io_locks[i]);
+            int reusable = (!gw->conns[i].connected ||
+                            gw->conns[i].remote_cluster[0] == '\0' ||
+                            gw->conns[i].fd < 0);
+            cmq_mutex_unlock(&gw->io_locks[i]);
+            if (reusable) {
                 slot = (int)i;
                 break;
             }
+        }
+        for (size_t i = 0; slot < 0 && i < gw->conn_count; ) {
+            cmq_mutex_lock(&gw->io_locks[i]);
+            int connected = gw->conns[i].connected;
+            int efd = gw->conns[i].fd;
+            cmq_mutex_unlock(&gw->io_locks[i]);
+            if (!connected || efd < 0) {
+                slot = (int)i;
+                break;
+            }
+            cmq_mutex_unlock(&gw->lock);
+            int alive = gw_fd_alive(efd);
+            cmq_mutex_lock(&gw->lock);
+            if (i >= gw->conn_count)
+                break;
+            cmq_mutex_lock(&gw->io_locks[i]);
+            int same = (gw->conns[i].fd == efd);
+            cmq_mutex_unlock(&gw->io_locks[i]);
+            if (!alive && same) {
+                gw_slot_close_fd(gw, i);
+                slot = (int)i;
+                break;
+            }
+            if (alive && same) {
+                i++;
+                continue;
+            }
+            /* Slot mutated while unlocked — rescan. */
+            i = 0;
         }
         if (slot < 0) {
             cmq_mutex_unlock(&gw->lock);
