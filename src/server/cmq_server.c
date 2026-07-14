@@ -374,12 +374,14 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
             cmq_mutex_lock(&w->clients_lock);
             cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
             /* Owning worker thread: wrap WS here so coro/drain can push raw CMQ. */
+            int finish_dead = 0;
             if (target && target->conn_gen == msg->target_gen &&
                 target->state != CMQ_CLIENT_CLOSED &&
                 target->state != CMQ_CLIENT_CLOSING) {
                 if (!client_account_live(w->server, target)) {
                     /* Soft-delete/reactivate: stop inbound delivery to stale epoch. */
                     target->state = CMQ_CLIENT_CLOSING;
+                    finish_dead = 1;
                     if (w->server)
                         cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                                   CMQ_ATOMIC_RELAXED);
@@ -400,6 +402,8 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                                           CMQ_ATOMIC_RELAXED);
             }
             cmq_mutex_unlock(&w->clients_lock);
+            if (finish_dead && target)
+                client_finish_closing(target);
             free(msg->buf);
             free(msg);
             msg = next;
@@ -934,6 +938,21 @@ static int ensure_write_cap(cmq_client_t *c, size_t need) {
     return 0;
 }
 
+/* Mark CLOSING without teardown — callers may hold clients_lock. */
+static void client_force_closing(cmq_client_t *c) {
+    if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
+        return;
+    c->state = CMQ_CLIENT_CLOSING;
+    if (c->ev_loop && c->fd >= 0) {
+        if (cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE,
+                       client_read_cb, c) != 0) {
+            c->write_len = 0;
+            c->write_pos = 0;
+            (void)shutdown(c->fd, SHUT_RDWR);
+        }
+    }
+}
+
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len) {
     if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
         return -1;
@@ -950,18 +969,7 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
         }
     }
 
-    /* Mark CLOSING without teardown — callers may hold clients_lock. */
-    #define CMQ_SEND_FORCE_CLOSE() do { \
-        c->state = CMQ_CLIENT_CLOSING; \
-        if (c->ev_loop && c->fd >= 0) { \
-            if (cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE, \
-                           client_read_cb, c) != 0) { \
-                c->write_len = 0; \
-                c->write_pos = 0; \
-                (void)shutdown(c->fd, SHUT_RDWR); \
-            } \
-        } \
-    } while (0)
+    #define CMQ_SEND_FORCE_CLOSE() client_force_closing(c)
 
     int rc = -1;
     if (c->write_buf && c->write_pos < c->write_len) {
@@ -1080,6 +1088,8 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
             if (c->server)
                 cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
+            /* Align with write_buf OOM: connection-level failure, not silent drop. */
+            client_force_closing(c);
             return -1;
         }
         cmq_ws_frame_t wf;
@@ -1378,6 +1388,7 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         cmq_mutex_lock(&w->clients_lock);
         cmq_client_t *c = cmq_idmap_get(w->idmap, client_id);
         int ok = 0;
+        int dead_acct = 0;
         if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
             client_account_live(srv, c) &&
             (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
@@ -1386,13 +1397,18 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
                    c->state == CMQ_CLIENT_CONNECTED &&
                    !client_account_live(srv, c)) {
             c->state = CMQ_CLIENT_CLOSING;
+            dead_acct = 1;
         }
         cmq_mutex_unlock(&w->clients_lock);
+        /* Soft-deleted account: drop ghost subs promptly via worker teardown. */
+        if (dead_acct)
+            (void)worker_push_teardown(w, client_id, conn_gen);
         return ok;
     }
     cmq_mutex_lock(&srv->clients_lock);
     cmq_client_t *c = cmq_idmap_get(srv->idmap, client_id);
     int ok = 0;
+    cmq_client_t *dead = NULL;
     if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
         client_account_live(srv, c) &&
         (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
@@ -1401,8 +1417,11 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
                c->state == CMQ_CLIENT_CONNECTED &&
                !client_account_live(srv, c)) {
         c->state = CMQ_CLIENT_CLOSING;
+        dead = c;
     }
     cmq_mutex_unlock(&srv->clients_lock);
+    if (dead)
+        client_finish_closing(dead);
     return ok;
 }
 
@@ -3197,6 +3216,33 @@ static int http_header_value(const char *req, const char *name,
     return -1;
 }
 
+/* RFC 7230 Connection tokens are comma-separated and case-insensitive. */
+static int http_header_has_token(const char *val, const char *tok) {
+    if (!val || !tok || !tok[0]) return 0;
+    size_t tlen = strlen(tok);
+    const char *p = val;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != ',' && *p != ' ' && *p != '\t') p++;
+        size_t len = (size_t)(p - start);
+        if (len == tlen) {
+            int match = 1;
+            for (size_t i = 0; i < tlen; i++) {
+                char a = start[i], b = tok[i];
+                if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+                if (a != b) { match = 0; break; }
+            }
+            if (match) return 1;
+        }
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == ',') p++;
+    }
+    return 0;
+}
+
 /* Extract host[:port] from Origin URL or Host header into out. */
 static void http_host_from_value(const char *val, char *out, size_t out_sz) {
     out[0] = '\0';
@@ -3269,6 +3315,14 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
     }
     /* Trim incidental spaces already handled by http_header_value. */
     if (strcmp(version, "13") != 0) { free(req); return -1; }
+
+    /* RFC 6455 §4.2.1/§4.2.2 — Connection must list upgrade (token form). */
+    char connection[256] = {0};
+    if (http_header_value(req, "Connection", connection, sizeof(connection)) != 0 ||
+        !http_header_has_token(connection, "upgrade")) {
+        free(req);
+        return -1;
+    }
 
     /* CSWSH: if Origin is present it must match Host. Native clients may omit Origin. */
     char origin_raw[256] = {0}, host_raw[256] = {0};
