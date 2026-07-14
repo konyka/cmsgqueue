@@ -2950,13 +2950,11 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 else
                     prep[msg].cluster_ok = 1;
             } else {
-                /* Encode OOM — abort without local pass (no partial fan-out). */
+                /* Encode OOM for this entry — keep going so pass 2c can still
+                   deliver locals (align with remote-only miss / no early abort). */
                 cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
-                for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
-                free(prep);
-                cmq_send_error(c, "batch delivery failed");
-                return;
+                batch_fail = 1;
             }
         } else {
             prep[msg].cluster_ok = 1;

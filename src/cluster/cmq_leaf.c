@@ -300,6 +300,20 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         size_t flen = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_SUBSCRIBE,
                                         0, payload, po);
         if (flen == 0 || write_all(fd, frame, flen) != 0) {
+            /* Best-effort UNSUB for subjects already pushed this reconnect so
+               hub does not keep interest that leaf will re-play on next connect. */
+            for (size_t u = 0; u < i; u++) {
+                uint32_t uid = ids[u];
+                uint8_t upay[4] = {
+                    (uint8_t)(uid >> 24), (uint8_t)(uid >> 16),
+                    (uint8_t)(uid >> 8), (uint8_t)uid
+                };
+                uint8_t uframe[16];
+                size_t ulen = cmq_frame_encode(uframe, sizeof(uframe),
+                                                CMQ_OP_UNSUBSCRIBE, 0, upay, 4);
+                if (ulen > 0)
+                    (void)write_all(fd, uframe, ulen);
+            }
             for (size_t j = 0; j < n; j++) free(subjects[j]);
             free(subjects);
             free(ids);
