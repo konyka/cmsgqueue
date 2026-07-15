@@ -2234,7 +2234,6 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         int worker_id;
         uint32_t client_id;
         uint32_t conn_gen;
-        cmq_client_t *acceptor;
     } cmq_inbox_dead_t;
     cmq_inbox_dead_t stack_deads[16];
     cmq_inbox_dead_t *deads = stack_deads;
@@ -2271,8 +2270,6 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                     deads[ndead].worker_id = cr->client->worker_id;
                     deads[ndead].client_id = cr->client->id;
                     deads[ndead].conn_gen = cr->client->conn_gen;
-                    deads[ndead].acceptor =
-                        (cr->client->worker_id < 0) ? cr->client : NULL;
                     ndead++;
                 } else {
                     /* Heap OOM: still nudge reclaim (no silent ghost skip). */
@@ -2281,8 +2278,15 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                         (void)worker_push_teardown(
                             &srv->workers[cr->client->worker_id],
                             cr->client->id, cr->client->conn_gen);
-                    else
-                        client_force_closing(cr->client);
+                    else {
+                        /* Acceptor-owned: only SHUT_RDWR off-owner. */
+                        cmq_mutex_lock(&srv->clients_lock);
+                        if (cr->client->fd >= 0)
+                            (void)shutdown(cr->client->fd, SHUT_RDWR);
+                        cmq_mutex_unlock(&srv->clients_lock);
+                        if (srv->ev_loop)
+                            cmq_ev_wakeup(srv->ev_loop);
+                    }
                 }
                 continue;
             }
@@ -2306,8 +2310,19 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                         }
                         cmq_mutex_unlock(&ww->clients_lock);
                     }
-                } else if (deads[di].acceptor)
-                    client_finish_closing(deads[di].acceptor);
+                } else {
+                    /* Acceptor-owned: foreign thread must not finish_closing /
+                       touch acceptor watchers — nudge EOF for owning loop. */
+                    cmq_mutex_lock(&srv->clients_lock);
+                    cmq_client_t *ac =
+                        cmq_idmap_get(srv->idmap, deads[di].client_id);
+                    if (ac && ac->conn_gen == deads[di].conn_gen &&
+                        ac->fd >= 0)
+                        (void)shutdown(ac->fd, SHUT_RDWR);
+                    cmq_mutex_unlock(&srv->clients_lock);
+                    if (srv->ev_loop)
+                        cmq_ev_wakeup(srv->ev_loop);
+                }
             }
             free(heap_deads);
             free(ref);
@@ -2359,8 +2374,15 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                 }
                 cmq_mutex_unlock(&ww->clients_lock);
             }
-        } else if (deads[di].acceptor)
-            client_finish_closing(deads[di].acceptor);
+        } else {
+            cmq_mutex_lock(&srv->clients_lock);
+            cmq_client_t *ac = cmq_idmap_get(srv->idmap, deads[di].client_id);
+            if (ac && ac->conn_gen == deads[di].conn_gen && ac->fd >= 0)
+                (void)shutdown(ac->fd, SHUT_RDWR);
+            cmq_mutex_unlock(&srv->clients_lock);
+            if (srv->ev_loop)
+                cmq_ev_wakeup(srv->ev_loop);
+        }
     }
     free(heap_deads);
     if (irc != 0) {

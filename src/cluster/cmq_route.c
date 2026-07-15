@@ -270,18 +270,25 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
 
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
-        if (strcmp(pool->conns[i].remote_id, node_id) == 0 &&
-            pool->conns[i].connected && pool->conns[i].fd >= 0) {
-            int fd = pool->conns[i].fd;
+        cmq_mutex_lock(&pool->io_locks[i]);
+        int match = (strcmp(pool->conns[i].remote_id, node_id) == 0);
+        int connected = pool->conns[i].connected;
+        int efd = pool->conns[i].fd;
+        cmq_mutex_unlock(&pool->io_locks[i]);
+        if (match && connected && efd >= 0) {
             size_t idx = i;
             cmq_mutex_unlock(&pool->lock);
-            if (route_fd_alive(fd))
+            if (route_fd_alive(efd))
                 return 0;
             cmq_mutex_lock(&pool->lock);
-            if (idx < pool->conn_count &&
-                strcmp(pool->conns[idx].remote_id, node_id) == 0 &&
-                pool->conns[idx].fd == fd)
-                route_slot_close(pool, idx);
+            if (idx < pool->conn_count) {
+                cmq_mutex_lock(&pool->io_locks[idx]);
+                int same = (strcmp(pool->conns[idx].remote_id, node_id) == 0 &&
+                            pool->conns[idx].fd == efd);
+                cmq_mutex_unlock(&pool->io_locks[idx]);
+                if (same)
+                    route_slot_close(pool, idx);
+            }
             break;
         }
     }

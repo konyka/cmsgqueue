@@ -2477,6 +2477,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — watcher lock publish · inbox acceptor SHUT_RDWR · gw/route io snap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">ev watchers lock</span></td><td>✅</td><td>Publish slot before epoll add; run snapshots <code>cb</code>/<code>data</code> under <code>watchers_lock</code>.</td></tr>
+<tr><td><span class="component-name">_INBOX reclaim</span></td><td>✅</td><td>Acceptor-owned epoch-dead: foreign thread only <code>SHUT_RDWR</code>+wakeup (no cross-thread teardown).</td></tr>
+<tr><td><span class="component-name">gw/route connect</span></td><td>✅</td><td>Snapshot <code>fd</code>/<code>connected</code> under <code>io_lock</code> before alive probe.</td></tr>
+</table>
+</div>
+
 
 
 

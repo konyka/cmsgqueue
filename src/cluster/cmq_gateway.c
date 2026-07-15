@@ -257,69 +257,79 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
     }
 
     for (size_t i = 0; i < gw->conn_count; i++) {
-        if (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0) {
-            if (gw->conns[i].connected && gw->conns[i].fd >= 0 &&
-                gw->conns[i].remote_port == port &&
-                strncmp(gw->conns[i].remote_addr, addr, CMQ_NODE_ADDR_SIZE) == 0) {
-                int fd = gw->conns[i].fd;
-                size_t idx = i;
-                cmq_mutex_unlock(&gw->lock);
-                if (gw_fd_alive(fd))
-                    return 0;
-                cmq_mutex_lock(&gw->lock);
-                if (idx < gw->conn_count &&
-                    strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
-                    gw->conns[idx].fd == fd)
-                    gw_slot_close_fd(gw, idx);
-                /* Rescan — avoid closing a peer installed while unlocked. */
-                i = (size_t)-1;
-                continue;
-            }
-            gw_slot_close_fd(gw, i);
-            char addr_copy[CMQ_NODE_ADDR_SIZE];
-            strncpy(addr_copy, addr, sizeof(addr_copy) - 1);
-            addr_copy[sizeof(addr_copy) - 1] = '\0';
-            int port_copy = port;
-            size_t slot = i;
+        cmq_mutex_lock(&gw->io_locks[i]);
+        int match = (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0);
+        int connected = gw->conns[i].connected;
+        int efd = gw->conns[i].fd;
+        int same_ep = match && connected && efd >= 0 &&
+                      gw->conns[i].remote_port == port &&
+                      strncmp(gw->conns[i].remote_addr, addr,
+                              CMQ_NODE_ADDR_SIZE) == 0;
+        cmq_mutex_unlock(&gw->io_locks[i]);
+        if (!match) continue;
+        if (same_ep) {
+            size_t idx = i;
             cmq_mutex_unlock(&gw->lock);
-
-            int fd = socket(AF_INET, SOCK_STREAM, 0);
-            if (fd < 0) return -1;
-            struct sockaddr_in sa = {0};
-            sa.sin_family = AF_INET;
-            sa.sin_port = htons((uint16_t)port_copy);
-            if (inet_pton(AF_INET, addr_copy, &sa.sin_addr) != 1) {
-                close(fd);
-                return -1;
-            }
-            if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
-                                     CMQ_GW_CONNECT_MS) != 0) {
-                close(fd);
-                return -1;
-            }
-            if (gw_handshake(gw, fd) != 0) {
-                close(fd);
-                return -1;
-            }
-            set_nonblock(fd);
+            if (gw_fd_alive(efd))
+                return 0;
             cmq_mutex_lock(&gw->lock);
-            /* Another thread may have published a live peer meanwhile. */
-            if (gw_has_live_peer(gw, cluster_name)) {
-                cmq_mutex_unlock(&gw->lock);
-                close(fd);
-                return 0;
+            if (idx < gw->conn_count) {
+                cmq_mutex_lock(&gw->io_locks[idx]);
+                int same =
+                    (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
+                     gw->conns[idx].fd == efd);
+                cmq_mutex_unlock(&gw->io_locks[idx]);
+                if (same)
+                    gw_slot_close_fd(gw, idx);
             }
-            if (slot < gw->conn_count &&
-                strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0) {
-                gw_slot_close_fd(gw, slot);
-                gw_slot_install(gw, slot, cluster_name, addr_copy, port_copy, fd);
-                cmq_mutex_unlock(&gw->lock);
-                return 0;
-            }
-            cmq_mutex_unlock(&gw->lock);
+            /* Rescan — avoid closing a peer installed while unlocked. */
+            i = (size_t)-1;
+            continue;
+        }
+        gw_slot_close_fd(gw, i);
+        char addr_copy[CMQ_NODE_ADDR_SIZE];
+        strncpy(addr_copy, addr, sizeof(addr_copy) - 1);
+        addr_copy[sizeof(addr_copy) - 1] = '\0';
+        int port_copy = port;
+        size_t slot = i;
+        cmq_mutex_unlock(&gw->lock);
+
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return -1;
+        struct sockaddr_in sa = {0};
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons((uint16_t)port_copy);
+        if (inet_pton(AF_INET, addr_copy, &sa.sin_addr) != 1) {
             close(fd);
             return -1;
         }
+        if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
+                                 CMQ_GW_CONNECT_MS) != 0) {
+            close(fd);
+            return -1;
+        }
+        if (gw_handshake(gw, fd) != 0) {
+            close(fd);
+            return -1;
+        }
+        set_nonblock(fd);
+        cmq_mutex_lock(&gw->lock);
+        /* Another thread may have published a live peer meanwhile. */
+        if (gw_has_live_peer(gw, cluster_name)) {
+            cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            return 0;
+        }
+        if (slot < gw->conn_count &&
+            strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0) {
+            gw_slot_close_fd(gw, slot);
+            gw_slot_install(gw, slot, cluster_name, addr_copy, port_copy, fd);
+            cmq_mutex_unlock(&gw->lock);
+            return 0;
+        }
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        return -1;
     }
 
     if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {

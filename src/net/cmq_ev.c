@@ -17,6 +17,7 @@
 #include <sys/event.h>
 #endif
 
+#include "cmq_thread.h"
 #include <sys/resource.h>
 
 #define CMQ_EV_MAX_EVENTS 64
@@ -40,6 +41,7 @@ struct cmq_ev_loop {
     int next_timer_id;
     cmq_ev_watcher_t *watchers;
     int watchers_cap;
+    cmq_mutex_t watchers_lock; /* publish/clear vs run snapshot (accept→worker) */
     cmq_ev_timer_t timers[CMQ_EV_MAX_TIMERS];
     cmq_ev_tick_t post_tick;
     void *post_tick_data;
@@ -82,6 +84,7 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
     for (int i = 0; i < loop->watchers_cap; i++) {
         loop->watchers[i].fd = -1;
     }
+    cmq_mutex_init(&loop->watchers_lock);
 
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         loop->timers[i].active = 0;
@@ -99,6 +102,7 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
 #endif
 
     if (loop->backend_fd < 0) {
+        cmq_mutex_destroy(&loop->watchers_lock);
         free(loop->watchers);
         free(loop);
         return NULL;
@@ -151,8 +155,40 @@ void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
     if (loop->wakeup_wfd >= 0 && loop->wakeup_wfd != loop->wakeup_fd)
         close(loop->wakeup_wfd);
     if (loop->backend_fd >= 0) close(loop->backend_fd);
+    cmq_mutex_destroy(&loop->watchers_lock);
     free(loop->watchers);
     free(loop);
+}
+
+static void watcher_publish(cmq_ev_loop_t *loop, int fd, int events,
+                             cmq_ev_cb_t cb, void *data) {
+    cmq_mutex_lock(&loop->watchers_lock);
+    loop->watchers[fd].fd = fd;
+    loop->watchers[fd].events = events;
+    loop->watchers[fd].cb = cb;
+    loop->watchers[fd].data = data;
+    cmq_mutex_unlock(&loop->watchers_lock);
+}
+
+static void watcher_clear(cmq_ev_loop_t *loop, int fd) {
+    cmq_mutex_lock(&loop->watchers_lock);
+    loop->watchers[fd].fd = -1;
+    loop->watchers[fd].events = 0;
+    loop->watchers[fd].cb = NULL;
+    loop->watchers[fd].data = NULL;
+    cmq_mutex_unlock(&loop->watchers_lock);
+}
+
+static int watcher_snapshot(cmq_ev_loop_t *loop, int fd, cmq_ev_cb_t *cb,
+                             void **data) {
+    cmq_mutex_lock(&loop->watchers_lock);
+    int ok = (fd >= 0 && fd < loop->watchers_cap && loop->watchers[fd].cb);
+    if (ok) {
+        *cb = loop->watchers[fd].cb;
+        *data = loop->watchers[fd].data;
+    }
+    cmq_mutex_unlock(&loop->watchers_lock);
+    return ok;
 }
 
 static int cmq_ev_ensure_watcher(cmq_ev_loop_t *loop, int fd) {
@@ -184,6 +220,9 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     if (!loop || fd < 0) return -1;
     if (cmq_ev_ensure_watcher(loop, fd) != 0) return -1;
 
+    /* Publish before epoll_ctl so a racing wait never sees cb==NULL. */
+    watcher_publish(loop, fd, events, cb, data);
+
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.events = (uint32_t)cmq_to_epoll_events(events);
@@ -191,17 +230,16 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
 
     if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
         /* Stale epoll entry after a failed DEL + fd reuse — clear and retry. */
-        if (errno != EEXIST)
+        if (errno != EEXIST) {
+            watcher_clear(loop, fd);
             return -1;
+        }
         (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
-        if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0)
+        if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
+            watcher_clear(loop, fd);
             return -1;
+        }
     }
-
-    loop->watchers[fd].fd = fd;
-    loop->watchers[fd].events = events;
-    loop->watchers[fd].cb = cb;
-    loop->watchers[fd].data = data;
     return 0;
 }
 
@@ -220,24 +258,22 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
             return -1;
     }
 
-    loop->watchers[fd].events = events;
-    loop->watchers[fd].cb = cb;
-    loop->watchers[fd].data = data;
+    watcher_publish(loop, fd, events, cb, data);
     return 0;
 }
 
 int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
-    if (loop->watchers[fd].fd < 0) return -1;
+    cmq_mutex_lock(&loop->watchers_lock);
+    int present = (loop->watchers[fd].fd >= 0);
+    cmq_mutex_unlock(&loop->watchers_lock);
+    if (!present) return -1;
 
     if (epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL) != 0 &&
         errno != ENOENT)
         return -1;
 
-    loop->watchers[fd].fd = -1;
-    loop->watchers[fd].events = 0;
-    loop->watchers[fd].cb = NULL;
-    loop->watchers[fd].data = NULL;
+    watcher_clear(loop, fd);
     return 0;
 }
 
@@ -273,9 +309,11 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
                 read(fd, &val, sizeof(val));
                 continue;
             }
-            if (fd >= 0 && fd < loop->watchers_cap && loop->watchers[fd].cb) {
+            cmq_ev_cb_t cb = NULL;
+            void *data = NULL;
+            if (watcher_snapshot(loop, fd, &cb, &data)) {
                 int ev = epoll_to_cmq_events((int)events[i].events);
-                loop->watchers[fd].cb(fd, ev, loop->watchers[fd].data);
+                cb(fd, ev, data);
             }
         }
 
@@ -326,20 +364,20 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     if (!loop || fd < 0) return -1;
     if (cmq_ev_ensure_watcher(loop, fd) != 0) return -1;
 
-    if (kqueue_add_filters(loop->backend_fd, fd, events) != 0)
+    watcher_publish(loop, fd, events, cb, data);
+    if (kqueue_add_filters(loop->backend_fd, fd, events) != 0) {
+        watcher_clear(loop, fd);
         return -1;
-
-    loop->watchers[fd].fd = fd;
-    loop->watchers[fd].events = events;
-    loop->watchers[fd].cb = cb;
-    loop->watchers[fd].data = data;
+    }
     return 0;
 }
 
 int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *data) {
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
 
+    cmq_mutex_lock(&loop->watchers_lock);
     int old_events = loop->watchers[fd].events;
+    cmq_mutex_unlock(&loop->watchers_lock);
     struct kevent ev[2];
     int n = 0;
 
@@ -357,30 +395,29 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
         return -1;
     }
 
-    loop->watchers[fd].events = events;
-    loop->watchers[fd].cb = cb;
-    loop->watchers[fd].data = data;
+    watcher_publish(loop, fd, events, cb, data);
     return 0;
 }
 
 int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
-    if (loop->watchers[fd].fd < 0) return -1;
+    cmq_mutex_lock(&loop->watchers_lock);
+    int present = (loop->watchers[fd].fd >= 0);
+    int old_events = loop->watchers[fd].events;
+    cmq_mutex_unlock(&loop->watchers_lock);
+    if (!present) return -1;
 
     struct kevent ev[2];
     int n = 0;
-    if (loop->watchers[fd].events & CMQ_EV_READ)
+    if (old_events & CMQ_EV_READ)
         EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-    if (loop->watchers[fd].events & CMQ_EV_WRITE)
+    if (old_events & CMQ_EV_WRITE)
         EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
     if (n > 0 && kevent(loop->backend_fd, ev, n, NULL, 0, NULL) != 0 &&
         errno != ENOENT)
         return -1;
 
-    loop->watchers[fd].fd = -1;
-    loop->watchers[fd].events = 0;
-    loop->watchers[fd].cb = NULL;
-    loop->watchers[fd].data = NULL;
+    watcher_clear(loop, fd);
     return 0;
 }
 
@@ -424,9 +461,11 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
                 while (read(fd, buf, sizeof(buf)) > 0) { }
                 continue;
             }
-            if (fd >= 0 && fd < loop->watchers_cap && loop->watchers[fd].cb) {
+            cmq_ev_cb_t cb = NULL;
+            void *data = NULL;
+            if (watcher_snapshot(loop, fd, &cb, &data)) {
                 int ev = kqueue_to_cmq_events(events[i].filter, (int)events[i].flags);
-                loop->watchers[fd].cb(fd, ev, loop->watchers[fd].data);
+                cb(fd, ev, data);
             }
         }
 
