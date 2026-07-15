@@ -57,8 +57,10 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
                              size_t *out_eagain);
 
 size_t cmq_route_pool_count(cmq_route_pool_t *pool);
-/* Connected peers with a live fd (excludes placeholders / dead slots). */
+/* Connected peers with a live fd (excludes placeholders / staged / dead). */
 size_t cmq_route_live_count(cmq_route_pool_t *pool);
+/* Slots currently holding an fd (live or staged inbound). */
+size_t cmq_route_held_count(cmq_route_pool_t *pool);
 /* Copy connection snapshot under lock (no live pointer after unlock). */
 int cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id,
                         cmq_route_conn_t *out);
