@@ -600,8 +600,8 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
                 continue;
             }
             char rid2[CMQ_NODE_ID_SIZE];
-            int c2 = 0, f2 = -1;
-            route_slot_snap(pool, idx, &c2, &f2, NULL, rid2);
+            int f2 = -1;
+            route_slot_snap(pool, idx, NULL, &f2, NULL, rid2);
             if (strcmp(rid2, node_id) != 0) {
                 i = (size_t)-1;
                 continue;
@@ -617,15 +617,15 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
                 cmq_mutex_unlock(&pool->lock);
                 return 0;
             }
-            if (!(c2 && f2 >= 0)) {
-                route_slot_close(pool, idx);
-                route_slot_install(pool, idx, node_id, fd, 0, 0);
+            if (f2 >= 0) {
+                /* Live or staged peer appeared — do not SHUT_RDWR/steal. */
                 cmq_mutex_unlock(&pool->lock);
-                return 0;
+                return -1;
             }
-            /* Fresh live egress appeared — reject inbound. */
+            route_slot_close(pool, idx);
+            route_slot_install(pool, idx, node_id, fd, 0, 0);
             cmq_mutex_unlock(&pool->lock);
-            return -1;
+            return 0;
         }
         route_slot_close(pool, i);
         route_slot_install(pool, i, node_id, fd, 0, 0);
