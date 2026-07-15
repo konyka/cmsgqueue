@@ -258,6 +258,9 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
         /* fd may have been dropped from the set; re-ADD once. */
         if (errno != ENOENT ||
             epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
+            /* Drop any leftover interest before clearing the table so a later
+               ev_del (!present) cannot leave a silent epoll entry behind. */
+            (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
             watcher_clear(loop, fd);
             return -1;
         }

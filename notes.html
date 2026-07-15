@@ -2526,6 +2526,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — ev_mod fail DEL before watcher_clear</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ev_mod (epoll)</span></td><td>✅</td><td>On MOD/re-ADD failure: <code>EPOLL_CTL_DEL</code> then <code>watcher_clear</code> (no orphan interest).</td></tr>
+</table>
+</div>
+
 
 
 
