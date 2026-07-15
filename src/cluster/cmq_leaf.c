@@ -69,6 +69,16 @@ static int leaf_fd_alive(int fd) {
     return pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL));
 }
 
+/* Caller holds hub_io_lock. Re-probe after identity match so a recycled
+   live hub_fd is not closed (connect installs under the same lock). */
+static void leaf_hub_drop_if_dead(cmq_leaf_node_t *leaf, int expect_fd) {
+    cmq_mutex_lock(&leaf->lock);
+    int same = (expect_fd >= 0 && leaf->hub_fd == expect_fd);
+    cmq_mutex_unlock(&leaf->lock);
+    if (same && !leaf_fd_alive(expect_fd))
+        leaf_hub_drop(leaf, expect_fd);
+}
+
 /* Complete write on nonblocking hub fd (poll on EAGAIN). */
 static int write_all(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
@@ -178,7 +188,7 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         if (leaf_fd_alive(fd))
             return 0;
         cmq_mutex_lock(&leaf->hub_io_lock);
-        leaf_hub_drop(leaf, fd);
+        leaf_hub_drop_if_dead(leaf, fd);
         cmq_mutex_unlock(&leaf->hub_io_lock);
         cmq_mutex_lock(&leaf->lock);
         if (leaf->connected && leaf->hub_fd >= 0) {
@@ -187,7 +197,7 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
             if (leaf_fd_alive(nfd))
                 return 0;
             cmq_mutex_lock(&leaf->hub_io_lock);
-            leaf_hub_drop(leaf, nfd);
+            leaf_hub_drop_if_dead(leaf, nfd);
             cmq_mutex_unlock(&leaf->hub_io_lock);
             cmq_mutex_lock(&leaf->lock);
         }
@@ -233,7 +243,7 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
             return 0;
         }
         cmq_mutex_lock(&leaf->hub_io_lock);
-        leaf_hub_drop(leaf, efd);
+        leaf_hub_drop_if_dead(leaf, efd);
         cmq_mutex_lock(&leaf->lock);
         if (leaf->connected && leaf->hub_fd >= 0) {
             int nfd = leaf->hub_fd;
@@ -244,7 +254,7 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
                 return 0;
             }
             cmq_mutex_lock(&leaf->hub_io_lock);
-            leaf_hub_drop(leaf, nfd);
+            leaf_hub_drop_if_dead(leaf, nfd);
             cmq_mutex_lock(&leaf->lock);
         }
     }
@@ -429,7 +439,7 @@ int cmq_leaf_is_connected(cmq_leaf_node_t *leaf) {
     /* Same light probe as connect — clear sticky connected on dead hub. */
     if (!leaf_fd_alive(fd)) {
         cmq_mutex_lock(&leaf->hub_io_lock);
-        leaf_hub_drop(leaf, fd);
+        leaf_hub_drop_if_dead(leaf, fd);
         cmq_mutex_unlock(&leaf->hub_io_lock);
         return 0;
     }
