@@ -2623,6 +2623,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf sub/unsub under hub_io</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">hub_io serialize</span></td><td>✅</td><td>Claim/drop + hub write under <code>hub_io_lock</code> so concurrent sub/unsub cannot ghost or false-succeed.</td></tr>
+</table>
+</div>
+
 
 
 

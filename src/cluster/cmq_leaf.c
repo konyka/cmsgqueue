@@ -441,30 +441,32 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
     size_t slen = strlen(subject);
     if (slen == 0 || slen >= 256) return -1;
 
+    char *copy = strdup(subject);
+    if (!copy) return -1;
+
+    /* hub_io → leaf: claim serialized with unsubscribe drop. */
+    cmq_mutex_lock(&leaf->hub_io_lock);
     cmq_mutex_lock(&leaf->lock);
     if (leaf->sub_count >= CMQ_LEAF_MAX_SUBS) {
         cmq_mutex_unlock(&leaf->lock);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        free(copy);
         return -1;
     }
     for (size_t i = 0; i < leaf->sub_count; i++) {
         if (strcmp(leaf->subs[i], subject) == 0) {
             cmq_mutex_unlock(&leaf->lock);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
+            free(copy);
             return 0;
         }
     }
-    char *copy = strdup(subject);
-    if (!copy) {
-        cmq_mutex_unlock(&leaf->lock);
-        return -1;
-    }
-    /* Claim local slot before hub I/O so capacity races cannot desync. */
-    size_t idx = leaf->sub_count;
-    /* Server rejects sub_id 0; skip wraparound to 0 after UINT32_MAX. */
     if (leaf->next_sub_id == 0)
         leaf->next_sub_id = 1;
     uint32_t sub_id = leaf->next_sub_id++;
     if (leaf->next_sub_id == 0)
         leaf->next_sub_id = 1;
+    size_t idx = leaf->sub_count;
     leaf->subs[idx] = copy;
     leaf->sub_ids[idx] = sub_id;
     leaf->sub_count++;
@@ -472,107 +474,54 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
     int connected = leaf->connected;
     cmq_mutex_unlock(&leaf->lock);
 
-    if (connected && hub_fd >= 0) {
-        uint8_t payload[8 + 256];
-        size_t po = 0;
-        payload[po++] = (uint8_t)(sub_id >> 24);
-        payload[po++] = (uint8_t)(sub_id >> 16);
-        payload[po++] = (uint8_t)(sub_id >> 8);
-        payload[po++] = (uint8_t)sub_id;
-        payload[po++] = (uint8_t)(slen >> 8);
-        payload[po++] = (uint8_t)slen;
-        memcpy(payload + po, subject, slen);
-        po += slen;
-        uint8_t frame[16 + 256];
-        size_t flen = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_SUBSCRIBE,
-                                        0, payload, po);
-        cmq_mutex_lock(&leaf->hub_io_lock);
-        cmq_mutex_lock(&leaf->lock);
-        int still = (leaf->connected && leaf->hub_fd == hub_fd);
-        cmq_mutex_unlock(&leaf->lock);
-        int wr = (still && flen > 0) ? write_all(hub_fd, frame, flen) : -1;
-        if (flen == 0 || wr != 0) {
-            if (still)
-                leaf_hub_drop(leaf, hub_fd);
-            /* Hold hub_io through rollback so connect cannot race the claim. */
-            cmq_mutex_lock(&leaf->lock);
-            int cur_fd = leaf->hub_fd;
-            int need_unsub = (!still && leaf->connected && cur_fd >= 0);
-            if (!need_unsub) {
-                for (size_t i = 0; i < leaf->sub_count; i++) {
-                    if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&
-                        strcmp(leaf->subs[i], subject) == 0) {
-                        free(leaf->subs[i]);
-                        memmove(&leaf->subs[i], &leaf->subs[i + 1],
-                                (leaf->sub_count - i - 1) * sizeof(char *));
-                        memmove(&leaf->sub_ids[i], &leaf->sub_ids[i + 1],
-                                (leaf->sub_count - i - 1) * sizeof(uint32_t));
-                        leaf->sub_count--;
-                        break;
-                    }
-                }
-                cmq_mutex_unlock(&leaf->lock);
-                cmq_mutex_unlock(&leaf->hub_io_lock);
-                return -1;
-            }
-            cmq_mutex_unlock(&leaf->lock);
-            uint8_t upay[4] = {
-                (uint8_t)(sub_id >> 24), (uint8_t)(sub_id >> 16),
-                (uint8_t)(sub_id >> 8), (uint8_t)sub_id
-            };
-            uint8_t uframe[16];
-            size_t ulen = cmq_frame_encode(uframe, sizeof(uframe),
-                                            CMQ_OP_UNSUBSCRIBE, 0, upay, 4);
-            int uwr = (ulen > 0) ? write_all(cur_fd, uframe, ulen) : -1;
-            if (ulen == 0 || uwr != 0) {
-                leaf_hub_drop(leaf, cur_fd);
-                cmq_mutex_lock(&leaf->lock);
-                if (leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
-                    cmq_mutex_unlock(&leaf->lock);
-                    cmq_mutex_unlock(&leaf->hub_io_lock);
-                    return -1; /* keep local claim — fail-closed */
-                }
-                for (size_t i = 0; i < leaf->sub_count; i++) {
-                    if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&
-                        strcmp(leaf->subs[i], subject) == 0) {
-                        free(leaf->subs[i]);
-                        memmove(&leaf->subs[i], &leaf->subs[i + 1],
-                                (leaf->sub_count - i - 1) * sizeof(char *));
-                        memmove(&leaf->sub_ids[i], &leaf->sub_ids[i + 1],
-                                (leaf->sub_count - i - 1) * sizeof(uint32_t));
-                        leaf->sub_count--;
-                        break;
-                    }
-                }
-                leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
-                cmq_mutex_unlock(&leaf->lock);
-                cmq_mutex_unlock(&leaf->hub_io_lock);
-                return -1;
-            }
-            cmq_mutex_lock(&leaf->lock);
-            for (size_t i = 0; i < leaf->sub_count; i++) {
-                if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&
-                    strcmp(leaf->subs[i], subject) == 0) {
-                    free(leaf->subs[i]);
-                    memmove(&leaf->subs[i], &leaf->subs[i + 1],
-                            (leaf->sub_count - i - 1) * sizeof(char *));
-                    memmove(&leaf->sub_ids[i], &leaf->sub_ids[i + 1],
-                            (leaf->sub_count - i - 1) * sizeof(uint32_t));
-                    leaf->sub_count--;
-                    break;
-                }
-            }
-            cmq_mutex_unlock(&leaf->lock);
-            cmq_mutex_unlock(&leaf->hub_io_lock);
-            return -1;
-        }
+    if (!(connected && hub_fd >= 0)) {
         cmq_mutex_unlock(&leaf->hub_io_lock);
+        return 0;
     }
+
+    uint8_t payload[8 + 256];
+    size_t po = 0;
+    payload[po++] = (uint8_t)(sub_id >> 24);
+    payload[po++] = (uint8_t)(sub_id >> 16);
+    payload[po++] = (uint8_t)(sub_id >> 8);
+    payload[po++] = (uint8_t)sub_id;
+    payload[po++] = (uint8_t)(slen >> 8);
+    payload[po++] = (uint8_t)slen;
+    memcpy(payload + po, subject, slen);
+    po += slen;
+    uint8_t frame[16 + 256];
+    size_t flen = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_SUBSCRIBE,
+                                    0, payload, po);
+    /* Hub cannot switch while we hold hub_io (connect takes same lock). */
+    int wr = (flen > 0) ? write_all(hub_fd, frame, flen) : -1;
+    if (flen == 0 || wr != 0) {
+        leaf_hub_drop(leaf, hub_fd);
+        cmq_mutex_lock(&leaf->lock);
+        for (size_t i = 0; i < leaf->sub_count; i++) {
+            if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&
+                strcmp(leaf->subs[i], subject) == 0) {
+                free(leaf->subs[i]);
+                memmove(&leaf->subs[i], &leaf->subs[i + 1],
+                        (leaf->sub_count - i - 1) * sizeof(char *));
+                memmove(&leaf->sub_ids[i], &leaf->sub_ids[i + 1],
+                        (leaf->sub_count - i - 1) * sizeof(uint32_t));
+                leaf->sub_count--;
+                break;
+            }
+        }
+        cmq_mutex_unlock(&leaf->lock);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        return -1;
+    }
+    cmq_mutex_unlock(&leaf->hub_io_lock);
     return 0;
 }
 
 int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
     if (!leaf || !subject) return -1;
+
+    /* hub_io → leaf: drop serialized with subscribe claim. */
+    cmq_mutex_lock(&leaf->hub_io_lock);
     cmq_mutex_lock(&leaf->lock);
     for (size_t i = 0; i < leaf->sub_count; i++) {
         if (strcmp(leaf->subs[i], subject) != 0)
@@ -580,10 +529,10 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
         uint32_t sub_id = leaf->sub_ids[i];
         int hub_fd = leaf->hub_fd;
         int connected = leaf->connected;
-        /* Drop local first so concurrent subscribe cannot false-hit. */
         if (!(connected && hub_fd >= 0) &&
             leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
             cmq_mutex_unlock(&leaf->lock);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
             return -1;
         }
         free(leaf->subs[i]);
@@ -595,6 +544,7 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
         if (!(connected && hub_fd >= 0)) {
             leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
             cmq_mutex_unlock(&leaf->lock);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
             return 0;
         }
         cmq_mutex_unlock(&leaf->lock);
@@ -606,38 +556,14 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
         uint8_t frame[16];
         size_t flen = cmq_frame_encode(frame, sizeof(frame),
                                         CMQ_OP_UNSUBSCRIBE, 0, payload, 4);
-
-        /* hub_io serializes vs connect replay (local already gone). */
-        cmq_mutex_lock(&leaf->hub_io_lock);
-        cmq_mutex_lock(&leaf->lock);
-        int still = (leaf->connected && leaf->hub_fd == hub_fd);
-        int cur_fd = leaf->hub_fd;
-        int cur_ok = (leaf->connected && cur_fd >= 0);
-        cmq_mutex_unlock(&leaf->lock);
-
-        int target = still ? hub_fd : (cur_ok ? cur_fd : -1);
-        if (target >= 0) {
-            int wr = (flen > 0) ? write_all(target, frame, flen) : -1;
-            if (flen == 0 || wr != 0) {
-                leaf_hub_drop(leaf, target);
-                if (!still) {
-                    cmq_mutex_lock(&leaf->lock);
-                    if (leaf->pending_unsub_count < CMQ_LEAF_MAX_SUBS)
-                        leaf->pending_unsub[leaf->pending_unsub_count++] =
-                            sub_id;
-                    cmq_mutex_unlock(&leaf->lock);
-                }
-            }
-        } else {
-            cmq_mutex_lock(&leaf->lock);
-            if (leaf->pending_unsub_count < CMQ_LEAF_MAX_SUBS)
-                leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
-            cmq_mutex_unlock(&leaf->lock);
-        }
+        int wr = (flen > 0) ? write_all(hub_fd, frame, flen) : -1;
+        if (flen == 0 || wr != 0)
+            leaf_hub_drop(leaf, hub_fd);
         cmq_mutex_unlock(&leaf->hub_io_lock);
         return 0;
     }
     cmq_mutex_unlock(&leaf->lock);
+    cmq_mutex_unlock(&leaf->hub_io_lock);
     return -1;
 }
 
