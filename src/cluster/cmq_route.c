@@ -556,17 +556,18 @@ void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd) {
     if (!pool || fd < 0) return;
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
+        int efd = -1;
+        route_slot_snap(pool, i, NULL, &efd, NULL, NULL);
+        if (efd != fd) continue;
+        /* pool->lock → io_lock (never reverse — avoids AB-BA with teardown). */
+        cmq_mutex_lock(&pool->io_locks[i]);
         if (pool->conns[i].fd == fd) {
-            /* pool->lock → io_lock (never reverse — avoids AB-BA with teardown). */
-            cmq_mutex_lock(&pool->io_locks[i]);
-            if (pool->conns[i].fd == fd) {
-                pool->conns[i].fd = -1;
-                pool->conns[i].connected = 0;
-                pool->conns[i].fd_owned = 0;
-            }
-            cmq_mutex_unlock(&pool->io_locks[i]);
-            break;
+            pool->conns[i].fd = -1;
+            pool->conns[i].connected = 0;
+            pool->conns[i].fd_owned = 0;
         }
+        cmq_mutex_unlock(&pool->io_locks[i]);
+        break;
     }
     cmq_mutex_unlock(&pool->lock);
 }
@@ -765,7 +766,9 @@ int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd) {
     cmq_mutex_lock(&pool->lock);
     int idx = -1;
     for (size_t i = 0; i < pool->conn_count; i++) {
-        if (pool->conns[i].fd == fd) {
+        int efd = -1;
+        route_slot_snap(pool, i, NULL, &efd, NULL, NULL);
+        if (efd == fd) {
             idx = (int)i;
             break;
         }

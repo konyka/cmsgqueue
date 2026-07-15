@@ -258,7 +258,7 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
         /* fd may have been dropped from the set; re-ADD once. */
         if (errno != ENOENT ||
             epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
-            /* Leave published slot — next successful mod/add or del clears. */
+            watcher_clear(loop, fd);
             return -1;
         }
     }

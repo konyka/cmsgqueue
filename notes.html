@@ -2497,6 +2497,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — flush_write no teardown · route fd snap · ev_mod rollback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_flush_write</span></td><td>✅</td><td>Hard write error: <code>force_closing</code>+<code>SHUT_RDWR</code> only — never destroy under caller.</td></tr>
+<tr><td><span class="component-name">route detach/io_lock</span></td><td>✅</td><td><code>route_slot_snap</code> for fd match before locking slot.</td></tr>
+<tr><td><span class="component-name">ev_mod fail</span></td><td>✅</td><td>Rollback with <code>watcher_clear</code> if epoll_ctl fails after publish.</td></tr>
+</table>
+</div>
+
 
 
 

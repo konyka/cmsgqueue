@@ -3304,15 +3304,17 @@ static void client_flush_write(cmq_client_t *c) {
         }
     } else if (n <= 0 &&
                (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK))) {
-        /* Hard write failure — do not leave CLOSING with a stuck write_buf
-           (busy WRITE loop + keepalive never scans CLOSING). */
+        /* Hard write failure — clear stuck write_buf; do NOT teardown here
+           (caller still holds c). Force CLOSING + SHUT_RDWR for owning path. */
         c->write_len = 0;
         c->write_pos = 0;
         if (route_io_idx >= 0 && c->server && c->server->routes) {
             cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
             route_io_idx = -1;
         }
-        client_teardown(c);
+        client_force_closing(c);
+        if (c->fd >= 0)
+            (void)shutdown(c->fd, SHUT_RDWR);
         return;
     }
 out:
@@ -3540,7 +3542,7 @@ static void client_finish_closing(cmq_client_t *c) {
            by a full TCP receive window (keepalive skips CLOSING). */
         client_closing_discard_inbound(c);
         client_flush_write(c);
-        if (c->state == CMQ_CLIENT_CLOSED) return; /* hard write error */
+        /* flush_write never destroys c; hard error leaves CLOSING + empty buf. */
         if (c->write_buf && c->write_pos < c->write_len) {
             /* Keep READ+WRITE so inbound continues to be discarded. */
             if (c->fd >= 0 &&
