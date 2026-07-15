@@ -40,8 +40,11 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
 int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                         const char *auth_user, const char *auth_pass);
 /* Register an already-handshaken inbound route fd (pool does not own/close it).
+   Stages with connected=0 until cmq_route_mark_connected after CONNACK drain.
    Returns -1 if pool full OR a live egress already exists for node_id. */
 int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd);
+/* Promote a staged inbound fd to broadcast-eligible (connected=1). */
+int cmq_route_mark_connected(cmq_route_pool_t *pool, int fd);
 /* Drop pool reference to fd without closing (client still owns the socket). */
 void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd);
 int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id);

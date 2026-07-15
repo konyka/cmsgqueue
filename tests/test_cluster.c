@@ -142,13 +142,16 @@ TEST(route, attach_inbound_borrow) {
     ASSERT_EQ(pipe(b), 0);
 
     ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", a[1]), 0);
+    ASSERT_EQ(cmq_route_live_count(rp), (size_t)0); /* staged until mark */
+    ASSERT_EQ(cmq_route_mark_connected(rp, a[1]), 0);
     ASSERT_EQ(cmq_route_live_count(rp), (size_t)1);
     cmq_route_conn_t conn;
     ASSERT_EQ(cmq_route_get_conn(rp, "r0", &conn), 0);
     ASSERT_EQ(conn.fd, a[1]);
     ASSERT_EQ(conn.fd_owned, 0);
+    ASSERT_EQ(conn.connected, 1);
 
-    /* Live egress already present — reject redundant inbound (do not replace). */
+    /* Live/staged egress already present — reject redundant inbound. */
     ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", b[1]), -1);
     ASSERT_EQ(cmq_route_get_conn(rp, "r0", &conn), 0);
     ASSERT_EQ(conn.fd, a[1]);

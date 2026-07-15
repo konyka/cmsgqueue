@@ -1153,7 +1153,11 @@ static int client_drain_write_sync(cmq_client_t *c) {
         }
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             struct pollfd pfd = { .fd = c->fd, .events = POLLOUT };
-            if (poll(&pfd, 1, 2000) <= 0)
+            int pr;
+            do {
+                pr = poll(&pfd, 1, 2000);
+            } while (pr < 0 && errno == EINTR);
+            if (pr <= 0)
                 return -1;
             continue;
         }
@@ -3226,23 +3230,32 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
         c->account_epoch = acc ? aep : 0;
         if (acc) cmq_account_inc_connections(acc, aep);
-        /* INFO/CONNACK before route attach so broadcast cannot race handshake. */
-        if (!c->is_websocket)
-            send_info_frame(srv, c);
-        cmq_send_connack(c, 0);
+        /* Stage inbound (connected=0) before CONNACK so failure can still
+           send CONNACK 1; promote after drain so broadcast cannot race. */
         if (want_route) {
-            if (client_drain_write_sync(c) != 0) {
-                c->state = CMQ_CLIENT_CLOSING;
-                break;
-            }
             char nid[CMQ_NODE_ID_SIZE];
             snprintf(nid, sizeof(nid), "r%d", route_ri);
             if (cmq_route_attach_inbound(srv->routes, nid, c->fd) != 0) {
                 c->state = CMQ_CLIENT_CLOSING;
-                (void)shutdown(c->fd, SHUT_RDWR);
+                cmq_send_connack(c, 1);
                 break;
             }
             c->is_route = 1;
+        }
+        if (!c->is_websocket)
+            send_info_frame(srv, c);
+        cmq_send_connack(c, 0);
+        if (want_route) {
+            if (client_drain_write_sync(c) != 0 ||
+                c->state != CMQ_CLIENT_CONNECTED) {
+                c->state = CMQ_CLIENT_CLOSING;
+                break;
+            }
+            if (cmq_route_mark_connected(srv->routes, c->fd) != 0) {
+                c->state = CMQ_CLIENT_CLOSING;
+                (void)shutdown(c->fd, SHUT_RDWR);
+                break;
+            }
         }
         break;
     case CMQ_OP_PING:

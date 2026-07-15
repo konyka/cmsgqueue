@@ -2579,6 +2579,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — stage inbound route · drain EINTR · CONNACK 1 on attach fail</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">inbound stage</span></td><td>✅</td><td>Attach with <code>connected=0</code>; <code>mark_connected</code> after CONNACK drain.</td></tr>
+<tr><td><span class="component-name">drain EINTR</span></td><td>✅</td><td>Retry <code>poll</code> on EINTR; skip promote if no longer CONNECTED.</td></tr>
+</table>
+</div>
+
 
 
 
