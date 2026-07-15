@@ -1429,12 +1429,12 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         }
         cmq_mutex_lock(&w->clients_lock);
         cmq_client_t *c = cmq_idmap_get(w->idmap, client_id);
-        int ok = 0;
+        int do_send = 0;
         int dead_acct = 0;
         if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
             client_account_live(srv, c) &&
             (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
-            if (cmq_client_send_local(c, frame, flen) == 0) ok = 1;
+            do_send = 1;
         } else if (c && c->conn_gen == conn_gen &&
                    c->state == CMQ_CLIENT_CONNECTED &&
                    !client_account_live(srv, c)) {
@@ -1442,6 +1442,11 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
             dead_acct = 1;
         }
         cmq_mutex_unlock(&w->clients_lock);
+        /* Owning thread: send after unlock (same as mailbox drain). */
+        int ok = 0;
+        if (do_send && c &&
+            cmq_client_send_local(c, frame, flen) == 0)
+            ok = 1;
         /* Soft-deleted account: drop ghost subs promptly via worker teardown. */
         if (dead_acct)
             worker_teardown_or_shutdown(w, client_id, conn_gen);
@@ -1450,20 +1455,29 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
     cmq_mutex_lock(&srv->clients_lock);
     cmq_client_t *c = cmq_idmap_get(srv->idmap, client_id);
     int ok = 0;
-    cmq_client_t *dead = NULL;
+    int dead_acct = 0;
+    int dead_fd = -1;
     if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
         client_account_live(srv, c) &&
         (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
+        /* May run off acceptor thread (worker deliver to acceptor-owned) —
+           hold clients_lock across send so finish_closing cannot race. */
         if (cmq_client_send_local(c, frame, flen) == 0) ok = 1;
     } else if (c && c->conn_gen == conn_gen &&
                c->state == CMQ_CLIENT_CONNECTED &&
                !client_account_live(srv, c)) {
+        /* Acceptor-owned: mark CLOSING; owning loop tears down after EOF. */
         c->state = CMQ_CLIENT_CLOSING;
-        dead = c;
+        dead_acct = 1;
+        dead_fd = c->fd;
     }
     cmq_mutex_unlock(&srv->clients_lock);
-    if (dead)
-        client_finish_closing(dead);
+    if (dead_acct) {
+        if (dead_fd >= 0)
+            (void)shutdown(dead_fd, SHUT_RDWR);
+        if (srv->ev_loop)
+            cmq_ev_wakeup(srv->ev_loop);
+    }
     return ok;
 }
 

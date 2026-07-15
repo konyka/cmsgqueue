@@ -2517,7 +2517,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
-
+<div class="phase">
+<h2>Phase — send_by_id unlock send · acceptor dead SHUT_RDWR</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_send_by_id</span></td><td>✅</td><td>Validate under lock; <code>send_local</code> after unlock (mailbox-aligned).</td></tr>
+<tr><td><span class="component-name">acceptor dead acct</span></td><td>✅</td><td>No off-owner <code>finish_closing</code> — <code>SHUT_RDWR</code>+wakeup only.</td></tr>
+</table>
+</div>
 
 
 
