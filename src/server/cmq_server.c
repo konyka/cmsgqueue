@@ -3135,7 +3135,12 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 break;
             }
             free(c->username);
-            c->username = strdup(uname);
+            /* Password-only auth: ignore client username so a shared secret
+               cannot pick/create arbitrary tenant accounts. */
+            if (need_user)
+                c->username = strdup(uname);
+            else
+                c->username = strdup("");
             if (!c->username) {
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;

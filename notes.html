@@ -2543,6 +2543,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — password-only auth · gateway reconnect reclaim</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">password-only auth</span></td><td>✅</td><td>Without <code>auth_username</code>, ignore CONNECT user — bind <code>$default</code> only.</td></tr>
+<tr><td><span class="component-name">gateway reconnect</span></td><td>✅</td><td>Post-dial slot ok allows empty/dead (aligned with full-table reclaim).</td></tr>
+</table>
+</div>
+
 
 
 

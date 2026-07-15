@@ -322,8 +322,10 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
         }
         if (slot < gw->conn_count) {
             cmq_mutex_lock(&gw->io_locks[slot]);
-            int ok =
-                (strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0);
+            /* Slot was closed before dial — empty/dead is reclaimable too. */
+            int ok = (!gw->conns[slot].connected ||
+                      gw->conns[slot].remote_cluster[0] == '\0' ||
+                      strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0);
             cmq_mutex_unlock(&gw->io_locks[slot]);
             if (ok) {
                 gw_slot_close_fd(gw, slot);
