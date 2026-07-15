@@ -310,7 +310,8 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                 int same = (strcmp(pool->conns[idx].remote_id, node_id) == 0 &&
                             pool->conns[idx].fd == efd);
                 cmq_mutex_unlock(&pool->io_locks[idx]);
-                if (same)
+                /* Re-probe: fd number may have been recycled into a new peer. */
+                if (same && !route_fd_alive(efd))
                     route_slot_close(pool, idx);
             }
             break;
@@ -376,7 +377,8 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                 char rid2[CMQ_NODE_ID_SIZE];
                 int f2 = -1;
                 route_slot_snap(pool, idx, NULL, &f2, NULL, rid2);
-                if (strcmp(rid2, node_id) == 0 && f2 == efd)
+                if (strcmp(rid2, node_id) == 0 && f2 == efd &&
+                    !route_fd_alive(efd))
                     route_slot_close(pool, idx);
             }
             /* Rescan — peer may have been replaced while unlocked. */
@@ -528,7 +530,18 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
                 i = (size_t)-1;
                 continue;
             }
-            if (f2 == efd || !(c2 && f2 >= 0)) {
+            if (f2 == efd) {
+                /* Fd number may have been recycled into a live peer. */
+                if (route_fd_alive(efd)) {
+                    cmq_mutex_unlock(&pool->lock);
+                    return -1;
+                }
+                route_slot_close(pool, idx);
+                route_slot_install(pool, idx, node_id, fd, 0, 0);
+                cmq_mutex_unlock(&pool->lock);
+                return 0;
+            }
+            if (!(c2 && f2 >= 0)) {
                 route_slot_close(pool, idx);
                 route_slot_install(pool, idx, node_id, fd, 0, 0);
                 cmq_mutex_unlock(&pool->lock);
@@ -747,7 +760,7 @@ size_t cmq_route_live_count(cmq_route_pool_t *pool) {
             char rid2[CMQ_NODE_ID_SIZE];
             int efd2 = -1;
             route_slot_snap(pool, i, NULL, &efd2, NULL, rid2);
-            if (efd2 == fd && strcmp(rid2, rid) == 0)
+            if (efd2 == fd && strcmp(rid2, rid) == 0 && !route_fd_alive(efd2))
                 route_slot_close(pool, i);
         }
         cmq_mutex_unlock(&pool->lock);
@@ -801,7 +814,8 @@ int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id) {
             char rid2[CMQ_NODE_ID_SIZE];
             int efd2 = -1;
             route_slot_snap(pool, i, NULL, &efd2, NULL, rid2);
-            if (strcmp(rid2, node_id) == 0 && efd2 == fd)
+            if (strcmp(rid2, node_id) == 0 && efd2 == fd &&
+                !route_fd_alive(efd2))
                 route_slot_close(pool, i);
         }
         cmq_mutex_unlock(&pool->lock);

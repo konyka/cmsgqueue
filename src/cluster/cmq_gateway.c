@@ -107,7 +107,7 @@ static int gw_has_live_peer(cmq_gateway_t *gw, const char *cluster_name) {
                 (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
                  gw->conns[idx].fd == efd);
             cmq_mutex_unlock(&gw->io_locks[idx]);
-            if (same)
+            if (same && !gw_fd_alive(efd))
                 gw_slot_close_fd(gw, idx);
         }
     }
@@ -371,7 +371,7 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             cmq_mutex_lock(&gw->io_locks[i]);
             int same = (gw->conns[i].fd == efd);
             cmq_mutex_unlock(&gw->io_locks[i]);
-            if (!alive && same) {
+            if (!alive && same && !gw_fd_alive(efd)) {
                 gw_slot_close_fd(gw, i);
                 slot = (int)i;
                 break;
