@@ -555,6 +555,11 @@ int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
         return 0;
     }
     if (strcmp(pub_account, sub_account) == 0) {
+        /* Inbox replies are not export subjects — allow same-account RR. */
+        if (strncmp(subject, "_INBOX.", 7) == 0) {
+            cmq_mutex_unlock(&mgr->lock);
+            return 1;
+        }
         /* Same account still respects export allow-list (revoked mid-flight). */
         cmq_account_perms_t *p = find_perms(mgr, pub_account);
         int ok = 1;

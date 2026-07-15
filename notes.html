@@ -2561,6 +2561,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — same-account _INBOX · defer inbound route attach</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">may_deliver inbox</span></td><td>✅</td><td>Same-account <code>_INBOX.*</code> bypasses export allow-list (RR).</td></tr>
+<tr><td><span class="component-name">inbound route attach</span></td><td>✅</td><td>Attach after account bind + CONNECTED, before CONNACK.</td></tr>
+</table>
+</div>
+
 
 
 

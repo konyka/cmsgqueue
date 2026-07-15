@@ -3148,34 +3148,25 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             }
         }
         /* CMQ_FLAG_ROUTE only trusted for peers whose IP is in routes[].
-           Inbound source ports are ephemeral — IP ACL + optional shared auth. */
+           Inbound source ports are ephemeral — IP ACL + optional shared auth.
+           Defer pool attach until after account bind so broadcast cannot hit
+           an INIT peer (connected=1 before CONNACK). */
+        int want_route = 0;
+        int route_ri = -1;
         if (frame->hdr.flags & CMQ_FLAG_ROUTE) {
-            int ri = peer_route_index(srv, c->fd);
-            if (!srv->routes || ri < 0) {
+            route_ri = peer_route_index(srv, c->fd);
+            if (!srv->routes || route_ri < 0) {
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
                 break;
             }
-            c->is_route = 1;
-            /* Borrow fd into route pool for egress (same nid as outbound rN). */
-            char nid[CMQ_NODE_ID_SIZE];
-            snprintf(nid, sizeof(nid), "r%d", ri);
-            if (cmq_route_attach_inbound(srv->routes, nid, c->fd) != 0) {
-                /* Pool full or live egress already present — reject inbound. */
-                c->is_route = 0;
-                cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
-                break;
-            }
+            want_route = 1;
         }
         /* Resolve account before CONNECTED so OOM/table-full never lands on
            $default after a successful password check. */
         if (c->username && c->username[0] != '\0') {
             size_t ul = strnlen(c->username, CMQ_ACCOUNT_NAME_SIZE);
             if (ul == 0 || ul >= CMQ_ACCOUNT_NAME_SIZE) {
-                if (c->is_route && srv->routes)
-                    route_detach_under_io_lock(srv, c->fd);
-                c->is_route = 0;
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
                 break;
@@ -3183,9 +3174,6 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             memcpy(c->account_name, c->username, ul);
             c->account_name[ul] = '\0';
             if (cmq_account_ensure(srv->accounts, c->account_name) != 0) {
-                if (c->is_route && srv->routes)
-                    route_detach_under_io_lock(srv, c->fd);
-                c->is_route = 0;
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
                 break;
@@ -3195,9 +3183,6 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             c->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
             /* Soft-delete must deny anonymous CONNECT until admin create(). */
             if (cmq_account_ensure(srv->accounts, "$default") != 0) {
-                if (c->is_route && srv->routes)
-                    route_detach_under_io_lock(srv, c->fd);
-                c->is_route = 0;
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
                 break;
@@ -3210,6 +3195,17 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
         c->account_epoch = acc ? aep : 0;
         if (acc) cmq_account_inc_connections(acc, aep);
+        if (want_route) {
+            char nid[CMQ_NODE_ID_SIZE];
+            snprintf(nid, sizeof(nid), "r%d", route_ri);
+            if (cmq_route_attach_inbound(srv->routes, nid, c->fd) != 0) {
+                /* Pool full or live egress already present — reject inbound. */
+                c->state = CMQ_CLIENT_CLOSING;
+                cmq_send_connack(c, 1);
+                break;
+            }
+            c->is_route = 1;
+        }
         /* INFO only after successful CONNECT (never on INIT). */
         if (!c->is_websocket)
             send_info_frame(srv, c);

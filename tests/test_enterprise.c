@@ -163,6 +163,9 @@ TEST(account, may_deliver_cross_account) {
     cmq_account_add_import(mgr, "globex", "acme.>", "acme");
     ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "globex", "acme.data"), 1);
     ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "other", "acme.data"), 0);
+    /* Same-account inbox replies must not be blocked by export allow-list. */
+    ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "acme", "_INBOX.rr1"), 1);
+    ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "acme", "other.data"), 0);
 
     /* Export without matching import must deny (not open-default). */
     cmq_account_remove_import(mgr, "globex", "acme.>");
