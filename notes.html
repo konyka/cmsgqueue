@@ -2703,6 +2703,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — account inc epoch rollback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">inc rollback</span></td><td>✅</td><td>After <code>fetch_add</code>, re-check epoch; mismatch rolls back (soft-delete/reactivate race).</td></tr>
+<tr><td><span class="component-name">epoch RELEASE</span></td><td>✅</td><td><code>account_bump_epoch</code> / create use atomic RELEASE; pairs with ACQUIRE loads.</td></tr>
+</table>
+</div>
+
 
 
 

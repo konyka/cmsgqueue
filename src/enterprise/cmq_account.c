@@ -22,6 +22,12 @@ struct cmq_account_manager {
 
 static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char *name);
 
+static void account_bump_epoch(cmq_account_t *a) {
+    uint32_t e = __atomic_load_n(&a->epoch, __ATOMIC_RELAXED) + 1;
+    if (e == 0) e = 1;
+    __atomic_store_n(&a->epoch, e, __ATOMIC_RELEASE);
+}
+
 cmq_account_manager_t *cmq_account_manager_create(void) {
     cmq_account_manager_t *mgr = calloc(1, sizeof(cmq_account_manager_t));
     if (!mgr) return NULL;
@@ -45,9 +51,7 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
             if (!__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE)) {
                 /* Reactivate soft-deleted slot (stable pointer for same name).
                    Bump epoch so pre-delete TCP sessions stay denied. */
-                mgr->accounts[i].epoch++;
-                if (mgr->accounts[i].epoch == 0)
-                    mgr->accounts[i].epoch = 1;
+                account_bump_epoch(&mgr->accounts[i]);
                 __atomic_store_n(&mgr->accounts[i].active, 1, __ATOMIC_RELEASE);
                 mgr->accounts[i].connections = 0;
                 mgr->accounts[i].subscriptions = 0;
@@ -77,9 +81,7 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
             return -1;
         }
         clear_account_perms_unlocked(mgr, slot->name);
-        slot->epoch++;
-        if (slot->epoch == 0)
-            slot->epoch = 1;
+        account_bump_epoch(slot);
         strncpy(slot->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
         slot->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
         slot->connections = 0;
@@ -95,7 +97,7 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     cmq_account_t *a = &mgr->accounts[mgr->count++];
     strncpy(a->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
     a->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
-    a->epoch = 1;
+    __atomic_store_n(&a->epoch, 1, __ATOMIC_RELEASE);
     __atomic_store_n(&a->active, 1, __ATOMIC_RELEASE);
     a->connections = 0;
     a->subscriptions = 0;
@@ -134,9 +136,7 @@ int cmq_account_ensure(cmq_account_manager_t *mgr, const char *name) {
             return -1;
         }
         clear_account_perms_unlocked(mgr, slot->name);
-        slot->epoch++;
-        if (slot->epoch == 0)
-            slot->epoch = 1;
+        account_bump_epoch(slot);
         strncpy(slot->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
         slot->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
         slot->connections = 0;
@@ -152,7 +152,7 @@ int cmq_account_ensure(cmq_account_manager_t *mgr, const char *name) {
     cmq_account_t *a = &mgr->accounts[mgr->count++];
     strncpy(a->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
     a->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
-    a->epoch = 1;
+    __atomic_store_n(&a->epoch, 1, __ATOMIC_RELEASE);
     __atomic_store_n(&a->active, 1, __ATOMIC_RELEASE);
     a->connections = 0;
     a->subscriptions = 0;
@@ -172,9 +172,7 @@ int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
             strcmp(mgr->accounts[i].name, name) == 0) {
             /* Soft-delete: bump epoch so live sessions fail client_account_live
                immediately (even across get→use TOCTOU), then clear active. */
-            mgr->accounts[i].epoch++;
-            if (mgr->accounts[i].epoch == 0)
-                mgr->accounts[i].epoch = 1;
+            account_bump_epoch(&mgr->accounts[i]);
             __atomic_store_n(&mgr->accounts[i].active, 0, __ATOMIC_RELEASE);
             clear_account_perms_unlocked(mgr, name);
             cmq_mutex_unlock(&mgr->lock);
@@ -196,7 +194,7 @@ cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name,
             strcmp(mgr->accounts[i].name, name) == 0) {
             found = &mgr->accounts[i];
             if (out_epoch)
-                *out_epoch = found->epoch;
+                *out_epoch = __atomic_load_n(&found->epoch, __ATOMIC_ACQUIRE);
             break;
         }
     }
@@ -216,46 +214,105 @@ size_t cmq_account_count(cmq_account_manager_t *mgr) {
 }
 
 void cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch) {
-    if (acc && acc->epoch == epoch &&
-        __atomic_load_n(&acc->active, __ATOMIC_ACQUIRE))
-        __atomic_fetch_add(&acc->connections, 1, __ATOMIC_RELAXED);
+    if (!acc) return;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+    __atomic_fetch_add(&acc->connections, 1, __ATOMIC_RELAXED);
+    /* Soft-delete/reactivate may have bumped epoch mid-inc — undo credit. */
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
+        uint64_t cur = __atomic_load_n(&acc->connections, __ATOMIC_RELAXED);
+        while (cur > 0 &&
+               !__atomic_compare_exchange_n(&acc->connections, &cur, cur - 1,
+                                            0, __ATOMIC_RELAXED,
+                                            __ATOMIC_RELAXED))
+            {}
+    }
 }
 void cmq_account_dec_connections(cmq_account_t *acc, uint32_t epoch) {
-    if (!acc || acc->epoch != epoch ||
-        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    if (!acc) return;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
     uint64_t cur = __atomic_load_n(&acc->connections, __ATOMIC_RELAXED);
     while (cur > 0) {
+        if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch)
+            return;
         if (__atomic_compare_exchange_n(&acc->connections, &cur, cur - 1,
                                          0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
             return;
     }
 }
 void cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch) {
-    if (acc && acc->epoch == epoch &&
-        __atomic_load_n(&acc->active, __ATOMIC_ACQUIRE))
-        __atomic_fetch_add(&acc->subscriptions, 1, __ATOMIC_RELAXED);
+    if (!acc) return;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+    __atomic_fetch_add(&acc->subscriptions, 1, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
+        uint64_t cur = __atomic_load_n(&acc->subscriptions, __ATOMIC_RELAXED);
+        while (cur > 0 &&
+               !__atomic_compare_exchange_n(&acc->subscriptions, &cur, cur - 1,
+                                            0, __ATOMIC_RELAXED,
+                                            __ATOMIC_RELAXED))
+            {}
+    }
 }
 void cmq_account_dec_subscriptions(cmq_account_t *acc, uint32_t epoch) {
-    if (!acc || acc->epoch != epoch ||
-        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    if (!acc) return;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
     uint64_t cur = __atomic_load_n(&acc->subscriptions, __ATOMIC_RELAXED);
     while (cur > 0) {
+        if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch)
+            return;
         if (__atomic_compare_exchange_n(&acc->subscriptions, &cur, cur - 1,
                                          0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
             return;
     }
 }
 void cmq_account_inc_msgs_in(cmq_account_t *acc, uint32_t epoch, uint64_t bytes) {
-    if (!acc || acc->epoch != epoch ||
-        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    if (!acc) return;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
     __atomic_fetch_add(&acc->messages_in, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&acc->bytes_in, bytes, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
+        uint64_t cur = __atomic_load_n(&acc->messages_in, __ATOMIC_RELAXED);
+        while (cur > 0 &&
+               !__atomic_compare_exchange_n(&acc->messages_in, &cur, cur - 1,
+                                            0, __ATOMIC_RELAXED,
+                                            __ATOMIC_RELAXED))
+            {}
+        cur = __atomic_load_n(&acc->bytes_in, __ATOMIC_RELAXED);
+        for (;;) {
+            uint64_t next = (cur > bytes) ? cur - bytes : 0;
+            if (__atomic_compare_exchange_n(&acc->bytes_in, &cur, next,
+                                             0, __ATOMIC_RELAXED,
+                                             __ATOMIC_RELAXED))
+                break;
+        }
+    }
 }
 void cmq_account_inc_msgs_out(cmq_account_t *acc, uint32_t epoch, uint64_t bytes) {
-    if (!acc || acc->epoch != epoch ||
-        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    if (!acc) return;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
     __atomic_fetch_add(&acc->messages_out, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&acc->bytes_out, bytes, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
+        uint64_t cur = __atomic_load_n(&acc->messages_out, __ATOMIC_RELAXED);
+        while (cur > 0 &&
+               !__atomic_compare_exchange_n(&acc->messages_out, &cur, cur - 1,
+                                            0, __ATOMIC_RELAXED,
+                                            __ATOMIC_RELAXED))
+            {}
+        cur = __atomic_load_n(&acc->bytes_out, __ATOMIC_RELAXED);
+        for (;;) {
+            uint64_t next = (cur > bytes) ? cur - bytes : 0;
+            if (__atomic_compare_exchange_n(&acc->bytes_out, &cur, next,
+                                             0, __ATOMIC_RELAXED,
+                                             __ATOMIC_RELAXED))
+                break;
+        }
+    }
 }
 
 static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char *name) {
