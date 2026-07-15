@@ -2552,6 +2552,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — ACL &gt; token · parser frame hard_cap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">ACL subject_match</span></td><td>✅</td><td>Lone final <code>&gt;</code> only; reject glued/mid <code>&gt;</code>/<code>*</code> at add.</td></tr>
+<tr><td><span class="component-name">parser hard_cap</span></td><td>✅</td><td>Allow frame payload up to body 16MB + subject/headers overhead.</td></tr>
+</table>
+</div>
+
 
 
 

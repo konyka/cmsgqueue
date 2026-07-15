@@ -279,6 +279,20 @@ TEST(parser, max_payload_reject) {
     cmq_parser_destroy(p);
 }
 
+/* Body ceiling is 16MB; set_max_payload must accept body+overhead hard_cap. */
+TEST(parser, frame_hard_cap_above_body) {
+    cmq_parser_t *p = cmq_parser_create();
+    size_t hard = (16u * 1024u * 1024u) + 1024u;
+    cmq_parser_set_max_payload(p, hard);
+    uint8_t body[32];
+    memset(body, 'Z', sizeof(body));
+    uint8_t buf[64];
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PING, 0, body, sizeof(body));
+    ASSERT(n > 0);
+    ASSERT_EQ(cmq_parser_feed(p, buf, n), 1);
+    cmq_parser_destroy(p);
+}
+
 /* Incomplete stream must not grow past header + max_payload. */
 TEST(parser, inbuf_hard_cap) {
     cmq_parser_t *p = cmq_parser_create();

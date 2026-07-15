@@ -18,7 +18,8 @@ typedef struct {
 cmq_parser_t *cmq_parser_create(void);
 void cmq_parser_destroy(cmq_parser_t *p);
 void cmq_parser_reset(cmq_parser_t *p);
-/* Cap accepted frame payload (0 = keep hard CMQ_MAX_PAYLOAD ceiling). */
+/* Cap accepted frame payload (0 = default 16MB body ceiling; values may
+   include subject/headers overhead up to CMQ_MAX_FRAME_PAYLOAD). */
 void cmq_parser_set_max_payload(cmq_parser_t *p, size_t max_payload);
 
 int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len);

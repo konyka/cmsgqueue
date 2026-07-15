@@ -31,7 +31,9 @@ struct cmq_parser {
     size_t max_payload;             /* per-connection payload cap */
 };
 
-#define CMQ_MAX_PAYLOAD (16 * 1024 * 1024) /* 16 MB hard ceiling */
+#define CMQ_MAX_PAYLOAD (16 * 1024 * 1024) /* 16 MB application body ceiling */
+/* Wire frame may carry subject/reply/headers beyond the body cap. */
+#define CMQ_MAX_FRAME_PAYLOAD (CMQ_MAX_PAYLOAD + 256u * 2u + 65536u + 64u)
 #define CMQ_HEADER_LEN (sizeof(cmq_frame_hdr_t))
 #define CMQ_PARSER_FRAME_QUEUE_MAX 64
 /* Bound queued payload memory ≈ 2× max_payload (not 64×). */
@@ -82,8 +84,10 @@ cmq_parser_t *cmq_parser_create(void) {
 
 void cmq_parser_set_max_payload(cmq_parser_t *p, size_t max_payload) {
     if (!p) return;
-    if (max_payload == 0 || max_payload > CMQ_MAX_PAYLOAD)
+    if (max_payload == 0)
         p->max_payload = CMQ_MAX_PAYLOAD;
+    else if (max_payload > CMQ_MAX_FRAME_PAYLOAD)
+        p->max_payload = CMQ_MAX_FRAME_PAYLOAD;
     else
         p->max_payload = max_payload;
 }

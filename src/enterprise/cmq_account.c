@@ -307,7 +307,23 @@ static int account_name_ok(const char *name) {
 static int acl_subject_ok(const char *subject) {
     if (!subject) return 0;
     size_t n = strnlen(subject, 256);
-    return n > 0 && n < 256;
+    if (n == 0 || n >= 256) return 0;
+    if (subject[0] == '.' || subject[n - 1] == '.') return 0;
+    const char *p = subject;
+    while (*p) {
+        const char *start = p;
+        while (*p && *p != '.') p++;
+        size_t len = (size_t)(p - start);
+        if (len == 0) return 0; /* empty token / ".." */
+        int is_gt = (len == 1 && start[0] == '>');
+        int is_star = (len == 1 && start[0] == '*');
+        /* Wildcards must be whole tokens; '>' only as final token. */
+        if (!is_gt && memchr(start, '>', len)) return 0;
+        if (!is_star && memchr(start, '*', len)) return 0;
+        if (is_gt && *p != '\0') return 0;
+        if (*p == '.') p++;
+    }
+    return 1;
 }
 
 static int peer_account_ok(cmq_account_manager_t *mgr, const char *name) {
@@ -461,7 +477,8 @@ static int subject_match(const char *pattern, const char *subject) {
         p = *pe ? pe + 1 : pe;
         s = *se ? se + 1 : se;
     }
-    if (*p == '>') return 1;
+    /* Lone final '>' matches any remaining subject tokens (including none). */
+    if (p[0] == '>' && p[1] == '\0') return 1;
     return *p == '\0' && *s == '\0';
 }
 

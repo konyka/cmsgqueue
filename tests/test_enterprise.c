@@ -126,11 +126,10 @@ TEST(account, exports_imports) {
     ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.prod.other"), 0);
     ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.*.events"), 0);
 
-    /* Mid-pattern '>' must not match everything (NATS: '>' is final only). */
-    ASSERT_EQ(cmq_account_add_export(mgr, "acme", "acme.>.secret", "globex"), 0);
-    ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.prod.secret"), 0);
-    ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.anything"), 0);
-    ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.>.secret"), 0);
+    /* Mid-pattern '>' is invalid — reject at add (NATS: '>' is final only). */
+    ASSERT_EQ(cmq_account_add_export(mgr, "acme", "acme.>.secret", "globex"), -1);
+    ASSERT_EQ(cmq_account_add_export(mgr, "acme", "foo.>bar", "globex"), -1);
+    ASSERT_EQ(cmq_account_add_export(mgr, "acme", "foo.*bar", "globex"), -1);
 
     ASSERT_EQ(cmq_account_remove_import(mgr, "globex", "acme.>"), 0);
     ASSERT_EQ(cmq_account_import_count(mgr, "globex"), (size_t)0);
