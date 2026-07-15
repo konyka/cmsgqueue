@@ -3248,10 +3248,17 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         if (want_route) {
             if (client_drain_write_sync(c) != 0 ||
                 c->state != CMQ_CLIENT_CONNECTED) {
+                /* Staged fd still looks live to peer_live — detach now so
+                   outbound reconnect is not blocked until teardown. */
+                cmq_route_detach_fd(srv->routes, c->fd);
+                c->is_route = 0;
                 c->state = CMQ_CLIENT_CLOSING;
+                (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
             if (cmq_route_mark_connected(srv->routes, c->fd) != 0) {
+                cmq_route_detach_fd(srv->routes, c->fd);
+                c->is_route = 0;
                 c->state = CMQ_CLIENT_CLOSING;
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
