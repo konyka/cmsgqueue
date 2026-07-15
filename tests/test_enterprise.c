@@ -187,10 +187,14 @@ TEST(account, may_deliver_cross_account) {
         /* Soft-delete itself bumps epoch so stale sessions cannot linger. */
         ASSERT(a->epoch != e0);
         e0 = a->epoch;
+        /* CONNECT path must refuse soft-deleted names. */
+        ASSERT_EQ(cmq_account_ensure(m2, "ep"), -1);
         ASSERT_EQ(cmq_account_create(m2, "ep"), 0);
         a = cmq_account_get(m2, "ep", NULL);
         ASSERT_NOT_NULL(a);
         ASSERT(a->epoch != e0);
+        ASSERT_EQ(cmq_account_ensure(m2, "ep"), 0); /* already active */
+        ASSERT_EQ(cmq_account_ensure(m2, "brand-new"), 0);
         (void)before;
         cmq_account_manager_destroy(m2);
     }

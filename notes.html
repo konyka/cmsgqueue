@@ -2534,6 +2534,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — CONNECT ensure no revive · client epoch for inc/dec</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_account_ensure</span></td><td>✅</td><td>CONNECT uses ensure; soft-deleted names refused (admin <code>create</code> revives).</td></tr>
+<tr><td><span class="component-name">account inc/dec</span></td><td>✅</td><td>Client-bound stats use <code>c-&gt;account_epoch</code>, not <code>get()</code> current epoch.</td></tr>
+</table>
+</div>
+
 
 
 

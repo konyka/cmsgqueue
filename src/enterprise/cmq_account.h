@@ -39,6 +39,9 @@ cmq_account_manager_t *cmq_account_manager_create(void);
 void cmq_account_manager_destroy(cmq_account_manager_t *mgr);
 
 int cmq_account_create(cmq_account_manager_t *mgr, const char *name);
+/* Like create, but refuses soft-deleted names (CONNECT must not revive).
+   Returns 0 if already active or newly created; -1 if soft-deleted / OOM. */
+int cmq_account_ensure(cmq_account_manager_t *mgr, const char *name);
 int cmq_account_delete(cmq_account_manager_t *mgr, const char *name);
 /* out_epoch (optional): snapshot under lock — pass to inc/dec to reject reclaim races. */
 cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name,

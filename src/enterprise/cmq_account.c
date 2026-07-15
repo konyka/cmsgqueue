@@ -107,6 +107,63 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     return 0;
 }
 
+int cmq_account_ensure(cmq_account_manager_t *mgr, const char *name) {
+    if (!mgr || !name) return -1;
+    size_t nlen = strnlen(name, CMQ_ACCOUNT_NAME_SIZE);
+    if (nlen == 0 || nlen >= CMQ_ACCOUNT_NAME_SIZE) return -1;
+    cmq_mutex_lock(&mgr->lock);
+    for (size_t i = 0; i < mgr->count; i++) {
+        if (strcmp(mgr->accounts[i].name, name) == 0) {
+            int ok = __atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE);
+            cmq_mutex_unlock(&mgr->lock);
+            /* Soft-deleted: refuse — admin create() reactivates explicitly. */
+            return ok ? 0 : -1;
+        }
+    }
+    /* Name never used — same append/reclaim path as create(). */
+    if (mgr->count >= CMQ_ACCOUNT_MAX) {
+        cmq_account_t *slot = NULL;
+        for (size_t i = 0; i < mgr->count; i++) {
+            if (!__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE)) {
+                slot = &mgr->accounts[i];
+                break;
+            }
+        }
+        if (!slot) {
+            cmq_mutex_unlock(&mgr->lock);
+            return -1;
+        }
+        clear_account_perms_unlocked(mgr, slot->name);
+        slot->epoch++;
+        if (slot->epoch == 0)
+            slot->epoch = 1;
+        strncpy(slot->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
+        slot->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+        slot->connections = 0;
+        slot->subscriptions = 0;
+        slot->messages_in = 0;
+        slot->messages_out = 0;
+        slot->bytes_in = 0;
+        slot->bytes_out = 0;
+        __atomic_store_n(&slot->active, 1, __ATOMIC_RELEASE);
+        cmq_mutex_unlock(&mgr->lock);
+        return 0;
+    }
+    cmq_account_t *a = &mgr->accounts[mgr->count++];
+    strncpy(a->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
+    a->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+    a->epoch = 1;
+    __atomic_store_n(&a->active, 1, __ATOMIC_RELEASE);
+    a->connections = 0;
+    a->subscriptions = 0;
+    a->messages_in = 0;
+    a->messages_out = 0;
+    a->bytes_in = 0;
+    a->bytes_out = 0;
+    cmq_mutex_unlock(&mgr->lock);
+    return 0;
+}
+
 int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
     if (!mgr || !name) return -1;
     cmq_mutex_lock(&mgr->lock);
