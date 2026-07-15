@@ -496,6 +496,14 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
         cmq_mutex_unlock(&leaf->hub_io_lock);
         if (flen == 0 || wr != 0) {
             cmq_mutex_lock(&leaf->lock);
+            /* Hub may have taken this sub via reconnect replay after unlock.
+               Queue UNSUB unless we still own the same hub we failed on. */
+            int need_pending = !(leaf->connected && leaf->hub_fd == hub_fd);
+            if (need_pending &&
+                leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
+                cmq_mutex_unlock(&leaf->lock);
+                return -1; /* keep local claim — fail-closed */
+            }
             for (size_t i = 0; i < leaf->sub_count; i++) {
                 if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&
                     strcmp(leaf->subs[i], subject) == 0) {
@@ -508,6 +516,8 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
                     break;
                 }
             }
+            if (need_pending)
+                leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
             cmq_mutex_unlock(&leaf->lock);
             return -1;
         }
@@ -550,9 +560,10 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
 
             /* Re-locate by sub_id+subject — never keep a dangling char*. */
             cmq_mutex_lock(&leaf->lock);
-            /* Offline: fail-closed if pending UNSUB queue is full — keep local
-               sub until we can schedule hub cleanup (avoid ghost interest). */
-            if (!(connected && hub_fd >= 0) &&
+            /* Skip pending only if the hub we notified is still current;
+               otherwise reconnect may have replayed this sub onto a new hub. */
+            int hub_current = (leaf->connected && leaf->hub_fd == hub_fd);
+            if (!hub_current &&
                 leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
                 cmq_mutex_unlock(&leaf->lock);
                 return -1;
@@ -569,9 +580,7 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
                     break;
                 }
             }
-            /* Offline (or already dropped): queue UNSUB for next connect so
-               hub does not keep a ghost sub_id after local removal. */
-            if (!(connected && hub_fd >= 0))
+            if (!hub_current)
                 leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
             cmq_mutex_unlock(&leaf->lock);
             return 0;

@@ -2588,6 +2588,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf pending_unsub on hub switch</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf subscribe rollback</span></td><td>✅</td><td>Queue <code>pending_unsub</code> if hub changed; fail-closed if queue full.</td></tr>
+<tr><td><span class="component-name">leaf unsubscribe</span></td><td>✅</td><td>Skip pending only when notified hub is still current.</td></tr>
+</table>
+</div>
+
 
 
 
