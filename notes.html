@@ -2570,6 +2570,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — CONNACK before route attach · session_accounted teardown</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route handshake order</span></td><td>✅</td><td>INFO+CONNACK drained sync, then <code>attach_inbound</code>.</td></tr>
+<tr><td><span class="component-name">session_accounted</span></td><td>✅</td><td>Teardown decs connections if CONNECTed-accounted, even via CLOSING.</td></tr>
+</table>
+</div>
+
 
 
 

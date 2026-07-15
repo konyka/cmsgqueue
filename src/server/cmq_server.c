@@ -3,6 +3,7 @@
 #include "cmq_config.h"
 #include "cmq_platform.h"
 #include "cmq_coro.h"
+#include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
 #endif
@@ -859,7 +860,8 @@ static void route_detach_under_io_lock(cmq_server_t *srv, int fd) {
 static void client_teardown(cmq_client_t *c) {
     if (!c || c->state == CMQ_CLIENT_CLOSED) return;
     cmq_server_t *srv = c->server;
-    int was_connected = (c->state == CMQ_CLIENT_CONNECTED);
+    int accounted = c->session_accounted;
+    c->session_accounted = 0;
     c->state = CMQ_CLIENT_CLOSED;
 
     if (c->is_route && srv && c->fd >= 0)
@@ -932,7 +934,7 @@ static void client_teardown(cmq_client_t *c) {
     if (active > 0) {
         cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
     }
-    if (was_connected) {
+    if (accounted) {
         uint64_t conns = cmq_atomic_load_u64(&srv->stat_connections, CMQ_ATOMIC_RELAXED);
         if (conns > 0) {
             cmq_atomic_fetch_sub_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
@@ -1132,6 +1134,34 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
     if (rc == 0 && c->state == CMQ_CLIENT_CONNECTED)
         c->last_activity_ms = srv_now_ms();
     return rc;
+}
+
+/* Drain write_buf before exposing fd to the route pool (handshake order). */
+static int client_drain_write_sync(cmq_client_t *c) {
+    if (!c || c->fd < 0) return -1;
+    for (int i = 0; i < 128; i++) {
+        if (!c->write_buf || c->write_pos >= c->write_len) {
+            c->write_len = 0;
+            c->write_pos = 0;
+            return 0;
+        }
+        size_t rem = c->write_len - c->write_pos;
+        ssize_t n = client_sock_write(c, c->write_buf + c->write_pos, rem);
+        if (n > 0) {
+            c->write_pos += (size_t)n;
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct pollfd pfd = { .fd = c->fd, .events = POLLOUT };
+            if (poll(&pfd, 1, 2000) <= 0)
+                return -1;
+            continue;
+        }
+        if (n < 0 && errno == EINTR)
+            continue;
+        return -1;
+    }
+    return (c->write_buf && c->write_pos < c->write_len) ? -1 : 0;
 }
 
 static int cmq_client_send_checked(cmq_client_t *c, const uint8_t *data, size_t len,
@@ -3191,25 +3221,29 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         c->state = CMQ_CLIENT_CONNECTED;
         c->last_activity_ms = srv_now_ms();
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
+        c->session_accounted = 1;
         uint32_t aep = 0;
         cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
         c->account_epoch = acc ? aep : 0;
         if (acc) cmq_account_inc_connections(acc, aep);
+        /* INFO/CONNACK before route attach so broadcast cannot race handshake. */
+        if (!c->is_websocket)
+            send_info_frame(srv, c);
+        cmq_send_connack(c, 0);
         if (want_route) {
+            if (client_drain_write_sync(c) != 0) {
+                c->state = CMQ_CLIENT_CLOSING;
+                break;
+            }
             char nid[CMQ_NODE_ID_SIZE];
             snprintf(nid, sizeof(nid), "r%d", route_ri);
             if (cmq_route_attach_inbound(srv->routes, nid, c->fd) != 0) {
-                /* Pool full or live egress already present — reject inbound. */
                 c->state = CMQ_CLIENT_CLOSING;
-                cmq_send_connack(c, 1);
+                (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
             c->is_route = 1;
         }
-        /* INFO only after successful CONNECT (never on INIT). */
-        if (!c->is_websocket)
-            send_info_frame(srv, c);
-        cmq_send_connack(c, 0);
         break;
     case CMQ_OP_PING:
         if (!client_account_live(srv, c)) {
