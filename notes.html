@@ -2487,6 +2487,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route_slot_snap · gateway install io · ev mod/del order</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route_slot_snap</span></td><td>✅</td><td>connect/attach/add_conn reuse decisions snapshot under <code>io_lock</code>.</td></tr>
+<tr><td><span class="component-name">gateway install</span></td><td>✅</td><td>Install eligibility checked under <code>io_locks[slot]</code>.</td></tr>
+<tr><td><span class="component-name">ev mod/del</span></td><td>✅</td><td>mod publish-before-ctl; del clear-before-ctl (aligned with add).</td></tr>
+</table>
+</div>
+
 
 
 

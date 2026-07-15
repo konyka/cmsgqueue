@@ -246,6 +246,9 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
 int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *data) {
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
 
+    /* Publish before epoll_ctl so a racing wait never sees stale cb/data. */
+    watcher_publish(loop, fd, events, cb, data);
+
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.events = (uint32_t)cmq_to_epoll_events(events);
@@ -254,11 +257,11 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     if (epoll_ctl(loop->backend_fd, EPOLL_CTL_MOD, fd, &ev) != 0) {
         /* fd may have been dropped from the set; re-ADD once. */
         if (errno != ENOENT ||
-            epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0)
+            epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
+            /* Leave published slot — next successful mod/add or del clears. */
             return -1;
+        }
     }
-
-    watcher_publish(loop, fd, events, cb, data);
     return 0;
 }
 
@@ -269,11 +272,12 @@ int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
     cmq_mutex_unlock(&loop->watchers_lock);
     if (!present) return -1;
 
+    /* Clear before DEL so wait cannot dispatch after teardown begins. */
+    watcher_clear(loop, fd);
+
     if (epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL) != 0 &&
         errno != ENOENT)
         return -1;
-
-    watcher_clear(loop, fd);
     return 0;
 }
 
@@ -378,6 +382,9 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     cmq_mutex_lock(&loop->watchers_lock);
     int old_events = loop->watchers[fd].events;
     cmq_mutex_unlock(&loop->watchers_lock);
+
+    watcher_publish(loop, fd, events, cb, data);
+
     struct kevent ev[2];
     int n = 0;
 
@@ -392,10 +399,9 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
         /* Restore previous filters — do not leave fd unwatched. */
         if (old_events != 0)
             (void)kqueue_add_filters(loop->backend_fd, fd, old_events);
+        watcher_publish(loop, fd, old_events, cb, data);
         return -1;
     }
-
-    watcher_publish(loop, fd, events, cb, data);
     return 0;
 }
 
@@ -407,6 +413,8 @@ int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
     cmq_mutex_unlock(&loop->watchers_lock);
     if (!present) return -1;
 
+    watcher_clear(loop, fd);
+
     struct kevent ev[2];
     int n = 0;
     if (old_events & CMQ_EV_READ)
@@ -416,8 +424,6 @@ int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
     if (n > 0 && kevent(loop->backend_fd, ev, n, NULL, 0, NULL) != 0 &&
         errno != ENOENT)
         return -1;
-
-    watcher_clear(loop, fd);
     return 0;
 }
 

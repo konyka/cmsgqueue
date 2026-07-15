@@ -320,12 +320,17 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             close(fd);
             return 0;
         }
-        if (slot < gw->conn_count &&
-            strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0) {
-            gw_slot_close_fd(gw, slot);
-            gw_slot_install(gw, slot, cluster_name, addr_copy, port_copy, fd);
-            cmq_mutex_unlock(&gw->lock);
-            return 0;
+        if (slot < gw->conn_count) {
+            cmq_mutex_lock(&gw->io_locks[slot]);
+            int ok =
+                (strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0);
+            cmq_mutex_unlock(&gw->io_locks[slot]);
+            if (ok) {
+                gw_slot_close_fd(gw, slot);
+                gw_slot_install(gw, slot, cluster_name, addr_copy, port_copy, fd);
+                cmq_mutex_unlock(&gw->lock);
+                return 0;
+            }
         }
         cmq_mutex_unlock(&gw->lock);
         close(fd);
@@ -411,15 +416,19 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             close(fd);
             return 0;
         }
-        if ((size_t)slot < gw->conn_count &&
-            (!gw->conns[slot].connected ||
-             gw->conns[slot].remote_cluster[0] == '\0' ||
-             strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0)) {
-            gw_slot_close_fd(gw, (size_t)slot);
-            gw_slot_install(gw, (size_t)slot, cluster_name, addr_copy,
-                            port_copy, fd);
-            cmq_mutex_unlock(&gw->lock);
-            return 0;
+        if ((size_t)slot < gw->conn_count) {
+            cmq_mutex_lock(&gw->io_locks[slot]);
+            int ok = (!gw->conns[slot].connected ||
+                      gw->conns[slot].remote_cluster[0] == '\0' ||
+                      strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0);
+            cmq_mutex_unlock(&gw->io_locks[slot]);
+            if (ok) {
+                gw_slot_close_fd(gw, (size_t)slot);
+                gw_slot_install(gw, (size_t)slot, cluster_name, addr_copy,
+                                port_copy, fd);
+                cmq_mutex_unlock(&gw->lock);
+                return 0;
+            }
         }
         cmq_mutex_unlock(&gw->lock);
         close(fd);
@@ -463,9 +472,12 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
         return 0;
     }
     for (size_t i = 0; i < gw->conn_count; i++) {
+        cmq_mutex_lock(&gw->io_locks[i]);
         int same = (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0);
-        if (!same && gw->conns[i].connected &&
-            gw->conns[i].remote_cluster[0] != '\0')
+        int connected = gw->conns[i].connected;
+        int empty = (gw->conns[i].remote_cluster[0] == '\0');
+        cmq_mutex_unlock(&gw->io_locks[i]);
+        if (!same && connected && !empty)
             continue;
         gw_slot_close_fd(gw, i);
         gw_slot_install(gw, i, cluster_name, addr_copy, port_copy, fd);
