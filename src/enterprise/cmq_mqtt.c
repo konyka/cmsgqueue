@@ -132,9 +132,10 @@ static int mqtt_read_connack(int fd) {
 
 int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (!br || !addr) return -1;
-    /* Sticky connected after peer death — probe like route/gateway/leaf. */
+    /* Sticky only for the same endpoint — addr/port change must reconnect. */
     if (br->connected) {
-        if (br->fd >= 0 && mqtt_fd_alive(br->fd))
+        if (br->fd >= 0 && mqtt_fd_alive(br->fd) && br->port == port &&
+            strncmp(br->addr, addr, sizeof(br->addr)) == 0)
             return 0;
         cmq_mqtt_bridge_disconnect(br);
     }
