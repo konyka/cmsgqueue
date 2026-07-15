@@ -279,7 +279,7 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
                     (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
                      gw->conns[idx].fd == efd);
                 cmq_mutex_unlock(&gw->io_locks[idx]);
-                if (same)
+                if (same && !gw_fd_alive(efd))
                     gw_slot_close_fd(gw, idx);
             }
             /* Rescan — avoid closing a peer installed while unlocked. */
