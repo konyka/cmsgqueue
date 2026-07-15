@@ -491,19 +491,65 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
         int still = (leaf->connected && leaf->hub_fd == hub_fd);
         cmq_mutex_unlock(&leaf->lock);
         int wr = (still && flen > 0) ? write_all(hub_fd, frame, flen) : -1;
-        if (flen == 0 || wr != 0)
-            leaf_hub_drop(leaf, hub_fd);
-        cmq_mutex_unlock(&leaf->hub_io_lock);
         if (flen == 0 || wr != 0) {
+            if (still)
+                leaf_hub_drop(leaf, hub_fd);
+            /* Hold hub_io through rollback so connect cannot race the claim. */
             cmq_mutex_lock(&leaf->lock);
-            /* Hub may have taken this sub via reconnect replay after unlock.
-               Queue UNSUB unless we still own the same hub we failed on. */
-            int need_pending = !(leaf->connected && leaf->hub_fd == hub_fd);
-            if (need_pending &&
-                leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
+            int cur_fd = leaf->hub_fd;
+            int need_unsub = (!still && leaf->connected && cur_fd >= 0);
+            if (!need_unsub) {
+                for (size_t i = 0; i < leaf->sub_count; i++) {
+                    if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&
+                        strcmp(leaf->subs[i], subject) == 0) {
+                        free(leaf->subs[i]);
+                        memmove(&leaf->subs[i], &leaf->subs[i + 1],
+                                (leaf->sub_count - i - 1) * sizeof(char *));
+                        memmove(&leaf->sub_ids[i], &leaf->sub_ids[i + 1],
+                                (leaf->sub_count - i - 1) * sizeof(uint32_t));
+                        leaf->sub_count--;
+                        break;
+                    }
+                }
                 cmq_mutex_unlock(&leaf->lock);
-                return -1; /* keep local claim — fail-closed */
+                cmq_mutex_unlock(&leaf->hub_io_lock);
+                return -1;
             }
+            cmq_mutex_unlock(&leaf->lock);
+            uint8_t upay[4] = {
+                (uint8_t)(sub_id >> 24), (uint8_t)(sub_id >> 16),
+                (uint8_t)(sub_id >> 8), (uint8_t)sub_id
+            };
+            uint8_t uframe[16];
+            size_t ulen = cmq_frame_encode(uframe, sizeof(uframe),
+                                            CMQ_OP_UNSUBSCRIBE, 0, upay, 4);
+            int uwr = (ulen > 0) ? write_all(cur_fd, uframe, ulen) : -1;
+            if (ulen == 0 || uwr != 0) {
+                leaf_hub_drop(leaf, cur_fd);
+                cmq_mutex_lock(&leaf->lock);
+                if (leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
+                    cmq_mutex_unlock(&leaf->lock);
+                    cmq_mutex_unlock(&leaf->hub_io_lock);
+                    return -1; /* keep local claim — fail-closed */
+                }
+                for (size_t i = 0; i < leaf->sub_count; i++) {
+                    if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&
+                        strcmp(leaf->subs[i], subject) == 0) {
+                        free(leaf->subs[i]);
+                        memmove(&leaf->subs[i], &leaf->subs[i + 1],
+                                (leaf->sub_count - i - 1) * sizeof(char *));
+                        memmove(&leaf->sub_ids[i], &leaf->sub_ids[i + 1],
+                                (leaf->sub_count - i - 1) * sizeof(uint32_t));
+                        leaf->sub_count--;
+                        break;
+                    }
+                }
+                leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
+                cmq_mutex_unlock(&leaf->lock);
+                cmq_mutex_unlock(&leaf->hub_io_lock);
+                return -1;
+            }
+            cmq_mutex_lock(&leaf->lock);
             for (size_t i = 0; i < leaf->sub_count; i++) {
                 if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&
                     strcmp(leaf->subs[i], subject) == 0) {
@@ -516,11 +562,11 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
                     break;
                 }
             }
-            if (need_pending)
-                leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
             cmq_mutex_unlock(&leaf->lock);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
             return -1;
         }
+        cmq_mutex_unlock(&leaf->hub_io_lock);
     }
     return 0;
 }
@@ -535,36 +581,91 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
             int connected = leaf->connected;
             cmq_mutex_unlock(&leaf->lock);
 
-            /* Notify hub first — avoid ghost interest if write fails. */
+            uint8_t payload[4];
+            payload[0] = (uint8_t)(sub_id >> 24);
+            payload[1] = (uint8_t)(sub_id >> 16);
+            payload[2] = (uint8_t)(sub_id >> 8);
+            payload[3] = (uint8_t)sub_id;
+            uint8_t frame[16];
+            size_t flen = cmq_frame_encode(frame, sizeof(frame),
+                                            CMQ_OP_UNSUBSCRIBE, 0,
+                                            payload, 4);
+
             if (connected && hub_fd >= 0) {
-                uint8_t payload[4];
-                payload[0] = (uint8_t)(sub_id >> 24);
-                payload[1] = (uint8_t)(sub_id >> 16);
-                payload[2] = (uint8_t)(sub_id >> 8);
-                payload[3] = (uint8_t)sub_id;
-                uint8_t frame[16];
-                size_t flen = cmq_frame_encode(frame, sizeof(frame),
-                                                CMQ_OP_UNSUBSCRIBE, 0,
-                                                payload, 4);
+                /* Hold hub_io until local removal so connect cannot replay. */
                 cmq_mutex_lock(&leaf->hub_io_lock);
                 cmq_mutex_lock(&leaf->lock);
                 int still = (leaf->connected && leaf->hub_fd == hub_fd);
                 cmq_mutex_unlock(&leaf->lock);
-                int wr = (still && flen > 0) ? write_all(hub_fd, frame, flen) : -1;
-                if (flen == 0 || wr != 0)
-                    leaf_hub_drop(leaf, hub_fd);
-                cmq_mutex_unlock(&leaf->hub_io_lock);
-                if (flen == 0 || wr != 0)
+                if (still) {
+                    int wr = (flen > 0) ? write_all(hub_fd, frame, flen) : -1;
+                    if (flen == 0 || wr != 0) {
+                        leaf_hub_drop(leaf, hub_fd);
+                        cmq_mutex_unlock(&leaf->hub_io_lock);
+                        return -1;
+                    }
+                    cmq_mutex_lock(&leaf->lock);
+                    for (size_t j = 0; j < leaf->sub_count; j++) {
+                        if (leaf->sub_ids[j] == sub_id && leaf->subs[j] &&
+                            strcmp(leaf->subs[j], subject) == 0) {
+                            free(leaf->subs[j]);
+                            memmove(&leaf->subs[j], &leaf->subs[j + 1],
+                                    (leaf->sub_count - j - 1) * sizeof(char *));
+                            memmove(&leaf->sub_ids[j], &leaf->sub_ids[j + 1],
+                                    (leaf->sub_count - j - 1) * sizeof(uint32_t));
+                            leaf->sub_count--;
+                            break;
+                        }
+                    }
+                    cmq_mutex_unlock(&leaf->lock);
+                    cmq_mutex_unlock(&leaf->hub_io_lock);
+                    return 0;
+                }
+                /* Hub switched — connect may have replayed; UNSUB current. */
+                cmq_mutex_lock(&leaf->lock);
+                int cur_fd = leaf->hub_fd;
+                int cur_ok = (leaf->connected && cur_fd >= 0);
+                if (!cur_ok &&
+                    leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
+                    cmq_mutex_unlock(&leaf->lock);
+                    cmq_mutex_unlock(&leaf->hub_io_lock);
                     return -1;
+                }
+                for (size_t j = 0; j < leaf->sub_count; j++) {
+                    if (leaf->sub_ids[j] == sub_id && leaf->subs[j] &&
+                        strcmp(leaf->subs[j], subject) == 0) {
+                        free(leaf->subs[j]);
+                        memmove(&leaf->subs[j], &leaf->subs[j + 1],
+                                (leaf->sub_count - j - 1) * sizeof(char *));
+                        memmove(&leaf->sub_ids[j], &leaf->sub_ids[j + 1],
+                                (leaf->sub_count - j - 1) * sizeof(uint32_t));
+                        leaf->sub_count--;
+                        break;
+                    }
+                }
+                if (!cur_ok) {
+                    leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
+                    cmq_mutex_unlock(&leaf->lock);
+                    cmq_mutex_unlock(&leaf->hub_io_lock);
+                    return 0;
+                }
+                cmq_mutex_unlock(&leaf->lock);
+                int wr2 = (flen > 0) ? write_all(cur_fd, frame, flen) : -1;
+                if (flen == 0 || wr2 != 0) {
+                    leaf_hub_drop(leaf, cur_fd);
+                    cmq_mutex_lock(&leaf->lock);
+                    if (leaf->pending_unsub_count < CMQ_LEAF_MAX_SUBS)
+                        leaf->pending_unsub[leaf->pending_unsub_count++] =
+                            sub_id;
+                    cmq_mutex_unlock(&leaf->lock);
+                }
+                cmq_mutex_unlock(&leaf->hub_io_lock);
+                return 0;
             }
 
-            /* Re-locate by sub_id+subject — never keep a dangling char*. */
+            /* Offline: queue UNSUB for next connect. */
             cmq_mutex_lock(&leaf->lock);
-            /* Skip pending only if the hub we notified is still current;
-               otherwise reconnect may have replayed this sub onto a new hub. */
-            int hub_current = (leaf->connected && leaf->hub_fd == hub_fd);
-            if (!hub_current &&
-                leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
+            if (leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
                 cmq_mutex_unlock(&leaf->lock);
                 return -1;
             }
@@ -580,8 +681,7 @@ int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
                     break;
                 }
             }
-            if (!hub_current)
-                leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
+            leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
             cmq_mutex_unlock(&leaf->lock);
             return 0;
         }

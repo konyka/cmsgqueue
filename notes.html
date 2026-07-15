@@ -2606,6 +2606,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf hub_io held through unsub</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">unsubscribe hub_io</span></td><td>✅</td><td>Hold <code>hub_io_lock</code> until local remove; UNSUB current hub on switch.</td></tr>
+<tr><td><span class="component-name">subscribe rollback</span></td><td>✅</td><td>Rollback under <code>hub_io_lock</code>; immediate UNSUB if replayed.</td></tr>
+</table>
+</div>
+
 
 
 
