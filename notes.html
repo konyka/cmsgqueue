@@ -2507,6 +2507,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route liveness identity · acceptor drain unlock send</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route live/peer</span></td><td>✅</td><td>After poll, close only if <code>route_slot_snap</code> still matches <code>(remote_id, fd)</code>.</td></tr>
+<tr><td><span class="component-name">acceptor drain</span></td><td>✅</td><td>Mark CLOSING under lock; <code>send_local</code>/<code>finish_closing</code> after unlock.</td></tr>
+<tr><td><span class="component-name">account epoch</span></td><td>✅</td><td><code>client_account_live</code> loads <code>epoch</code> with ACQUIRE.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -25,7 +25,8 @@ static int client_account_live(cmq_server_t *srv, const cmq_client_t *c) {
     if (!a) return 0;
     /* Re-check active after get() unlock (TOCTOU with soft-delete). */
     if (!__atomic_load_n(&a->active, __ATOMIC_ACQUIRE)) return 0;
-    return ep == c->account_epoch && a->epoch == c->account_epoch;
+    uint32_t aep = __atomic_load_n(&a->epoch, __ATOMIC_ACQUIRE);
+    return ep == c->account_epoch && aep == c->account_epoch;
 }
 
 static uint64_t srv_now_ms(void) {
@@ -4749,45 +4750,60 @@ static void acceptor_process_drain(cmq_server_t *srv) {
     uint8_t disc[16];
     size_t disc_len = cmq_frame_encode(disc, sizeof(disc), CMQ_OP_DISCONNECT, 0, NULL, 0);
 
+    typedef struct {
+        cmq_client_t *c;
+        uint8_t send_disc;
+    } cmq_acc_drain_t;
+
     cmq_mutex_lock(&srv->clients_lock);
     int nacc = srv->clients_count;
-    cmq_client_t **acc_snap = NULL;
+    cmq_acc_drain_t *acc_snap = NULL;
     if (nacc > 0) {
-        acc_snap = malloc((size_t)nacc * sizeof(cmq_client_t *));
+        acc_snap = malloc((size_t)nacc * sizeof(cmq_acc_drain_t));
         if (acc_snap) {
-            memcpy(acc_snap, srv->clients, (size_t)nacc * sizeof(cmq_client_t *));
+            int n = 0;
             for (int i = 0; i < nacc; i++) {
                 cmq_client_t *c = srv->clients[i];
                 if (!c || c->state == CMQ_CLIENT_CLOSED)
                     continue;
+                uint8_t send_disc = 0;
                 if (c->state == CMQ_CLIENT_CONNECTED) {
-                    if (disc_len > 0) cmq_client_send_local(c, disc, disc_len);
+                    send_disc = (disc_len > 0) ? 1 : 0;
                     c->state = CMQ_CLIENT_CLOSING;
                 } else if (c->state == CMQ_CLIENT_INIT) {
-                    /* Half-open: no CONNACK yet — skip DISCONNECT, still close. */
                     c->state = CMQ_CLIENT_CLOSING;
                 }
                 /* Pre-existing CLOSING: finish below. */
+                acc_snap[n].c = c;
+                acc_snap[n].send_disc = send_disc;
+                n++;
             }
+            nacc = n;
         } else {
+            /* OOM: nudge EOF only — no send_local under clients_lock. */
             for (int i = 0; i < nacc; i++) {
                 cmq_client_t *c = srv->clients[i];
                 if (c && c->fd >= 0 &&
                     (c->state == CMQ_CLIENT_CONNECTED ||
                      c->state == CMQ_CLIENT_INIT ||
                      c->state == CMQ_CLIENT_CLOSING)) {
-                    if (c->state == CMQ_CLIENT_CONNECTED && disc_len > 0)
-                        cmq_client_send_local(c, disc, disc_len);
-                    shutdown(c->fd, SHUT_RDWR);
+                    if (c->state != CMQ_CLIENT_CLOSING &&
+                        c->state != CMQ_CLIENT_CLOSED)
+                        c->state = CMQ_CLIENT_CLOSING;
+                    (void)shutdown(c->fd, SHUT_RDWR);
                 }
             }
+            nacc = 0;
         }
     }
     cmq_mutex_unlock(&srv->clients_lock);
     if (acc_snap) {
         for (int i = 0; i < nacc; i++) {
-            cmq_client_t *c = acc_snap[i];
-            if (c && c->state == CMQ_CLIENT_CLOSING)
+            cmq_client_t *c = acc_snap[i].c;
+            if (!c) continue;
+            if (acc_snap[i].send_disc && disc_len > 0)
+                (void)cmq_client_send_local(c, disc, disc_len);
+            if (c->state == CMQ_CLIENT_CLOSING)
                 client_finish_closing(c);
         }
         free(acc_snap);
