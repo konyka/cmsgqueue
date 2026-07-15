@@ -10,6 +10,8 @@ typedef struct cmq_route_pool cmq_route_pool_t;
 
 typedef struct {
     char remote_id[CMQ_NODE_ID_SIZE];
+    char remote_addr[CMQ_NODE_ADDR_SIZE];
+    int remote_port;
     int fd;
     int connected;
     int fd_owned;                   /* 1 = pool closes fd; 0 = inbound borrow */

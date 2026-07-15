@@ -237,7 +237,7 @@ static void route_slot_close(cmq_route_pool_t *pool, size_t idx) {
     if (!pool || idx >= CMQ_ROUTE_MAX_CONNS) return;
     cmq_mutex_lock(&pool->io_locks[idx]);
     conn_drop_fd(&pool->conns[idx]);
-    memset(pool->conns[idx].remote_id, 0, sizeof(pool->conns[idx].remote_id));
+    memset(&pool->conns[idx], 0, sizeof(pool->conns[idx]));
     cmq_mutex_unlock(&pool->io_locks[idx]);
 }
 
@@ -249,14 +249,28 @@ static int route_fd_alive(int fd) {
     return pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL));
 }
 
+/* Empty remote_addr = inbound/placeholder (no configured endpoint). */
+static int route_ep_same(const char *slot_addr, int slot_port,
+                          const char *addr, int port) {
+    if (!slot_addr || slot_addr[0] == '\0')
+        return 1;
+    return slot_port == port &&
+           strncmp(slot_addr, addr, CMQ_NODE_ADDR_SIZE) == 0;
+}
+
 /* Publish a peer into a slot. Caller holds pool->lock.
-   connected=0 stages inbound until handshake is drained. */
+   connected=0 stages inbound until handshake is drained.
+   addr may be NULL for inbound/placeholder (no endpoint sticky). */
 static void route_slot_install(cmq_route_pool_t *pool, size_t idx,
                                 const char *node_id, int fd, int fd_owned,
-                                int connected) {
+                                int connected, const char *addr, int port) {
     cmq_mutex_lock(&pool->io_locks[idx]);
     memset(&pool->conns[idx], 0, sizeof(pool->conns[idx]));
     strncpy(pool->conns[idx].remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
+    if (addr && addr[0]) {
+        strncpy(pool->conns[idx].remote_addr, addr, CMQ_NODE_ADDR_SIZE - 1);
+        pool->conns[idx].remote_port = port;
+    }
     pool->conns[idx].fd = fd;
     pool->conns[idx].connected = connected ? 1 : 0;
     pool->conns[idx].fd_owned = fd_owned ? 1 : 0;
@@ -297,21 +311,39 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         cmq_mutex_lock(&pool->io_locks[i]);
         int match = (strcmp(pool->conns[i].remote_id, node_id) == 0);
         int efd = pool->conns[i].fd;
+        char ep[CMQ_NODE_ADDR_SIZE];
+        int eport = 0;
+        if (match && efd >= 0) {
+            memcpy(ep, pool->conns[i].remote_addr, CMQ_NODE_ADDR_SIZE);
+            ep[CMQ_NODE_ADDR_SIZE - 1] = '\0';
+            eport = pool->conns[i].remote_port;
+        }
         cmq_mutex_unlock(&pool->io_locks[i]);
-        /* Live or staged (fd>=0, connected may be 0 during CONNACK drain). */
+        /* Live or staged (fd>=0). Sticky only for same configured endpoint;
+           inbound/empty addr keeps any alive peer (do not steal staged). */
         if (match && efd >= 0) {
             size_t idx = i;
+            int same_ep = route_ep_same(ep, eport, addr, port);
             cmq_mutex_unlock(&pool->lock);
-            if (route_fd_alive(efd))
+            if (route_fd_alive(efd) && same_ep)
                 return 0;
             cmq_mutex_lock(&pool->lock);
             if (idx < pool->conn_count) {
                 cmq_mutex_lock(&pool->io_locks[idx]);
                 int same = (strcmp(pool->conns[idx].remote_id, node_id) == 0 &&
                             pool->conns[idx].fd == efd);
+                char ep2[CMQ_NODE_ADDR_SIZE];
+                int eport2 = 0;
+                if (same) {
+                    memcpy(ep2, pool->conns[idx].remote_addr, CMQ_NODE_ADDR_SIZE);
+                    ep2[CMQ_NODE_ADDR_SIZE - 1] = '\0';
+                    eport2 = pool->conns[idx].remote_port;
+                }
                 cmq_mutex_unlock(&pool->io_locks[idx]);
-                /* Re-probe: fd number may have been recycled into a new peer. */
-                if (same && !route_fd_alive(efd))
+                /* Drop dead or wrong-endpoint outbound; never steal inbound. */
+                if (same &&
+                    (!route_fd_alive(efd) ||
+                     (ep2[0] != '\0' && !route_ep_same(ep2, eport2, addr, port))))
                     route_slot_close(pool, idx);
             }
             break;
@@ -367,8 +399,16 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         /* Another thread may have restored a live or staged egress. */
         if (efd >= 0) {
             size_t idx = i;
+            char ep[CMQ_NODE_ADDR_SIZE];
+            int eport = 0;
+            cmq_mutex_lock(&pool->io_locks[idx]);
+            memcpy(ep, pool->conns[idx].remote_addr, CMQ_NODE_ADDR_SIZE);
+            ep[CMQ_NODE_ADDR_SIZE - 1] = '\0';
+            eport = pool->conns[idx].remote_port;
+            cmq_mutex_unlock(&pool->io_locks[idx]);
+            int same_ep = route_ep_same(ep, eport, addr, port);
             cmq_mutex_unlock(&pool->lock);
-            if (route_fd_alive(efd)) {
+            if (route_fd_alive(efd) && same_ep) {
                 close(fd);
                 return 0;
             }
@@ -377,16 +417,26 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                 char rid2[CMQ_NODE_ID_SIZE];
                 int f2 = -1;
                 route_slot_snap(pool, idx, NULL, &f2, NULL, rid2);
-                if (strcmp(rid2, node_id) == 0 && f2 == efd &&
-                    !route_fd_alive(efd))
-                    route_slot_close(pool, idx);
+                char ep2[CMQ_NODE_ADDR_SIZE];
+                int eport2 = 0;
+                if (strcmp(rid2, node_id) == 0 && f2 == efd) {
+                    cmq_mutex_lock(&pool->io_locks[idx]);
+                    memcpy(ep2, pool->conns[idx].remote_addr, CMQ_NODE_ADDR_SIZE);
+                    ep2[CMQ_NODE_ADDR_SIZE - 1] = '\0';
+                    eport2 = pool->conns[idx].remote_port;
+                    cmq_mutex_unlock(&pool->io_locks[idx]);
+                    if (!route_fd_alive(efd) ||
+                        (ep2[0] != '\0' &&
+                         !route_ep_same(ep2, eport2, addr, port)))
+                        route_slot_close(pool, idx);
+                }
             }
             /* Rescan — peer may have been replaced while unlocked. */
             i = (size_t)-1;
             continue;
         }
         route_slot_close(pool, i);
-        route_slot_install(pool, i, node_id, fd, 1, 1);
+        route_slot_install(pool, i, node_id, fd, 1, 1, addr, port);
         cmq_mutex_unlock(&pool->lock);
         return 0;
     }
@@ -400,7 +450,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         if (rid[0] != '\0' && connected)
             continue; /* connected+fd<0 placeholder */
         route_slot_close(pool, i);
-        route_slot_install(pool, i, node_id, fd, 1, 1);
+        route_slot_install(pool, i, node_id, fd, 1, 1, addr, port);
         cmq_mutex_unlock(&pool->lock);
         return 0;
     }
@@ -410,7 +460,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         return -1;
     }
     size_t idx = pool->conn_count++;
-    route_slot_install(pool, idx, node_id, fd, 1, 1);
+    route_slot_install(pool, idx, node_id, fd, 1, 1, addr, port);
     cmq_mutex_unlock(&pool->lock);
     return 0;
 }
@@ -477,7 +527,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                     if (strcmp(rid2, node_id) == 0 && f2 == efd &&
                         !route_fd_alive(efd)) {
                         route_slot_close(pool, idx);
-                        route_slot_install(pool, idx, node_id, fd, fd >= 0, 1);
+                        route_slot_install(pool, idx, node_id, fd, fd >= 0, 1, NULL, 0);
                         cmq_mutex_unlock(&pool->lock);
                         return 0;
                     }
@@ -489,14 +539,14 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                     }
                     if (strcmp(rid2, node_id) == 0) {
                         route_slot_close(pool, idx);
-                        route_slot_install(pool, idx, node_id, fd, fd >= 0, 1);
+                        route_slot_install(pool, idx, node_id, fd, fd >= 0, 1, NULL, 0);
                         cmq_mutex_unlock(&pool->lock);
                         return 0;
                     }
                 }
                 /* Fall through to rescan / grow. */
             } else {
-                route_slot_install(pool, (size_t)replace, node_id, fd, fd >= 0, 1);
+                route_slot_install(pool, (size_t)replace, node_id, fd, fd >= 0, 1, NULL, 0);
                 cmq_mutex_unlock(&pool->lock);
                 return 0;
             }
@@ -533,7 +583,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
             }
             if (f2 == efd && !route_fd_alive(efd)) {
                 route_slot_close(pool, idx);
-                route_slot_install(pool, idx, node_id, fd, fd >= 0, 1);
+                route_slot_install(pool, idx, node_id, fd, fd >= 0, 1, NULL, 0);
                 cmq_mutex_unlock(&pool->lock);
                 return 0;
             }
@@ -543,11 +593,11 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                 return 0;
             }
             route_slot_close(pool, idx);
-            route_slot_install(pool, idx, node_id, fd, fd >= 0, 1);
+            route_slot_install(pool, idx, node_id, fd, fd >= 0, 1, NULL, 0);
             cmq_mutex_unlock(&pool->lock);
             return 0;
         }
-        route_slot_install(pool, i, node_id, fd, fd >= 0, 1);
+        route_slot_install(pool, i, node_id, fd, fd >= 0, 1, NULL, 0);
         cmq_mutex_unlock(&pool->lock);
         return 0;
     }
@@ -560,7 +610,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
         if (rid[0] != '\0' && connected)
             continue; /* connected+fd<0 placeholder */
         route_slot_close(pool, i);
-        route_slot_install(pool, i, node_id, fd, fd >= 0, 1);
+        route_slot_install(pool, i, node_id, fd, fd >= 0, 1, NULL, 0);
         cmq_mutex_unlock(&pool->lock);
         return 0;
     }
@@ -570,7 +620,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
         return -1;
     }
     size_t idx = pool->conn_count++;
-    route_slot_install(pool, idx, node_id, fd, fd >= 0, 1);
+    route_slot_install(pool, idx, node_id, fd, fd >= 0, 1, NULL, 0);
     cmq_mutex_unlock(&pool->lock);
     return 0;
 }
@@ -613,7 +663,7 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
                     return -1;
                 }
                 route_slot_close(pool, idx);
-                route_slot_install(pool, idx, node_id, fd, 0, 0);
+                route_slot_install(pool, idx, node_id, fd, 0, 0, NULL, 0);
                 cmq_mutex_unlock(&pool->lock);
                 return 0;
             }
@@ -623,12 +673,12 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
                 return -1;
             }
             route_slot_close(pool, idx);
-            route_slot_install(pool, idx, node_id, fd, 0, 0);
+            route_slot_install(pool, idx, node_id, fd, 0, 0, NULL, 0);
             cmq_mutex_unlock(&pool->lock);
             return 0;
         }
         route_slot_close(pool, i);
-        route_slot_install(pool, i, node_id, fd, 0, 0);
+        route_slot_install(pool, i, node_id, fd, 0, 0, NULL, 0);
         cmq_mutex_unlock(&pool->lock);
         return 0;
     }
@@ -641,7 +691,7 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
         if (rid[0] != '\0' && connected)
             continue; /* connected+fd<0 placeholder */
         route_slot_close(pool, i);
-        route_slot_install(pool, i, node_id, fd, 0, 0);
+        route_slot_install(pool, i, node_id, fd, 0, 0, NULL, 0);
         cmq_mutex_unlock(&pool->lock);
         return 0;
     }
@@ -650,7 +700,7 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
         return -1;
     }
     size_t idx = pool->conn_count++;
-    route_slot_install(pool, idx, node_id, fd, 0, 0);
+    route_slot_install(pool, idx, node_id, fd, 0, 0, NULL, 0);
     cmq_mutex_unlock(&pool->lock);
     return 0;
 }

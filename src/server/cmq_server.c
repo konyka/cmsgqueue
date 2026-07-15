@@ -4137,16 +4137,21 @@ static void *route_reconnect_thread(void *arg) {
                     break;
                 char nid[CMQ_NODE_ID_SIZE];
                 snprintf(nid, sizeof(nid), "r%d", i);
-                if (cmq_route_peer_live(srv->routes, nid))
+                const char *addr = srv->config.routes[i].addr;
+                int port = srv->config.routes[i].port;
+                cmq_route_conn_t snap;
+                if (cmq_route_get_conn(srv->routes, nid, &snap) == 0 &&
+                    snap.fd >= 0 &&
+                    (snap.remote_addr[0] == '\0' ||
+                     (snap.remote_port == port &&
+                      strncmp(snap.remote_addr, addr, sizeof(snap.remote_addr)) == 0)) &&
+                    cmq_route_peer_live(srv->routes, nid))
                     continue;
-                if (cmq_route_connect(srv->routes, nid,
-                                      srv->config.routes[i].addr,
-                                      srv->config.routes[i].port,
+                if (cmq_route_connect(srv->routes, nid, addr, port,
                                       srv->config.auth_username,
                                       srv->config.auth_password) == 0) {
                     cmq_log_info(srv->log, "Route reconnected to %s:%d",
-                                 srv->config.routes[i].addr,
-                                 srv->config.routes[i].port);
+                                 addr, port);
                 }
                 /* Continue — retry every dead peer each interval. */
             }
