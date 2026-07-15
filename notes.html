@@ -2597,6 +2597,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — protect staged inbound from reconnect</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">peer_live staged</span></td><td>✅</td><td><code>fd&gt;=0</code> (incl. CONNACK stage) counts live for reconnect skip.</td></tr>
+<tr><td><span class="component-name">connect/tombstone</span></td><td>✅</td><td>Do not <code>SHUT_RDWR</code>/reuse slots that still hold a staged fd.</td></tr>
+</table>
+</div>
 
 
 

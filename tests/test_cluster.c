@@ -143,6 +143,7 @@ TEST(route, attach_inbound_borrow) {
 
     ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", a[1]), 0);
     ASSERT_EQ(cmq_route_live_count(rp), (size_t)0); /* staged until mark */
+    ASSERT_EQ(cmq_route_peer_live(rp, "r0"), 1); /* staged blocks reconnect */
     ASSERT_EQ(cmq_route_mark_connected(rp, a[1]), 0);
     ASSERT_EQ(cmq_route_live_count(rp), (size_t)1);
     cmq_route_conn_t conn;
