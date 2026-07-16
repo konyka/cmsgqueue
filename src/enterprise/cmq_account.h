@@ -49,7 +49,8 @@ cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name,
 size_t cmq_account_count(cmq_account_manager_t *mgr);
 
 void cmq_account_inc_stat(cmq_account_t *acc, size_t field_offset, uint64_t delta);
-void cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch);
+/* Returns 0 if the connection credit stuck on this epoch; -1 if inactive/raced. */
+int cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch);
 void cmq_account_dec_connections(cmq_account_t *acc, uint32_t epoch);
 void cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch);
 void cmq_account_dec_subscriptions(cmq_account_t *acc, uint32_t epoch);

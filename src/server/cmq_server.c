@@ -3289,7 +3289,20 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             break;
         }
         c->account_epoch = aep;
-        cmq_account_inc_connections(acc, aep);
+        /* get→inc→CONNECTED TOCTOU: refuse if credit cannot stick or epoch died. */
+        if (cmq_account_inc_connections(acc, aep) != 0) {
+            c->account_epoch = 0;
+            cmq_send_connack(c, 1);
+            c->state = CMQ_CLIENT_CLOSING;
+            break;
+        }
+        if (!client_account_live(srv, c)) {
+            cmq_account_dec_connections(acc, aep);
+            c->account_epoch = 0;
+            cmq_send_connack(c, 1);
+            c->state = CMQ_CLIENT_CLOSING;
+            break;
+        }
         c->state = CMQ_CLIENT_CONNECTED;
         c->last_activity_ms = srv_now_ms();
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);

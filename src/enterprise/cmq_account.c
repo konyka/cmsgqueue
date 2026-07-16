@@ -213,13 +213,16 @@ size_t cmq_account_count(cmq_account_manager_t *mgr) {
     return c;
 }
 
-void cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch) {
-    if (!acc) return;
-    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
-    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+int cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch) {
+    if (!acc) return -1;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return -1;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return -1;
     __atomic_fetch_add(&acc->connections, 1, __ATOMIC_RELAXED);
-    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch)
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
         account_undo_inc_u64(&acc->connections, 1);
+        return -1;
+    }
+    return 0;
 }
 void cmq_account_dec_connections(cmq_account_t *acc, uint32_t epoch) {
     if (!acc) return;

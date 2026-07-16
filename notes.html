@@ -2748,6 +2748,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — CONNECT inc must stick · filestore clearerr</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CONNECT inc</span></td><td>✅</td><td><code>inc_connections</code> returns failure; refuse CONNACK 0 if credit/live fails after get.</td></tr>
+<tr><td><span class="component-name">filestore clearerr</span></td><td>✅</td><td>Append rollback <code>clearerr</code>+seek; idx <code>ftruncate</code> checked like data.</td></tr>
+</table>
+</div>
+
 
 
 

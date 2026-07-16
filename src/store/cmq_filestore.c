@@ -366,6 +366,7 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
         fflush(fs->data_fp);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
+        clearerr(fs->data_fp);
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
@@ -373,6 +374,7 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     if (fflush(fs->data_fp) != 0) {
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
+        clearerr(fs->data_fp);
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
@@ -384,6 +386,7 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     if (fs_tell(fs->idx_fp, &idx_off) != 0) {
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
+        clearerr(fs->data_fp);
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
@@ -392,17 +395,23 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
         fflush(fs->idx_fp);
         /* Same as fflush(idx) failure: drop partial idx so next_seq cannot
            advance over a ghost record pointing at truncated data. */
-        ftruncate(fileno(fs->idx_fp), (off_t)idx_off);
+        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_off) == 0)
+            fs_seek(fs->idx_fp, idx_off);
+        clearerr(fs->idx_fp);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
+        clearerr(fs->data_fp);
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     if (fflush(fs->idx_fp) != 0) {
-        ftruncate(fileno(fs->idx_fp), (off_t)idx_off);
+        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_off) == 0)
+            fs_seek(fs->idx_fp, idx_off);
+        clearerr(fs->idx_fp);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
+        clearerr(fs->data_fp);
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
