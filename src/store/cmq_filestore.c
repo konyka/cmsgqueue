@@ -281,8 +281,16 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
         valid = i + 1;
     }
     if (valid * 8u != idx_sz) {
-        if (ftruncate(fileno(fs->idx_fp), (off_t)(valid * 8u)) == 0)
-            fs_seek_end(fs->idx_fp);
+        /* Must drop the bad suffix before advertising next_seq=valid+1;
+           otherwise later refresh_next_seq would re-extend over ghosts. */
+        if (ftruncate(fileno(fs->idx_fp), (off_t)(valid * 8u)) != 0) {
+            clearerr(fs->idx_fp);
+            return UINT64_MAX;
+        }
+        if (fs_seek_end(fs->idx_fp) != 0) {
+            clearerr(fs->idx_fp);
+            return UINT64_MAX;
+        }
     }
     return valid;
 }

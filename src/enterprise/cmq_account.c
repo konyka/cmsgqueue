@@ -247,14 +247,17 @@ void cmq_account_dec_connections(cmq_account_t *acc, uint32_t epoch) {
             return;
     }
 }
-void cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch) {
-    if (!acc) return;
-    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
-    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+int cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch) {
+    if (!acc) return -1;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return -1;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return -1;
     uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
     uint64_t prev = __atomic_fetch_add(&acc->subscriptions, 1, __ATOMIC_RELAXED);
-    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch)
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
         account_undo_stale_inc(&acc->subscriptions, 1, prev, g0, acc);
+        return -1;
+    }
+    return 0;
 }
 void cmq_account_dec_subscriptions(cmq_account_t *acc, uint32_t epoch) {
     if (!acc) return;

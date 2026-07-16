@@ -2775,6 +2775,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — repair suffix truncate · SUB credit must stick</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">repair truncate</span></td><td>✅</td><td>Fail-closed if bad-idx suffix <code>ftruncate</code> fails (avoid ghost <code>next_seq</code>).</td></tr>
+<tr><td><span class="component-name">SUB credit</span></td><td>✅</td><td><code>inc_subscriptions</code> returns stick; new SUB rolls back + SUBACK 1 if credit/live fails.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -2532,7 +2532,31 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         cmq_atomic_fetch_add_u64(&srv->stat_subscriptions, 1, CMQ_ATOMIC_RELAXED);
         c->sub_count++;
         cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name, NULL);
-        if (a) cmq_account_inc_subscriptions(a, c->account_epoch);
+        int credited =
+            (a && cmq_account_inc_subscriptions(a, c->account_epoch) == 0);
+        /* Soft-delete between live-check and credit: roll back ghost sub. */
+        if (!credited || !client_account_live(srv, c)) {
+            if (credited)
+                cmq_account_dec_subscriptions(a, c->account_epoch);
+            c->subs = entry->next;
+            if (c->sub_count > 0) c->sub_count--;
+            uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
+                                                CMQ_ATOMIC_RELAXED);
+            if (cur > 0)
+                cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
+                                          CMQ_ATOMIC_RELAXED);
+            cmq_rwlock_wrlock(&srv->sublist_lock);
+            if (entry->ref) {
+                cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
+                free(entry->ref);
+                entry->ref = NULL;
+            }
+            cmq_rwlock_unlock(&srv->sublist_lock);
+            free(entry);
+            cmq_send_suback(c, sub_id, 1);
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
     }
     cmq_send_suback(c, sub_id, 0);
 }
