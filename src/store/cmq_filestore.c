@@ -192,24 +192,27 @@ static void truncate_orphan_data(cmq_filestore_t *fs, uint64_t n_idx) {
 }
 
 /* Validate idx→data records from the start; truncate at first bad/partial
-   entry (crash after idx append with incomplete data, or torn idx write). */
+   entry (crash after idx append with incomplete data, or torn idx write).
+   Returns valid count, or UINT64_MAX on I/O failure (do not treat as empty). */
 static uint64_t repair_idx(cmq_filestore_t *fs) {
     if (fs_seek_end(fs->idx_fp) != 0)
-        return 0;
+        return UINT64_MAX;
     uint64_t idx_sz;
     if (fs_tell(fs->idx_fp, &idx_sz) != 0)
-        return 0;
-    /* Drop torn trailing bytes that are not a full offset entry. */
+        return UINT64_MAX;
+    /* Drop torn trailing bytes that are not a full offset entry. Even if
+       ftruncate fails, keep scanning with the rounded size — returning 0
+       here would make create() truncate .data to empty. */
     if ((idx_sz % 8) != 0) {
         idx_sz -= idx_sz % 8;
-        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_sz) != 0)
-            return 0;
+        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_sz) == 0)
+            (void)fs_seek_end(fs->idx_fp);
     }
     if (fs_seek_end(fs->data_fp) != 0)
-        return 0;
+        return UINT64_MAX;
     uint64_t data_sz;
     if (fs_tell(fs->data_fp, &data_sz) != 0)
-        return 0;
+        return UINT64_MAX;
 
     uint64_t valid = 0;
     uint64_t n = idx_sz / 8u;
@@ -298,10 +301,19 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     uint64_t n = 0;
     if (fs_lock_pair(fs, LOCK_EX) == 0) {
         n = repair_idx(fs);
-        truncate_orphan_data(fs, n);
+        if (n != UINT64_MAX)
+            truncate_orphan_data(fs, n);
         fs_unlock_pair(fs);
     } else {
         /* Fail closed: do not repair unlocked against a live writer. */
+        fclose(fs->idx_fp);
+        fclose(fs->data_fp);
+        cmq_mutex_destroy(&fs->lock);
+        free(fs);
+        return NULL;
+    }
+    if (n == UINT64_MAX) {
+        /* repair I/O failed — never orphan-truncate as if empty. */
         fclose(fs->idx_fp);
         fclose(fs->data_fp);
         cmq_mutex_destroy(&fs->lock);

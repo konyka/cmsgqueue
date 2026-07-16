@@ -38,12 +38,16 @@ static void account_clear_counters(cmq_account_t *a) {
     __atomic_store_n(&a->bytes_out, 0, __ATOMIC_RELAXED);
 }
 
-/* Undo a fetch_add that lost its epoch (soft-delete/reactivate). Prefer
-   correcting a post-clear pollution over leaving a permanent +1 on the new
-   generation; clear under mgr lock already wiped any pre-clear add. */
-static void account_undo_inc_u64(uint64_t *counter, uint64_t delta) {
+/* Undo a stale fetch_add only while still soft-deleted. After reactivate,
+   clear_counters owns the reset — unconditional undo would steal new-gen credits. */
+static void account_undo_inc_u64(uint64_t *counter, uint64_t delta,
+                                 cmq_account_t *acc) {
+    if (__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE))
+        return;
     uint64_t cur = __atomic_load_n(counter, __ATOMIC_RELAXED);
     for (;;) {
+        if (__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE))
+            return;
         uint64_t next = (cur > delta) ? cur - delta : 0;
         if (__atomic_compare_exchange_n(counter, &cur, next,
                                          0, __ATOMIC_RELAXED,
@@ -171,8 +175,10 @@ int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
         if (__atomic_load_n(&mgr->accounts[i].active, __ATOMIC_ACQUIRE) &&
             strcmp(mgr->accounts[i].name, name) == 0) {
             /* Soft-delete: bump epoch so live sessions fail client_account_live
-               immediately (even across get→use TOCTOU), then clear active. */
+               immediately (even across get→use TOCTOU), then clear active.
+               Zero counters while inactive so stale fetch_add can undo safely. */
             account_bump_epoch(&mgr->accounts[i]);
+            account_clear_counters(&mgr->accounts[i]);
             __atomic_store_n(&mgr->accounts[i].active, 0, __ATOMIC_RELEASE);
             clear_account_perms_unlocked(mgr, name);
             cmq_mutex_unlock(&mgr->lock);
@@ -219,7 +225,7 @@ int cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch) {
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return -1;
     __atomic_fetch_add(&acc->connections, 1, __ATOMIC_RELAXED);
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
-        account_undo_inc_u64(&acc->connections, 1);
+        account_undo_inc_u64(&acc->connections, 1, acc);
         return -1;
     }
     return 0;
@@ -243,7 +249,7 @@ void cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch) {
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
     __atomic_fetch_add(&acc->subscriptions, 1, __ATOMIC_RELAXED);
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch)
-        account_undo_inc_u64(&acc->subscriptions, 1);
+        account_undo_inc_u64(&acc->subscriptions, 1, acc);
 }
 void cmq_account_dec_subscriptions(cmq_account_t *acc, uint32_t epoch) {
     if (!acc) return;
@@ -265,8 +271,8 @@ void cmq_account_inc_msgs_in(cmq_account_t *acc, uint32_t epoch, uint64_t bytes)
     __atomic_fetch_add(&acc->messages_in, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&acc->bytes_in, bytes, __ATOMIC_RELAXED);
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
-        account_undo_inc_u64(&acc->messages_in, 1);
-        account_undo_inc_u64(&acc->bytes_in, bytes);
+        account_undo_inc_u64(&acc->messages_in, 1, acc);
+        account_undo_inc_u64(&acc->bytes_in, bytes, acc);
     }
 }
 void cmq_account_inc_msgs_out(cmq_account_t *acc, uint32_t epoch, uint64_t bytes) {
@@ -276,8 +282,8 @@ void cmq_account_inc_msgs_out(cmq_account_t *acc, uint32_t epoch, uint64_t bytes
     __atomic_fetch_add(&acc->messages_out, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&acc->bytes_out, bytes, __ATOMIC_RELAXED);
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
-        account_undo_inc_u64(&acc->messages_out, 1);
-        account_undo_inc_u64(&acc->bytes_out, bytes);
+        account_undo_inc_u64(&acc->messages_out, 1, acc);
+        account_undo_inc_u64(&acc->bytes_out, bytes, acc);
     }
 }
 

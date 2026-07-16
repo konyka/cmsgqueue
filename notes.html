@@ -2757,6 +2757,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — filestore repair fail-closed · undo inactive-only</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">repair_idx</span></td><td>✅</td><td>I/O errors return <code>UINT64_MAX</code>; create fail-closed — never orphan-truncate as empty.</td></tr>
+<tr><td><span class="component-name">inc undo</span></td><td>✅</td><td>Epoch-mismatch undo only while inactive; soft-delete clears counters under lock.</td></tr>
+</table>
+</div>
+
 
 
 
