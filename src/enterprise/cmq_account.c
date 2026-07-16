@@ -39,18 +39,17 @@ static void account_clear_counters(cmq_account_t *a) {
     __atomic_store_n(&a->bytes_out, 0, __ATOMIC_RELAXED);
 }
 
-/* Undo stale fetch_add using clear_gen + prev from fetch_add:
-   - no clear in window → undo
-   - one clear before our add (counter still > prev) → undo pollution
-   - clear after our add wiped us (counter <= prev) → do not steal new credits */
+/* Undo stale fetch_add only while clear_gen still equals g0.
+   Re-check gen on every CAS retry — a delete+reactivate mid-loop must not
+   steal the new generation's credits (prefer rare leak over theft). */
 static void account_undo_stale_inc(uint64_t *counter, uint64_t delta,
                                    uint64_t prev, uint32_t g0,
                                    cmq_account_t *acc) {
-    uint32_t g1 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
+    (void)prev;
     uint64_t cur = __atomic_load_n(counter, __ATOMIC_RELAXED);
-    if (g1 != g0 && !(g1 == g0 + 1 && cur > prev))
-        return;
     for (;;) {
+        if (__atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0)
+            return;
         uint64_t next = (cur > delta) ? cur - delta : 0;
         if (__atomic_compare_exchange_n(counter, &cur, next,
                                          0, __ATOMIC_RELAXED,

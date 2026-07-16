@@ -2784,6 +2784,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — undo CAS recheck clear_gen · read clearerr</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">undo CAS</span></td><td>✅</td><td>Each CAS retry rechecks <code>clear_gen==g0</code>; never steal post-reactivate credits.</td></tr>
+<tr><td><span class="component-name">read clearerr</span></td><td>✅</td><td><code>cmq_filestore_read</code> failure path <code>clearerr</code>s idx/data so sticky <code>ferror</code> cannot poison append.</td></tr>
+</table>
+</div>
+
 
 
 
