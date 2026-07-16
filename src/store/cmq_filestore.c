@@ -159,36 +159,45 @@ static int prefix_safe(const char *prefix) {
 }
 
 /* Drop trailing .data bytes not covered by .idx (crash between fflush(data)
-   and idx append). Indexed records stay intact; orphans are truncated. */
-static void truncate_orphan_data(cmq_filestore_t *fs, uint64_t n_idx) {
+   and idx append). Indexed records stay intact; orphans are truncated.
+   Returns 0 on success (incl. nothing to do), -1 on I/O error. */
+static int truncate_orphan_data(cmq_filestore_t *fs, uint64_t n_idx) {
     off_t expect = 0;
     if (n_idx > 0) {
         if (fs_seek(fs->idx_fp, (n_idx - 1) * 8u) != 0)
-            return;
+            goto io_fail;
         uint8_t idxb[8];
         if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1)
-            return;
+            goto io_fail;
         uint64_t offset = get_le64(idxb);
         if (fs_seek(fs->data_fp, offset) != 0)
-            return;
+            goto io_fail;
         uint8_t hdr[CMQ_FS_HDR_SIZE];
         if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1)
-            return;
+            goto io_fail;
         if (get_le32(hdr) != CMQ_FS_MAGIC)
-            return;
+            return 0;
         uint32_t len = get_le32(hdr + 14);
         expect = (off_t)(offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)len);
         if (expect < 0 || (uint64_t)expect !=
             offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)len)
-            return;
+            return 0;
     }
     if (fs_seek_end(fs->data_fp) != 0)
-        return;
+        goto io_fail;
     uint64_t sz;
-    if (fs_tell(fs->data_fp, &sz) != 0 || (off_t)sz <= expect)
-        return;
-    if (ftruncate(fileno(fs->data_fp), expect) == 0)
-        fs_seek_end(fs->data_fp);
+    if (fs_tell(fs->data_fp, &sz) != 0)
+        goto io_fail;
+    if ((off_t)sz <= expect)
+        return 0;
+    if (ftruncate(fileno(fs->data_fp), expect) != 0)
+        goto io_fail;
+    (void)fs_seek_end(fs->data_fp);
+    return 0;
+io_fail:
+    if (fs->idx_fp) clearerr(fs->idx_fp);
+    if (fs->data_fp) clearerr(fs->data_fp);
+    return -1;
 }
 
 /* Validate idx→data records from the start; truncate at first bad/partial
@@ -326,10 +335,11 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     if (!fs->idx_fp) { fclose(fs->data_fp); cmq_mutex_destroy(&fs->lock); free(fs); return NULL; }
 
     uint64_t n = 0;
+    int orphan_rc = 0;
     if (fs_lock_pair(fs, LOCK_EX) == 0) {
         n = repair_idx(fs);
         if (n != UINT64_MAX)
-            truncate_orphan_data(fs, n);
+            orphan_rc = truncate_orphan_data(fs, n);
         fs_unlock_pair(fs);
     } else {
         /* Fail closed: do not repair unlocked against a live writer. */
@@ -339,8 +349,8 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
         free(fs);
         return NULL;
     }
-    if (n == UINT64_MAX) {
-        /* repair I/O failed — never orphan-truncate as if empty. */
+    if (n == UINT64_MAX || orphan_rc != 0) {
+        /* repair/orphan I/O failed — never hand out a sticky-ferror handle. */
         fclose(fs->idx_fp);
         fclose(fs->data_fp);
         cmq_mutex_destroy(&fs->lock);
@@ -370,6 +380,8 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
 
     /* Re-sync next_seq from idx — another process may have appended. */
     if (fs_refresh_next_seq(fs, 1) != 0) {
+        clearerr(fs->idx_fp);
+        clearerr(fs->data_fp);
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
@@ -377,12 +389,16 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
 
     /* Always append at EOF — read() leaves the stream mid-file. */
     if (fs_seek_end(fs->data_fp) != 0 || fs_seek_end(fs->idx_fp) != 0) {
+        clearerr(fs->idx_fp);
+        clearerr(fs->data_fp);
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     uint64_t offset;
     if (fs_tell(fs->data_fp, &offset) != 0) {
+        clearerr(fs->idx_fp);
+        clearerr(fs->data_fp);
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
@@ -432,24 +448,26 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     }
     if (fwrite(idxb, sizeof(idxb), 1, fs->idx_fp) != 1) {
         fflush(fs->idx_fp);
-        /* Same as fflush(idx) failure: drop partial idx so next_seq cannot
-           advance over a ghost record pointing at truncated data. */
-        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_off) == 0)
+        /* Only truncate data after idx rollback succeeds — else keep
+           data↔idx consistent for repair_idx (avoid ghost→hole). */
+        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_off) == 0) {
             fs_seek(fs->idx_fp, idx_off);
+            if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
+                fs_seek(fs->data_fp, offset);
+        }
         clearerr(fs->idx_fp);
-        if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
-            fs_seek(fs->data_fp, offset);
         clearerr(fs->data_fp);
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
     }
     if (fflush(fs->idx_fp) != 0) {
-        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_off) == 0)
+        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_off) == 0) {
             fs_seek(fs->idx_fp, idx_off);
+            if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
+                fs_seek(fs->data_fp, offset);
+        }
         clearerr(fs->idx_fp);
-        if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
-            fs_seek(fs->data_fp, offset);
         clearerr(fs->data_fp);
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);

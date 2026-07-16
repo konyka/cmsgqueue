@@ -2793,6 +2793,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — orphan truncate fail-closed · idx rollback order</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">orphan truncate</span></td><td>✅</td><td>I/O fail → <code>clearerr</code> + create returns NULL; append early-fail also clears.</td></tr>
+<tr><td><span class="component-name">idx rollback</span></td><td>✅</td><td>Truncate data only after idx <code>ftruncate</code> succeeds (no ghost→hole).</td></tr>
+</table>
+</div>
+
 
 
 
