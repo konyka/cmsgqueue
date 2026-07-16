@@ -2739,6 +2739,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — mailbox deferred msgs_out · bytes_in body</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">mailbox credit</span></td><td>✅</td><td>Enqueue is not success; <code>msgs_out</code> after <code>send_local</code>. Push retries no longer multi-count drops.</td></tr>
+<tr><td><span class="component-name">bytes_in</span></td><td>✅</td><td>PUBLISH/REQUEST/RESPONSE account <code>bytes_in</code> uses body <code>msg_len</code> (matches BATCH/out).</td></tr>
+</table>
+</div>
+
 
 
 

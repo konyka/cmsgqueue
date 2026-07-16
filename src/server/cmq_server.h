@@ -112,6 +112,10 @@ typedef struct cmq_worker_msg {
     uint32_t target_gen;            /* must match client->conn_gen */
     int kind;                       /* 0=send data, 1=teardown client */
     uint32_t require_sub_id;        /* 0 = no check; else skip if sub gone */
+    uint8_t credit_out;             /* 1: credit msgs_out after send_local ok */
+    uint32_t account_epoch;
+    uint32_t payload_bytes;         /* body bytes for account bytes_out */
+    char account_name[CMQ_ACCOUNT_NAME_SIZE];
     uint8_t *buf;
     size_t len;
     struct cmq_worker_msg *next;

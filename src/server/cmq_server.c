@@ -416,10 +416,21 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                     if (w->server)
                         cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                                   CMQ_ATOMIC_RELAXED);
-                } else if (cmq_client_send_local(target, msg->buf, msg->len) != 0 &&
-                           w->server) {
-                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                } else if (cmq_client_send_local(target, msg->buf, msg->len) != 0) {
+                    if (w->server)
+                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                                  CMQ_ATOMIC_RELAXED);
+                } else if (msg->credit_out && w->server) {
+                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_out, 1,
                                               CMQ_ATOMIC_RELAXED);
+                    if (msg->account_name[0] != '\0') {
+                        cmq_account_t *oacc =
+                            cmq_account_get(w->server->accounts, msg->account_name,
+                                             NULL);
+                        if (oacc)
+                            cmq_account_inc_msgs_out(oacc, msg->account_epoch,
+                                                     (uint64_t)msg->payload_bytes);
+                    }
                 }
             }
             if (finish_dead && target)
@@ -464,42 +475,41 @@ static void worker_purge_send_for_id(cmq_worker_t *w, uint32_t target_id,
     cmq_mutex_unlock(&w->msg_lock);
 }
 
-/* Returns 0 on success, -1 on OOM or queue-full (message dropped).
-   require_sub_id: 0 = always deliver; else skip if that sub is gone. */
+/* Returns 0 on success, -1 on OOM or queue-full.
+   Callers that care about drops should count once (do not count here — retries
+   would over-count). credit_out: mailbox credits msgs_out after send_local. */
 static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
                              uint32_t target_gen,
                              const uint8_t *buf, size_t len,
-                             uint32_t require_sub_id) {
+                             uint32_t require_sub_id,
+                             int credit_out, const char *account_name,
+                             uint32_t account_epoch, uint32_t payload_bytes) {
     cmq_mutex_lock(&w->msg_lock);
     if (w->msg_pending >= CMQ_WORKER_MSG_QUEUE_MAX) {
         cmq_mutex_unlock(&w->msg_lock);
-        if (w->server) {
-            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                      CMQ_ATOMIC_RELAXED);
-        }
         return -1;
     }
     cmq_mutex_unlock(&w->msg_lock);
 
     cmq_worker_msg_t *msg = malloc(sizeof(cmq_worker_msg_t));
-    if (!msg) {
-        if (w->server) {
-            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                      CMQ_ATOMIC_RELAXED);
-        }
+    if (!msg)
         return -1;
-    }
     msg->target_id = target_id;
     msg->target_gen = target_gen;
     msg->kind = CMQ_WORKER_MSG_SEND;
     msg->require_sub_id = require_sub_id;
+    msg->credit_out = credit_out ? 1 : 0;
+    msg->account_epoch = account_epoch;
+    msg->payload_bytes = payload_bytes;
+    if (credit_out && account_name) {
+        strncpy(msg->account_name, account_name, CMQ_ACCOUNT_NAME_SIZE - 1);
+        msg->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+    } else {
+        msg->account_name[0] = '\0';
+    }
     msg->buf = malloc(len);
     if (!msg->buf) {
         free(msg);
-        if (w->server) {
-            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                      CMQ_ATOMIC_RELAXED);
-        }
         return -1;
     }
     memcpy(msg->buf, buf, len);
@@ -511,10 +521,6 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
         cmq_mutex_unlock(&w->msg_lock);
         free(msg->buf);
         free(msg);
-        if (w->server) {
-            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                      CMQ_ATOMIC_RELAXED);
-        }
         return -1;
     }
     if (w->msg_tail) {
@@ -552,10 +558,6 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
         return 0;
     free(msg->buf);
     free(msg);
-    if (w->server) {
-        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                  CMQ_ATOMIC_RELAXED);
-    }
     return -1;
 }
 
@@ -1189,7 +1191,7 @@ static int cmq_client_send_checked(cmq_client_t *c, const uint8_t *data, size_t 
 
     if (cross) {
         return worker_push_msg(&srv->workers[c->worker_id], c->id, c->conn_gen,
-                                data, len, require_sub_id);
+                                data, len, require_sub_id, 0, NULL, 0, 0);
     }
     if (require_sub_id != 0 && !client_has_sub(c, require_sub_id))
         return -1;
@@ -1466,7 +1468,7 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         cmq_worker_t *w = &srv->workers[worker_id];
         if (cmq_current_worker_id != worker_id) {
             if (worker_push_msg(w, client_id, conn_gen, frame, flen,
-                                 require_sub_id) == 0)
+                                 require_sub_id, 0, NULL, 0, 0) == 0)
                 return 1;
             /* Queue full — nudge EOF; do not race write_buf/subs cross-thread. */
             cmq_mutex_lock(&w->clients_lock);
@@ -1540,16 +1542,20 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
 }
 
 /* Queue to worker mailbox; same-worker falls back to send_local. Cross-worker
-   briefly yields and retries so a full queue can drain without silent drop. */
+   briefly yields and retries so a full queue can drain without silent drop.
+   Returns 1 if send_local completed, 2 if only queued (msgs_out deferred), 0 fail. */
 static int deliver_via_worker(cmq_server_t *srv, int worker_id,
                                uint32_t client_id, uint32_t conn_gen,
                                uint32_t sub_id,
                                const uint8_t *frame, size_t flen,
-                               int coro_ok) {
+                               int coro_ok,
+                               const char *account_name, uint32_t account_epoch,
+                               uint32_t payload_bytes) {
     cmq_worker_t *w = &srv->workers[worker_id];
     for (int attempt = 0; attempt < 4; attempt++) {
-        if (worker_push_msg(w, client_id, conn_gen, frame, flen, sub_id) == 0)
-            return 1;
+        if (worker_push_msg(w, client_id, conn_gen, frame, flen, sub_id,
+                             1, account_name, account_epoch, payload_bytes) == 0)
+            return 2;
         if (cmq_current_worker_id == worker_id)
             return client_send_by_id(srv, worker_id, client_id, conn_gen, sub_id,
                                      frame, flen);
@@ -1601,18 +1607,25 @@ static int deliver_targets_sync(cmq_server_t *srv,
         if (t->worker_id >= 0 && srv->workers &&
             t->worker_id < srv->num_workers) {
             delivered = deliver_via_worker(srv, t->worker_id, t->client_id,
-                                            t->conn_gen, t->sub_id, frame, flen, 0);
+                                            t->conn_gen, t->sub_id, frame, flen, 0,
+                                            t->account_name, t->account_epoch,
+                                            (uint32_t)payload_len);
         } else {
             delivered = client_send_by_id(srv, -1, t->client_id, t->conn_gen,
                                            t->sub_id, frame, flen);
         }
         if (delivered) {
             any = 1;
-            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
-            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, NULL);
-            if (oacc)
-                cmq_account_inc_msgs_out(oacc, t->account_epoch,
-                                         (uint64_t)payload_len);
+            /* 2 = mailbox queued — credit msgs_out after send_local. */
+            if (delivered == 1) {
+                cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_account_t *oacc =
+                    cmq_account_get(srv->accounts, t->account_name, NULL);
+                if (oacc)
+                    cmq_account_inc_msgs_out(oacc, t->account_epoch,
+                                             (uint64_t)payload_len);
+            }
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -1649,19 +1662,24 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             t->worker_id < srv->num_workers) {
             /* Mailbox path: has_sub / write_buf only on owning worker thread. */
             delivered = deliver_via_worker(srv, t->worker_id, t->client_id,
-                                            t->conn_gen, t->sub_id, frame, flen, 0);
+                                            t->conn_gen, t->sub_id, frame, flen, 0,
+                                            t->account_name, t->account_epoch,
+                                            (uint32_t)payload_len);
         } else {
             delivered = client_send_by_id(srv, -1, t->client_id, t->conn_gen,
                                            t->sub_id, frame, flen);
         }
         if (delivered) {
             delivered_n++;
-            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                      CMQ_ATOMIC_RELAXED);
-            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, NULL);
-            if (oacc)
-                cmq_account_inc_msgs_out(oacc, t->account_epoch,
-                                         (uint64_t)payload_len);
+            if (delivered == 1) {
+                cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_account_t *oacc =
+                    cmq_account_get(srv->accounts, t->account_name, NULL);
+                if (oacc)
+                    cmq_account_inc_msgs_out(oacc, t->account_epoch,
+                                             (uint64_t)payload_len);
+            }
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -1720,7 +1738,9 @@ static void deliver_coro_func(void *arg) {
             t->worker_id < srv->num_workers) {
             delivered = deliver_via_worker(srv, t->worker_id, t->client_id,
                                             t->conn_gen, t->sub_id, ctx->frame,
-                                            ctx->frame_len, 1);
+                                            ctx->frame_len, 1,
+                                            t->account_name, t->account_epoch,
+                                            (uint32_t)ctx->payload_len);
         } else {
             delivered = client_send_by_id(srv, -1, t->client_id, t->conn_gen,
                                            t->sub_id, ctx->frame, ctx->frame_len);
@@ -1728,12 +1748,15 @@ static void deliver_coro_func(void *arg) {
 
         if (delivered) {
             ctx->delivered_any = 1;
-            cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
-                                      CMQ_ATOMIC_RELAXED);
-            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, NULL);
-            if (oacc)
-                cmq_account_inc_msgs_out(oacc, t->account_epoch,
-                                         (uint64_t)ctx->payload_len);
+            if (delivered == 1) {
+                cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_account_t *oacc =
+                    cmq_account_get(srv->accounts, t->account_name, NULL);
+                if (oacc)
+                    cmq_account_inc_msgs_out(oacc, t->account_epoch,
+                                             (uint64_t)ctx->payload_len);
+            }
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -1759,7 +1782,7 @@ done:
                 ctx->publisher_worker_id < srv->num_workers) {
                 cmq_worker_t *pw = &srv->workers[ctx->publisher_worker_id];
                 if (worker_push_msg(pw, ctx->publisher_id, ctx->publisher_gen,
-                                     ebuf, elen, 0) != 0) {
+                                     ebuf, elen, 0, 0, NULL, 0, 0) != 0) {
                     /* Queue full — sync send or force EOF so publisher notices. */
                     if (client_send_by_id(srv, ctx->publisher_worker_id,
                                            ctx->publisher_id, ctx->publisher_gen,
@@ -2087,7 +2110,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
-    if (acc) cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)frame->payload_len);
+    if (acc) cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)msg_len);
 
     size_t route_sent = 0;
     int route_rc = 0;
@@ -2646,7 +2669,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
 
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
-    if (acc) cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)frame->payload_len);
+    if (acc) cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)msg_len);
 
     size_t route_sent = 0;
     int route_rc = 0;
@@ -2753,7 +2776,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
-    if (acc) cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)frame->payload_len);
+    if (acc) cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)msg_len);
 
     size_t route_sent = 0;
     int route_rc = 0;
@@ -4128,7 +4151,7 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
             for (int i = 0; i < ndoomed; i++) {
                 if (disc_len > 0)
                     worker_push_msg(w, doomed[i].id, doomed[i].gen,
-                                    disc, disc_len, 0);
+                                    disc, disc_len, 0, 0, NULL, 0, 0);
                 if (worker_push_teardown(w, doomed[i].id, doomed[i].gen) != 0) {
                     /* OOM: force-close fd so the worker notices EOF. */
                     cmq_mutex_lock(&w->clients_lock);
@@ -4982,7 +5005,7 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
             cmq_mutex_unlock(&w->clients_lock);
             for (int j = 0; j < nids; j++) {
                 if (keys[j].send_disc && disc_len > 0)
-                    worker_push_msg(w, keys[j].id, keys[j].gen, disc, disc_len, 0);
+                    worker_push_msg(w, keys[j].id, keys[j].gen, disc, disc_len, 0, 0, NULL, 0, 0);
                 if (worker_push_teardown(w, keys[j].id, keys[j].gen) != 0) {
                     /* OOM: force-close fd so the worker notices EOF (same as
                        keepalive_timer_cb). */
