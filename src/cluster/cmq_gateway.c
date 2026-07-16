@@ -113,6 +113,47 @@ static int gw_has_live_peer(cmq_gateway_t *gw, const char *cluster_name) {
     }
 }
 
+/* Claim slot for a freshly dialed fd. Caller holds gw->lock on entry/exit.
+   0 = installed; 1 = keep existing live peer (caller closes new fd);
+   -1 = slot not reclaimable. Never gw_slot_close a probed-live same-cluster peer. */
+static int gw_slot_claim_install(cmq_gateway_t *gw, size_t slot,
+                                 const char *cluster_name, const char *addr,
+                                 int port, int fd) {
+    if (slot >= gw->conn_count) return -1;
+    cmq_mutex_lock(&gw->io_locks[slot]);
+    int connected = gw->conns[slot].connected;
+    int empty = (gw->conns[slot].remote_cluster[0] == '\0');
+    int same = (strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0);
+    int efd = gw->conns[slot].fd;
+    cmq_mutex_unlock(&gw->io_locks[slot]);
+
+    if (same && connected && efd >= 0) {
+        cmq_mutex_unlock(&gw->lock);
+        int alive = gw_fd_alive(efd);
+        cmq_mutex_lock(&gw->lock);
+        if (slot >= gw->conn_count) return -1;
+        cmq_mutex_lock(&gw->io_locks[slot]);
+        int still =
+            (strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0 &&
+             gw->conns[slot].fd == efd);
+        cmq_mutex_unlock(&gw->io_locks[slot]);
+        if (!still) return -1;
+        if (alive) return 1;
+        if (!gw_fd_alive(efd)) {
+            gw_slot_close_fd(gw, slot);
+            gw_slot_install(gw, slot, cluster_name, addr, port, fd);
+            return 0;
+        }
+        return 1;
+    }
+    if (!connected || empty || same) {
+        gw_slot_close_fd(gw, slot);
+        gw_slot_install(gw, slot, cluster_name, addr, port, fd);
+        return 0;
+    }
+    return -1;
+}
+
 /* 0 = full write, 1 = EAGAIN zero progress, -1 = hard failure. */
 static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
@@ -321,16 +362,15 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             return 0;
         }
         if (slot < gw->conn_count) {
-            cmq_mutex_lock(&gw->io_locks[slot]);
-            /* Slot was closed before dial — empty/dead is reclaimable too. */
-            int ok = (!gw->conns[slot].connected ||
-                      gw->conns[slot].remote_cluster[0] == '\0' ||
-                      strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0);
-            cmq_mutex_unlock(&gw->io_locks[slot]);
-            if (ok) {
-                gw_slot_close_fd(gw, slot);
-                gw_slot_install(gw, slot, cluster_name, addr_copy, port_copy, fd);
+            int rc = gw_slot_claim_install(gw, slot, cluster_name, addr_copy,
+                                           port_copy, fd);
+            if (rc == 0) {
                 cmq_mutex_unlock(&gw->lock);
+                return 0;
+            }
+            if (rc == 1) {
+                cmq_mutex_unlock(&gw->lock);
+                close(fd);
                 return 0;
             }
         }
@@ -419,16 +459,15 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             return 0;
         }
         if ((size_t)slot < gw->conn_count) {
-            cmq_mutex_lock(&gw->io_locks[slot]);
-            int ok = (!gw->conns[slot].connected ||
-                      gw->conns[slot].remote_cluster[0] == '\0' ||
-                      strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0);
-            cmq_mutex_unlock(&gw->io_locks[slot]);
-            if (ok) {
-                gw_slot_close_fd(gw, (size_t)slot);
-                gw_slot_install(gw, (size_t)slot, cluster_name, addr_copy,
-                                port_copy, fd);
+            int rc = gw_slot_claim_install(gw, (size_t)slot, cluster_name,
+                                           addr_copy, port_copy, fd);
+            if (rc == 0) {
                 cmq_mutex_unlock(&gw->lock);
+                return 0;
+            }
+            if (rc == 1) {
+                cmq_mutex_unlock(&gw->lock);
+                close(fd);
                 return 0;
             }
         }
@@ -474,17 +513,17 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
         return 0;
     }
     for (size_t i = 0; i < gw->conn_count; i++) {
-        cmq_mutex_lock(&gw->io_locks[i]);
-        int same = (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0);
-        int connected = gw->conns[i].connected;
-        int empty = (gw->conns[i].remote_cluster[0] == '\0');
-        cmq_mutex_unlock(&gw->io_locks[i]);
-        if (!same && connected && !empty)
-            continue;
-        gw_slot_close_fd(gw, i);
-        gw_slot_install(gw, i, cluster_name, addr_copy, port_copy, fd);
-        cmq_mutex_unlock(&gw->lock);
-        return 0;
+        int rc = gw_slot_claim_install(gw, i, cluster_name, addr_copy,
+                                       port_copy, fd);
+        if (rc == 0) {
+            cmq_mutex_unlock(&gw->lock);
+            return 0;
+        }
+        if (rc == 1) {
+            cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            return 0;
+        }
     }
     if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {
         cmq_mutex_unlock(&gw->lock);

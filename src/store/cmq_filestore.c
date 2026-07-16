@@ -578,6 +578,10 @@ uint64_t cmq_filestore_last_seq(cmq_filestore_t *fs) {
     if (fs_lock_pair(fs, LOCK_SH) == 0) {
         if (fs_refresh_next_seq(fs, 0) == 0)
             last = fs->next_seq > 0 ? fs->next_seq - 1 : 0;
+        else {
+            if (fs->idx_fp) clearerr(fs->idx_fp);
+            if (fs->data_fp) clearerr(fs->data_fp);
+        }
         fs_unlock_pair(fs);
     }
     cmq_mutex_unlock(&fs->lock);
@@ -596,6 +600,10 @@ int cmq_filestore_sync(cmq_filestore_t *fs) {
     if (fs->idx_fp && fflush(fs->idx_fp) != 0) rc = -1;
     if (fsync(fileno(fs->data_fp)) != 0) rc = -1;
     if (fs->idx_fp && fsync(fileno(fs->idx_fp)) != 0) rc = -1;
+    if (rc != 0) {
+        if (fs->idx_fp) clearerr(fs->idx_fp);
+        clearerr(fs->data_fp);
+    }
     fs_unlock_pair(fs);
     cmq_mutex_unlock(&fs->lock);
     return rc;

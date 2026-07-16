@@ -2811,6 +2811,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — gateway claim live peer · last_seq/sync clearerr</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">gw claim</span></td><td>✅</td><td><code>gw_slot_claim_install</code> probes before reclaim; never closes a live same-cluster peer.</td></tr>
+<tr><td><span class="component-name">last_seq/sync</span></td><td>✅</td><td>Failure paths <code>clearerr</code> idx/data so sticky <code>ferror</code> cannot poison append.</td></tr>
+</table>
+</div>
+
 
 
 
