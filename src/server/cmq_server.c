@@ -1373,6 +1373,7 @@ typedef struct {
     uint32_t conn_gen;
     int worker_id;
     uint32_t sub_id;
+    uint32_t account_epoch; /* subscriber CONNECT epoch — not get() current */
     char subject[CMQ_MAX_SUBJECT];
     char queue_group[CMQ_MAX_QUEUE_GROUP];
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
@@ -1383,6 +1384,7 @@ static void cmq_fill_deliver_tgt(cmq_deliver_tgt_t *t, const cmq_sub_ref_t *ref)
     t->conn_gen = ref->client->conn_gen;
     t->worker_id = ref->client->worker_id;
     t->sub_id = ref->sub_id;
+    t->account_epoch = ref->client->account_epoch;
     memcpy(t->subject, ref->subject, CMQ_MAX_SUBJECT);
     memcpy(t->queue_group, ref->queue_group, CMQ_MAX_QUEUE_GROUP);
     memcpy(t->account_name, ref->client->account_name, CMQ_ACCOUNT_NAME_SIZE);
@@ -1607,9 +1609,10 @@ static int deliver_targets_sync(cmq_server_t *srv,
         if (delivered) {
             any = 1;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1, CMQ_ATOMIC_RELAXED);
-            uint32_t oep = 0;
-            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, &oep);
-            if (oacc) cmq_account_inc_msgs_out(oacc, oep, (uint64_t)payload_len);
+            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, NULL);
+            if (oacc)
+                cmq_account_inc_msgs_out(oacc, t->account_epoch,
+                                         (uint64_t)payload_len);
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -1655,9 +1658,10 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             delivered_n++;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                       CMQ_ATOMIC_RELAXED);
-            uint32_t oep = 0;
-            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, &oep);
-            if (oacc) cmq_account_inc_msgs_out(oacc, oep, (uint64_t)payload_len);
+            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, NULL);
+            if (oacc)
+                cmq_account_inc_msgs_out(oacc, t->account_epoch,
+                                         (uint64_t)payload_len);
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -1726,9 +1730,10 @@ static void deliver_coro_func(void *arg) {
             ctx->delivered_any = 1;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                       CMQ_ATOMIC_RELAXED);
-            uint32_t oep = 0;
-            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, &oep);
-            if (oacc) cmq_account_inc_msgs_out(oacc, oep, (uint64_t)ctx->payload_len);
+            cmq_account_t *oacc = cmq_account_get(srv->accounts, t->account_name, NULL);
+            if (oacc)
+                cmq_account_inc_msgs_out(oacc, t->account_epoch,
+                                         (uint64_t)ctx->payload_len);
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -3250,14 +3255,22 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 break;
             }
         }
+        /* ensure→get TOCTOU: soft-delete between them must not CONNACK 0. */
+        uint32_t aep = 0;
+        cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
+        if (!acc ||
+            !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+            __atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != aep) {
+            cmq_send_connack(c, 1);
+            c->state = CMQ_CLIENT_CLOSING;
+            break;
+        }
+        c->account_epoch = aep;
+        cmq_account_inc_connections(acc, aep);
         c->state = CMQ_CLIENT_CONNECTED;
         c->last_activity_ms = srv_now_ms();
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
         c->session_accounted = 1;
-        uint32_t aep = 0;
-        cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, &aep);
-        c->account_epoch = acc ? aep : 0;
-        if (acc) cmq_account_inc_connections(acc, aep);
         /* Stage inbound (connected=0) before CONNACK so failure can still
            send CONNACK 1; promote after drain so broadcast cannot race. */
         if (want_route) {

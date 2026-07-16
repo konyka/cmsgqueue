@@ -2730,6 +2730,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — deliver msgs_out snapshot epoch · CONNECT get before CONNACK</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">msgs_out epoch</span></td><td>✅</td><td><code>cmq_deliver_tgt_t.account_epoch</code> from subscriber CONNECT; not <code>get()</code> current.</td></tr>
+<tr><td><span class="component-name">CONNECT get</span></td><td>✅</td><td>Validate <code>get</code>+active+epoch before CONNECTED/CONNACK 0 (ensure→get TOCTOU).</td></tr>
+</table>
+</div>
+
 
 
 
