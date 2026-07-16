@@ -237,13 +237,19 @@ void cmq_account_dec_connections(cmq_account_t *acc, uint32_t epoch) {
     if (!acc) return;
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
     if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
     uint64_t cur = __atomic_load_n(&acc->connections, __ATOMIC_RELAXED);
     while (cur > 0) {
-        if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch)
-            return;
+        if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+        if (__atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) return;
         if (__atomic_compare_exchange_n(&acc->connections, &cur, cur - 1,
-                                         0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                                         0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+            /* Counter ABA across clear+reactivate+inc: restore theft.
+               Clear after a legit dec may leave +1 on inactive — wiped on reactivate. */
+            if (__atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0)
+                __atomic_fetch_add(&acc->connections, 1, __ATOMIC_RELAXED);
             return;
+        }
     }
 }
 int cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch) {
@@ -262,13 +268,17 @@ void cmq_account_dec_subscriptions(cmq_account_t *acc, uint32_t epoch) {
     if (!acc) return;
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
     if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
     uint64_t cur = __atomic_load_n(&acc->subscriptions, __ATOMIC_RELAXED);
     while (cur > 0) {
-        if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch)
-            return;
+        if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+        if (__atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) return;
         if (__atomic_compare_exchange_n(&acc->subscriptions, &cur, cur - 1,
-                                         0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                                         0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+            if (__atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0)
+                __atomic_fetch_add(&acc->subscriptions, 1, __ATOMIC_RELAXED);
             return;
+        }
     }
 }
 void cmq_account_inc_msgs_in(cmq_account_t *acc, uint32_t epoch, uint64_t bytes) {

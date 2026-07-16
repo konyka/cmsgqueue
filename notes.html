@@ -2802,6 +2802,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — dec clear_gen ABA · torn idx truncate fail-closed</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">dec ABA</span></td><td>✅</td><td><code>dec_connections/subscriptions</code> gate on <code>clear_gen</code>; CAS success + gen change restores theft.</td></tr>
+<tr><td><span class="component-name">torn idx</span></td><td>✅</td><td>Non-8-aligned idx suffix <code>ftruncate</code> fail → <code>UINT64_MAX</code> (create fail-closed).</td></tr>
+</table>
+</div>
+
 
 
 

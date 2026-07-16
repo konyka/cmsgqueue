@@ -209,13 +209,18 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
     uint64_t idx_sz;
     if (fs_tell(fs->idx_fp, &idx_sz) != 0)
         return UINT64_MAX;
-    /* Drop torn trailing bytes that are not a full offset entry. Even if
-       ftruncate fails, keep scanning with the rounded size — returning 0
-       here would make create() truncate .data to empty. */
+    /* Drop torn trailing bytes that are not a full offset entry.
+       Fail-closed on truncate/seek — else append's refresh may never write. */
     if ((idx_sz % 8) != 0) {
         idx_sz -= idx_sz % 8;
-        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_sz) == 0)
-            (void)fs_seek_end(fs->idx_fp);
+        if (ftruncate(fileno(fs->idx_fp), (off_t)idx_sz) != 0) {
+            clearerr(fs->idx_fp);
+            return UINT64_MAX;
+        }
+        if (fs_seek_end(fs->idx_fp) != 0) {
+            clearerr(fs->idx_fp);
+            return UINT64_MAX;
+        }
     }
     if (fs_seek_end(fs->data_fp) != 0)
         return UINT64_MAX;
