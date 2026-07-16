@@ -390,6 +390,9 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     }
     if (fwrite(idxb, sizeof(idxb), 1, fs->idx_fp) != 1) {
         fflush(fs->idx_fp);
+        /* Same as fflush(idx) failure: drop partial idx so next_seq cannot
+           advance over a ghost record pointing at truncated data. */
+        ftruncate(fileno(fs->idx_fp), (off_t)idx_off);
         if (ftruncate(fileno(fs->data_fp), (off_t)offset) == 0)
             fs_seek(fs->data_fp, offset);
         fs_unlock_pair(fs);

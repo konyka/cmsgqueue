@@ -2721,6 +2721,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — account undo always · filestore idx fwrite rollback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">inc undo</span></td><td>✅</td><td>Epoch mismatch always rolls back stale <code>fetch_add</code>; reactivate clears before <code>active=1</code>.</td></tr>
+<tr><td><span class="component-name">filestore idx</span></td><td>✅</td><td><code>fwrite(idx)</code> failure truncates idx to <code>idx_off</code> (same as fflush path).</td></tr>
+</table>
+</div>
+
 
 
 
