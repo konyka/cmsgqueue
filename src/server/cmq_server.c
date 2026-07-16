@@ -403,12 +403,24 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
             }
             cmq_mutex_unlock(&w->clients_lock);
             /* Same-thread ownership: TEARDOWN cannot free target until we
-               return to the mailbox loop. */
-            if (do_send && target &&
-                cmq_client_send_local(target, msg->buf, msg->len) != 0 &&
-                w->server) {
-                cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                          CMQ_ATOMIC_RELAXED);
+               return to the mailbox loop. Re-check account after unlock. */
+            if (do_send && target) {
+                if (!client_account_live(w->server, target)) {
+                    cmq_mutex_lock(&w->clients_lock);
+                    if (target->conn_gen == msg->target_gen &&
+                        target->state != CMQ_CLIENT_CLOSED &&
+                        target->state != CMQ_CLIENT_CLOSING)
+                        target->state = CMQ_CLIENT_CLOSING;
+                    cmq_mutex_unlock(&w->clients_lock);
+                    finish_dead = 1;
+                    if (w->server)
+                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                                  CMQ_ATOMIC_RELAXED);
+                } else if (cmq_client_send_local(target, msg->buf, msg->len) != 0 &&
+                           w->server) {
+                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                              CMQ_ATOMIC_RELAXED);
+                }
             }
             if (finish_dead && target)
                 client_finish_closing(target);
@@ -1405,6 +1417,9 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
         /* Do not read client->state here (cross-thread race); send paths filter. */
 
         if (ref->queue_group[0] == '\0') {
+            /* Same epoch filter as QG: skip soft-deleted holders early. */
+            if (!client_account_live(srv, ref->client))
+                continue;
             cmq_fill_deliver_tgt(&tgts[n++], ref);
             continue;
         }
@@ -1474,11 +1489,20 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
             dead_acct = 1;
         }
         cmq_mutex_unlock(&w->clients_lock);
-        /* Owning thread: send after unlock (same as mailbox drain). */
+        /* Owning thread: send after unlock (same as mailbox drain).
+           Re-check account after unlock — soft-delete/reactivate TOCTOU. */
         int ok = 0;
-        if (do_send && c &&
-            cmq_client_send_local(c, frame, flen) == 0)
-            ok = 1;
+        if (do_send && c) {
+            if (!client_account_live(srv, c)) {
+                cmq_mutex_lock(&w->clients_lock);
+                if (c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED)
+                    c->state = CMQ_CLIENT_CLOSING;
+                cmq_mutex_unlock(&w->clients_lock);
+                dead_acct = 1;
+            } else if (cmq_client_send_local(c, frame, flen) == 0) {
+                ok = 1;
+            }
+        }
         /* Soft-deleted account: drop ghost subs promptly via worker teardown. */
         if (dead_acct)
             worker_teardown_or_shutdown(w, client_id, conn_gen);

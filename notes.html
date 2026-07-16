@@ -2712,6 +2712,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — account undo inactive-only · deliver epoch filter</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">undo if inactive</span></td><td>✅</td><td>Stale <code>inc</code> rollback only while soft-deleted; never steal reactivated credits. Counters cleared with atomics.</td></tr>
+<tr><td><span class="component-name">non-QG snapshot</span></td><td>✅</td><td>Skip epoch-dead plain subs like QG; worker send/mailbox re-check before <code>send_local</code>.</td></tr>
+</table>
+</div>
+
 
 
 
