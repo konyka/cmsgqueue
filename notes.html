@@ -2766,6 +2766,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — repair mid-scan ferror · account clear_gen undo</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">repair ferror</span></td><td>✅</td><td>Mid-scan <code>ferror</code>/<code>fseek</code> fail → <code>UINT64_MAX</code>; only logical corrupt truncates.</td></tr>
+<tr><td><span class="component-name">clear_gen</span></td><td>✅</td><td>Stale <code>inc</code> undo uses <code>clear_gen</code>+<code>prev</code> so post-clear pollution rolls back without stealing.</td></tr>
+</table>
+</div>
+
 
 
 

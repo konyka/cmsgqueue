@@ -21,6 +21,7 @@ typedef struct {
     uint64_t bytes_out;
     int active;
     uint32_t epoch; /* bumps on soft-delete reactivate; stale clients must not revive */
+    uint32_t clear_gen; /* bumps on clear_counters; pairs with stale-inc undo */
 } cmq_account_t;
 
 typedef struct {

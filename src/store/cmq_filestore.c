@@ -217,19 +217,34 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
     uint64_t valid = 0;
     uint64_t n = idx_sz / 8u;
     for (uint64_t i = 0; i < n; i++) {
-        if (fs_seek(fs->idx_fp, i * 8u) != 0)
-            break;
+        if (fs_seek(fs->idx_fp, i * 8u) != 0) {
+            clearerr(fs->idx_fp);
+            return UINT64_MAX;
+        }
         uint8_t idxb[8];
-        if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1)
+        if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1) {
+            /* ferror: transient I/O — fail-closed. feof/short: torn/corrupt. */
+            if (ferror(fs->idx_fp)) {
+                clearerr(fs->idx_fp);
+                return UINT64_MAX;
+            }
             break;
+        }
         uint64_t offset = get_le64(idxb);
         if (offset + (uint64_t)CMQ_FS_HDR_SIZE > data_sz)
             break;
-        if (fs_seek(fs->data_fp, offset) != 0)
-            break;
+        if (fs_seek(fs->data_fp, offset) != 0) {
+            clearerr(fs->data_fp);
+            return UINT64_MAX;
+        }
         uint8_t hdr[CMQ_FS_HDR_SIZE];
-        if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1)
+        if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1) {
+            if (ferror(fs->data_fp)) {
+                clearerr(fs->data_fp);
+                return UINT64_MAX;
+            }
             break;
+        }
         if (get_le32(hdr + 0) != CMQ_FS_MAGIC ||
             get_le16(hdr + 4) != (uint16_t)CMQ_FS_VERSION)
             break;
@@ -248,6 +263,10 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
         while (left > 0) {
             size_t chunk_n = left > (uint32_t)sizeof(chunk) ? sizeof(chunk) : (size_t)left;
             if (fread(chunk, 1, chunk_n, fs->data_fp) != chunk_n) {
+                if (ferror(fs->data_fp)) {
+                    clearerr(fs->data_fp);
+                    return UINT64_MAX;
+                }
                 ok = 0;
                 break;
             }
