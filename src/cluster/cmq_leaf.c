@@ -235,9 +235,11 @@ static int read_suback(int fd, uint32_t expect_id) {
 
 cmq_leaf_node_t *cmq_leaf_create(const char *hub_addr, int hub_port) {
     if (!hub_addr) return NULL;
+    if (strnlen(hub_addr, CMQ_NODE_ADDR_SIZE) >= CMQ_NODE_ADDR_SIZE)
+        return NULL;
     cmq_leaf_node_t *l = calloc(1, sizeof(cmq_leaf_node_t));
     if (!l) return NULL;
-    strncpy(l->hub_addr, hub_addr, CMQ_NODE_ADDR_SIZE - 1);
+    snprintf(l->hub_addr, sizeof(l->hub_addr), "%s", hub_addr);
     l->hub_port = hub_port;
     l->hub_fd = -1;
     l->connected = 0;

@@ -3324,6 +3324,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — reject oversized stream/leaf/mqtt identity strings</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">stream names</span></td><td>✅</td><td>Reject oversized stream/consumer names before truncate can duplicate consumers and pin <code>retain_floor</code>.</td></tr>
+<tr><td><span class="component-name">leaf/mqtt</span></td><td>✅</td><td>Reject oversized <code>hub_addr</code>/<code>client_id</code>/<code>addr</code> before truncate collision.</td></tr>
+</table>
+</div>
+
 
 
 

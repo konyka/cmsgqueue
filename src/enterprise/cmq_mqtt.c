@@ -2,6 +2,7 @@
 #include "cmq_mqtt.h"
 #include "cmq_route.h"
 #include "cmq_thread.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -68,9 +69,11 @@ static void mqtt_disconnect_unlocked(cmq_mqtt_bridge_t *br) {
 
 cmq_mqtt_bridge_t *cmq_mqtt_bridge_create(const char *client_id) {
     if (!client_id) return NULL;
+    if (strnlen(client_id, CMQ_MQTT_CLIENT_ID) >= CMQ_MQTT_CLIENT_ID)
+        return NULL;
     cmq_mqtt_bridge_t *br = calloc(1, sizeof(cmq_mqtt_bridge_t));
     if (!br) return NULL;
-    strncpy(br->client_id, client_id, CMQ_MQTT_CLIENT_ID - 1);
+    snprintf(br->client_id, sizeof(br->client_id), "%s", client_id);
     br->fd = -1;
     br->keepalive_ms = 60000;
     br->clean_session = 1;
@@ -156,6 +159,7 @@ static int mqtt_read_connack(int fd) {
 
 int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (!br || !addr) return -1;
+    if (strnlen(addr, sizeof(br->addr)) >= sizeof(br->addr)) return -1;
     if (mqtt_begin_op(br) != 0) return -1;
     cmq_mutex_lock(&br->lock);
     /* Sticky only for the same endpoint — addr/port change must reconnect. */
@@ -247,8 +251,7 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     mqtt_disconnect_unlocked(br);
     br->fd = fd;
     br->connected = 1;
-    strncpy(br->addr, addr, sizeof(br->addr) - 1);
-    br->addr[sizeof(br->addr) - 1] = '\0';
+    snprintf(br->addr, sizeof(br->addr), "%s", addr);
     br->port = port;
     cmq_mutex_unlock(&br->lock);
     mqtt_end_op(br);

@@ -2,6 +2,7 @@
 #include "cmq_stream.h"
 #include "cmq_store.h"
 #include "cmq_thread.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -46,10 +47,10 @@ static void stream_end_op(cmq_stream_t *stream) {
 
 cmq_stream_t *cmq_stream_create(const char *name, size_t max_msgs, size_t max_bytes) {
     if (!name) return NULL;
+    if (strnlen(name, CMQ_MAX_NAME) >= CMQ_MAX_NAME) return NULL;
     cmq_stream_t *s = calloc(1, sizeof(cmq_stream_t));
     if (!s) return NULL;
-    strncpy(s->name, name, CMQ_MAX_NAME - 1);
-    s->name[CMQ_MAX_NAME - 1] = '\0';
+    snprintf(s->name, sizeof(s->name), "%s", name);
     s->store = cmq_store_create(max_msgs > 0 ? max_msgs : 1024);
     if (!s->store) { free(s); return NULL; }
     s->consumer_count = 0;
@@ -190,6 +191,8 @@ void cmq_stream_msg_release(cmq_stream_msg_t *msg) {
 
 static int stream_add_consumer_impl(cmq_stream_t *stream, const char *consumer_name) {
     if (!stream || !consumer_name) return -1;
+    size_t nlen = strnlen(consumer_name, CMQ_MAX_NAME);
+    if (nlen == 0 || nlen >= CMQ_MAX_NAME) return -1;
     cmq_mutex_lock(&stream->lock);
     if (stream->consumer_count >= CMQ_MAX_CONSUMERS) {
         cmq_mutex_unlock(&stream->lock);
@@ -202,8 +205,7 @@ static int stream_add_consumer_impl(cmq_stream_t *stream, const char *consumer_n
         }
     }
     cmq_consumer_entry_t *c = &stream->consumers[stream->consumer_count++];
-    strncpy(c->name, consumer_name, CMQ_MAX_NAME - 1);
-    c->name[CMQ_MAX_NAME - 1] = '\0';
+    snprintf(c->name, sizeof(c->name), "%s", consumer_name);
     /* Start at the oldest retained seq (evictions before join are skipped). */
     c->acked_seq = 0;
     uint64_t first = cmq_store_first_seq(stream->store);
