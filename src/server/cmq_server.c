@@ -476,6 +476,12 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
                 if (w->server)
                     cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                               CMQ_ATOMIC_RELAXED);
+            } else if (msg->sync_heap && msg->sync_result &&
+                       __atomic_load_n(msg->sync_result, __ATOMIC_ACQUIRE) != 0) {
+                /* Publisher hard-abandoned — do not deliver late. */
+                if (w->server)
+                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                              CMQ_ATOMIC_RELAXED);
             } else if (cmq_client_send_local(target, msg->buf, msg->len) != 0) {
                 if (w->server)
                     cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
@@ -2034,6 +2040,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     struct timespec ts2 = {0, 50000L};
                     nanosleep(&ts2, NULL);
                 }
+                /* Fail-closed so worker_deliver_send_msg skips late delivery. */
+                __atomic_store_n(&sync->result, -1, __ATOMIC_RELEASE);
                 req_sync_release(sync);
                 return 0;
             }
