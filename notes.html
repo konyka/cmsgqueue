@@ -2829,6 +2829,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST sync mailbox + write drain</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cross-worker REQUEST</span></td><td>✅</td><td>Sync mailbox waits for owner <code>send_local</code>+drain; no false <code>delivery failed</code> / PUBACK.</td></tr>
+<tr><td><span class="component-name">write drain</span></td><td>✅</td><td>REQUEST success requires <code>client_drain_write_sync</code> so PUBACK is not mere <code>write_buf</code> enqueue.</td></tr>
+</table>
+</div>
+
 
 
 
