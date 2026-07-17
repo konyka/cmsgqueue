@@ -3472,6 +3472,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — BATCH/PUBLISH account · leaf merge · MQTT race</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">BATCH/PUBLISH</span></td><td>✅</td><td>Re-check account before each BATCH entry and before cluster forward so soft-delete cannot keep fanning out.</td></tr>
+<tr><td><span class="component-name">leaf pending</span></td><td>✅</td><td>Reconnect UNSUB overflow always memmoves concurrent pendings (no wholesale zero).</td></tr>
+<tr><td><span class="component-name">MQTT connect race</span></td><td>✅</td><td>Losing concurrent connect returns −1 unless the winning peer is the requested endpoint.</td></tr>
+</table>
+</div>
+
 
 
 

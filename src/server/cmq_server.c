@@ -2703,12 +2703,25 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     }
     if (!tgts || ntgt == 0) {
         free(tgts);
+        if (!client_account_live(srv, c)) {
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
         if (!c->is_route)
             route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
                                              frame->payload, frame->payload_len,
                                              &route_sent);
         if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent))
             cmq_send_error(c, "route failed");
+        return;
+    }
+
+    /* Soft-delete may race after snapshot — stop before cluster forward. */
+    if (!client_account_live(srv, c)) {
+        free(tgts);
+        cmq_send_error(c, "account inactive");
+        c->state = CMQ_CLIENT_CLOSING;
         return;
     }
 
@@ -3726,6 +3739,13 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
     int batch_fail = 0;
     int any_delivered = 0;
     for (uint16_t msg = 0; msg < count; msg++) {
+        if (!client_account_live(srv, c)) {
+            for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
+            free(prep);
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
         uint16_t subject_len = prep[msg].subject_len;
         uint16_t reply_len = prep[msg].reply_len;
         uint32_t payload_len = prep[msg].payload_len;
@@ -3790,6 +3810,13 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
     for (uint16_t msg = 0; msg < count; msg++) {
+        if (!client_account_live(srv, c)) {
+            for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
+            free(prep);
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
         const uint8_t *msg_payload = prep[msg].msg_payload;
         uint32_t payload_len = prep[msg].payload_len;
         if (prep[msg].tgts && prep[msg].ntgt > 0) {

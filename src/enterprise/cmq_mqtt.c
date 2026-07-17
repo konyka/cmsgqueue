@@ -246,11 +246,13 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
         if (br->fd == efd && !mqtt_fd_alive(efd))
             mqtt_disconnect_unlocked(br);
         else if (br->connected && br->fd >= 0) {
-            /* Another connect installed a different live peer. */
+            /* Another connect won — success only if it is our endpoint. */
+            int same_ep = (br->port == port &&
+                           strncmp(br->addr, addr, sizeof(br->addr)) == 0);
             cmq_mutex_unlock(&br->lock);
             close(fd);
             mqtt_end_op(br);
-            return 0;
+            return same_ep ? 0 : -1;
         }
     }
     mqtt_disconnect_unlocked(br);
