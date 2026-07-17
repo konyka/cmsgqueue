@@ -4305,6 +4305,9 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
             c->state = CMQ_CLIENT_CLOSING;
             if (c->fd >= 0)
                 (void)shutdown(c->fd, SHUT_RDWR);
+            /* Align send_direct io_lock fail — detach before sticky-live. */
+            if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+                route_detach_under_io_lock(c->server, c->fd);
             return;
         }
     }
@@ -4322,6 +4325,9 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
                 route_io_idx = -1;
             }
             (void)shutdown(c->fd, SHUT_RDWR);
+            c->state = CMQ_CLIENT_CLOSING;
+            if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+                route_detach_under_io_lock(c->server, c->fd);
             return;
         }
         goto out;
@@ -4648,6 +4654,9 @@ static void client_finish_closing(cmq_client_t *c) {
                 cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE,
                            client_read_cb, c) != 0) {
                 (void)shutdown(c->fd, SHUT_RDWR);
+                /* Cannot re-arm WRITE — detach route so pool is not sticky. */
+                if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+                    route_detach_under_io_lock(c->server, c->fd);
             }
             if (acc)
                 cmq_mutex_unlock(&srv->clients_lock);

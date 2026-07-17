@@ -3630,6 +3630,7 @@ All 15 test suites passing, 0 warnings.
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">send_direct / flush write</span></td><td>✅</td><td>After <code>SHUT_RDWR</code> (and after releasing route <code>io_lock</code>), call <code>cmq_route_detach_fd</code> so CLOSING inbound routes do not sticky-occupy the pool until teardown.</td></tr>
+<tr><td><span class="component-name">flush io_lock / empty ev_mod</span></td><td>✅</td><td>Same detach on <code>route_io_lock_fd</code> fail and empty-buffer <code>ev_mod</code> fail; <code>finish_closing</code> pending-write <code>ev_mod</code> fail also detaches.</td></tr>
 </table>
 </div>
 
