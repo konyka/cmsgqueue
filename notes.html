@@ -3510,6 +3510,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST drain-fail skips cluster fallback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">REQUEST buffered</span></td><td>✅</td><td>After <code>send_local</code>, mark sync <code>buffered</code>; drain timeout/fail returns ambiguous (−1) so cluster fallback is skipped (epoll may still flush).</td></tr>
+</table>
+</div>
+
 
 
 

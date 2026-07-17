@@ -385,10 +385,12 @@ static ssize_t client_sock_write(cmq_client_t *c, const uint8_t *buf, size_t len
 #define CMQ_WORKER_WAKE_BATCH 64
 
 /* Heap sync slot for cross-worker REQUEST — publisher+worker each hold a ref.
-   result: 0 pending, 2 claimed (worker owns wire), 1 ok, -1 fail/abandon. */
+   result: 0 pending, 2 claimed (worker owns wire), 1 ok, -1 fail/abandon.
+   buffered: set after send_local queued bytes (drain may still fail). */
 typedef struct {
     int result;
     int refs;
+    int buffered;
 } cmq_req_sync_t;
 
 static void req_sync_release(cmq_req_sync_t *s) {
@@ -399,6 +401,16 @@ static void req_sync_release(cmq_req_sync_t *s) {
 
 static int req_sync_terminal(int v) {
     return v == 1 || v == -1;
+}
+
+/* Map terminal sync to deliver_request_via_worker codes: 1 / 0 / -1 ambiguous. */
+static int req_sync_finish(cmq_req_sync_t *sync, int v) {
+    int amb = (v == -1 &&
+               __atomic_load_n(&sync->buffered, __ATOMIC_ACQUIRE));
+    req_sync_release(sync);
+    if (v == 1) return 1;
+    if (amb) return -1;
+    return 0;
 }
 
 /* Claim pending (0→2) before send so hard-abandon cannot race mid-delivery. */
@@ -512,25 +524,34 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
                 if (w->server)
                     cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                               CMQ_ATOMIC_RELAXED);
-            } else if (msg->drain_sync &&
-                       client_drain_write_sync(target) != 0) {
-                if (w->server)
-                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                              CMQ_ATOMIC_RELAXED);
             } else {
-                sync_ok = 1;
-                if (msg->credit_out && w->server) {
-                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_out, 1,
-                                              CMQ_ATOMIC_RELAXED);
-                    if (msg->account_name[0] != '\0') {
-                        cmq_account_t *oacc =
-                            cmq_account_get(w->server->accounts,
-                                             msg->account_name, NULL);
-                        if (oacc) {
-                            cmq_account_inc_msgs_out(
-                                oacc, msg->account_epoch,
-                                (uint64_t)msg->payload_bytes);
-                            cmq_account_release(w->server->accounts, oacc);
+                /* Bytes may be in write_buf / partial TCP — mark before drain
+                   so publisher can skip cluster fallback on drain timeout. */
+                if (msg->sync_heap && msg->sync_result) {
+                    cmq_req_sync_t *s = (cmq_req_sync_t *)msg->sync_result;
+                    __atomic_store_n(&s->buffered, 1, __ATOMIC_RELEASE);
+                }
+                if (msg->drain_sync &&
+                    client_drain_write_sync(target) != 0) {
+                    if (w->server)
+                        cmq_atomic_fetch_add_u64(
+                            &w->server->stat_messages_dropped, 1,
+                            CMQ_ATOMIC_RELAXED);
+                } else {
+                    sync_ok = 1;
+                    if (msg->credit_out && w->server) {
+                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_out,
+                                                  1, CMQ_ATOMIC_RELAXED);
+                        if (msg->account_name[0] != '\0') {
+                            cmq_account_t *oacc =
+                                cmq_account_get(w->server->accounts,
+                                                 msg->account_name, NULL);
+                            if (oacc) {
+                                cmq_account_inc_msgs_out(
+                                    oacc, msg->account_epoch,
+                                    (uint64_t)msg->payload_bytes);
+                                cmq_account_release(w->server->accounts, oacc);
+                            }
                         }
                     }
                 }
@@ -1996,7 +2017,8 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
         if (!deliver_acl_ok(srv, pub_account, c->account_name, frame, flen))
             return 0;
         if (cmq_client_send_local(c, frame, flen) != 0) return 0;
-        return client_drain_write_sync(c) == 0 ? 1 : 0;
+        /* Drain fail after buffer: ambiguous (epoll may still flush). */
+        return client_drain_write_sync(c) == 0 ? 1 : -1;
     }
     /* Acceptor-owned: hold clients_lock across send+drain (no bare-c* UAF). */
     cmq_mutex_lock(&srv->clients_lock);
@@ -2005,10 +2027,10 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
     if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
         client_account_live(srv, c) &&
         (require_sub_id == 0 || client_has_sub(c, require_sub_id)) &&
-        deliver_acl_ok(srv, pub_account, c->account_name, frame, flen) &&
-        cmq_client_send_local(c, frame, flen) == 0 &&
-        client_drain_write_sync(c) == 0)
-        ok = 1;
+        deliver_acl_ok(srv, pub_account, c->account_name, frame, flen)) {
+        if (cmq_client_send_local(c, frame, flen) == 0)
+            ok = client_drain_write_sync(c) == 0 ? 1 : -1;
+    }
     cmq_mutex_unlock(&srv->clients_lock);
     return ok;
 }
@@ -2050,10 +2072,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
         int waited = 0;
         for (;;) {
             int v = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
-            if (req_sync_terminal(v)) {
-                req_sync_release(sync);
-                return v == 1 ? 1 : 0;
-            }
+            if (req_sync_terminal(v))
+                return req_sync_finish(sync, v);
             if (self) {
                 worker_drain_teardowns(self, 8);
                 worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
@@ -2090,10 +2110,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                 /* In-flight — wait drain bound, nudge EOF, then hard-abandon. */
                 for (int extra = 0; extra < 50000; extra++) { /* ~2.5s */
                     int v2 = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
-                    if (req_sync_terminal(v2)) {
-                        req_sync_release(sync);
-                        return v2 == 1 ? 1 : 0;
-                    }
+                    if (req_sync_terminal(v2))
+                        return req_sync_finish(sync, v2);
                     if (self) {
                         worker_drain_teardowns(self, 8);
                         worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
@@ -2112,10 +2130,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                 /* Hard abandon: CAS pending→fail; if claimed (2), wait final. */
                 for (int hard = 0; hard < 50000; hard++) { /* ~2.5s more */
                     int v2 = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
-                    if (req_sync_terminal(v2)) {
-                        req_sync_release(sync);
-                        return v2 == 1 ? 1 : 0;
-                    }
+                    if (req_sync_terminal(v2))
+                        return req_sync_finish(sync, v2);
                     if (v2 == 0) {
                         int expected = 0;
                         if (__atomic_compare_exchange_n(
@@ -2141,10 +2157,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                    (local delivery may still complete). */
                 {
                     int cur = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
-                    if (req_sync_terminal(cur)) {
-                        req_sync_release(sync);
-                        return cur == 1 ? 1 : 0;
-                    }
+                    if (req_sync_terminal(cur))
+                        return req_sync_finish(sync, cur);
                     if (cur == 2) {
                         req_sync_release(sync);
                         return -1;
@@ -2156,8 +2170,10 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                         req_sync_release(sync);
                         return 0;
                     }
+                    if (req_sync_terminal(expected))
+                        return req_sync_finish(sync, expected);
                     req_sync_release(sync);
-                    return expected == 1 ? 1 : 0;
+                    return expected == 2 ? -1 : 0;
                 }
             }
             struct timespec ts = {0, 50000L};
@@ -2170,16 +2186,16 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
 
 /* REQUEST fan-out by client_id after sublist unlock (same safety as publish).
    Returns number of successful on-wire deliveries (for honest PUBACK).
-   If out_claim_abandon is set, *out_claim_abandon=1 when a cross-worker
-   wait abandoned while claimed (2) — local delivery may still complete. */
+   If out_ambiguous is set, *out_ambiguous=1 when local delivery may still
+   complete (claimed abandon or send buffered / drain failed). */
 static size_t deliver_request_targets(cmq_server_t *srv,
                                      cmq_deliver_tgt_t *tgts, size_t ntgt,
                                      const char *subject, const char *reply_to,
                                      const char *pub_account,
                                      const uint8_t *payload, size_t payload_len,
                                      cmq_client_t *publisher,
-                                     int *out_claim_abandon) {
-    if (out_claim_abandon) *out_claim_abandon = 0;
+                                     int *out_ambiguous) {
+    if (out_ambiguous) *out_ambiguous = 0;
     if (!tgts || ntgt == 0) return 0;
     size_t flen = 0;
     uint8_t *frame = cmq_build_request_message_frame(0, subject, reply_to,
@@ -2224,7 +2240,7 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                 cmq_account_release(srv->accounts, oacc);
             }
         } else if (delivered < 0) {
-            if (out_claim_abandon) *out_claim_abandon = 1;
+            if (out_ambiguous) *out_ambiguous = 1;
             /* Ambiguous in-flight — do not count as a clean drop. */
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
@@ -3348,11 +3364,11 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                          &route_sent);
 
     if (tgts && ntgt > 0) {
-        int claim_abandon = 0;
+        int ambiguous = 0;
         size_t n = deliver_request_targets(srv, tgts, ntgt, subject, reply_to,
                                             c->account_name,
                                             msg_payload, msg_len, c,
-                                            &claim_abandon);
+                                            &ambiguous);
         free(tgts);
         /* Soft-delete may race during long cross-worker waits. */
         if (!client_account_live(srv, c)) {
@@ -3364,9 +3380,9 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
-        } else if (claim_abandon) {
-            /* Local worker may still be on the wire — do not also fan out
-               to the cluster (would duplicate REQUEST / _INBOX replies). */
+        } else if (ambiguous) {
+            /* Claimed abandon or buffered-but-drain-fail — local wire may
+               still complete; do not also fan out to the cluster. */
             cmq_send_error(c, "delivery failed");
         } else if (!c->is_route) {
             /* Local targets were ghost/CLOSING — try cluster responders. */
