@@ -4896,6 +4896,13 @@ static void client_read_cb(int fd, int events, void *data) {
             }
             if (parsed == 0) break; /* need more data */
 
+            /* Same fail-closed as binary READ / dispatch — multi-frame WS
+               batch can race broadcast hard-fail mid-loop (ghost PING/ingress). */
+            if (!client_route_pool_held(c)) {
+                client_finish_closing(c);
+                return;
+            }
+
             /* RFC 6455: client→server frames MUST be masked. */
             if (!ws_frame.masked) {
                 client_teardown(c);

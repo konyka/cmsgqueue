@@ -3684,6 +3684,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS multi-frame route pool recheck</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_read_cb WS loop</span></td><td>✅</td><td>Each parsed WS frame re-probes <code>client_route_pool_held</code> before PING/PONG/data handling (align binary path mid-batch drop).</td></tr>
+</table>
+</div>
+
 
 
 
