@@ -245,7 +245,8 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
             break;
         }
         uint64_t offset = get_le64(idxb);
-        if (offset + (uint64_t)CMQ_FS_HDR_SIZE > data_sz)
+        if (offset > UINT64_MAX - (uint64_t)CMQ_FS_HDR_SIZE ||
+            offset + (uint64_t)CMQ_FS_HDR_SIZE > data_sz)
             break;
         if (fs_seek(fs->data_fp, offset) != 0) {
             clearerr(fs->data_fp);
@@ -266,7 +267,8 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
         uint32_t hlen = get_le32(hdr + 14);
         if (hseq != i + 1 || hlen == 0 || hlen > (16u * 1024 * 1024))
             break;
-        if (offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen > data_sz)
+        if (offset > UINT64_MAX - (uint64_t)CMQ_FS_HDR_SIZE - (uint64_t)hlen ||
+            offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen > data_sz)
             break;
         /* Stream CRC in fixed chunks — never malloc(hlen); OOM must not
            truncate a still-valid unread suffix of the index. */
@@ -520,7 +522,8 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
     uint64_t data_sz;
     if (fs_tell(fs->data_fp, &data_sz) != 0)
         goto fail;
-    if (data_offset + (uint64_t)CMQ_FS_HDR_SIZE > data_sz)
+    if (data_offset > UINT64_MAX - (uint64_t)CMQ_FS_HDR_SIZE ||
+        data_offset + (uint64_t)CMQ_FS_HDR_SIZE > data_sz)
         goto fail;
 
     if (fs_seek(fs->data_fp, data_offset) != 0)
@@ -541,7 +544,8 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
 
     if (hlen == 0 || hlen > (16u * 1024 * 1024))
         goto fail;
-    if (data_offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen > data_sz)
+    if (data_offset > UINT64_MAX - (uint64_t)CMQ_FS_HDR_SIZE - (uint64_t)hlen ||
+        data_offset + (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen > data_sz)
         goto fail;
 
     buf = malloc(hlen);

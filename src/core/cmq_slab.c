@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 #include "cmq_slab.h"
 #include "cmq_platform.h"
 
@@ -70,6 +71,9 @@ static cmq_slab_page_t *slab_page_create(size_t obj_size, size_t capacity) {
 cmq_slab_t *cmq_slab_create(size_t obj_size, size_t capacity) {
     /* Index freelist stores uint32_t inside free objects. */
     if (obj_size < sizeof(uint32_t)) return NULL;
+    /* head_index is int — index freelist cannot exceed INT_MAX slots. */
+    if (obj_size < sizeof(void *) && capacity > (size_t)INT_MAX)
+        return NULL;
     cmq_slab_t *slab = (cmq_slab_t *)malloc(sizeof(*slab));
     if (!slab) return NULL;
     slab->obj_size = obj_size;
@@ -166,6 +170,8 @@ void *cmq_slab_alloc(cmq_slab_t *slab) {
     }
     if (slab->capacity > SIZE_MAX / 2) return NULL;
     size_t new_cap = slab->capacity ? slab->capacity * 2 : 4;
+    if (slab->obj_size < sizeof(void *) && new_cap > (size_t)INT_MAX)
+        return NULL;
     cmq_slab_page_t *np = slab_page_create(slab->obj_size, new_cap);
     if (!np) return NULL;
     cmq_slab_page_t *last = slab->head;

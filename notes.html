@@ -3082,6 +3082,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — MQTT sticky re-probe · filestore offset wrap · slab INT_MAX</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">mqtt re-probe</span></td><td>✅</td><td>Drop sticky only if <code>fd==efd</code> and still dead (fd recycle safe).</td></tr>
+<tr><td><span class="component-name">filestore offset</span></td><td>✅</td><td>get/repair reject <code>offset+HDR(+len)</code> wrap before bounds check.</td></tr>
+<tr><td><span class="component-name">slab index cap</span></td><td>✅</td><td>Index freelist create/grow reject capacity &gt; INT_MAX.</td></tr>
+</table>
+</div>
+
 
 
 

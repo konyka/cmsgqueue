@@ -162,8 +162,8 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
             cmq_mutex_unlock(&br->lock);
             return 0;
         }
-        /* Only drop the probed fd — a newer peer installed mid-probe stays. */
-        if (br->fd == efd)
+        /* Only drop still-dead probed fd — fd recycle must not kill a new peer. */
+        if (br->fd == efd && !mqtt_fd_alive(efd))
             mqtt_disconnect_unlocked(br);
     }
     int keepalive_ms = br->keepalive_ms;
@@ -241,8 +241,8 @@ int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br) {
         cmq_mutex_unlock(&br->lock);
         return 1;
     }
-    /* Dead sticky only — do not close a replacement fd. */
-    if (br->fd == efd)
+    /* Dead sticky only — re-probe so fd recycle cannot kill a new peer. */
+    if (br->fd == efd && !mqtt_fd_alive(efd))
         mqtt_disconnect_unlocked(br);
     cmq_mutex_unlock(&br->lock);
     return 0;
