@@ -161,6 +161,17 @@ TEST(route, attach_inbound_borrow) {
     ASSERT_EQ(conn.fd_owned, 0);
     ASSERT_EQ(conn.connected, 1);
 
+    /* CLOSING demote: not broadcast-live, but fd kept for flush/io_lock. */
+    cmq_route_unmark_connected_fd(rp, a[1]);
+    ASSERT_EQ(cmq_route_live_count(rp), (size_t)0);
+    ASSERT_EQ(cmq_route_held_count(rp), (size_t)1);
+    ASSERT_EQ(cmq_route_get_conn(rp, "r0", &conn), 0);
+    ASSERT_EQ(conn.fd, a[1]);
+    ASSERT_EQ(conn.connected, 0);
+    ASSERT_EQ(cmq_route_peer_live(rp, "r0"), 1); /* held fd blocks reconnect */
+    ASSERT_EQ(cmq_route_mark_connected(rp, a[1]), 0); /* restore for later */
+    ASSERT_EQ(cmq_route_live_count(rp), (size_t)1);
+
     /* Live/staged egress already present — reject redundant inbound. */
     ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", b[1]), -1);
     ASSERT_EQ(cmq_route_get_conn(rp, "r0", &conn), 0);

@@ -978,6 +978,23 @@ static int route_mark_connected_impl(cmq_route_pool_t *pool, int fd) {
     return -1;
 }
 
+/* connected=0, keep fd/remote_id — flush and route_io_lock_fd still work. */
+static void route_unmark_connected_fd_impl(cmq_route_pool_t *pool, int fd) {
+    if (!pool || fd < 0) return;
+    cmq_mutex_lock(&pool->lock);
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        int efd = -1;
+        route_slot_snap(pool, i, NULL, &efd, NULL, NULL);
+        if (efd != fd) continue;
+        cmq_mutex_lock(&pool->io_locks[i]);
+        if (pool->conns[i].fd == fd)
+            pool->conns[i].connected = 0;
+        cmq_mutex_unlock(&pool->io_locks[i]);
+        break;
+    }
+    cmq_mutex_unlock(&pool->lock);
+}
+
 static void route_detach_fd_impl(cmq_route_pool_t *pool, int fd) {
     if (!pool || fd < 0) return;
     cmq_mutex_lock(&pool->lock);
@@ -1302,6 +1319,13 @@ int cmq_route_mark_connected(cmq_route_pool_t *pool, int fd) {
     int rc = route_mark_connected_impl(pool, fd);
     route_end_op(pool);
     return rc;
+}
+
+void cmq_route_unmark_connected_fd(cmq_route_pool_t *pool, int fd) {
+    if (!pool || fd < 0) return;
+    if (route_begin_op(pool) != 0) return;
+    route_unmark_connected_fd_impl(pool, fd);
+    route_end_op(pool);
 }
 
 void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd) {

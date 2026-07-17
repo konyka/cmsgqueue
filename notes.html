@@ -3659,6 +3659,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — CLOSING unmarks route connected</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_route_unmark_connected_fd</span></td><td>✅</td><td>Sets <code>connected=0</code> but keeps <code>fd</code> so flush/<code>io_lock</code> still work; broadcast and <code>live_count</code> skip the peer.</td></tr>
+<tr><td><span class="component-name">force_closing / DISCONNECT / finish_closing</span></td><td>✅</td><td>Inbound route demoted on CLOSING (not only on hard-fail detach); <code>send_direct</code> under <code>io_lock</code> only sets CLOSING then post-unlock detaches.</td></tr>
+</table>
+</div>
+
 
 
 

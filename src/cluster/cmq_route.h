@@ -50,6 +50,9 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
 int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd);
 /* Promote a staged inbound fd to broadcast-eligible (connected=1). */
 int cmq_route_mark_connected(cmq_route_pool_t *pool, int fd);
+/* Demote live fd to non-broadcast (connected=0) but keep fd for flush/io_lock.
+   Used when an inbound route enters CLOSING before teardown detach. */
+void cmq_route_unmark_connected_fd(cmq_route_pool_t *pool, int fd);
 /* Drop pool reference to fd without closing (client still owns the socket). */
 void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd);
 int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id);

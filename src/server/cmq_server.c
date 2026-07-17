@@ -1273,7 +1273,8 @@ static int ensure_write_cap(cmq_client_t *c, size_t need) {
     return 0;
 }
 
-/* Mark CLOSING without teardown — callers may hold clients_lock. */
+/* Mark CLOSING without teardown — callers may hold clients_lock.
+   Must NOT hold route io_lock (unmark takes pool→io). */
 static void client_force_closing(cmq_client_t *c) {
     if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
         return;
@@ -1287,6 +1288,9 @@ static void client_force_closing(cmq_client_t *c) {
             (void)shutdown(c->fd, SHUT_RDWR);
         }
     }
+    /* Drop broadcast/live eligibility; keep fd for graceful flush + io_lock. */
+    if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+        cmq_route_unmark_connected_fd(c->server->routes, c->fd);
 }
 
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len) {
@@ -1307,7 +1311,8 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
         }
     }
 
-    #define CMQ_SEND_FORCE_CLOSE() client_force_closing(c)
+    /* Under route io_lock — only set CLOSING; post-unlock detach covers pool. */
+    #define CMQ_SEND_FORCE_CLOSE() do { c->state = CMQ_CLIENT_CLOSING; } while (0)
 
     int rc = -1;
     if (c->write_buf && c->write_pos < c->write_len) {
@@ -4296,7 +4301,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             handle_batch(srv, c, frame);
         break;
     case CMQ_OP_DISCONNECT:
-        c->state = CMQ_CLIENT_CLOSING;
+        /* Unmark route so broadcast/live_count skip during graceful flush. */
+        client_force_closing(c);
         break;
     case CMQ_OP_STATS:
         if (!client_account_live(srv, c)) {
@@ -4660,6 +4666,10 @@ static void client_finish_closing(cmq_client_t *c) {
             cmq_mutex_unlock(&srv->clients_lock);
         return;
     }
+    /* Catch CLOSING paths that skipped client_force_closing — demote pool
+       before flush so broadcast/live_count do not treat this peer as live. */
+    if (c->is_route && srv && srv->routes && c->fd >= 0)
+        cmq_route_unmark_connected_fd(srv->routes, c->fd);
     if (c->write_buf && c->write_pos < c->write_len) {
         /* Peer may still send; drain RX so our final frames are not blocked
            by a full TCP receive window (keepalive skips CLOSING). */
