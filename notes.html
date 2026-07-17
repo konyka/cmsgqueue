@@ -3092,6 +3092,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — max_payload write_buf fit · route/leaf HDR+plen wrap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">max_payload cap</span></td><td>✅</td><td>Validate ≤ <code>CMQ_MAX_PAYLOAD_LIMIT</code> (fits 4MiB write_buf + framing).</td></tr>
+<tr><td><span class="component-name">handshake plen</span></td><td>✅</td><td>route <code>peer_handshake</code> / leaf <code>read_suback</code> reject <code>HDR+plen</code> wrap.</td></tr>
+</table>
+</div>
+
 
 
 

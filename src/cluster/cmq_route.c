@@ -107,8 +107,10 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
             uint8_t op = hb[4];
             uint32_t plen_f = (uint32_t)hb[5] | ((uint32_t)hb[6] << 8) |
                                ((uint32_t)hb[7] << 16) | ((uint32_t)hb[8] << 24);
+            /* Guard size_t wrap before need = HDR + plen (esp. 32-bit). */
+            if ((size_t)plen_f > sizeof(rbuf) - sizeof(cmq_frame_hdr_t))
+                return -1;
             size_t need = sizeof(cmq_frame_hdr_t) + (size_t)plen_f;
-            if (need > sizeof(rbuf)) return -1;
             if (rlen < need) break;
 
             if (op == (uint8_t)CMQ_OP_CONNACK) {

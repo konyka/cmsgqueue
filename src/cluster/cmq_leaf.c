@@ -4,6 +4,7 @@
 #include "cmq_parser.h"
 #include "cmq_proto.h"
 #include "cmq_thread.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -155,8 +156,11 @@ static int read_suback(int fd, uint32_t expect_id) {
             uint8_t op = rbuf[4];
             uint32_t plen = (uint32_t)rbuf[5] | ((uint32_t)rbuf[6] << 8) |
                             ((uint32_t)rbuf[7] << 16) | ((uint32_t)rbuf[8] << 24);
-            size_t need = (size_t)CMQ_PROTO_HDR_SIZE + (size_t)plen;
-            if (need > sizeof(rbuf)) {
+            /* uint64 need avoids size_t wrap on 32-bit before discard/parse. */
+            uint64_t need64 = (uint64_t)CMQ_PROTO_HDR_SIZE + (uint64_t)plen;
+            if (need64 > sizeof(rbuf)) {
+                if (need64 > (uint64_t)SIZE_MAX) return -1;
+                size_t need = (size_t)need64;
                 /* Drop buffered prefix; discard the rest from the socket. */
                 size_t have = rlen;
                 rlen = 0;
@@ -168,6 +172,7 @@ static int read_suback(int fd, uint32_t expect_id) {
                     return -1;
                 continue;
             }
+            size_t need = (size_t)need64;
             if (rlen < need) break;
 
             const uint8_t *pay = rbuf + CMQ_PROTO_HDR_SIZE;

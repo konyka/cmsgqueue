@@ -193,8 +193,8 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (!config) return CMQ_ERR_INVALID_ARG;
     if (config->port < 0 || config->port > 65535) return CMQ_ERR_INVALID_ARG;
     if (config->max_payload_size < 0) return CMQ_ERR_INVALID_ARG;
-    /* Match parser CMQ_MAX_PAYLOAD — unbounded configs enable OOM via queues. */
-    if (config->max_payload_size > 16 * 1024 * 1024)
+    /* Must fit CMQ_WRITE_BUF_LIMIT after framing — else deliver force-closes. */
+    if (config->max_payload_size > CMQ_MAX_PAYLOAD_LIMIT)
         return CMQ_ERR_INVALID_ARG;
     if (config->max_subs_per_client < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_subs_per_client > CMQ_DEFAULT_MAX_SUBS_PER_CLIENT)
