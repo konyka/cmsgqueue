@@ -1301,6 +1301,8 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
             c->state = CMQ_CLIENT_CLOSING;
             if (c->fd >= 0)
                 (void)shutdown(c->fd, SHUT_RDWR);
+            /* Unlock never held — detach so pool cannot sticky-live the peer. */
+            route_detach_under_io_lock(c->server, c->fd);
             return -1;
         }
     }
@@ -1409,6 +1411,10 @@ out:
 #undef CMQ_SEND_FORCE_CLOSE
     if (route_io_idx >= 0 && c->server && c->server->routes)
         cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+    /* After io unlock: align broadcast hard-fail — drop pool slot promptly. */
+    if (rc != 0 && c->is_route && c->state == CMQ_CLIENT_CLOSING &&
+        c->server && c->server->routes && c->fd >= 0)
+        route_detach_under_io_lock(c->server, c->fd);
     return rc;
 }
 
@@ -4338,6 +4344,8 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
                     route_io_idx = -1;
                 }
                 (void)shutdown(c->fd, SHUT_RDWR);
+                if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+                    route_detach_under_io_lock(c->server, c->fd);
                 return;
             }
         }
@@ -4355,6 +4363,9 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
         client_force_closing(c);
         if (c->fd >= 0)
             (void)shutdown(c->fd, SHUT_RDWR);
+        /* Detach after io unlock — pool must not keep borrowed fd live. */
+        if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+            route_detach_under_io_lock(c->server, c->fd);
         return;
     }
 out:

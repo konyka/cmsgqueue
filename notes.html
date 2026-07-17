@@ -3625,6 +3625,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route client write-fail detaches pool</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">send_direct / flush write</span></td><td>✅</td><td>After <code>SHUT_RDWR</code> (and after releasing route <code>io_lock</code>), call <code>cmq_route_detach_fd</code> so CLOSING inbound routes do not sticky-occupy the pool until teardown.</td></tr>
+</table>
+</div>
+
 
 
 
