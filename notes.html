@@ -2937,6 +2937,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — sync send ACL · acceptor drain under lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_send_by_id ACL</span></td><td>✅</td><td>Same-worker/acceptor direct send rechecks may_deliver via pub_account.</td></tr>
+<tr><td><span class="component-name">drain acceptor UAF</span></td><td>✅</td><td>REQUEST drain holds clients_lock across send+drain (no bare-c* race).</td></tr>
+</table>
+</div>
+
 
 
 

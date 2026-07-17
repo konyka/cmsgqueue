@@ -1555,17 +1555,32 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
     return tgts;
 }
 
+/* pub_account non-empty: recheck may_deliver (same as mailbox SEND). */
+static int deliver_acl_ok(cmq_server_t *srv, const char *pub_account,
+                           const char *sub_account,
+                           const uint8_t *frame, size_t flen) {
+    if (!pub_account || !pub_account[0] || !srv || !srv->accounts)
+        return 1;
+    if (!sub_account) return 0;
+    char subj[CMQ_MAX_SUBJECT];
+    if (message_frame_subject(frame, flen, subj, sizeof(subj)) != 0)
+        return 0;
+    return cmq_account_may_deliver(srv->accounts, pub_account, sub_account,
+                                    subj);
+}
+
 /* Lookup by id+gen and send. Worker targets: owning thread may send_local;
    foreign threads only mailbox-push (never touch subs/write_buf off-owner). */
 static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_id,
                               uint32_t conn_gen, uint32_t require_sub_id,
-                              const uint8_t *frame, size_t flen) {
+                              const uint8_t *frame, size_t flen,
+                              const char *pub_account) {
     if (worker_id >= 0 && srv->workers && worker_id < srv->num_workers) {
         cmq_worker_t *w = &srv->workers[worker_id];
         if (cmq_current_worker_id != worker_id) {
             if (worker_push_msg(w, client_id, conn_gen, frame, flen,
                                  require_sub_id, 0, NULL, 0, 0, NULL, 0,
-                                 NULL) == 0)
+                                 pub_account) == 0)
                 return 1;
             /* Queue full — nudge EOF; do not race write_buf/subs cross-thread. */
             cmq_mutex_lock(&w->clients_lock);
@@ -1591,7 +1606,7 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         }
         cmq_mutex_unlock(&w->clients_lock);
         /* Owning thread: send after unlock (same as mailbox drain).
-           Re-check account after unlock — soft-delete/reactivate TOCTOU. */
+           Re-check account/ACL after unlock — soft-delete / revoke TOCTOU. */
         int ok = 0;
         if (do_send && c) {
             if (!client_account_live(srv, c)) {
@@ -1600,6 +1615,9 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
                     c->state = CMQ_CLIENT_CLOSING;
                 cmq_mutex_unlock(&w->clients_lock);
                 dead_acct = 1;
+            } else if (!deliver_acl_ok(srv, pub_account, c->account_name,
+                                        frame, flen)) {
+                /* ACL revoked mid-flight — drop. */
             } else if (cmq_client_send_local(c, frame, flen) == 0) {
                 ok = 1;
             }
@@ -1619,7 +1637,9 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
         /* May run off acceptor thread (worker deliver to acceptor-owned) —
            hold clients_lock across send so finish_closing cannot race. */
-        if (cmq_client_send_local(c, frame, flen) == 0) ok = 1;
+        if (deliver_acl_ok(srv, pub_account, c->account_name, frame, flen) &&
+            cmq_client_send_local(c, frame, flen) == 0)
+            ok = 1;
     } else if (c && c->conn_gen == conn_gen &&
                c->state == CMQ_CLIENT_CONNECTED &&
                !client_account_live(srv, c)) {
@@ -1653,7 +1673,7 @@ static int deliver_via_worker(cmq_server_t *srv, int worker_id,
     cmq_worker_t *w = &srv->workers[worker_id];
     if (cmq_current_worker_id == worker_id) {
         int r = client_send_by_id(srv, worker_id, client_id, conn_gen, sub_id,
-                                   frame, flen);
+                                   frame, flen, pub_account);
         if (r) return 1;
     }
     for (int attempt = 0; attempt < 4; attempt++) {
@@ -1663,7 +1683,7 @@ static int deliver_via_worker(cmq_server_t *srv, int worker_id,
             return 2;
         if (cmq_current_worker_id == worker_id)
             return client_send_by_id(srv, worker_id, client_id, conn_gen, sub_id,
-                                     frame, flen);
+                                     frame, flen, pub_account);
         if (attempt + 1 >= 4)
             break;
         if (coro_ok)
@@ -1717,7 +1737,7 @@ static int deliver_targets_sync(cmq_server_t *srv,
                                             (uint32_t)payload_len, pub_account);
         } else {
             delivered = client_send_by_id(srv, -1, t->client_id, t->conn_gen,
-                                           t->sub_id, frame, flen);
+                                           t->sub_id, frame, flen, pub_account);
         }
         if (delivered) {
             any = 1;
@@ -1744,7 +1764,8 @@ static int deliver_targets_sync(cmq_server_t *srv,
 static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
                                     uint32_t client_id, uint32_t conn_gen,
                                     uint32_t require_sub_id,
-                                    const uint8_t *frame, size_t flen) {
+                                    const uint8_t *frame, size_t flen,
+                                    const char *pub_account) {
     if (worker_id >= 0 && srv->workers && worker_id < srv->num_workers) {
         if (cmq_current_worker_id != worker_id)
             return 0;
@@ -1759,21 +1780,24 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
         cmq_mutex_unlock(&w->clients_lock);
         if (!do_send || !c) return 0;
         if (!client_account_live(srv, c)) return 0;
+        if (!deliver_acl_ok(srv, pub_account, c->account_name, frame, flen))
+            return 0;
         if (cmq_client_send_local(c, frame, flen) != 0) return 0;
         return client_drain_write_sync(c) == 0 ? 1 : 0;
     }
+    /* Acceptor-owned: hold clients_lock across send+drain (no bare-c* UAF). */
     cmq_mutex_lock(&srv->clients_lock);
     cmq_client_t *c = cmq_idmap_get(srv->idmap, client_id);
-    int do_send = 0;
+    int ok = 0;
     if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
         client_account_live(srv, c) &&
-        (require_sub_id == 0 || client_has_sub(c, require_sub_id)))
-        do_send = 1;
+        (require_sub_id == 0 || client_has_sub(c, require_sub_id)) &&
+        deliver_acl_ok(srv, pub_account, c->account_name, frame, flen) &&
+        cmq_client_send_local(c, frame, flen) == 0 &&
+        client_drain_write_sync(c) == 0)
+        ok = 1;
     cmq_mutex_unlock(&srv->clients_lock);
-    if (!do_send || !c) return 0;
-    if (!client_account_live(srv, c)) return 0;
-    if (cmq_client_send_local(c, frame, flen) != 0) return 0;
-    return client_drain_write_sync(c) == 0 ? 1 : 0;
+    return ok;
 }
 
 /* Cross-worker REQUEST: mailbox + wait for owner send_local(+drain).
@@ -1865,7 +1889,8 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             if (cmq_current_worker_id == t->worker_id)
                 delivered = client_send_by_id_drain(srv, t->worker_id,
                                                      t->client_id, t->conn_gen,
-                                                     t->sub_id, frame, flen);
+                                                     t->sub_id, frame, flen,
+                                                     pub_account);
             else
                 delivered = deliver_request_via_worker(
                     srv, t->worker_id, t->client_id, t->conn_gen, t->sub_id,
@@ -1873,7 +1898,7 @@ static size_t deliver_request_targets(cmq_server_t *srv,
         } else {
             delivered = client_send_by_id_drain(srv, -1, t->client_id,
                                                  t->conn_gen, t->sub_id,
-                                                 frame, flen);
+                                                 frame, flen, pub_account);
         }
         if (delivered) {
             delivered_n++;
@@ -1948,7 +1973,8 @@ static void deliver_coro_func(void *arg) {
                                             ctx->pub_account);
         } else {
             delivered = client_send_by_id(srv, -1, t->client_id, t->conn_gen,
-                                           t->sub_id, ctx->frame, ctx->frame_len);
+                                           t->sub_id, ctx->frame, ctx->frame_len,
+                                           ctx->pub_account);
         }
 
         if (delivered) {
@@ -1992,7 +2018,7 @@ done:
                     /* Queue full — sync send or force EOF so publisher notices. */
                     if (client_send_by_id(srv, ctx->publisher_worker_id,
                                            ctx->publisher_id, ctx->publisher_gen,
-                                           0, ebuf, elen) != 0) {
+                                           0, ebuf, elen, NULL) != 0) {
                         cmq_mutex_lock(&pw->clients_lock);
                         cmq_client_t *pub =
                             cmq_idmap_get(pw->idmap, ctx->publisher_id);
@@ -2004,7 +2030,8 @@ done:
                 }
             } else {
                 (void)client_send_by_id(srv, -1, ctx->publisher_id,
-                                         ctx->publisher_gen, 0, ebuf, elen);
+                                         ctx->publisher_gen, 0, ebuf, elen,
+                                         NULL);
             }
         }
     }
