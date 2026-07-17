@@ -3333,6 +3333,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — filestore dir traversal · cluster id API bounds</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">filestore dir</span></td><td>✅</td><td><code>dir_safe</code> rejects <code>.</code>/<code>..</code> path components (prefix already guarded).</td></tr>
+<tr><td><span class="component-name">cluster id APIs</span></td><td>✅</td><td>Heartbeat/get/remove/set_state reject oversized ids consistently with <code>add_node</code>.</td></tr>
+</table>
+</div>
+
 
 
 

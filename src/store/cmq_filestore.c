@@ -179,6 +179,34 @@ static int prefix_safe(const char *prefix) {
     return 1;
 }
 
+/* dir may be absolute/relative with '/', but no "."/".." components. */
+static int dir_safe(const char *dir) {
+    if (!dir || !dir[0]) return 0;
+    size_t n = strnlen(dir, sizeof(((cmq_filestore_t *)0)->dir));
+    if (n == 0 || n >= sizeof(((cmq_filestore_t *)0)->dir)) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)dir[i];
+        if (c == '\\' || c < 0x20 || c == 0x7f)
+            return 0;
+    }
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && dir[i] == '/')
+            i++;
+        if (i >= n)
+            break;
+        size_t start = i;
+        while (i < n && dir[i] != '/')
+            i++;
+        size_t len = i - start;
+        if (len == 1 && dir[start] == '.')
+            return 0;
+        if (len == 2 && dir[start] == '.' && dir[start + 1] == '.')
+            return 0;
+    }
+    return 1;
+}
+
 /* Drop trailing .data bytes not covered by .idx (crash between fflush(data)
    and idx append). Indexed records stay intact; orphans are truncated.
    Returns 0 on success (incl. nothing to do), -1 on I/O error. */
@@ -333,17 +361,14 @@ static uint64_t repair_idx(cmq_filestore_t *fs) {
 }
 
 cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
-    if (!dir || !prefix_safe(prefix)) return NULL;
-    if (strnlen(dir, sizeof(((cmq_filestore_t *)0)->dir)) >=
-        sizeof(((cmq_filestore_t *)0)->dir))
-        return NULL;
+    if (!dir_safe(dir) || !prefix_safe(prefix)) return NULL;
 
     mkdir(dir, 0755);
 
     cmq_filestore_t *fs = calloc(1, sizeof(cmq_filestore_t));
     if (!fs) return NULL;
-    strncpy(fs->dir, dir, sizeof(fs->dir) - 1);
-    strncpy(fs->prefix, prefix, sizeof(fs->prefix) - 1);
+    snprintf(fs->dir, sizeof(fs->dir), "%s", dir);
+    snprintf(fs->prefix, sizeof(fs->prefix), "%s", prefix);
     atomic_init(&fs->in_flight, 0);
     atomic_init(&fs->dying, 0);
     cmq_mutex_init(&fs->lock);

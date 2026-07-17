@@ -32,6 +32,12 @@ static void cluster_end_op(cmq_cluster_t *cluster) {
     atomic_fetch_sub_explicit(&cluster->in_flight, 1, memory_order_acq_rel);
 }
 
+static int cluster_id_ok(const char *id) {
+    if (!id || !id[0]) return 0;
+    size_t n = strnlen(id, CMQ_NODE_ID_SIZE);
+    return n > 0 && n < CMQ_NODE_ID_SIZE;
+}
+
 static uint64_t now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -80,9 +86,8 @@ const char *cmq_cluster_self_id(cmq_cluster_t *cluster) {
 
 static int cluster_add_node_impl(cmq_cluster_t *cluster, const char *id,
                           const char *addr, int port) {
-    if (!cluster || !id || !addr) return -1;
-    if (strnlen(id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE ||
-        strnlen(addr, CMQ_NODE_ADDR_SIZE) >= CMQ_NODE_ADDR_SIZE)
+    if (!cluster || !cluster_id_ok(id) || !addr) return -1;
+    if (strnlen(addr, CMQ_NODE_ADDR_SIZE) >= CMQ_NODE_ADDR_SIZE)
         return -1;
     cmq_mutex_lock(&cluster->lock);
 
@@ -117,7 +122,7 @@ static int cluster_add_node_impl(cmq_cluster_t *cluster, const char *id,
 }
 
 static int cluster_remove_node_impl(cmq_cluster_t *cluster, const char *id) {
-    if (!cluster || !id) return -1;
+    if (!cluster || !cluster_id_ok(id)) return -1;
     cmq_mutex_lock(&cluster->lock);
     for (size_t i = 0; i < cluster->count; i++) {
         if (strcmp(cluster->nodes[i].id, id) == 0) {
@@ -134,7 +139,7 @@ static int cluster_remove_node_impl(cmq_cluster_t *cluster, const char *id) {
 
 static int cluster_get_node_impl(cmq_cluster_t *cluster, const char *id,
                           cmq_node_info_t *out) {
-    if (!cluster || !id || !out) return -1;
+    if (!cluster || !cluster_id_ok(id) || !out) return -1;
     cmq_mutex_lock(&cluster->lock);
     for (size_t i = 0; i < cluster->count; i++) {
         if (strcmp(cluster->nodes[i].id, id) == 0) {
@@ -149,7 +154,7 @@ static int cluster_get_node_impl(cmq_cluster_t *cluster, const char *id,
 
 static int cluster_set_node_state_impl(cmq_cluster_t *cluster, const char *id,
                                 cmq_node_state_t state) {
-    if (!cluster || !id) return -1;
+    if (!cluster || !cluster_id_ok(id)) return -1;
     cmq_mutex_lock(&cluster->lock);
     int rc = -1;
     for (size_t i = 0; i < cluster->count; i++) {
@@ -164,7 +169,7 @@ static int cluster_set_node_state_impl(cmq_cluster_t *cluster, const char *id,
 }
 
 static void cluster_heartbeat_impl(cmq_cluster_t *cluster, const char *id) {
-    if (!cluster || !id) return;
+    if (!cluster || !cluster_id_ok(id)) return;
     cmq_mutex_lock(&cluster->lock);
     for (size_t i = 0; i < cluster->count; i++) {
         if (strcmp(cluster->nodes[i].id, id) == 0) {
@@ -204,7 +209,7 @@ static void cluster_list_nodes_impl(cmq_cluster_t *cluster, cmq_node_info_t *out
 }
 
 static int64_t cluster_ms_since_heartbeat_impl(cmq_cluster_t *cluster, const char *id) {
-    if (!cluster || !id) return -1;
+    if (!cluster || !cluster_id_ok(id)) return -1;
     cmq_mutex_lock(&cluster->lock);
     int64_t diff = -1;
     for (size_t i = 0; i < cluster->count; i++) {
