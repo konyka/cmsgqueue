@@ -3544,6 +3544,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS upgrade only in INIT</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">WS upgrade</span></td><td>✅</td><td>Gate <code>handle_ws_upgrade</code> / read_cb accumulate to <code>CMQ_CLIENT_INIT</code> so CONNECTED sessions cannot wipe <code>write_buf</code> or switch parsers.</td></tr>
+</table>
+</div>
+
 
 
 

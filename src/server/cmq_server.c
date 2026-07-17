@@ -4486,6 +4486,9 @@ static int http_host_from_value(const char *val, char *out, size_t out_sz) {
 static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                               size_t *consumed) {
     if (consumed) *consumed = 0;
+    /* Upgrade only on fresh sockets — CONNECTED CMQ sessions must not lose
+       write_buf / switch parsers mid-flight. */
+    if (!c || c->state != CMQ_CLIENT_INIT) return -1;
     if (len < 4) return 1; /* need more data */
 
     size_t hdr_end = 0;
@@ -4683,8 +4686,9 @@ static void client_read_cb(int fd, int events, void *data) {
 
     /* HTTP upgrade may arrive fragmented or pipelined with the first WS frame.
        Accumulate into ws_recv_buf until headers complete, then keep any trailing
-       bytes for the WS frame parser below. */
+       bytes for the WS frame parser below. Only INIT (pre-CONNECT). */
     if (!c->is_websocket && !c->ws_upgrade_done &&
+        c->state == CMQ_CLIENT_INIT &&
         (c->ws_recv_len > 0 || (n > 0 && c->read_buf[0] == 'G'))) {
         if ((size_t)n > SIZE_MAX - c->ws_recv_len) { client_teardown(c); return; }
         size_t need = c->ws_recv_len + (size_t)n;
