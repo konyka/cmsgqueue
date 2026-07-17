@@ -1293,6 +1293,25 @@ static void client_force_closing(cmq_client_t *c) {
         cmq_route_unmark_connected_fd(c->server->routes, c->fd);
 }
 
+/* 1 if route still in pool (or not a live route). 0 → CLOSING started.
+   Must NOT hold route io_lock. Closes ghost ingress after broadcast drop. */
+static int client_route_pool_held(cmq_client_t *c) {
+    if (!c || !c->is_route || c->state != CMQ_CLIENT_CONNECTED)
+        return 1;
+    cmq_server_t *srv = c->server;
+    if (!srv || !srv->routes || c->fd < 0)
+        return 1;
+    int ri = cmq_route_io_lock_fd(srv->routes, c->fd);
+    if (ri < 0) {
+        client_force_closing(c);
+        if (c->fd >= 0)
+            (void)shutdown(c->fd, SHUT_RDWR);
+        return 0;
+    }
+    cmq_route_io_unlock_idx(srv->routes, ri);
+    return 1;
+}
+
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len) {
     if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
         return -1;
@@ -4704,8 +4723,15 @@ static int client_dispatch_parser(cmq_server_t *srv, cmq_client_t *c, int rc) {
     for (;;) {
         while (rc == 1) {
             const cmq_frame_t *frame = cmq_parser_frame(c->parser);
-            if (frame)
+            if (frame) {
+                /* Re-check after READ probe — broadcast may have dropped the
+                   slot between unlock and this frame (ghost dual-path). */
+                if (!client_route_pool_held(c)) {
+                    client_finish_closing(c);
+                    return -1;
+                }
                 handle_frame(srv, c, frame);
+            }
             if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) {
                 client_finish_closing(c);
                 return -1;
@@ -4758,17 +4784,9 @@ static void client_read_cb(int fd, int events, void *data) {
 
     /* Align write-path fail-closed: after broadcast hard-fail drops the pool
        fd, do not keep parsing ingress while CONNECTED (ghost fan-in / dual path). */
-    if (c->is_route && c->state == CMQ_CLIENT_CONNECTED &&
-        srv && srv->routes && c->fd >= 0) {
-        int ri = cmq_route_io_lock_fd(srv->routes, c->fd);
-        if (ri < 0) {
-            client_force_closing(c);
-            if (c->fd >= 0)
-                (void)shutdown(c->fd, SHUT_RDWR);
-            client_finish_closing(c);
-            return;
-        }
-        cmq_route_io_unlock_idx(srv->routes, ri);
+    if (!client_route_pool_held(c)) {
+        client_finish_closing(c);
+        return;
     }
 
     ssize_t n = client_sock_read(c, c->read_buf, sizeof(c->read_buf));
@@ -4776,6 +4794,11 @@ static void client_read_cb(int fd, int events, void *data) {
         if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
             client_teardown(c);
         }
+        return;
+    }
+    /* Narrow TOCTOU after sock_read: drop before feeding the parser. */
+    if (!client_route_pool_held(c)) {
+        client_finish_closing(c);
         return;
     }
     /* INIT: do not refresh on TCP traffic — PING/junk must not hold slots.

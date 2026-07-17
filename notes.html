@@ -3676,6 +3676,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route dispatch re-checks pool after READ probe</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_route_pool_held</span></td><td>✅</td><td>Shared probe; READ entry, post-<code>sock_read</code>, and each <code>handle_frame</code> — closes TOCTOU where broadcast drops the slot after the first unlock.</td></tr>
+</table>
+</div>
+
 
 
 
