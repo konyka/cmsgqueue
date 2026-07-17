@@ -4756,6 +4756,21 @@ static void client_read_cb(int fd, int events, void *data) {
 
     if (!(events & CMQ_EV_READ)) return;
 
+    /* Align write-path fail-closed: after broadcast hard-fail drops the pool
+       fd, do not keep parsing ingress while CONNECTED (ghost fan-in / dual path). */
+    if (c->is_route && c->state == CMQ_CLIENT_CONNECTED &&
+        srv && srv->routes && c->fd >= 0) {
+        int ri = cmq_route_io_lock_fd(srv->routes, c->fd);
+        if (ri < 0) {
+            client_force_closing(c);
+            if (c->fd >= 0)
+                (void)shutdown(c->fd, SHUT_RDWR);
+            client_finish_closing(c);
+            return;
+        }
+        cmq_route_io_unlock_idx(srv->routes, ri);
+    }
+
     ssize_t n = client_sock_read(c, c->read_buf, sizeof(c->read_buf));
     if (n <= 0) {
         if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {

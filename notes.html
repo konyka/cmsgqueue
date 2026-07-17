@@ -3668,6 +3668,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route READ fails closed after pool drop</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_read_cb route membership</span></td><td>✅</td><td>Before READ parse, <code>cmq_route_io_lock_fd</code> miss → CLOSING (align send/flush); stops ghost ingress after broadcast hard-fail evicts the slot.</td></tr>
+</table>
+</div>
+
 
 
 
