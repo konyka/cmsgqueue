@@ -325,6 +325,21 @@ static ssize_t client_sock_write(cmq_client_t *c, const uint8_t *buf, size_t len
 
 #define CMQ_WORKER_WAKE_BATCH 64
 
+/* MESSAGE/REQUEST body: [4B sub_id][2B slen][subject]… */
+static int message_frame_subject(const uint8_t *buf, size_t len,
+                                  char *out, size_t out_sz) {
+    if (!buf || !out || out_sz < 2 || len < sizeof(cmq_frame_hdr_t) + 6)
+        return -1;
+    const uint8_t *p = buf + sizeof(cmq_frame_hdr_t);
+    size_t body = len - sizeof(cmq_frame_hdr_t);
+    uint16_t slen = ((uint16_t)p[4] << 8) | (uint16_t)p[5];
+    if (slen == 0 || (size_t)slen >= out_sz || 6u + (size_t)slen > body)
+        return -1;
+    memcpy(out, p + 6, slen);
+    out[slen] = '\0';
+    return 0;
+}
+
 static void worker_wakeup_cb(int fd, int events, void *data) {
     (void)events;
     cmq_worker_t *w = (cmq_worker_t *)data;
@@ -418,28 +433,52 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                     if (w->server)
                         cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                                   CMQ_ATOMIC_RELAXED);
-                } else if (cmq_client_send_local(target, msg->buf, msg->len) != 0) {
-                    if (w->server)
-                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                                  CMQ_ATOMIC_RELAXED);
-                } else if (msg->drain_sync &&
-                           client_drain_write_sync(target) != 0) {
-                    if (w->server)
-                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                                  CMQ_ATOMIC_RELAXED);
                 } else {
-                    sync_ok = 1;
-                    if (msg->credit_out && w->server) {
-                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_out, 1,
-                                                  CMQ_ATOMIC_RELAXED);
-                        if (msg->account_name[0] != '\0') {
-                            cmq_account_t *oacc =
-                                cmq_account_get(w->server->accounts,
-                                                 msg->account_name, NULL);
-                            if (oacc)
-                                cmq_account_inc_msgs_out(
-                                    oacc, msg->account_epoch,
-                                    (uint64_t)msg->payload_bytes);
+                    int acl_deny = 0;
+                    if (msg->pub_account[0] != '\0' && w->server &&
+                        w->server->accounts) {
+                        /* Recheck ACL after mailbox delay — revoke must stop send. */
+                        char subj[CMQ_MAX_SUBJECT];
+                        if (message_frame_subject(msg->buf, msg->len, subj,
+                                                   sizeof(subj)) != 0 ||
+                            !cmq_account_may_deliver(w->server->accounts,
+                                                      msg->pub_account,
+                                                      target->account_name,
+                                                      subj))
+                            acl_deny = 1;
+                    }
+                    if (acl_deny) {
+                        if (w->server)
+                            cmq_atomic_fetch_add_u64(
+                                &w->server->stat_messages_dropped, 1,
+                                CMQ_ATOMIC_RELAXED);
+                    } else if (cmq_client_send_local(target, msg->buf,
+                                                      msg->len) != 0) {
+                        if (w->server)
+                            cmq_atomic_fetch_add_u64(
+                                &w->server->stat_messages_dropped, 1,
+                                CMQ_ATOMIC_RELAXED);
+                    } else if (msg->drain_sync &&
+                               client_drain_write_sync(target) != 0) {
+                        if (w->server)
+                            cmq_atomic_fetch_add_u64(
+                                &w->server->stat_messages_dropped, 1,
+                                CMQ_ATOMIC_RELAXED);
+                    } else {
+                        sync_ok = 1;
+                        if (msg->credit_out && w->server) {
+                            cmq_atomic_fetch_add_u64(
+                                &w->server->stat_messages_out, 1,
+                                CMQ_ATOMIC_RELAXED);
+                            if (msg->account_name[0] != '\0') {
+                                cmq_account_t *oacc =
+                                    cmq_account_get(w->server->accounts,
+                                                     msg->account_name, NULL);
+                                if (oacc)
+                                    cmq_account_inc_msgs_out(
+                                        oacc, msg->account_epoch,
+                                        (uint64_t)msg->payload_bytes);
+                            }
                         }
                     }
                 }
@@ -500,7 +539,8 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
                              uint32_t require_sub_id,
                              int credit_out, const char *account_name,
                              uint32_t account_epoch, uint32_t payload_bytes,
-                             int *sync_result, int drain_sync) {
+                             int *sync_result, int drain_sync,
+                             const char *pub_account) {
     cmq_mutex_lock(&w->msg_lock);
     if (w->msg_pending >= CMQ_WORKER_MSG_QUEUE_MAX) {
         cmq_mutex_unlock(&w->msg_lock);
@@ -527,6 +567,12 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
         msg->account_name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
     } else {
         msg->account_name[0] = '\0';
+    }
+    if (pub_account && pub_account[0]) {
+        strncpy(msg->pub_account, pub_account, CMQ_ACCOUNT_NAME_SIZE - 1);
+        msg->pub_account[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
+    } else {
+        msg->pub_account[0] = '\0';
     }
     msg->buf = malloc(len);
     if (!msg->buf) {
@@ -1241,7 +1287,7 @@ static int cmq_client_send_checked(cmq_client_t *c, const uint8_t *data, size_t 
     if (cross) {
         return worker_push_msg(&srv->workers[c->worker_id], c->id, c->conn_gen,
                                 data, len, require_sub_id, 0, NULL, 0, 0,
-                                NULL, 0);
+                                NULL, 0, NULL);
     }
     if (require_sub_id != 0 && !client_has_sub(c, require_sub_id))
         return -1;
@@ -1518,7 +1564,8 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         cmq_worker_t *w = &srv->workers[worker_id];
         if (cmq_current_worker_id != worker_id) {
             if (worker_push_msg(w, client_id, conn_gen, frame, flen,
-                                 require_sub_id, 0, NULL, 0, 0, NULL, 0) == 0)
+                                 require_sub_id, 0, NULL, 0, 0, NULL, 0,
+                                 NULL) == 0)
                 return 1;
             /* Queue full — nudge EOF; do not race write_buf/subs cross-thread. */
             cmq_mutex_lock(&w->clients_lock);
@@ -1601,7 +1648,8 @@ static int deliver_via_worker(cmq_server_t *srv, int worker_id,
                                const uint8_t *frame, size_t flen,
                                int coro_ok,
                                const char *account_name, uint32_t account_epoch,
-                               uint32_t payload_bytes) {
+                               uint32_t payload_bytes,
+                               const char *pub_account) {
     cmq_worker_t *w = &srv->workers[worker_id];
     if (cmq_current_worker_id == worker_id) {
         int r = client_send_by_id(srv, worker_id, client_id, conn_gen, sub_id,
@@ -1611,7 +1659,7 @@ static int deliver_via_worker(cmq_server_t *srv, int worker_id,
     for (int attempt = 0; attempt < 4; attempt++) {
         if (worker_push_msg(w, client_id, conn_gen, frame, flen, sub_id,
                              1, account_name, account_epoch, payload_bytes,
-                             NULL, 0) == 0)
+                             NULL, 0, pub_account) == 0)
             return 2;
         if (cmq_current_worker_id == worker_id)
             return client_send_by_id(srv, worker_id, client_id, conn_gen, sub_id,
@@ -1666,7 +1714,7 @@ static int deliver_targets_sync(cmq_server_t *srv,
             delivered = deliver_via_worker(srv, t->worker_id, t->client_id,
                                             t->conn_gen, t->sub_id, frame, flen, 0,
                                             t->account_name, t->account_epoch,
-                                            (uint32_t)payload_len);
+                                            (uint32_t)payload_len, pub_account);
         } else {
             delivered = client_send_by_id(srv, -1, t->client_id, t->conn_gen,
                                            t->sub_id, frame, flen);
@@ -1734,12 +1782,12 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
 static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                                        uint32_t client_id, uint32_t conn_gen,
                                        uint32_t sub_id, const uint8_t *frame,
-                                       size_t flen) {
+                                       size_t flen, const char *pub_account) {
     cmq_worker_t *w = &srv->workers[worker_id];
     for (int attempt = 0; attempt < 4; attempt++) {
         int result = 0;
         if (worker_push_msg(w, client_id, conn_gen, frame, flen, sub_id,
-                             0, NULL, 0, 0, &result, 1) != 0) {
+                             0, NULL, 0, 0, &result, 1, pub_account) != 0) {
             if (attempt + 1 >= 4) break;
             struct timespec ts = {0, 50000L};
             nanosleep(&ts, NULL);
@@ -1821,7 +1869,7 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             else
                 delivered = deliver_request_via_worker(
                     srv, t->worker_id, t->client_id, t->conn_gen, t->sub_id,
-                    frame, flen);
+                    frame, flen, pub_account);
         } else {
             delivered = client_send_by_id_drain(srv, -1, t->client_id,
                                                  t->conn_gen, t->sub_id,
@@ -1896,7 +1944,8 @@ static void deliver_coro_func(void *arg) {
                                             t->conn_gen, t->sub_id, ctx->frame,
                                             ctx->frame_len, 1,
                                             t->account_name, t->account_epoch,
-                                            (uint32_t)ctx->payload_len);
+                                            (uint32_t)ctx->payload_len,
+                                            ctx->pub_account);
         } else {
             delivered = client_send_by_id(srv, -1, t->client_id, t->conn_gen,
                                            t->sub_id, ctx->frame, ctx->frame_len);
@@ -1938,7 +1987,8 @@ done:
                 ctx->publisher_worker_id < srv->num_workers) {
                 cmq_worker_t *pw = &srv->workers[ctx->publisher_worker_id];
                 if (worker_push_msg(pw, ctx->publisher_id, ctx->publisher_gen,
-                                     ebuf, elen, 0, 0, NULL, 0, 0, NULL, 0) != 0) {
+                                     ebuf, elen, 0, 0, NULL, 0, 0, NULL, 0,
+                                     NULL) != 0) {
                     /* Queue full — sync send or force EOF so publisher notices. */
                     if (client_send_by_id(srv, ctx->publisher_worker_id,
                                            ctx->publisher_id, ctx->publisher_gen,
@@ -2712,6 +2762,20 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
             c->state = CMQ_CLIENT_CLOSING;
             return;
         }
+    } else if (!client_account_live(srv, c)) {
+        /* Replace path: same soft-delete TOCTOU as new-sub credit. */
+        c->subs = entry->next;
+        cmq_rwlock_wrlock(&srv->sublist_lock);
+        if (entry->ref) {
+            cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
+            free(entry->ref);
+            entry->ref = NULL;
+        }
+        cmq_rwlock_unlock(&srv->sublist_lock);
+        free(entry);
+        cmq_send_suback(c, sub_id, 1);
+        c->state = CMQ_CLIENT_CLOSING;
+        return;
     }
     cmq_send_suback(c, sub_id, 0);
 }
@@ -4344,7 +4408,8 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
             for (int i = 0; i < ndoomed; i++) {
                 if (disc_len > 0)
                     worker_push_msg(w, doomed[i].id, doomed[i].gen,
-                                    disc, disc_len, 0, 0, NULL, 0, 0, NULL, 0);
+                                    disc, disc_len, 0, 0, NULL, 0, 0, NULL, 0,
+                                    NULL);
                 if (worker_push_teardown(w, doomed[i].id, doomed[i].gen) != 0) {
                     /* OOM: force-close fd so the worker notices EOF. */
                     cmq_mutex_lock(&w->clients_lock);
@@ -5199,7 +5264,7 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
             for (int j = 0; j < nids; j++) {
                 if (keys[j].send_disc && disc_len > 0)
                     worker_push_msg(w, keys[j].id, keys[j].gen, disc, disc_len, 0, 0, NULL, 0, 0,
-                                    NULL, 0);
+                                    NULL, 0, NULL);
                 if (worker_push_teardown(w, keys[j].id, keys[j].gen) != 0) {
                     /* OOM: force-close fd so the worker notices EOF (same as
                        keepalive_timer_cb). */
