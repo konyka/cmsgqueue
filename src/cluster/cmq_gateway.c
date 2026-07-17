@@ -133,6 +133,19 @@ static int gw_has_live_peer(cmq_gateway_t *gw, const char *cluster_name) {
     }
 }
 
+/* Caller holds gw->lock. True if cluster still maps to addr:port (add_remote
+   may have rewritten the endpoint while connect was unlocked). */
+static int gw_endpoint_current(cmq_gateway_t *gw, const char *cluster_name,
+                               const char *addr, int port) {
+    if (!gw || !cluster_name || !addr) return 0;
+    for (size_t i = 0; i < gw->cluster_count; i++) {
+        if (strcmp(gw->clusters[i].name, cluster_name) == 0)
+            return gw->clusters[i].port == port &&
+                   strncmp(gw->clusters[i].addr, addr, CMQ_NODE_ADDR_SIZE) == 0;
+    }
+    return 0;
+}
+
 /* Claim slot for a freshly dialed fd. Caller holds gw->lock on entry/exit.
    0 = installed; 1 = keep existing live peer (caller closes new fd);
    -1 = slot not reclaimable. Never gw_slot_close a probed-live same-cluster peer. */
@@ -397,6 +410,11 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
             close(fd);
             return 0;
         }
+        if (!gw_endpoint_current(gw, cluster_name, addr_copy, port_copy)) {
+            cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            return -1;
+        }
         if (slot < gw->conn_count) {
             int rc = gw_slot_claim_install(gw, slot, cluster_name, addr_copy,
                                            port_copy, fd);
@@ -500,6 +518,11 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
             close(fd);
             return 0;
         }
+        if (!gw_endpoint_current(gw, cluster_name, addr_copy, port_copy)) {
+            cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            return -1;
+        }
         if ((size_t)slot < gw->conn_count) {
             int rc = gw_slot_claim_install(gw, (size_t)slot, cluster_name,
                                            addr_copy, port_copy, fd);
@@ -559,6 +582,11 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
         close(fd);
         return 0;
     }
+    if (!gw_endpoint_current(gw, cluster_name, addr_copy, port_copy)) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        return -1;
+    }
     for (size_t i = 0; i < gw->conn_count; i++) {
         int rc = gw_slot_claim_install(gw, i, cluster_name, addr_copy,
                                        port_copy, fd);
@@ -576,6 +604,11 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
         cmq_mutex_unlock(&gw->lock);
         close(fd);
         return 0;
+    }
+    if (!gw_endpoint_current(gw, cluster_name, addr_copy, port_copy)) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        return -1;
     }
     if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {
         cmq_mutex_unlock(&gw->lock);
