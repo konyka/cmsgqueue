@@ -93,18 +93,19 @@ int cmq_cluster_remove_node(cmq_cluster_t *cluster, const char *id) {
     return -1;
 }
 
-cmq_node_info_t *cmq_cluster_get_node(cmq_cluster_t *cluster, const char *id) {
-    if (!cluster || !id) return NULL;
+int cmq_cluster_get_node(cmq_cluster_t *cluster, const char *id,
+                          cmq_node_info_t *out) {
+    if (!cluster || !id || !out) return -1;
     cmq_mutex_lock(&cluster->lock);
-    cmq_node_info_t *found = NULL;
     for (size_t i = 0; i < cluster->count; i++) {
         if (strcmp(cluster->nodes[i].id, id) == 0) {
-            found = &cluster->nodes[i];
-            break;
+            *out = cluster->nodes[i];
+            cmq_mutex_unlock(&cluster->lock);
+            return 0;
         }
     }
     cmq_mutex_unlock(&cluster->lock);
-    return found;
+    return -1;
 }
 
 int cmq_cluster_set_node_state(cmq_cluster_t *cluster, const char *id,

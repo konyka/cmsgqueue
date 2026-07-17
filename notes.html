@@ -2846,6 +2846,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — cluster get_node copy-out · CONNECT CONNACK order</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">get_node</span></td><td>✅</td><td>Copy-out under lock (align gateway); no interior pointer vs <code>remove</code> <code>memmove</code> UAF.</td></tr>
+<tr><td><span class="component-name">attach CONNACK</span></td><td>✅</td><td><code>attach_inbound</code> fail: CONNACK 1 before CLOSING so reject is not dropped by send path.</td></tr>
+</table>
+</div>
+
 
 
 

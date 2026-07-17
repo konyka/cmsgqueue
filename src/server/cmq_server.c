@@ -3469,8 +3469,9 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             char nid[CMQ_NODE_ID_SIZE];
             snprintf(nid, sizeof(nid), "r%d", route_ri);
             if (cmq_route_attach_inbound(srv->routes, nid, c->fd) != 0) {
-                c->state = CMQ_CLIENT_CLOSING;
+                /* CONNACK before CLOSING — send_direct rejects CLOSING. */
                 cmq_send_connack(c, 1);
+                c->state = CMQ_CLIENT_CLOSING;
                 break;
             }
             c->is_route = 1;

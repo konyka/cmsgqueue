@@ -36,7 +36,9 @@ const char *cmq_cluster_self_id(cmq_cluster_t *cluster);
 int cmq_cluster_add_node(cmq_cluster_t *cluster, const char *id,
                           const char *addr, int port);
 int cmq_cluster_remove_node(cmq_cluster_t *cluster, const char *id);
-cmq_node_info_t *cmq_cluster_get_node(cmq_cluster_t *cluster, const char *id);
+/* Copy-out under lock — never return an interior pointer (remove memmove UAF). */
+int cmq_cluster_get_node(cmq_cluster_t *cluster, const char *id,
+                          cmq_node_info_t *out);
 
 int cmq_cluster_set_node_state(cmq_cluster_t *cluster, const char *id,
                                 cmq_node_state_t state);

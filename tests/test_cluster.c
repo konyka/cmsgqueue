@@ -26,14 +26,14 @@ TEST(cluster, add_remove_nodes) {
     ASSERT_EQ(cmq_cluster_add_node(c, "n2", "10.0.0.2", 7654), 0);
     ASSERT_EQ(cmq_cluster_node_count(c), (size_t)2);
 
-    cmq_node_info_t *n = cmq_cluster_get_node(c, "n2");
-    ASSERT_NOT_NULL(n);
-    ASSERT_STR_EQ(n->addr, "10.0.0.2");
-    ASSERT_EQ(n->port, 7654);
+    cmq_node_info_t n;
+    ASSERT_EQ(cmq_cluster_get_node(c, "n2", &n), 0);
+    ASSERT_STR_EQ(n.addr, "10.0.0.2");
+    ASSERT_EQ(n.port, 7654);
 
     ASSERT_EQ(cmq_cluster_remove_node(c, "n2"), 0);
     ASSERT_EQ(cmq_cluster_node_count(c), (size_t)1);
-    ASSERT_NULL(cmq_cluster_get_node(c, "n2"));
+    ASSERT_EQ(cmq_cluster_get_node(c, "n2", &n), -1);
 
     cmq_cluster_destroy(c);
 }
@@ -42,11 +42,13 @@ TEST(cluster, node_state) {
     cmq_cluster_t *c = cmq_cluster_create("c1", "n1");
     cmq_cluster_add_node(c, "n2", "10.0.0.2", 7654);
 
-    cmq_node_info_t *n = cmq_cluster_get_node(c, "n2");
-    ASSERT_EQ(n->state, CMQ_NODE_JOINING);
+    cmq_node_info_t n;
+    ASSERT_EQ(cmq_cluster_get_node(c, "n2", &n), 0);
+    ASSERT_EQ(n.state, CMQ_NODE_JOINING);
 
     cmq_cluster_set_node_state(c, "n2", CMQ_NODE_ACTIVE);
-    ASSERT_EQ(n->state, CMQ_NODE_ACTIVE);
+    ASSERT_EQ(cmq_cluster_get_node(c, "n2", &n), 0);
+    ASSERT_EQ(n.state, CMQ_NODE_ACTIVE);
     ASSERT_EQ(cmq_cluster_active_count(c), (size_t)1);
 
     cmq_cluster_destroy(c);
