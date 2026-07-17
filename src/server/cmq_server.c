@@ -5047,11 +5047,10 @@ static void client_read_cb(int fd, int events, void *data) {
                     c->ws_msg_len += ws_frame.payload_len;
                 }
 
-                /* INIT WS: refresh on every data fragment (slow CONNECT may
-                   span FIN=0 frames). CONNECTED: FIN-only (avoid FIN=0 spam). */
-                if (c->state == CMQ_CLIENT_INIT)
-                    client_touch_activity(c);
-                else if (ws_frame.fin && c->state == CMQ_CLIENT_CONNECTED)
+                /* Align TCP INIT + WS PING: never refresh on INIT fragments
+                   (FIN=0 spam must not hold slots). CONNECT success touches
+                   activity in handle_frame; CONNECTED only on FIN=1. */
+                if (ws_frame.fin && c->state == CMQ_CLIENT_CONNECTED)
                     client_touch_activity(c);
 
                 if (ws_frame.fin) {

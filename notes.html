@@ -3709,6 +3709,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS INIT fragments do not refresh keepalive</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_read_cb WS data</span></td><td>✅</td><td>Removed INIT-per-fragment <code>client_touch_activity</code> (aligned with TCP INIT / WS PING); FIN=0 spam can no longer hold pre-CONNECT slots.</td></tr>
+</table>
+</div>
+
 
 
 
