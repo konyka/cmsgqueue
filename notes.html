@@ -3232,6 +3232,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — stream read/append unlock around copy</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">stream read</span></td><td>✅</td><td>No longer holds <code>stream-&gt;lock</code> across <code>cmq_store_get</code>.</td></tr>
+<tr><td><span class="component-name">stream append</span></td><td>✅</td><td><code>malloc</code>+copy of payload before taking <code>stream-&gt;lock</code>.</td></tr>
+</table>
+</div>
+
 
 
 

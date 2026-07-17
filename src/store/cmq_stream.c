@@ -82,15 +82,13 @@ const char *cmq_stream_name(cmq_stream_t *stream) {
 
 static uint64_t stream_append_impl(cmq_stream_t *stream, const uint8_t *data, size_t len) {
     if (!stream || !data || len == 0) return 0;
-    cmq_mutex_lock(&stream->lock);
 
-    /* Allocate payload before any eviction so OOM cannot drop retained msgs. */
+    /* Allocate/copy before stream lock — OOM cannot drop retained msgs. */
     uint8_t *copy = malloc(len);
-    if (!copy) {
-        cmq_mutex_unlock(&stream->lock);
-        return 0;
-    }
+    if (!copy) return 0;
     memcpy(copy, data, len);
+
+    cmq_mutex_lock(&stream->lock);
 
     /* Do not evict past the slowest consumer's ack watermark. */
     uint64_t last_seq = cmq_store_last_seq(stream->store);
@@ -171,18 +169,15 @@ static uint64_t stream_append_impl(cmq_stream_t *stream, const uint8_t *data, si
 
 static int stream_read_impl(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out) {
     if (!stream || !out) return -1;
-    cmq_mutex_lock(&stream->lock);
+    /* Store has its own lock + begin_op barrier — no need to hold stream->lock
+       across get (avoids blocking append/ack during large copies). */
     cmq_store_msg_t msg;
     int rc = cmq_store_get(stream->store, seq, &msg);
-    if (rc != 0) {
-        cmq_mutex_unlock(&stream->lock);
-        return rc;
-    }
+    if (rc != 0) return rc;
     out->seq = msg.seq;
     out->data = msg.data; /* ownership transferred */
     out->len = msg.len;
     out->timestamp_ms = msg.timestamp_ms;
-    cmq_mutex_unlock(&stream->lock);
     return 0;
 }
 
