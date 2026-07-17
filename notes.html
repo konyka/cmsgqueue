@@ -2900,6 +2900,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — attach_inbound/live_count/leaf_is_connected sticky recheck</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">attach_inbound</span></td><td>✅</td><td>Reject only when probe alive AND slot identity still matches.</td></tr>
+<tr><td><span class="component-name">live_count</span></td><td>✅</td><td>Count live only after connected+fd+remote_id recheck.</td></tr>
+<tr><td><span class="component-name">leaf_is_connected</span></td><td>✅</td><td>Mirror connect: alive + hub_fd identity after probe.</td></tr>
+</table>
+</div>
+
 
 
 

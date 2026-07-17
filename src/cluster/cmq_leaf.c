@@ -558,13 +558,17 @@ int cmq_leaf_is_connected(cmq_leaf_node_t *leaf) {
     cmq_mutex_unlock(&leaf->lock);
     if (!c) return 0;
     /* Same light probe as connect — clear sticky connected on dead hub. */
-    if (!leaf_fd_alive(fd)) {
-        cmq_mutex_lock(&leaf->hub_io_lock);
-        leaf_hub_drop_if_dead(leaf, fd);
-        cmq_mutex_unlock(&leaf->hub_io_lock);
-        return 0;
+    int alive = leaf_fd_alive(fd);
+    cmq_mutex_lock(&leaf->lock);
+    if (alive && leaf->connected && leaf->hub_fd == fd) {
+        cmq_mutex_unlock(&leaf->lock);
+        return 1;
     }
-    return 1;
+    cmq_mutex_unlock(&leaf->lock);
+    cmq_mutex_lock(&leaf->hub_io_lock);
+    leaf_hub_drop_if_dead(leaf, fd);
+    cmq_mutex_unlock(&leaf->hub_io_lock);
+    return 0;
 }
 
 int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {

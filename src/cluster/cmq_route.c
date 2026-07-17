@@ -652,8 +652,7 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
                 return -1;
             }
             cmq_mutex_unlock(&pool->lock);
-            if (route_fd_alive(efd))
-                return -1;
+            int alive = route_fd_alive(efd);
             cmq_mutex_lock(&pool->lock);
             if (idx >= pool->conn_count) {
                 i = (size_t)-1;
@@ -667,15 +666,19 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
                 continue;
             }
             if (f2 == efd) {
-                /* Fd number may have been recycled into a live peer. */
-                if (route_fd_alive(efd)) {
+                /* Probe+identity: recycled fd must not reject attach forever. */
+                if (alive) {
                     cmq_mutex_unlock(&pool->lock);
                     return -1;
                 }
-                route_slot_close(pool, idx);
-                route_slot_install(pool, idx, node_id, fd, 0, 0, NULL, 0);
+                if (!route_fd_alive(efd)) {
+                    route_slot_close(pool, idx);
+                    route_slot_install(pool, idx, node_id, fd, 0, 0, NULL, 0);
+                    cmq_mutex_unlock(&pool->lock);
+                    return 0;
+                }
                 cmq_mutex_unlock(&pool->lock);
-                return 0;
+                return -1;
             }
             if (f2 >= 0) {
                 /* Live or staged peer appeared — do not SHUT_RDWR/steal. */
@@ -887,7 +890,12 @@ size_t cmq_route_live_count(cmq_route_pool_t *pool) {
         }
         cmq_mutex_unlock(&pool->io_locks[i]);
         if (!cand) continue;
-        if (route_fd_alive(fd)) {
+        int alive = route_fd_alive(fd);
+        cmq_mutex_lock(&pool->io_locks[i]);
+        int still = (pool->conns[i].connected && pool->conns[i].fd == fd &&
+                     strcmp(pool->conns[i].remote_id, rid) == 0);
+        cmq_mutex_unlock(&pool->io_locks[i]);
+        if (alive && still) {
             n++;
             continue;
         }
