@@ -2991,6 +2991,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf accept sticky reclaim · sublist destroy wrlock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf accept</span></td><td>✅</td><td>Table-full reclaim sticky connected=1 dead TCP (identity recheck); placeholders untouched.</td></tr>
+<tr><td><span class="component-name">sublist destroy</span></td><td>✅</td><td>Wrlock while detaching/freeing trie; clears root before unlock.</td></tr>
+</table>
+</div>
+
 
 
 

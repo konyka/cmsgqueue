@@ -741,24 +741,68 @@ size_t cmq_leaf_accept_count(cmq_leaf_node_t *leaf) {
     return c;
 }
 
+/* Caller holds leaf->lock. Compact out one sticky connected=1 dead TCP.
+   Placeholders (fd < 0) are left alone. Returns 1 if a slot was removed. */
+static int leaf_reclaim_one_sticky_dead(cmq_leaf_node_t *leaf) {
+    for (size_t i = 0; i < leaf->leaf_count; ) {
+        int connected = leaf->leaves[i].connected;
+        int efd = leaf->leaves[i].fd;
+        char id[CMQ_NODE_ID_SIZE];
+        if (!connected || efd < 0) {
+            i++;
+            continue;
+        }
+        memcpy(id, leaf->leaves[i].leaf_id, CMQ_NODE_ID_SIZE);
+        cmq_mutex_unlock(&leaf->lock);
+        int alive = leaf_fd_alive(efd);
+        cmq_mutex_lock(&leaf->lock);
+        if (i >= leaf->leaf_count)
+            return 0;
+        int same = (leaf->leaves[i].connected && leaf->leaves[i].fd == efd &&
+                    strcmp(leaf->leaves[i].leaf_id, id) == 0);
+        if (!same) {
+            i = 0;
+            continue;
+        }
+        if (alive) {
+            i++;
+            continue;
+        }
+        /* Re-probe under identity — fd recycle must not close a live peer. */
+        if (!leaf_fd_alive(efd)) {
+            close(efd);
+            memmove(&leaf->leaves[i], &leaf->leaves[i + 1],
+                    (leaf->leaf_count - i - 1) * sizeof(cmq_leaf_conn_t));
+            leaf->leaf_count--;
+            memset(&leaf->leaves[leaf->leaf_count], 0, sizeof(cmq_leaf_conn_t));
+            return 1;
+        }
+        i++;
+    }
+    return 0;
+}
+
+/* Caller holds leaf->lock. 0 = room or same-id replace; -1 = still full. */
+static int leaf_ensure_accept_slot(cmq_leaf_node_t *leaf, const char *leaf_id) {
+    while (leaf->leaf_count >= CMQ_LEAF_MAX_CONNECTIONS) {
+        for (size_t i = 0; i < leaf->leaf_count; i++) {
+            if (strcmp(leaf->leaves[i].leaf_id, leaf_id) == 0)
+                return 0;
+        }
+        if (!leaf_reclaim_one_sticky_dead(leaf))
+            return -1;
+    }
+    return 0;
+}
+
 int cmq_leaf_accept(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
     if (!leaf || !leaf_id) return -1;
 
     cmq_mutex_lock(&leaf->lock);
-    if (leaf->leaf_count >= CMQ_LEAF_MAX_CONNECTIONS) {
-        /* Allow replace of an existing same leaf_id even when table is full. */
-        int have = 0;
-        for (size_t i = 0; i < leaf->leaf_count; i++) {
-            if (strcmp(leaf->leaves[i].leaf_id, leaf_id) == 0) {
-                have = 1;
-                break;
-            }
-        }
-        if (!have) {
-            cmq_mutex_unlock(&leaf->lock);
-            if (fd >= 0) close(fd);
-            return -1;
-        }
+    if (leaf_ensure_accept_slot(leaf, leaf_id) != 0) {
+        cmq_mutex_unlock(&leaf->lock);
+        if (fd >= 0) close(fd);
+        return -1;
     }
     cmq_mutex_unlock(&leaf->lock);
 
@@ -772,20 +816,10 @@ int cmq_leaf_accept(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
     }
 
     cmq_mutex_lock(&leaf->lock);
-    if (leaf->leaf_count >= CMQ_LEAF_MAX_CONNECTIONS) {
-        /* Still allow replace of an existing same leaf_id. */
-        int have = 0;
-        for (size_t i = 0; i < leaf->leaf_count; i++) {
-            if (strcmp(leaf->leaves[i].leaf_id, leaf_id) == 0) {
-                have = 1;
-                break;
-            }
-        }
-        if (!have) {
-            cmq_mutex_unlock(&leaf->lock);
-            if (fd >= 0) close(fd);
-            return -1;
-        }
+    if (leaf_ensure_accept_slot(leaf, leaf_id) != 0) {
+        cmq_mutex_unlock(&leaf->lock);
+        if (fd >= 0) close(fd);
+        return -1;
     }
     for (size_t i = 0; i < leaf->leaf_count; i++) {
         if (strcmp(leaf->leaves[i].leaf_id, leaf_id) == 0) {
@@ -798,6 +832,7 @@ int cmq_leaf_accept(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
         }
     }
     if (leaf->leaf_count >= CMQ_LEAF_MAX_CONNECTIONS) {
+        /* Lost race after reclaim — fail closed. */
         cmq_mutex_unlock(&leaf->lock);
         if (fd >= 0) close(fd);
         return -1;

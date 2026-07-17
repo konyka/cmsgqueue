@@ -199,12 +199,16 @@ void cmq_sublist_free_data(cmq_sublist_t *sl) {
 
 void cmq_sublist_destroy(cmq_sublist_t *sl) {
     if (!sl) return;
+    cmq_rwlock_wrlock(&sl->lock);
     cmq_sl_node_t *child = sl->root.children;
+    sl->root.children = NULL;
+    sl->count = 0;
     while (child) {
         cmq_sl_node_t *next = child->next;
         cmq_sl_node_destroy(child);
         child = next;
     }
+    cmq_rwlock_unlock(&sl->lock);
     cmq_rwlock_destroy(&sl->lock);
     free(sl);
 }
