@@ -5289,10 +5289,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     cmq_ev_run(srv->ev_loop, -1);
 
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
-    if (srv->route_reconn_started) {
+    /* Claim+join — destroy may race; only one caller joins. */
+    if (__atomic_exchange_n(&srv->route_reconn_started, 0, __ATOMIC_ACQ_REL))
         cmq_thread_join(srv->route_reconn_thr);
-        srv->route_reconn_started = 0;
-    }
 
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
@@ -5501,6 +5500,16 @@ void cmq_server_stop(cmq_server_t *srv) {
 
 void cmq_server_destroy(cmq_server_t *srv) {
     if (!srv) return;
+
+    /* Stop reconn before tearing down routes (connect unlocks mid-dial). */
+    cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
+    if (srv->ev_loop) cmq_ev_stop(srv->ev_loop);
+    if (srv->workers) {
+        for (int i = 0; i < srv->num_workers; i++)
+            cmq_ev_stop(srv->workers[i].ev_loop);
+    }
+    if (__atomic_exchange_n(&srv->route_reconn_started, 0, __ATOMIC_ACQ_REL))
+        cmq_thread_join(srv->route_reconn_thr);
 
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {

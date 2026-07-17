@@ -3101,6 +3101,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — destroy join route reconn · log dispatch drain</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route reconn join</span></td><td>✅</td><td><code>destroy</code> stops + claim-joins reconn before <code>route_pool_destroy</code>.</td></tr>
+<tr><td><span class="component-name">log destroy</span></td><td>✅</td><td><code>dying</code>+<code>in_flight</code> drain unlocked appenders before fclose/free.</td></tr>
+</table>
+</div>
+
 
 
 

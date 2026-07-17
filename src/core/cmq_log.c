@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
 
 #define CMQ_LOG_MAX_APPENDERS 8
@@ -22,6 +23,8 @@ struct cmq_log {
     pthread_mutex_t lock;
     cmq_log_appender_t appenders[CMQ_LOG_MAX_APPENDERS];
     size_t appender_count;
+    atomic_int in_flight; /* dispatch holding snapshot after unlock */
+    atomic_int dying;     /* destroy claimed — no new dispatch */
 };
 
 
@@ -62,6 +65,7 @@ static void cmq_format_time(char *out, size_t out_size) {
     strftime(out, out_size, "%Y-%m-%d %H:%M:%S", &tmv);
 }
 
+/* Caller must hold in_flight (and have checked !dying). */
 static void cmq_dispatch_log(cmq_log_t *log, const char *line, size_t len) {
     // Take a snapshot of appenders under lock to avoid re-entrancy issues
     cmq_log_appender_t snapshot[CMQ_LOG_MAX_APPENDERS];
@@ -85,6 +89,8 @@ cmq_log_t *cmq_log_create(cmq_log_level_t level) {
     if (!log) return NULL;
     log->level = level;
     log->appender_count = 0;
+    atomic_init(&log->in_flight, 0);
+    atomic_init(&log->dying, 0);
     if (pthread_mutex_init(&log->lock, NULL) != 0) {
         free(log);
         return NULL;
@@ -94,6 +100,12 @@ cmq_log_t *cmq_log_create(cmq_log_level_t level) {
 
 void cmq_log_destroy(cmq_log_t *log) {
     if (!log) return;
+    atomic_store_explicit(&log->dying, 1, memory_order_release);
+    /* Wait for unlocked appender callbacks before fclose/free. */
+    while (atomic_load_explicit(&log->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     // Close any file appenders
     pthread_mutex_lock(&log->lock);
     for (size_t i = 0; i < log->appender_count; ++i) {
@@ -143,11 +155,21 @@ void cmq_log_add_stdout(cmq_log_t *log) {
 
 void cmq_log_write(cmq_log_t *log, cmq_log_level_t level, const char *file, int line, const char *fmt, ...) {
     if (!log || !fmt) return;
+    if (atomic_load_explicit(&log->dying, memory_order_acquire))
+        return;
+    atomic_fetch_add_explicit(&log->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&log->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&log->in_flight, 1, memory_order_acq_rel);
+        return;
+    }
     int log_now = 0;
     pthread_mutex_lock(&log->lock);
     log_now = (level >= log->level);
     pthread_mutex_unlock(&log->lock);
-    if (!log_now) return;
+    if (!log_now) {
+        atomic_fetch_sub_explicit(&log->in_flight, 1, memory_order_acq_rel);
+        return;
+    }
 
     char user_buf[CMQ_LOG_MSG_SIZE];
     va_list ap;
@@ -172,10 +194,18 @@ void cmq_log_write(cmq_log_t *log, cmq_log_level_t level, const char *file, int 
     }
 
     cmq_dispatch_log(log, final_buf, strlen(final_buf));
+    atomic_fetch_sub_explicit(&log->in_flight, 1, memory_order_acq_rel);
 }
 
 void cmq_log_flush(cmq_log_t *log) {
     if (!log) return;
+    if (atomic_load_explicit(&log->dying, memory_order_acquire))
+        return;
+    atomic_fetch_add_explicit(&log->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&log->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&log->in_flight, 1, memory_order_acq_rel);
+        return;
+    }
     pthread_mutex_lock(&log->lock);
     size_t count = log->appender_count;
     for (size_t i = 0; i < count; ++i) {
@@ -185,4 +215,5 @@ void cmq_log_flush(cmq_log_t *log) {
         }
     }
     pthread_mutex_unlock(&log->lock);
+    atomic_fetch_sub_explicit(&log->in_flight, 1, memory_order_acq_rel);
 }
