@@ -192,7 +192,9 @@ static void node_free_data(cmq_sl_node_t *node) {
 
 void cmq_sublist_free_data(cmq_sublist_t *sl) {
     if (!sl) return;
+    cmq_rwlock_wrlock(&sl->lock);
     node_free_data(&sl->root);
+    cmq_rwlock_unlock(&sl->lock);
 }
 
 void cmq_sublist_destroy(cmq_sublist_t *sl) {
@@ -370,5 +372,8 @@ void cmq_sublist_result_free(cmq_sublist_result_t *result) {
 
 size_t cmq_sublist_count(cmq_sublist_t *sl) {
     if (!sl) return 0;
-    return sl->count;
+    cmq_rwlock_rdlock(&sl->lock);
+    size_t c = sl->count;
+    cmq_rwlock_unlock(&sl->lock);
+    return c;
 }

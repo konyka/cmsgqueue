@@ -2982,6 +2982,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — MQTT bridge mutex · sublist count/free_data lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">mqtt bridge lock</span></td><td>✅</td><td>Mutex on connect/disconnect/is_connected/info/mappings; unlocked disconnect helper (no recursion).</td></tr>
+<tr><td><span class="component-name">sublist count/free_data</span></td><td>✅</td><td><code>cmq_sublist_count</code> rdlock; <code>cmq_sublist_free_data</code> wrlock.</td></tr>
+</table>
+</div>
+
 
 
 

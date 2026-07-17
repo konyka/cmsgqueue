@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_mqtt.h"
 #include "cmq_route.h"
+#include "cmq_thread.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -33,6 +34,7 @@ struct cmq_mqtt_bridge {
     uint64_t messages_out;
     cmq_mqtt_mapping_t mappings[CMQ_MQTT_MAX_MAPPINGS];
     size_t mapping_count;
+    cmq_mutex_t lock;
 };
 
 static int mqtt_fd_alive(int fd) {
@@ -53,6 +55,12 @@ static int mqtt_fd_alive(int fd) {
     return 1;
 }
 
+static void mqtt_disconnect_unlocked(cmq_mqtt_bridge_t *br) {
+    if (br->fd >= 0) close(br->fd);
+    br->fd = -1;
+    br->connected = 0;
+}
+
 cmq_mqtt_bridge_t *cmq_mqtt_bridge_create(const char *client_id) {
     if (!client_id) return NULL;
     cmq_mqtt_bridge_t *br = calloc(1, sizeof(cmq_mqtt_bridge_t));
@@ -61,12 +69,16 @@ cmq_mqtt_bridge_t *cmq_mqtt_bridge_create(const char *client_id) {
     br->fd = -1;
     br->keepalive_ms = 60000;
     br->clean_session = 1;
+    cmq_mutex_init(&br->lock);
     return br;
 }
 
 void cmq_mqtt_bridge_destroy(cmq_mqtt_bridge_t *br) {
     if (!br) return;
-    if (br->fd >= 0) close(br->fd);
+    cmq_mutex_lock(&br->lock);
+    mqtt_disconnect_unlocked(br);
+    cmq_mutex_unlock(&br->lock);
+    cmq_mutex_destroy(&br->lock);
     free(br);
 }
 
@@ -132,21 +144,31 @@ static int mqtt_read_connack(int fd) {
 
 int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (!br || !addr) return -1;
+    cmq_mutex_lock(&br->lock);
     /* Sticky only for the same endpoint — addr/port change must reconnect. */
     if (br->connected) {
         int efd = br->fd, ep = br->port;
         char ea[sizeof(br->addr)];
         strncpy(ea, br->addr, sizeof(ea) - 1);
         ea[sizeof(ea) - 1] = '\0';
+        cmq_mutex_unlock(&br->lock);
         int alive = (efd >= 0 && ep == port &&
                      strncmp(ea, addr, sizeof(ea)) == 0 &&
                      mqtt_fd_alive(efd));
+        cmq_mutex_lock(&br->lock);
         /* Re-check identity after probe — fd recycle must not fake success. */
         if (alive && br->connected && br->fd == efd && br->port == ep &&
-            strncmp(br->addr, ea, sizeof(br->addr)) == 0)
+            strncmp(br->addr, ea, sizeof(br->addr)) == 0) {
+            cmq_mutex_unlock(&br->lock);
             return 0;
-        cmq_mqtt_bridge_disconnect(br);
+        }
+        mqtt_disconnect_unlocked(br);
     }
+    int keepalive_ms = br->keepalive_ms;
+    int clean_session = br->clean_session;
+    char client_id[CMQ_MQTT_CLIENT_ID];
+    memcpy(client_id, br->client_id, sizeof(client_id));
+    cmq_mutex_unlock(&br->lock);
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
@@ -167,39 +189,58 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     mqtt_set_nonblock(fd);
 
     uint8_t cbuf[256];
-    int keepalive_s = br->keepalive_ms > 0 ? br->keepalive_ms / 1000 : 60;
+    int keepalive_s = keepalive_ms > 0 ? keepalive_ms / 1000 : 60;
     if (keepalive_s < 1) keepalive_s = 1;
-    int clen = cmq_mqtt_encode_connect(cbuf, sizeof(cbuf), br->client_id,
-                                        keepalive_s, br->clean_session);
+    int clen = cmq_mqtt_encode_connect(cbuf, sizeof(cbuf), client_id,
+                                        keepalive_s, clean_session);
     if (clen < 0 || mqtt_write_all(fd, cbuf, (size_t)clen) != 0 ||
         mqtt_read_connack(fd) != 0) {
         close(fd);
         return -1;
     }
 
+    cmq_mutex_lock(&br->lock);
+    if (br->connected && br->fd >= 0) {
+        /* Lost race — keep existing live peer. */
+        cmq_mutex_unlock(&br->lock);
+        close(fd);
+        return 0;
+    }
+    mqtt_disconnect_unlocked(br);
     br->fd = fd;
     br->connected = 1;
     strncpy(br->addr, addr, sizeof(br->addr) - 1);
     br->addr[sizeof(br->addr) - 1] = '\0';
     br->port = port;
+    cmq_mutex_unlock(&br->lock);
     return 0;
 }
 
 int cmq_mqtt_bridge_disconnect(cmq_mqtt_bridge_t *br) {
     if (!br) return -1;
-    if (br->fd >= 0) close(br->fd);
-    br->fd = -1;
-    br->connected = 0;
+    cmq_mutex_lock(&br->lock);
+    mqtt_disconnect_unlocked(br);
+    cmq_mutex_unlock(&br->lock);
     return 0;
 }
 
 int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br) {
-    if (!br || !br->connected || br->fd < 0) return 0;
+    if (!br) return 0;
+    cmq_mutex_lock(&br->lock);
+    if (!br->connected || br->fd < 0) {
+        cmq_mutex_unlock(&br->lock);
+        return 0;
+    }
     int efd = br->fd;
+    cmq_mutex_unlock(&br->lock);
     int alive = mqtt_fd_alive(efd);
-    if (alive && br->connected && br->fd == efd)
+    cmq_mutex_lock(&br->lock);
+    if (alive && br->connected && br->fd == efd) {
+        cmq_mutex_unlock(&br->lock);
         return 1;
-    cmq_mqtt_bridge_disconnect(br);
+    }
+    mqtt_disconnect_unlocked(br);
+    cmq_mutex_unlock(&br->lock);
     return 0;
 }
 
@@ -209,16 +250,17 @@ const char *cmq_mqtt_client_id(cmq_mqtt_bridge_t *br) {
 
 cmq_mqtt_bridge_info_t cmq_mqtt_bridge_info(cmq_mqtt_bridge_t *br) {
     cmq_mqtt_bridge_info_t info = {0};
-    if (br) {
-        strncpy(info.client_id, br->client_id, CMQ_MQTT_CLIENT_ID - 1);
-        strncpy(info.addr, br->addr, sizeof(info.addr) - 1);
-        info.port = br->port;
-        info.keepalive_ms = br->keepalive_ms;
-        info.clean_session = br->clean_session;
-        info.connected = br->connected;
-        info.messages_in = br->messages_in;
-        info.messages_out = br->messages_out;
-    }
+    if (!br) return info;
+    cmq_mutex_lock(&br->lock);
+    strncpy(info.client_id, br->client_id, CMQ_MQTT_CLIENT_ID - 1);
+    strncpy(info.addr, br->addr, sizeof(info.addr) - 1);
+    info.port = br->port;
+    info.keepalive_ms = br->keepalive_ms;
+    info.clean_session = br->clean_session;
+    info.connected = br->connected;
+    info.messages_in = br->messages_in;
+    info.messages_out = br->messages_out;
+    cmq_mutex_unlock(&br->lock);
     return info;
 }
 
@@ -230,13 +272,18 @@ int cmq_mqtt_add_mapping(cmq_mqtt_bridge_t *br, const char *cmq_subject,
         return -1;
     if (strnlen(mqtt_topic, CMQ_MQTT_TOPIC_MAX) >= CMQ_MQTT_TOPIC_MAX)
         return -1;
-    if (br->mapping_count >= CMQ_MQTT_MAX_MAPPINGS) return -1;
+    cmq_mutex_lock(&br->lock);
+    if (br->mapping_count >= CMQ_MQTT_MAX_MAPPINGS) {
+        cmq_mutex_unlock(&br->lock);
+        return -1;
+    }
     for (size_t i = 0; i < br->mapping_count; i++) {
         if (strcmp(br->mappings[i].mqtt_topic, mqtt_topic) == 0) {
             strncpy(br->mappings[i].cmq_subject, cmq_subject,
                     CMQ_MQTT_TOPIC_MAX - 1);
             br->mappings[i].cmq_subject[CMQ_MQTT_TOPIC_MAX - 1] = '\0';
             br->mappings[i].qos = qos;
+            cmq_mutex_unlock(&br->lock);
             return 0;
         }
     }
@@ -247,33 +294,46 @@ int cmq_mqtt_add_mapping(cmq_mqtt_bridge_t *br, const char *cmq_subject,
     m->mqtt_topic[CMQ_MQTT_TOPIC_MAX - 1] = '\0';
     m->qos = qos;
     m->active = 1;
+    cmq_mutex_unlock(&br->lock);
     return 0;
 }
 
 int cmq_mqtt_remove_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic) {
     if (!br || !mqtt_topic) return -1;
+    cmq_mutex_lock(&br->lock);
     for (size_t i = 0; i < br->mapping_count; i++) {
         if (strcmp(br->mappings[i].mqtt_topic, mqtt_topic) == 0) {
             memmove(&br->mappings[i], &br->mappings[i + 1],
                     (br->mapping_count - i - 1) * sizeof(cmq_mqtt_mapping_t));
             br->mapping_count--;
+            cmq_mutex_unlock(&br->lock);
             return 0;
         }
     }
+    cmq_mutex_unlock(&br->lock);
     return -1;
 }
 
 size_t cmq_mqtt_mapping_count(cmq_mqtt_bridge_t *br) {
-    return br ? br->mapping_count : 0;
+    if (!br) return 0;
+    cmq_mutex_lock(&br->lock);
+    size_t c = br->mapping_count;
+    cmq_mutex_unlock(&br->lock);
+    return c;
 }
 
 cmq_mqtt_mapping_t *cmq_mqtt_find_mapping(cmq_mqtt_bridge_t *br,
                                             const char *mqtt_topic) {
     if (!br || !mqtt_topic) return NULL;
+    cmq_mutex_lock(&br->lock);
     for (size_t i = 0; i < br->mapping_count; i++) {
-        if (strcmp(br->mappings[i].mqtt_topic, mqtt_topic) == 0)
-            return &br->mappings[i];
+        if (strcmp(br->mappings[i].mqtt_topic, mqtt_topic) == 0) {
+            cmq_mqtt_mapping_t *m = &br->mappings[i];
+            cmq_mutex_unlock(&br->lock);
+            return m;
+        }
     }
+    cmq_mutex_unlock(&br->lock);
     return NULL;
 }
 
