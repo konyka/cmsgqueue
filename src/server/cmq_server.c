@@ -3514,6 +3514,13 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     if (tgts && ntgt > 0) {
         if (deliver_targets_sync(srv, tgts, ntgt, subject, c->account_name,
                                   msg_payload, msg_len, NULL, 0) != 0) {
+            /* Soft-delete may race during cross-worker waits — align REQUEST. */
+            if (!client_account_live(srv, c)) {
+                free(tgts);
+                cmq_send_error(c, "account inactive");
+                c->state = CMQ_CLIENT_CLOSING;
+                return;
+            }
             /* Local inbox targets were ghost/CLOSING — try cluster. */
             if (!c->is_route) {
                 route_rc = cmq_route_forward_op(srv, CMQ_OP_RESPONSE,

@@ -3518,6 +3518,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — RESPONSE cluster fallback account recheck</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">RESPONSE fallback</span></td><td>✅</td><td>Re-check <code>client_account_live</code> after local deliver fails and before cluster fan-out (align REQUEST; soft-delete must not broadcast <code>_INBOX</code>).</td></tr>
+</table>
+</div>
+
 
 
 
