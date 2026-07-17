@@ -3739,6 +3739,7 @@ All 15 test suites passing, 0 warnings.
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">cmq_ev_mod (epoll)</span></td><td>✅</td><td>On MOD/re-ADD fail, restore prior interest+cb/data when possible (align kqueue); only DEL+<code>watcher_clear</code> if restore also fails.</td></tr>
+<tr><td><span class="component-name">cmq_ev_add EEXIST</span></td><td>✅</td><td>Prefer <code>EPOLL_CTL_MOD</code> on stale entry (then ENOENT→ADD); avoid unconditional DEL+ADD hole before last-resort retry.</td></tr>
 </table>
 </div>
 

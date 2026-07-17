@@ -263,12 +263,23 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     ev.data.fd = fd;
 
     if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
-        /* Stale epoll entry after a failed DEL + fd reuse — clear and retry. */
+        /* Stale epoll entry after a failed DEL + fd reuse. Prefer MOD so we
+           do not open a DEL window where interest is gone before re-ADD. */
         if (errno != EEXIST) {
             watcher_clear(loop, fd);
             ev_end_op(loop);
             return -1;
         }
+        if (epoll_ctl(loop->backend_fd, EPOLL_CTL_MOD, fd, &ev) == 0) {
+            ev_end_op(loop);
+            return 0;
+        }
+        if (errno == ENOENT &&
+            epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) == 0) {
+            ev_end_op(loop);
+            return 0;
+        }
+        /* Last resort: DEL then ADD (may briefly unwatch). */
         (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
         if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
             watcher_clear(loop, fd);
