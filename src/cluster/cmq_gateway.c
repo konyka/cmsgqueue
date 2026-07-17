@@ -374,6 +374,12 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
                 return 0;
             }
         }
+        /* Claim lost a race — peer may already be live. */
+        if (gw_has_live_peer(gw, cluster_name)) {
+            cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            return 0;
+        }
         cmq_mutex_unlock(&gw->lock);
         close(fd);
         return -1;
@@ -471,6 +477,11 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
                 return 0;
             }
         }
+        if (gw_has_live_peer(gw, cluster_name)) {
+            cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            return 0;
+        }
         cmq_mutex_unlock(&gw->lock);
         close(fd);
         return -1;
@@ -524,6 +535,11 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
             close(fd);
             return 0;
         }
+    }
+    if (gw_has_live_peer(gw, cluster_name)) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        return 0;
     }
     if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {
         cmq_mutex_unlock(&gw->lock);

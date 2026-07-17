@@ -1173,17 +1173,25 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
 }
 
 /* Drain write_buf before exposing fd to the route pool (handshake order).
-   Cap total wait so a slow peer cannot stall the owning event thread (~256s). */
+   Cap total wait so a slow peer cannot stall the owning event thread (~256s).
+   Route fds take route_io_lock — same as send_direct / flush (vs broadcast). */
 #define CMQ_DRAIN_SYNC_MS 2000
 static int client_drain_write_sync(cmq_client_t *c) {
     if (!c || c->fd < 0) return -1;
+    int route_io_idx = -1;
+    if (c->is_route && c->server && c->server->routes) {
+        route_io_idx = cmq_route_io_lock_fd(c->server->routes, c->fd);
+        if (route_io_idx < 0) return -1;
+    }
+    int rc = -1;
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (int i = 0; i < 128; i++) {
         if (!c->write_buf || c->write_pos >= c->write_len) {
             c->write_len = 0;
             c->write_pos = 0;
-            return 0;
+            rc = 0;
+            goto out;
         }
         struct timespec t1;
         clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -1191,7 +1199,7 @@ static int client_drain_write_sync(cmq_client_t *c) {
             (int64_t)(t1.tv_sec - t0.tv_sec) * 1000 +
             (int64_t)(t1.tv_nsec - t0.tv_nsec) / 1000000;
         if (elapsed_ms >= CMQ_DRAIN_SYNC_MS)
-            return -1;
+            goto out;
         size_t rem = c->write_len - c->write_pos;
         ssize_t n = client_sock_write(c, c->write_buf + c->write_pos, rem);
         if (n > 0) {
@@ -1201,21 +1209,26 @@ static int client_drain_write_sync(cmq_client_t *c) {
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             int wait_ms = (int)(CMQ_DRAIN_SYNC_MS - elapsed_ms);
             if (wait_ms > 200) wait_ms = 200;
-            if (wait_ms < 1) return -1;
+            if (wait_ms < 1) goto out;
             struct pollfd pfd = { .fd = c->fd, .events = POLLOUT };
             int pr;
             do {
                 pr = poll(&pfd, 1, wait_ms);
             } while (pr < 0 && errno == EINTR);
             if (pr <= 0)
-                return -1;
+                goto out;
             continue;
         }
         if (n < 0 && errno == EINTR)
             continue;
-        return -1;
+        goto out;
     }
-    return (c->write_buf && c->write_pos < c->write_len) ? -1 : 0;
+    if (!(c->write_buf && c->write_pos < c->write_len))
+        rc = 0;
+out:
+    if (route_io_idx >= 0 && c->server && c->server->routes)
+        cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+    return rc;
 }
 
 static int cmq_client_send_checked(cmq_client_t *c, const uint8_t *data, size_t len,

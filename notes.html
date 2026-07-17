@@ -2873,6 +2873,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — drain holds route_io · gateway claim miss recheck</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">drain io_lock</span></td><td>✅</td><td>Route <code>drain_write_sync</code> takes <code>route_io_lock</code> (no tear with broadcast).</td></tr>
+<tr><td><span class="component-name">gw claim -1</span></td><td>✅</td><td>After claim miss, recheck <code>has_live_peer</code> before returning failure.</td></tr>
+</table>
+</div>
+
 
 
 
