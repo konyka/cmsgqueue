@@ -3169,6 +3169,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — mpool/slab count wrap · mqtt client_id dying</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">mpool used</span></td><td>✅</td><td><code>cmq_mpool_used</code> saturates on block-size sum wrap.</td></tr>
+<tr><td><span class="component-name">slab alloc</span></td><td>✅</td><td>Refuse alloc when <code>total_allocated == SIZE_MAX</code>.</td></tr>
+<tr><td><span class="component-name">mqtt id</span></td><td>✅</td><td><code>cmq_mqtt_client_id</code> returns NULL when bridge <code>dying</code>.</td></tr>
+</table>
+</div>
+
 
 
 

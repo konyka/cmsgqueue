@@ -165,6 +165,8 @@ size_t cmq_mpool_used(cmq_mpool_t *pool) {
     size_t total = 0;
     cmq_mpool_block_t *cur = pool->head;
     while (cur) {
+        if (cur->size > SIZE_MAX - total)
+            return SIZE_MAX;
         total += cur->size;
         cur = cur->next;
     }

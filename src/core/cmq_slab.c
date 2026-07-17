@@ -136,6 +136,7 @@ static int slab_on_freelist(cmq_slab_page_t *page, void *obj, size_t idx) {
 
 void *cmq_slab_alloc(cmq_slab_t *slab) {
     if (!slab || !slab->head) return NULL;
+    if (slab->total_allocated == SIZE_MAX) return NULL;
     cmq_slab_page_t *cur = slab->head;
     while (cur) {
         if (cur->use_ptr_next) {

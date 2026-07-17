@@ -289,7 +289,9 @@ int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br) {
 }
 
 const char *cmq_mqtt_client_id(cmq_mqtt_bridge_t *br) {
-    return br ? br->client_id : NULL;
+    if (!br || atomic_load_explicit(&br->dying, memory_order_acquire))
+        return NULL;
+    return br->client_id;
 }
 
 static cmq_mqtt_bridge_info_t mqtt_bridge_info_impl(cmq_mqtt_bridge_t *br) {
