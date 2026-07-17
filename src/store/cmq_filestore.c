@@ -370,8 +370,17 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
 
 void cmq_filestore_destroy(cmq_filestore_t *fs) {
     if (!fs) return;
-    if (fs->data_fp) fclose(fs->data_fp);
-    if (fs->idx_fp) fclose(fs->idx_fp);
+    /* Hold lock so concurrent append/get cannot use FILE* mid-fclose. */
+    cmq_mutex_lock(&fs->lock);
+    if (fs->data_fp) {
+        fclose(fs->data_fp);
+        fs->data_fp = NULL;
+    }
+    if (fs->idx_fp) {
+        fclose(fs->idx_fp);
+        fs->idx_fp = NULL;
+    }
+    cmq_mutex_unlock(&fs->lock);
     cmq_mutex_destroy(&fs->lock);
     free(fs);
 }
@@ -380,6 +389,10 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
                           uint64_t *out_seq) {
     if (!fs || !data || len == 0 || len > (16u * 1024 * 1024)) return -1;
     cmq_mutex_lock(&fs->lock);
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
     if (fs_lock_pair(fs, LOCK_EX) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;
@@ -493,6 +506,10 @@ int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
                         uint8_t **out_data, size_t *out_len) {
     if (!fs || !out_data || !out_len || seq == 0) return -1;
     cmq_mutex_lock(&fs->lock);
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
     if (fs_lock_pair(fs, LOCK_SH) != 0) {
         cmq_mutex_unlock(&fs->lock);
         return -1;

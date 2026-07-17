@@ -5252,6 +5252,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 return CMQ_ERR_IO;
             }
         }
+        srv->workers_joinable = nthreads;
         cmq_log_info(srv->log, "CMQ server started with %d worker threads", nthreads);
     }
 
@@ -5293,12 +5294,15 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     if (__atomic_exchange_n(&srv->route_reconn_started, 0, __ATOMIC_ACQ_REL))
         cmq_thread_join(srv->route_reconn_thr);
 
-    if (srv->workers) {
-        for (int i = 0; i < srv->num_workers; i++) {
-            cmq_ev_stop(srv->workers[i].ev_loop);
-        }
-        for (int i = 0; i < srv->num_workers; i++) {
-            cmq_thread_join(srv->workers[i].thread);
+    /* Claim+join workers — destroy may race; only one caller joins. */
+    {
+        int njoin = __atomic_exchange_n(&srv->workers_joinable, 0,
+                                         __ATOMIC_ACQ_REL);
+        if (njoin > 0 && srv->workers) {
+            for (int i = 0; i < srv->num_workers; i++)
+                cmq_ev_stop(srv->workers[i].ev_loop);
+            for (int i = 0; i < njoin && i < srv->num_workers; i++)
+                cmq_thread_join(srv->workers[i].thread);
         }
     }
 
@@ -5510,6 +5514,14 @@ void cmq_server_destroy(cmq_server_t *srv) {
     }
     if (__atomic_exchange_n(&srv->route_reconn_started, 0, __ATOMIC_ACQ_REL))
         cmq_thread_join(srv->route_reconn_thr);
+    {
+        int njoin = __atomic_exchange_n(&srv->workers_joinable, 0,
+                                         __ATOMIC_ACQ_REL);
+        if (njoin > 0 && srv->workers) {
+            for (int i = 0; i < njoin && i < srv->num_workers; i++)
+                cmq_thread_join(srv->workers[i].thread);
+        }
+    }
 
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {

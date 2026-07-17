@@ -196,6 +196,7 @@ struct cmq_server {
 
     cmq_thread_t route_reconn_thr;
     int route_reconn_started;               /* 1 if thread joinable */
+    int workers_joinable;                   /* n worker threads still to join */
 };
 
 #endif

@@ -3110,6 +3110,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — destroy join workers · MQTT in_flight · filestore destroy lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">worker join</span></td><td>✅</td><td>Claim-join <code>workers_joinable</code> in run/destroy before teardown.</td></tr>
+<tr><td><span class="component-name">mqtt lifecycle</span></td><td>✅</td><td><code>dying</code>/<code>in_flight</code> cover unlocked dial/probe vs destroy.</td></tr>
+<tr><td><span class="component-name">filestore destroy</span></td><td>✅</td><td>fclose under lock; clear fps so concurrent IO fails closed.</td></tr>
+</table>
+</div>
+
 
 
 

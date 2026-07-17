@@ -11,6 +11,8 @@
 #include <errno.h>
 #include <poll.h>
 #include <fcntl.h>
+#include <stdatomic.h>
+#include <time.h>
 
 #define CMQ_MQTT_MAX_MAPPINGS 64
 #define CMQ_MQTT_CONNECT_MS   2000
@@ -35,7 +37,24 @@ struct cmq_mqtt_bridge {
     cmq_mqtt_mapping_t mappings[CMQ_MQTT_MAX_MAPPINGS];
     size_t mapping_count;
     cmq_mutex_t lock;
+    atomic_int in_flight; /* connect/is_connected unlocked dial/probe */
+    atomic_int dying;
 };
+
+static int mqtt_begin_op(cmq_mqtt_bridge_t *br) {
+    if (atomic_load_explicit(&br->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&br->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&br->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&br->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void mqtt_end_op(cmq_mqtt_bridge_t *br) {
+    atomic_fetch_sub_explicit(&br->in_flight, 1, memory_order_acq_rel);
+}
 
 static int mqtt_fd_alive(int fd) {
     if (fd < 0) return 0;
@@ -69,12 +88,19 @@ cmq_mqtt_bridge_t *cmq_mqtt_bridge_create(const char *client_id) {
     br->fd = -1;
     br->keepalive_ms = 60000;
     br->clean_session = 1;
+    atomic_init(&br->in_flight, 0);
+    atomic_init(&br->dying, 0);
     cmq_mutex_init(&br->lock);
     return br;
 }
 
 void cmq_mqtt_bridge_destroy(cmq_mqtt_bridge_t *br) {
     if (!br) return;
+    atomic_store_explicit(&br->dying, 1, memory_order_release);
+    while (atomic_load_explicit(&br->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     cmq_mutex_lock(&br->lock);
     mqtt_disconnect_unlocked(br);
     cmq_mutex_unlock(&br->lock);
@@ -144,6 +170,7 @@ static int mqtt_read_connack(int fd) {
 
 int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (!br || !addr) return -1;
+    if (mqtt_begin_op(br) != 0) return -1;
     cmq_mutex_lock(&br->lock);
     /* Sticky only for the same endpoint — addr/port change must reconnect. */
     if (br->connected) {
@@ -160,6 +187,7 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
         if (alive && br->connected && br->fd == efd && br->port == ep &&
             strncmp(br->addr, ea, sizeof(br->addr)) == 0) {
             cmq_mutex_unlock(&br->lock);
+            mqtt_end_op(br);
             return 0;
         }
         /* Only drop still-dead probed fd — fd recycle must not kill a new peer. */
@@ -173,19 +201,24 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     cmq_mutex_unlock(&br->lock);
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        mqtt_end_op(br);
+        return -1;
+    }
 
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;
     sa.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, addr, &sa.sin_addr) != 1) {
         close(fd);
+        mqtt_end_op(br);
         return -1;
     }
 
     if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
                              CMQ_MQTT_CONNECT_MS) != 0) {
         close(fd);
+        mqtt_end_op(br);
         return -1;
     }
     mqtt_set_nonblock(fd);
@@ -198,6 +231,7 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (clen < 0 || mqtt_write_all(fd, cbuf, (size_t)clen) != 0 ||
         mqtt_read_connack(fd) != 0) {
         close(fd);
+        mqtt_end_op(br);
         return -1;
     }
 
@@ -206,6 +240,7 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
         /* Lost race — keep existing live peer. */
         cmq_mutex_unlock(&br->lock);
         close(fd);
+        mqtt_end_op(br);
         return 0;
     }
     mqtt_disconnect_unlocked(br);
@@ -215,6 +250,7 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     br->addr[sizeof(br->addr) - 1] = '\0';
     br->port = port;
     cmq_mutex_unlock(&br->lock);
+    mqtt_end_op(br);
     return 0;
 }
 
@@ -228,9 +264,11 @@ int cmq_mqtt_bridge_disconnect(cmq_mqtt_bridge_t *br) {
 
 int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br) {
     if (!br) return 0;
+    if (mqtt_begin_op(br) != 0) return 0;
     cmq_mutex_lock(&br->lock);
     if (!br->connected || br->fd < 0) {
         cmq_mutex_unlock(&br->lock);
+        mqtt_end_op(br);
         return 0;
     }
     int efd = br->fd;
@@ -239,12 +277,14 @@ int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br) {
     cmq_mutex_lock(&br->lock);
     if (alive && br->connected && br->fd == efd) {
         cmq_mutex_unlock(&br->lock);
+        mqtt_end_op(br);
         return 1;
     }
     /* Dead sticky only — re-probe so fd recycle cannot kill a new peer. */
     if (br->fd == efd && !mqtt_fd_alive(efd))
         mqtt_disconnect_unlocked(br);
     cmq_mutex_unlock(&br->lock);
+    mqtt_end_op(br);
     return 0;
 }
 
