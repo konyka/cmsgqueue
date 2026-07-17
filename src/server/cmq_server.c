@@ -3039,6 +3039,40 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         }
         cmq_sublist_result_free(&claim);
     }
+    /* Reserve account quota before the sub is visible in the trie — otherwise
+       PUBLISH can deliver to a ghost sub that later rolls back with SUBACK 1. */
+    cmq_account_t *pre_acc = NULL;
+    int pre_credited = 0;
+    if (!replacing) {
+        pre_acc = cmq_account_get(srv->accounts, c->account_name, NULL);
+        if (!pre_acc ||
+            cmq_account_inc_subscriptions(pre_acc, c->account_epoch) != 0) {
+            cmq_rwlock_unlock(&srv->sublist_lock);
+            if (pre_acc) cmq_account_release(srv->accounts, pre_acc);
+            free(heap_deads);
+            free(ref);
+            free(entry);
+            cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_suback(c, sub_id, 1);
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
+        pre_credited = 1;
+        if (!client_account_live(srv, c)) {
+            cmq_account_dec_subscriptions(pre_acc, c->account_epoch);
+            cmq_rwlock_unlock(&srv->sublist_lock);
+            cmq_account_release(srv->accounts, pre_acc);
+            free(heap_deads);
+            free(ref);
+            free(entry);
+            cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_suback(c, sub_id, 1);
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
+    }
     /* Remove old first so publish cannot briefly match both subjects. */
     cmq_sub_ref_t *old_ref = (old && old->ref) ? old->ref : NULL;
     char old_subject[CMQ_MAX_SUBJECT];
@@ -3091,6 +3125,12 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     }
     free(heap_deads);
     if (irc != 0) {
+        if (pre_credited && pre_acc) {
+            cmq_account_dec_subscriptions(pre_acc, c->account_epoch);
+            cmq_account_release(srv->accounts, pre_acc);
+            pre_acc = NULL;
+            pre_credited = 0;
+        }
         free(ref);
         free(entry);
         if (ghost_drop && old) {
@@ -3138,14 +3178,11 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     if (!replacing) {
         cmq_atomic_fetch_add_u64(&srv->stat_subscriptions, 1, CMQ_ATOMIC_RELAXED);
         c->sub_count++;
-        cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name, NULL);
-        int credited =
-            (a && cmq_account_inc_subscriptions(a, c->account_epoch) == 0);
-        /* Soft-delete between live-check and credit: roll back ghost sub. */
-        if (!credited || !client_account_live(srv, c)) {
-            if (credited)
-                cmq_account_dec_subscriptions(a, c->account_epoch);
-            if (a) cmq_account_release(srv->accounts, a);
+        /* Soft-delete may still race after unlock — roll back reserved credit. */
+        if (!client_account_live(srv, c)) {
+            if (pre_credited && pre_acc)
+                cmq_account_dec_subscriptions(pre_acc, c->account_epoch);
+            if (pre_acc) cmq_account_release(srv->accounts, pre_acc);
             c->subs = entry->next;
             if (c->sub_count > 0) c->sub_count--;
             uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
@@ -3165,7 +3202,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
             c->state = CMQ_CLIENT_CLOSING;
             return;
         }
-        if (a) cmq_account_release(srv->accounts, a);
+        if (pre_acc) cmq_account_release(srv->accounts, pre_acc);
     } else if (!client_account_live(srv, c)) {
         /* Replace path: old entry already freed — roll back counts too or
            sub_count/stat/account quota stay inflated with zero live subs. */
@@ -4672,7 +4709,10 @@ static void client_read_cb(int fd, int events, void *data) {
             }
 
             if (ws_frame.opcode == CMQ_WS_OPCODE_CLOSE) {
-                client_teardown(c);
+                /* Align DISCONNECT/keepalive — flush write_buf before teardown
+                   so in-flight SUBACK/RESPONSE are not silently dropped. */
+                c->state = CMQ_CLIENT_CLOSING;
+                client_finish_closing(c);
                 return;
             }
 

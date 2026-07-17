@@ -3526,6 +3526,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — SUB credit before trie · WS CLOSE flush</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">SUBSCRIBE credit</span></td><td>✅</td><td>Reserve <code>inc_subscriptions</code> under <code>sublist_lock</code> before insert so PUBLISH cannot hit a ghost sub that later SUBACK-fails.</td></tr>
+<tr><td><span class="component-name">WS CLOSE</span></td><td>✅</td><td>Set <code>CLOSING</code> + <code>client_finish_closing</code> (flush write_buf) instead of immediate teardown.</td></tr>
+</table>
+</div>
+
 
 
 
