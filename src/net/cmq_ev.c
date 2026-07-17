@@ -582,7 +582,30 @@ int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_m
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         if (!loop->timers[i].active) {
             uint64_t now = cmq_ev_now_ms();
-            loop->timers[i].timer_id = loop->next_timer_id++;
+            /* Avoid signed overflow UB; skip 0 and ids still in use after wrap. */
+            int tid = -1;
+            for (int tries = 0; tries < CMQ_EV_MAX_TIMERS + 2; tries++) {
+                if (loop->next_timer_id <= 0 || loop->next_timer_id == INT_MAX)
+                    loop->next_timer_id = 1;
+                int cand = loop->next_timer_id++;
+                int clash = 0;
+                for (int j = 0; j < CMQ_EV_MAX_TIMERS; j++) {
+                    if (loop->timers[j].active &&
+                        loop->timers[j].timer_id == cand) {
+                        clash = 1;
+                        break;
+                    }
+                }
+                if (!clash) {
+                    tid = cand;
+                    break;
+                }
+            }
+            if (tid < 0) {
+                ev_end_op(loop);
+                return -1;
+            }
+            loop->timers[i].timer_id = tid;
             if (delay_ms > UINT64_MAX - now)
                 loop->timers[i].expire_ms = UINT64_MAX;
             else
@@ -592,7 +615,6 @@ int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_m
             loop->timers[i].data = data;
             loop->timers[i].repeat = (interval_ms > 0) ? 1 : 0;
             loop->timers[i].active = 1;
-            int tid = loop->timers[i].timer_id;
             ev_end_op(loop);
             return tid;
         }
@@ -602,7 +624,7 @@ int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_m
 }
 
 int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
-    if (!loop) return -1;
+    if (!loop || timer_id <= 0) return -1;
     if (ev_begin_op(loop) != 0) return -1;
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         if (loop->timers[i].active && loop->timers[i].timer_id == timer_id) {
@@ -633,12 +655,15 @@ void cmq_ev_wakeup(cmq_ev_loop_t *loop) {
 }
 
 int cmq_ev_fd(cmq_ev_loop_t *loop) {
-    if (!loop) return -1;
+    if (!loop || atomic_load_explicit(&loop->dying, memory_order_acquire))
+        return -1;
     return loop->backend_fd;
 }
 
 void cmq_ev_set_post_tick(cmq_ev_loop_t *loop, cmq_ev_tick_t tick, void *data) {
     if (!loop) return;
+    if (ev_begin_op(loop) != 0) return;
     loop->post_tick = tick;
     loop->post_tick_data = data;
+    ev_end_op(loop);
 }

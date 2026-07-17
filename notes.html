@@ -3179,6 +3179,25 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — ev timer_id wrap-safe · set_post_tick barrier</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">timer id</span></td><td>✅</td><td>Skip ≤0 / INT_MAX; avoid active-id clash after wrap (no signed overflow).</td></tr>
+<tr><td><span class="component-name">post_tick</span></td><td>✅</td><td><code>cmq_ev_set_post_tick</code> holds <code>in_flight</code> vs destroy.</td></tr>
+</table>
+</div>
+
+<div class="phase">
+<h2>Phase — write_buf/WS/route size_t add wrap · timer id wrap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">send coalesce</span></td><td>✅</td><td>Pending write + new frame reject <code>SIZE_MAX</code> add wrap.</td></tr>
+<tr><td><span class="component-name">WS/route/batch</span></td><td>✅</td><td>WS total, route forward, BATCH pub body wrap-checked.</td></tr>
+<tr><td><span class="component-name">timer id</span></td><td>✅</td><td><code>next_timer_id</code> skips ≤0 after overflow.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -1199,11 +1199,11 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
     int rc = -1;
     if (c->write_buf && c->write_pos < c->write_len) {
         size_t remaining = c->write_len - c->write_pos;
-        size_t new_len = remaining + len;
-        if (new_len > CMQ_WRITE_BUF_LIMIT) {
+        if (len > SIZE_MAX - remaining || remaining + len > CMQ_WRITE_BUF_LIMIT) {
             CMQ_SEND_FORCE_CLOSE();
             goto out;
         }
+        size_t new_len = remaining + len;
         /* Compact unsent bytes to the front, then grow capacity if needed. */
         if (c->write_pos > 0) {
             memmove(c->write_buf, c->write_buf + c->write_pos, remaining);
@@ -1311,6 +1311,10 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
         rc = cmq_client_send_direct(c, data, len);
     } else {
         size_t hdr_len = (len <= 125) ? 2 : (len <= 65535) ? 4 : 10;
+        if (len > SIZE_MAX - hdr_len) {
+            client_force_closing(c);
+            return -1;
+        }
         size_t total = hdr_len + len;
         uint8_t *wsbuf = malloc(total);
         if (!wsbuf) {
@@ -2383,6 +2387,7 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
     if (out_sent) *out_sent = 0;
     if (!srv || !srv->routes) return 0;
     if (payload_len > 0 && !payload) return 0;
+    if (payload_len > SIZE_MAX - sizeof(cmq_frame_hdr_t)) return -1;
     size_t need = sizeof(cmq_frame_hdr_t) + payload_len;
     uint8_t *fwd = malloc(need);
     if (!fwd) {
@@ -3549,6 +3554,11 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         size_t route_sent = 0;
 
         if (srv->routes && !c->is_route) {
+            if ((size_t)payload_len > SIZE_MAX - (4u + (size_t)subject_len +
+                                                   (size_t)reply_len)) {
+                batch_fail = 1;
+                continue;
+            }
             size_t pub_len = 2 + subject_len + 2 + reply_len + payload_len;
             uint8_t *pub = malloc(pub_len);
             if (pub) {
