@@ -26,6 +26,7 @@ struct cmq_leaf_node {
     char hub_addr[CMQ_NODE_ADDR_SIZE];
     int hub_port;
     int hub_fd;
+    uint32_t hub_gen; /* bumps on each hub_fd publish; foil recycled-fd races */
     int connected;
     char auth_user[256];
     char auth_pass[256];
@@ -436,6 +437,10 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         return -1;
     }
     leaf->hub_fd = fd;
+    leaf->hub_gen++;
+    if (leaf->hub_gen == 0)
+        leaf->hub_gen = 1;
+    uint32_t snap_gen = leaf->hub_gen;
     /* connected=1 only after hub SUB replay — is_connected must not race. */
     leaf->connected = 0;
     /* Flush offline UNSUBs before replaying live interest.
@@ -495,7 +500,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     cmq_mutex_unlock(&leaf->lock);
 
     /* Yield hub_io between frames so disconnect/subscribe are not starved for
-       the full 1024×SUBACK window; re-check hub_fd after each reacquire. */
+       the full 1024×SUBACK window; re-check hub_fd+hub_gen after each reacquire. */
     for (size_t i = 0; i < pn; i++) {
         uint32_t uid = pending[i];
         uint8_t upay[4] = {
@@ -507,7 +512,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
                                         CMQ_OP_UNSUBSCRIBE, 0, upay, 4);
         int still = 0;
         cmq_mutex_lock(&leaf->lock);
-        still = (leaf->hub_fd == fd);
+        still = (leaf->hub_fd == fd && leaf->hub_gen == snap_gen);
         cmq_mutex_unlock(&leaf->lock);
         if (!still || ulen == 0 || write_all(fd, uframe, ulen) != 0) {
             int own = 0;
@@ -531,7 +536,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
                     leaf->pending_unsub[leaf->pending_unsub_count++] =
                         pending[r];
             }
-            if (leaf->hub_fd == fd) {
+            if (leaf->hub_fd == fd && leaf->hub_gen == snap_gen) {
                 leaf->hub_fd = -1;
                 leaf->connected = 0;
                 own = 1;
@@ -569,7 +574,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
                                         0, payload, po);
         int still = 0;
         cmq_mutex_lock(&leaf->lock);
-        still = (leaf->hub_fd == fd);
+        still = (leaf->hub_fd == fd && leaf->hub_gen == snap_gen);
         cmq_mutex_unlock(&leaf->lock);
         int wr = (still && flen > 0) ? write_all(fd, frame, flen) : -1;
         if (!still || flen == 0 || wr != 0 ||
@@ -577,10 +582,10 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
             /* Best-effort UNSUB for subjects already pushed this reconnect so
                hub does not keep interest that leaf will re-play on next connect.
                Include index i when write may have landed (align subscribe_impl).
-               Only if we still own hub_fd — otherwise disconnect already closed. */
+               Only if we still own this hub generation — else disconnect/reconnect. */
             int own = 0;
             cmq_mutex_lock(&leaf->lock);
-            own = (leaf->hub_fd == fd);
+            own = (leaf->hub_fd == fd && leaf->hub_gen == snap_gen);
             if (own) {
                 leaf->hub_fd = -1;
                 leaf->connected = 0;
@@ -612,8 +617,8 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         cmq_mutex_lock(&leaf->hub_io_lock);
     }
     cmq_mutex_lock(&leaf->lock);
-    /* Disconnect may have stolen hub_fd after the last SUBACK — do not lie. */
-    int ok = (leaf->hub_fd == fd);
+    /* Disconnect/reconnect may have replaced hub_fd (same number) — do not lie. */
+    int ok = (leaf->hub_fd == fd && leaf->hub_gen == snap_gen);
     if (ok)
         leaf->connected = 1;
     cmq_mutex_unlock(&leaf->lock);

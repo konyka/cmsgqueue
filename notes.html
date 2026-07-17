@@ -3589,6 +3589,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf hub_gen against recycled fd</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf connect replay</span></td><td>✅</td><td>Bump <code>hub_gen</code> when publishing <code>hub_fd</code>; SUB/UNSUB replay <code>still</code>/<code>own</code>/<code>ok</code> require matching gen so disconnect+reconnect cannot reuse the same fd number and steal mid-yield writes.</td></tr>
+</table>
+</div>
+
 
 
 
