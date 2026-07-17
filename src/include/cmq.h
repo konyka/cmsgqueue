@@ -25,6 +25,8 @@ extern "C" {
 #define CMQ_DEFAULT_HOST     "0.0.0.0"
 #define CMQ_DEFAULT_THREADS  0  /* 0 = auto-detect (number of CPU cores) */
 #define CMQ_DEFAULT_MAX_CLIENTS  65536
+/* Hard ceiling for max_clients / clients[] growth (prevents int wrap on *2). */
+#define CMQ_MAX_CLIENTS_LIMIT    1000000
 #define CMQ_DEFAULT_MAX_PAYLOAD  (1024 * 1024)  /* 1 MB */
 #define CMQ_DEFAULT_MAX_SUBS_PER_CLIENT 1024
 #define CMQ_DEFAULT_PING_INTERVAL 30000  /* 30 seconds */

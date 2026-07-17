@@ -207,6 +207,8 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->write_timeout_ms > 86400000)
         return CMQ_ERR_INVALID_ARG;
     if (config->max_clients < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->max_clients > CMQ_MAX_CLIENTS_LIMIT)
+        return CMQ_ERR_INVALID_ARG;
     if (config->num_threads < 0 || config->num_threads > 64)
         return CMQ_ERR_INVALID_ARG;
     /* Empty auth strings would enable a zero-credential bypass; reject. */

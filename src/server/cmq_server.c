@@ -65,6 +65,21 @@ static int wakeup_fd_pair(int *rfd, int *wfd) {
 #endif
 }
 
+/* Grow clients[] under caller lock. Caps at CMQ_MAX_CLIENTS_LIMIT; rejects *2 wrap. */
+static int clients_array_grow(cmq_client_t ***arr, int *cap) {
+    if (!arr || !cap || !*arr) return -1;
+    if (*cap >= CMQ_MAX_CLIENTS_LIMIT) return -1;
+    int new_cap = *cap * 2;
+    if (new_cap < *cap || new_cap > CMQ_MAX_CLIENTS_LIMIT)
+        new_cap = CMQ_MAX_CLIENTS_LIMIT;
+    if (new_cap <= *cap) return -1;
+    cmq_client_t **na = realloc(*arr, (size_t)new_cap * sizeof(*na));
+    if (!na) return -1;
+    *arr = na;
+    *cap = new_cap;
+    return 0;
+}
+
 static int wakeup_fd_signal(int wfd) {
 #ifdef CMQ_OS_LINUX
     uint64_t val = 1;
@@ -3200,17 +3215,20 @@ static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
     uint64_t drops = cmq_atomic_load_u64(&srv->stat_messages_dropped,
                                            CMQ_ATOMIC_RELAXED);
 
-    int active = 0;
+    uint64_t active64 = 0;
     cmq_mutex_lock(&srv->clients_lock);
-    active += srv->clients_count;
+    if (srv->clients_count > 0)
+        active64 += (uint64_t)srv->clients_count;
     cmq_mutex_unlock(&srv->clients_lock);
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
             cmq_mutex_lock(&srv->workers[i].clients_lock);
-            active += srv->workers[i].clients_count;
+            if (srv->workers[i].clients_count > 0)
+                active64 += (uint64_t)srv->workers[i].clients_count;
             cmq_mutex_unlock(&srv->workers[i].clients_lock);
         }
     }
+    uint32_t active = active64 > UINT32_MAX ? UINT32_MAX : (uint32_t)active64;
 
     uint8_t payload[9 * 8 + 4];
     size_t off = 0;
@@ -3223,10 +3241,10 @@ static void handle_stats(cmq_server_t *srv, cmq_client_t *c) {
     WRITE_U64(bytes_in);
     WRITE_U64(bytes_out);
     WRITE_U64(subs);
-    payload[off++] = (active >> 24) & 0xFF;
-    payload[off++] = (active >> 16) & 0xFF;
-    payload[off++] = (active >> 8) & 0xFF;
-    payload[off++] = active & 0xFF;
+    payload[off++] = (uint8_t)((active >> 24) & 0xFF);
+    payload[off++] = (uint8_t)((active >> 16) & 0xFF);
+    payload[off++] = (uint8_t)((active >> 8) & 0xFF);
+    payload[off++] = (uint8_t)(active & 0xFF);
     WRITE_U64(pub_rej);
     WRITE_U64(sub_rej);
     WRITE_U64(drops);
@@ -4721,17 +4739,12 @@ static void accept_cb(int fd, int events, void *data) {
                same lock). epoll_ctl does not invoke callbacks. */
             cmq_mutex_lock(&w->clients_lock);
             if (w->clients_count >= w->clients_cap) {
-                int new_cap = w->clients_cap * 2;
-                cmq_client_t **new_arr = realloc(w->clients,
-                                                  (size_t)new_cap * sizeof(cmq_client_t *));
-                if (!new_arr) {
+                if (clients_array_grow(&w->clients, &w->clients_cap) != 0) {
                     cmq_mutex_unlock(&w->clients_lock);
                     cmq_client_destroy(client);
                     cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
                     continue;
                 }
-                w->clients = new_arr;
-                w->clients_cap = new_cap;
             }
             w->clients[w->clients_count++] = client;
             if (cmq_idmap_put(w->idmap, client->id, client) != 0) {
@@ -4768,17 +4781,12 @@ static void accept_cb(int fd, int events, void *data) {
 
             cmq_mutex_lock(&srv->clients_lock);
             if (srv->clients_count >= srv->clients_cap) {
-                int new_cap = srv->clients_cap * 2;
-                cmq_client_t **new_arr = realloc(srv->clients,
-                                                  (size_t)new_cap * sizeof(cmq_client_t *));
-                if (!new_arr) {
+                if (clients_array_grow(&srv->clients, &srv->clients_cap) != 0) {
                     cmq_mutex_unlock(&srv->clients_lock);
                     cmq_client_destroy(client);
                     cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
                     continue;
                 }
-                srv->clients = new_arr;
-                srv->clients_cap = new_cap;
             }
             srv->clients[srv->clients_count++] = client;
             if (cmq_idmap_put(srv->idmap, client->id, client) != 0) {

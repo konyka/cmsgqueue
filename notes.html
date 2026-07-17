@@ -3033,6 +3033,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — max_clients ceiling · clients_cap grow · STATS active</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">max_clients limit</span></td><td>✅</td><td>Validate rejects <code>max_clients &gt; CMQ_MAX_CLIENTS_LIMIT</code> (1e6).</td></tr>
+<tr><td><span class="component-name">clients_cap grow</span></td><td>✅</td><td>Accept path saturates at limit; rejects <code>*2</code> int wrap before realloc.</td></tr>
+<tr><td><span class="component-name">STATS active</span></td><td>✅</td><td>Sum in <code>uint64_t</code>, saturate to <code>uint32_t</code> wire field.</td></tr>
+</table>
+</div>
+
 
 
 
