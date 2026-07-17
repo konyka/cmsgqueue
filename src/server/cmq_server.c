@@ -2637,8 +2637,17 @@ static int cmq_route_forward_missed(cmq_server_t *srv, int route_rc,
     if (!srv || !srv->routes) return 0;
     size_t named = cmq_route_pool_count(srv->routes);
     size_t live = cmq_route_live_count(srv->routes);
+    size_t held = cmq_route_held_count(srv->routes);
+    size_t targets = cmq_route_target_count(srv->routes);
     if (named > 0 && live == 0) return 1;
-    if (live == 0) return 0;
+    if (live == 0) {
+        /* Connect-fail / cleared tombstones leave named=0 but peers were
+           configured — do not silently succeed remote-only PUBLISH. */
+        if (route_sent == 0 &&
+            (held > 0 || targets > 0 || srv->config.route_count > 0))
+            return 1;
+        return 0;
+    }
     return route_sent == 0;
 }
 
@@ -3923,10 +3932,14 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
 
     /* Pass 2b-pre: refuse entire batch only when NO entry has local targets and
        cluster peers are configured but none live. Mixed batches (some local
-       subs) must reach pass 2c — align with single-PUBLISH local delivery. */
-    if (srv->routes && !c->is_route && cmq_route_pool_count(srv->routes) > 0 &&
+       subs) must reach pass 2c — align with single-PUBLISH local delivery.
+       Include target_count/config (connect-fail or cleared tombstones). */
+    if (srv->routes && !c->is_route &&
         cmq_route_live_count(srv->routes) == 0 &&
-        cmq_route_held_count(srv->routes) == 0) {
+        cmq_route_held_count(srv->routes) == 0 &&
+        (cmq_route_pool_count(srv->routes) > 0 ||
+         cmq_route_target_count(srv->routes) > 0 ||
+         srv->config.route_count > 0)) {
         int any_local = 0;
         for (uint16_t msg = 0; msg < count; msg++) {
             if (prep[msg].tgts && prep[msg].ntgt > 0) {

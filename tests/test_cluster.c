@@ -82,6 +82,20 @@ TEST(route, create_destroy) {
     cmq_route_pool_t *rp = cmq_route_pool_create(c);
     ASSERT_NOT_NULL(rp);
     ASSERT_EQ(cmq_route_pool_count(rp), (size_t)0);
+    ASSERT_EQ(cmq_route_target_count(rp), (size_t)0);
+    cmq_route_pool_destroy(rp);
+    cmq_cluster_destroy(c);
+}
+
+/* Failed dial still registers a target — forward_missed must see cluster intent. */
+TEST(route, connect_fail_keeps_target) {
+    cmq_cluster_t *c = cmq_cluster_create("c1", "n1");
+    cmq_route_pool_t *rp = cmq_route_pool_create(c);
+    ASSERT_NOT_NULL(rp);
+    ASSERT_EQ(cmq_route_connect(rp, "n2", "127.0.0.1", 1, NULL, NULL), -1);
+    ASSERT_EQ(cmq_route_live_count(rp), (size_t)0);
+    ASSERT_EQ(cmq_route_pool_count(rp), (size_t)0);
+    ASSERT_EQ(cmq_route_target_count(rp), (size_t)1);
     cmq_route_pool_destroy(rp);
     cmq_cluster_destroy(c);
 }

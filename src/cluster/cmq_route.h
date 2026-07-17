@@ -70,6 +70,8 @@ size_t cmq_route_pool_count(cmq_route_pool_t *pool);
 size_t cmq_route_live_count(cmq_route_pool_t *pool);
 /* Slots currently holding an fd (live or staged inbound). */
 size_t cmq_route_held_count(cmq_route_pool_t *pool);
+/* Configured dial targets (set even when connect/handshake failed). */
+size_t cmq_route_target_count(cmq_route_pool_t *pool);
 /* Copy connection snapshot under lock (no live pointer after unlock). */
 int cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id,
                         cmq_route_conn_t *out);

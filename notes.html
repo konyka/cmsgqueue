@@ -3692,6 +3692,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — forward_missed sees configured targets</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_route_target_count</span></td><td>✅</td><td>Expose dial targets kept after connect/handshake failure.</td></tr>
+<tr><td><span class="component-name">forward_missed / BATCH pre</span></td><td>✅</td><td>When <code>live==0</code> but targets/config/held exist, remote-only PUBLISH/BATCH fail-closed (no silent drop after tombstone clear or dial fail).</td></tr>
+</table>
+</div>
+
 
 
 
