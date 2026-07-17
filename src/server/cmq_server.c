@@ -2077,10 +2077,23 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     struct timespec ts2 = {0, 50000L};
                     nanosleep(&ts2, NULL);
                 }
-                /* Still unresolved: force fail; claimed worker will not clobber. */
-                __atomic_store_n(&sync->result, -1, __ATOMIC_RELEASE);
-                req_sync_release(sync);
-                return 0;
+                /* Still unresolved: CAS-fail only — never overwrite a late 1. */
+                {
+                    int cur = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
+                    if (req_sync_terminal(cur)) {
+                        req_sync_release(sync);
+                        return cur == 1 ? 1 : 0;
+                    }
+                    int expected = cur; /* 0 or 2 */
+                    if (__atomic_compare_exchange_n(
+                            &sync->result, &expected, -1, 0,
+                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                        req_sync_release(sync);
+                        return 0;
+                    }
+                    req_sync_release(sync);
+                    return expected == 1 ? 1 : 0;
+                }
             }
             struct timespec ts = {0, 50000L};
             nanosleep(&ts, NULL);
@@ -3054,7 +3067,6 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
                       ((uint32_t)frame->payload[2] << 8) |
                       (uint32_t)frame->payload[3];
 
-    int found = 0;
     cmq_sub_entry_t **pp = &c->subs;
     while (*pp) {
         if ((*pp)->sub_id == sub_id) {
@@ -3084,17 +3096,12 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
                     cmq_account_release(srv->accounts, a);
                 }
             }
-            found = 1;
             break;
         }
         pp = &(*pp)->next;
     }
 
-    if (!found) {
-        cmq_send_error(c, "unknown subscription");
-        return;
-    }
-
+    /* Unknown / already-gone sub_id: still UNSUBACK (idempotent). */
     uint8_t ack[16];
     size_t len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_UNSUBACK, 0,
                                    frame->payload, 4);
@@ -4172,6 +4179,19 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
     }
     /* Trim incidental spaces already handled by http_header_value. */
     if (strcmp(version, "13") != 0) { free(req); return -1; }
+
+    /* Handshake GET must not carry a body — trailing bytes become WS frames. */
+    char clen[32] = {0}, te[64] = {0};
+    if (http_header_value(req, "Content-Length", clen, sizeof(clen)) == 0 &&
+        strcmp(clen, "0") != 0) {
+        free(req);
+        return -1;
+    }
+    if (http_header_value(req, "Transfer-Encoding", te, sizeof(te)) == 0 &&
+        http_header_has_token(te, "chunked")) {
+        free(req);
+        return -1;
+    }
 
     /* RFC 6455 §4.2.1/§4.2.2 — Connection must list upgrade (token form). */
     char connection[256] = {0};

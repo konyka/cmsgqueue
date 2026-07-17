@@ -961,7 +961,8 @@ TEST(server_ops, unsubscribe_unknown) {
     wait_ms(80);
     cmq_frame_t f;
     ASSERT_EQ(recv_frame(fd, &f, parser), 0);
-    ASSERT_EQ(f.hdr.op, CMQ_OP_ERROR);
+    /* Idempotent: unknown sub_id still gets UNSUBACK (not ERROR). */
+    ASSERT_EQ(f.hdr.op, CMQ_OP_UNSUBACK);
     free_frame(&f);
 
     cmq_parser_destroy(parser);

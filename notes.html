@@ -3422,6 +3422,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST abandon CAS · idempotent UNSUB · WS no body</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">REQUEST abandon</span></td><td>✅</td><td>Final hard-abandon uses CAS from pending/claimed only — never overwrites a late success (1).</td></tr>
+<tr><td><span class="component-name">UNSUBACK</span></td><td>✅</td><td>Unknown <code>sub_id</code> still gets <code>UNSUBACK</code> (idempotent); malformed payload keeps ERROR.</td></tr>
+<tr><td><span class="component-name">WS body</span></td><td>✅</td><td>Reject upgrade when <code>Content-Length≠0</code> or <code>Transfer-Encoding: chunked</code>.</td></tr>
+</table>
+</div>
+
 
 
 
