@@ -1132,8 +1132,15 @@ static void client_teardown(cmq_client_t *c) {
 static int ensure_write_cap(cmq_client_t *c, size_t need) {
     if (need > CMQ_WRITE_BUF_LIMIT) return -1;
     if (c->write_cap >= need) return 0;
-    size_t ncap = c->write_cap ? c->write_cap * 2 : 256;
-    while (ncap < need) ncap *= 2;
+    size_t ncap = c->write_cap ? c->write_cap : 256;
+    if (c->write_cap) {
+        if (c->write_cap > SIZE_MAX / 2) ncap = CMQ_WRITE_BUF_LIMIT;
+        else ncap = c->write_cap * 2;
+    }
+    while (ncap < need) {
+        if (ncap > SIZE_MAX / 2) { ncap = CMQ_WRITE_BUF_LIMIT; break; }
+        ncap *= 2;
+    }
     if (ncap > CMQ_WRITE_BUF_LIMIT) ncap = CMQ_WRITE_BUF_LIMIT;
     if (need > ncap) return -1;
     uint8_t *nb = realloc(c->write_buf, ncap);
@@ -4193,10 +4200,18 @@ static void client_read_cb(int fd, int events, void *data) {
        bytes for the WS frame parser below. */
     if (!c->is_websocket && !c->ws_upgrade_done &&
         (c->ws_recv_len > 0 || (n > 0 && c->read_buf[0] == 'G'))) {
+        if ((size_t)n > SIZE_MAX - c->ws_recv_len) { client_teardown(c); return; }
         size_t need = c->ws_recv_len + (size_t)n;
         if (need > c->ws_recv_cap) {
-            size_t ncap = c->ws_recv_cap ? c->ws_recv_cap * 2 : 4096;
-            while (ncap < need) ncap *= 2;
+            size_t ncap = c->ws_recv_cap ? c->ws_recv_cap : 4096;
+            if (c->ws_recv_cap) {
+                if (c->ws_recv_cap > SIZE_MAX / 2) ncap = 65536;
+                else ncap = c->ws_recv_cap * 2;
+            }
+            while (ncap < need) {
+                if (ncap > SIZE_MAX / 2) { ncap = 65536; break; }
+                ncap *= 2;
+            }
             if (ncap > 65536) ncap = 65536;
             if (need > ncap) { client_teardown(c); return; }
             uint8_t *nb = realloc(c->ws_recv_buf, ncap);
@@ -4233,11 +4248,19 @@ static void client_read_cb(int fd, int events, void *data) {
     if (c->is_websocket && c->ws_upgrade_done) {
         /* Append any fresh TCP bytes into reassembly buffer. */
         if (n > 0) {
+            if ((size_t)n > SIZE_MAX - c->ws_recv_len) { client_teardown(c); return; }
             size_t need = c->ws_recv_len + (size_t)n;
             if (need > c->ws_recv_cap) {
-                size_t ncap = c->ws_recv_cap ? c->ws_recv_cap * 2 : 4096;
-                while (ncap < need) ncap *= 2;
                 size_t hard = cmq_client_frame_hard_cap(srv);
+                size_t ncap = c->ws_recv_cap ? c->ws_recv_cap : 4096;
+                if (c->ws_recv_cap) {
+                    if (c->ws_recv_cap > SIZE_MAX / 2) ncap = hard;
+                    else ncap = c->ws_recv_cap * 2;
+                }
+                while (ncap < need) {
+                    if (ncap > SIZE_MAX / 2) { ncap = hard; break; }
+                    ncap *= 2;
+                }
                 if (ncap > hard) ncap = hard;
                 if (need > ncap) { client_teardown(c); return; }
                 uint8_t *nb = realloc(c->ws_recv_buf, ncap);
@@ -4354,11 +4377,22 @@ static void client_read_cb(int fd, int events, void *data) {
                 }
 
                 if (ws_frame.payload_len > 0) {
+                    if (ws_frame.payload_len > SIZE_MAX - c->ws_msg_len) {
+                        client_teardown(c);
+                        return;
+                    }
                     size_t need = c->ws_msg_len + ws_frame.payload_len;
                     if (need > c->ws_msg_cap) {
-                        size_t ncap = c->ws_msg_cap ? c->ws_msg_cap * 2 : 4096;
-                        while (ncap < need) ncap *= 2;
                         size_t hard = cmq_client_frame_hard_cap(srv);
+                        size_t ncap = c->ws_msg_cap ? c->ws_msg_cap : 4096;
+                        if (c->ws_msg_cap) {
+                            if (c->ws_msg_cap > SIZE_MAX / 2) ncap = hard;
+                            else ncap = c->ws_msg_cap * 2;
+                        }
+                        while (ncap < need) {
+                            if (ncap > SIZE_MAX / 2) { ncap = hard; break; }
+                            ncap *= 2;
+                        }
                         if (ncap > hard) ncap = hard;
                         if (need > ncap) { client_teardown(c); return; }
                         uint8_t *nb = realloc(c->ws_msg_buf, ncap);

@@ -3129,6 +3129,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route/gw broadcast in_flight · leaf op barriers · WS grow wrap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/gw fanout</span></td><td>✅</td><td><code>broadcast</code>/<code>forward</code> hold <code>in_flight</code> across unlocked <code>io_lock</code> writes.</td></tr>
+<tr><td><span class="component-name">leaf ops</span></td><td>✅</td><td>subscribe/unsubscribe/disconnect/set_auth/remove gated by <code>begin_op</code>.</td></tr>
+<tr><td><span class="component-name">WS grow</span></td><td>✅</td><td>recv/msg buffer add + <code>ncap*2</code> reject <code>SIZE_MAX</code> wrap.</td></tr>
+</table>
+</div>
+
 
 
 

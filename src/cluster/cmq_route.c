@@ -965,6 +965,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
                              size_t *out_eagain) {
     if (out_eagain) *out_eagain = 0;
     if (!pool || !data || len == 0) return 0;
+    if (route_begin_op(pool) != 0) return 0;
     int fds[CMQ_ROUTE_MAX_CONNS];
     size_t idxs[CMQ_ROUTE_MAX_CONNS];
     char ids[CMQ_ROUTE_MAX_CONNS][CMQ_NODE_ID_SIZE];
@@ -1025,6 +1026,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
         }
     }
     if (out_eagain) *out_eagain = deferred;
+    route_end_op(pool);
     return sent;
 }
 

@@ -43,7 +43,7 @@ struct cmq_leaf_node {
 
     cmq_mutex_t lock;
     cmq_mutex_t hub_io_lock; /* serialize hub writes vs disconnect close */
-    atomic_int in_flight; /* connect/accept/is_connected unlocked windows */
+    atomic_int in_flight; /* public ops vs destroy (unlocked I/O windows) */
     atomic_int dying;
 };
 
@@ -282,7 +282,7 @@ void cmq_leaf_destroy(cmq_leaf_node_t *leaf) {
     free(leaf);
 }
 
-int cmq_leaf_set_auth(cmq_leaf_node_t *leaf, const char *user, const char *pass) {
+static int leaf_set_auth_impl(cmq_leaf_node_t *leaf, const char *user, const char *pass) {
     if (!leaf) return -1;
     cmq_mutex_lock(&leaf->lock);
     memset(leaf->auth_user, 0, sizeof(leaf->auth_user));
@@ -579,7 +579,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     return 0;
 }
 
-int cmq_leaf_disconnect(cmq_leaf_node_t *leaf) {
+static int leaf_disconnect_impl(cmq_leaf_node_t *leaf) {
     if (!leaf) return -1;
     cmq_mutex_lock(&leaf->hub_io_lock);
     cmq_mutex_lock(&leaf->lock);
@@ -612,7 +612,7 @@ static int leaf_is_connected_impl(cmq_leaf_node_t *leaf) {
     return 0;
 }
 
-int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
+static int leaf_subscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
     if (!leaf || !subject) return -1;
     size_t slen = strlen(subject);
     if (slen == 0 || slen >= 256) return -1;
@@ -707,7 +707,7 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
     return 0;
 }
 
-int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
+static int leaf_unsubscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
     if (!leaf || !subject) return -1;
 
     /* hub_io → leaf: drop serialized with subscribe claim. */
@@ -879,7 +879,7 @@ static int leaf_accept_impl(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) 
     return 0;
 }
 
-int cmq_leaf_remove(cmq_leaf_node_t *leaf, const char *leaf_id) {
+static int leaf_remove_impl(cmq_leaf_node_t *leaf, const char *leaf_id) {
     if (!leaf || !leaf_id) return -1;
     cmq_mutex_lock(&leaf->lock);
     for (size_t i = 0; i < leaf->leaf_count; i++) {
@@ -896,6 +896,47 @@ int cmq_leaf_remove(cmq_leaf_node_t *leaf, const char *leaf_id) {
     return -1;
 }
 
+
+
+int cmq_leaf_set_auth(cmq_leaf_node_t *leaf, const char *user, const char *pass) {
+    if (!leaf) return -1;
+    if (leaf_begin_op(leaf) != 0) return -1;
+    int rc = leaf_set_auth_impl(leaf, user, pass);
+    leaf_end_op(leaf);
+    return rc;
+}
+
+int cmq_leaf_disconnect(cmq_leaf_node_t *leaf) {
+    if (!leaf) return -1;
+    if (leaf_begin_op(leaf) != 0) return -1;
+    int rc = leaf_disconnect_impl(leaf);
+    leaf_end_op(leaf);
+    return rc;
+}
+
+int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
+    if (!leaf || !subject) return -1;
+    if (leaf_begin_op(leaf) != 0) return -1;
+    int rc = leaf_subscribe_impl(leaf, subject);
+    leaf_end_op(leaf);
+    return rc;
+}
+
+int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject) {
+    if (!leaf || !subject) return -1;
+    if (leaf_begin_op(leaf) != 0) return -1;
+    int rc = leaf_unsubscribe_impl(leaf, subject);
+    leaf_end_op(leaf);
+    return rc;
+}
+
+int cmq_leaf_remove(cmq_leaf_node_t *leaf, const char *leaf_id) {
+    if (!leaf || !leaf_id) return -1;
+    if (leaf_begin_op(leaf) != 0) return -1;
+    int rc = leaf_remove_impl(leaf, leaf_id);
+    leaf_end_op(leaf);
+    return rc;
+}
 
 int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     if (!leaf) return -1;

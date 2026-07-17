@@ -622,6 +622,7 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
                             size_t *out_eagain) {
     if (out_eagain) *out_eagain = 0;
     if (!gw || !data || len == 0) return 0;
+    if (gw_begin_op(gw) != 0) return 0;
     int fds[CMQ_GW_MAX_CONNECTIONS];
     size_t idxs[CMQ_GW_MAX_CONNECTIONS];
     char clusters[CMQ_GW_MAX_CONNECTIONS][64];
@@ -678,6 +679,7 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
         }
     }
     if (out_eagain) *out_eagain = deferred;
+    gw_end_op(gw);
     return sent;
 }
 
@@ -685,6 +687,7 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
                               size_t *out_eagain) {
     if (out_eagain) *out_eagain = 0;
     if (!gw || !data || len == 0) return 0;
+    if (gw_begin_op(gw) != 0) return 0;
     int fds[CMQ_GW_MAX_CONNECTIONS];
     size_t idxs[CMQ_GW_MAX_CONNECTIONS];
     char clusters[CMQ_GW_MAX_CONNECTIONS][64];
@@ -738,6 +741,7 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
         }
     }
     if (out_eagain) *out_eagain = deferred;
+    gw_end_op(gw);
     return sent;
 }
 
