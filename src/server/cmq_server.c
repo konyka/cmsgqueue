@@ -3189,6 +3189,25 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         old->ref = NULL;
         old_ref = NULL;
     }
+    if (irc == 0) {
+        /* Link before unlock so PUBLISH cannot match then silent-drop on
+           missing sub_id (mirror UNSUB: drop trie before unlink). */
+        if (old) {
+            cmq_sub_entry_t **q = &c->subs;
+            while (*q) {
+                if (*q == old) {
+                    *q = old->next;
+                    break;
+                }
+                q = &(*q)->next;
+            }
+            free(old);
+            old = NULL;
+        }
+        entry->ref = ref;
+        entry->next = c->subs;
+        c->subs = entry;
+    }
     cmq_rwlock_unlock(&srv->sublist_lock);
     for (size_t di = 0; di < ndead; di++) {
         if (deads[di].worker_id >= 0 && srv->workers &&
@@ -3252,22 +3271,6 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_suback(c, sub_id, 1);
         return;
     }
-
-    if (old) {
-        cmq_sub_entry_t **q = &c->subs;
-        while (*q) {
-            if (*q == old) {
-                *q = old->next;
-                break;
-            }
-            q = &(*q)->next;
-        }
-        free(old);
-    }
-
-    entry->ref = ref;
-    entry->next = c->subs;
-    c->subs = entry;
 
     if (!replacing) {
         cmq_atomic_fetch_add_u64(&srv->stat_subscriptions, 1, CMQ_ATOMIC_RELAXED);
