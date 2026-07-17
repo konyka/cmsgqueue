@@ -3482,6 +3482,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route reconnect · account inc · parser partial</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route inbound fail</span></td><td>✅</td><td>Hard-fail clears <code>remote_id</code> (keeps fd for detach) so <code>peer_live</code> no longer blocks outbound reconnect.</td></tr>
+<tr><td><span class="component-name">account inc</span></td><td>✅</td><td>After <code>fetch_add</code>, undo if active/epoch/<code>clear_gen</code> went stale (soft-delete TOCTOU).</td></tr>
+<tr><td><span class="component-name">parser queue</span></td><td>✅</td><td>Queue-full after a prior frame returns 1 (partial) so already-queued frames are not torn down.</td></tr>
+</table>
+</div>
+
 
 
 

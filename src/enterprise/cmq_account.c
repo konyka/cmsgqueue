@@ -264,7 +264,10 @@ int cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch) {
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return -1;
     uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
     uint64_t prev = __atomic_fetch_add(&acc->connections, 1, __ATOMIC_RELAXED);
-    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
+    /* Soft-delete may clear between fetch_add and here — undo if stale. */
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) {
         account_undo_stale_inc(&acc->connections, 1, prev, g0, acc);
         return -1;
     }
@@ -295,7 +298,9 @@ int cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch) {
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return -1;
     uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
     uint64_t prev = __atomic_fetch_add(&acc->subscriptions, 1, __ATOMIC_RELAXED);
-    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) {
         account_undo_stale_inc(&acc->subscriptions, 1, prev, g0, acc);
         return -1;
     }
@@ -325,7 +330,9 @@ void cmq_account_inc_msgs_in(cmq_account_t *acc, uint32_t epoch, uint64_t bytes)
     uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
     uint64_t prev_m = __atomic_fetch_add(&acc->messages_in, 1, __ATOMIC_RELAXED);
     uint64_t prev_b = __atomic_fetch_add(&acc->bytes_in, bytes, __ATOMIC_RELAXED);
-    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) {
         account_undo_stale_inc(&acc->messages_in, 1, prev_m, g0, acc);
         account_undo_stale_inc(&acc->bytes_in, bytes, prev_b, g0, acc);
     }
@@ -337,7 +344,9 @@ void cmq_account_inc_msgs_out(cmq_account_t *acc, uint32_t epoch, uint64_t bytes
     uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
     uint64_t prev_m = __atomic_fetch_add(&acc->messages_out, 1, __ATOMIC_RELAXED);
     uint64_t prev_b = __atomic_fetch_add(&acc->bytes_out, bytes, __ATOMIC_RELAXED);
-    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) {
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) {
         account_undo_stale_inc(&acc->messages_out, 1, prev_m, g0, acc);
         account_undo_stale_inc(&acc->bytes_out, bytes, prev_b, g0, acc);
     }

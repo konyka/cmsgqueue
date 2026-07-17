@@ -129,7 +129,7 @@ TEST(parser, multiple_frames) {
     cmq_parser_destroy(p);
 }
 
-/* More than CMQ_PARSER_FRAME_QUEUE_MAX frames in one feed must fail. */
+/* More than CMQ_PARSER_FRAME_QUEUE_MAX frames in one feed: keep queued, return 1. */
 TEST(parser, frame_queue_cap) {
     cmq_parser_t *p = cmq_parser_create();
     /* 65 zero-payload PING frames (header = 9 bytes typically) */
@@ -148,7 +148,9 @@ TEST(parser, frame_queue_cap) {
         off += sizeof(h);
     }
     int rc = cmq_parser_feed(p, buf, off);
-    ASSERT_EQ(rc, -1);
+    /* Partial success — already-queued frames must remain drainable. */
+    ASSERT_EQ(rc, 1);
+    ASSERT(cmq_parser_frame(p) != NULL);
     cmq_parser_destroy(p);
 }
 

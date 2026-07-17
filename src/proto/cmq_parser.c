@@ -227,7 +227,8 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
 
         if (!cmq_push_frame(p, &frame)) {
             if (frame.payload) free(frame.payload);
-            return -1;
+            /* Keep already-queued frames for the caller to drain. */
+            return produced ? 1 : -1;
         }
 
         p->inbuf_off += total;

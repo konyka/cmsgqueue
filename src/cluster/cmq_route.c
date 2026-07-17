@@ -1124,15 +1124,16 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
             deferred++;
         } else {
             /* Drop under io_lock so other writers cannot race close/shutdown.
-               Inbound (borrowed fd): SHUT_RDWR + clear connected only — keep
-               fd/identity so reconnect cannot install a duplicate outbound
-               before server detach. Count as undelivered for drop stats. */
+               Inbound (borrowed fd): SHUT_RDWR, clear connected + remote_id so
+               peer_live no longer blocks outbound reconnect; keep fd for
+               detach_fd. Count as undelivered for drop stats. */
             if (pool->conns[idx].fd == fd) {
                 if (pool->conns[idx].fd_owned)
                     conn_drop_fd(&pool->conns[idx]);
                 else {
                     (void)shutdown(fd, SHUT_RDWR);
                     pool->conns[idx].connected = 0;
+                    pool->conns[idx].remote_id[0] = '\0';
                 }
             }
             cmq_mutex_unlock(&pool->io_locks[idx]);
