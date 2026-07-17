@@ -384,9 +384,10 @@ static ssize_t client_sock_write(cmq_client_t *c, const uint8_t *buf, size_t len
 
 #define CMQ_WORKER_WAKE_BATCH 64
 
-/* Heap sync slot for cross-worker REQUEST — publisher+worker each hold a ref. */
+/* Heap sync slot for cross-worker REQUEST — publisher+worker each hold a ref.
+   result: 0 pending, 2 claimed (worker owns wire), 1 ok, -1 fail/abandon. */
 typedef struct {
-    int result; /* 0 pending, 1 ok, -1 fail */
+    int result;
     int refs;
 } cmq_req_sync_t;
 
@@ -396,11 +397,36 @@ static void req_sync_release(cmq_req_sync_t *s) {
         free(s);
 }
 
+static int req_sync_terminal(int v) {
+    return v == 1 || v == -1;
+}
+
+/* Claim pending (0→2) before send so hard-abandon cannot race mid-delivery. */
+static int req_sync_claim(int *result) {
+    int expected = 0;
+    return __atomic_compare_exchange_n(result, &expected, 2, 0,
+                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+
 static void worker_complete_sync(cmq_worker_msg_t *msg, int v) {
     if (!msg || !msg->sync_result) return;
+    if (msg->sync_heap) {
+        /* Resolve from pending/claimed only — never clobber abandon (-1). */
+        for (;;) {
+            int cur = __atomic_load_n(msg->sync_result, __ATOMIC_ACQUIRE);
+            if (req_sync_terminal(cur)) {
+                req_sync_release((cmq_req_sync_t *)msg->sync_result);
+                return;
+            }
+            int expected = cur; /* 0 or 2 */
+            if (__atomic_compare_exchange_n(msg->sync_result, &expected, v, 0,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                req_sync_release((cmq_req_sync_t *)msg->sync_result);
+                return;
+            }
+        }
+    }
     __atomic_store_n(msg->sync_result, v, __ATOMIC_RELEASE);
-    if (msg->sync_heap)
-        req_sync_release((cmq_req_sync_t *)msg->sync_result);
 }
 
 /* MESSAGE/REQUEST body: [4B sub_id][2B slen][subject]… */
@@ -477,8 +503,8 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
                     cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                               CMQ_ATOMIC_RELAXED);
             } else if (msg->sync_heap && msg->sync_result &&
-                       __atomic_load_n(msg->sync_result, __ATOMIC_ACQUIRE) != 0) {
-                /* Publisher hard-abandoned — do not deliver late. */
+                       !req_sync_claim(msg->sync_result)) {
+                /* Hard-abandoned or already resolved — do not deliver late. */
                 if (w->server)
                     cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                               CMQ_ATOMIC_RELAXED);
@@ -1975,7 +2001,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
         int waited = 0;
         for (;;) {
             int v = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
-            if (v != 0) {
+            if (req_sync_terminal(v)) {
                 req_sync_release(sync);
                 return v == 1 ? 1 : 0;
             }
@@ -2012,7 +2038,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                 /* In-flight — wait drain bound, nudge EOF, then hard-abandon. */
                 for (int extra = 0; extra < 50000; extra++) { /* ~2.5s */
                     int v2 = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
-                    if (v2 != 0) {
+                    if (req_sync_terminal(v2)) {
                         req_sync_release(sync);
                         return v2 == 1 ? 1 : 0;
                     }
@@ -2028,19 +2054,30 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     struct timespec ts2 = {0, 50000L};
                     nanosleep(&ts2, NULL);
                 }
-                /* Hard abandon: drop publisher ref; worker frees when done. */
+                /* Hard abandon: CAS pending→fail; if claimed (2), wait final. */
                 for (int hard = 0; hard < 50000; hard++) { /* ~2.5s more */
                     int v2 = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
-                    if (v2 != 0) {
+                    if (req_sync_terminal(v2)) {
                         req_sync_release(sync);
                         return v2 == 1 ? 1 : 0;
                     }
+                    if (v2 == 0) {
+                        int expected = 0;
+                        if (__atomic_compare_exchange_n(
+                                &sync->result, &expected, -1, 0,
+                                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                            req_sync_release(sync);
+                            return 0;
+                        }
+                        continue;
+                    }
+                    /* Claimed (2) — wait for worker to resolve. */
                     if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
                     if (publisher) client_touch_activity(publisher);
                     struct timespec ts2 = {0, 50000L};
                     nanosleep(&ts2, NULL);
                 }
-                /* Fail-closed so worker_deliver_send_msg skips late delivery. */
+                /* Still unresolved: force fail; claimed worker will not clobber. */
                 __atomic_store_n(&sync->result, -1, __ATOMIC_RELEASE);
                 req_sync_release(sync);
                 return 0;
@@ -3892,7 +3929,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
     }
 }
 
-static void client_flush_write(cmq_client_t *c) {
+/* Caller holds srv->clients_lock for acceptor-owned clients (worker_id < 0). */
+static void client_flush_write_unlocked(cmq_client_t *c) {
     int route_io_idx = -1;
     if (c->is_route && c->server && c->server->routes && c->fd >= 0) {
         route_io_idx = cmq_route_io_lock_fd(c->server->routes, c->fd);
@@ -3964,6 +4002,17 @@ static void client_flush_write(cmq_client_t *c) {
 out:
     if (route_io_idx >= 0 && c->server && c->server->routes)
         cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+}
+
+/* Serialize acceptor write_buf with worker send_local (holds clients_lock). */
+static void client_flush_write(cmq_client_t *c) {
+    cmq_server_t *srv = c ? c->server : NULL;
+    int acc = (c && c->worker_id < 0 && srv != NULL);
+    if (acc)
+        cmq_mutex_lock(&srv->clients_lock);
+    client_flush_write_unlocked(c);
+    if (acc)
+        cmq_mutex_unlock(&srv->clients_lock);
 }
 
 static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
@@ -4205,7 +4254,8 @@ static void client_finish_closing(cmq_client_t *c) {
         /* Peer may still send; drain RX so our final frames are not blocked
            by a full TCP receive window (keepalive skips CLOSING). */
         client_closing_discard_inbound(c);
-        client_flush_write(c);
+        /* Already hold clients_lock for acceptor — avoid recursive lock. */
+        client_flush_write_unlocked(c);
         /* flush_write never destroys c; hard error leaves CLOSING + empty buf. */
         if (c->write_buf && c->write_pos < c->write_len) {
             /* Keep READ+WRITE so inbound continues to be discarded. */

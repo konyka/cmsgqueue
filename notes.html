@@ -3393,6 +3393,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST sync claim · acceptor flush lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">REQUEST claim</span></td><td>✅</td><td>Worker CAS-claims sync (0→2) before send; hard-abandon only CAS pending→fail and waits out claimed; complete never clobbers −1.</td></tr>
+<tr><td><span class="component-name">acceptor flush</span></td><td>✅</td><td><code>client_flush_write</code> takes <code>clients_lock</code> for acceptor-owned clients so it serializes with worker <code>send_local</code>; <code>finish_closing</code> uses unlocked path under the same lock.</td></tr>
+</table>
+</div>
+
 
 
 
