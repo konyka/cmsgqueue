@@ -3562,6 +3562,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — MQTT bridge DISCONNECT on close</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">mqtt disconnect</span></td><td>✅</td><td>When <code>connected</code>, send MQTT DISCONNECT (0xE0) before <code>close</code> so clean_session=0 brokers do not wait for keepalive.</td></tr>
+</table>
+</div>
+
 
 
 

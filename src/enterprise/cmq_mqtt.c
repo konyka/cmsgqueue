@@ -24,6 +24,7 @@
 #define CMQ_MQTT_PUBLISH    0x30
 #define CMQ_MQTT_SUBSCRIBE  0x80
 #define CMQ_MQTT_PINGREQ    0xC0
+#define CMQ_MQTT_DISCONNECT 0xE0
 
 struct cmq_mqtt_bridge {
     char client_id[CMQ_MQTT_CLIENT_ID];
@@ -61,8 +62,18 @@ static int mqtt_fd_alive(int fd) {
     return cmq_tcp_fd_alive(fd);
 }
 
+static int mqtt_write_all(int fd, const uint8_t *data, size_t len);
+
 static void mqtt_disconnect_unlocked(cmq_mqtt_bridge_t *br) {
-    if (br->fd >= 0) close(br->fd);
+    if (br->fd >= 0) {
+        /* Best-effort DISCONNECT so clean_session=0 brokers drop the session
+           promptly instead of waiting for keepalive after a bare TCP close. */
+        if (br->connected) {
+            uint8_t disc[2] = { CMQ_MQTT_DISCONNECT, 0x00 };
+            (void)mqtt_write_all(br->fd, disc, sizeof(disc));
+        }
+        close(br->fd);
+    }
     br->fd = -1;
     br->connected = 0;
 }
