@@ -3672,8 +3672,10 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
                 c->state = CMQ_CLIENT_CLOSING;
                 return;
             }
-            /* Local inbox targets were ghost/CLOSING — try cluster. */
-            if (!c->is_route) {
+            /* Local targets were ghost/CLOSING. Cluster-forward only for
+               non-_INBOX — private inbox replies must not fan out to all peers
+               (ntgt==0 path above still forwards when inbox is remote-only). */
+            if (!c->is_route && strncmp(subject, "_INBOX.", 7) != 0) {
                 route_rc = route_forward_if_live(srv, c, CMQ_OP_RESPONSE,
                                                   frame->hdr.flags,
                                                   frame->payload,

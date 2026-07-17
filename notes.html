@@ -3701,6 +3701,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — _INBOX RESPONSE no cluster fan-out on local miss</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">handle_response local-fail</span></td><td>✅</td><td>When local <code>_INBOX.*</code> targets exist but deliver fails, fail-closed with <code>delivery failed</code> — do not broadcast private replies to every route peer.</td></tr>
+</table>
+</div>
+
 
 
 
