@@ -3224,6 +3224,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — store_get malloc outside lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">store get</span></td><td>✅</td><td>Allocate buffer unlocked; re-validate slot then <code>memcpy</code> under lock (no UAF vs put).</td></tr>
+</table>
+</div>
+
 
 
 

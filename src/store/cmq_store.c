@@ -144,17 +144,40 @@ static int store_get_impl(cmq_store_t *store, uint64_t seq, cmq_store_msg_t *out
         return -1;
     }
 
-    out->seq = slot->seq;
-    out->data = malloc(slot->len);
-    if (!out->data) {
+    /* malloc outside the lock — put path already allocates unlocked. */
+    size_t len = slot->len;
+    uint64_t ts = slot->timestamp_ms;
+    cmq_mutex_unlock(&store->lock);
+
+    uint8_t *buf = malloc(len ? len : 1);
+    if (!buf) return -1;
+
+    cmq_mutex_lock(&store->lock);
+    if (seq >= store->head_seq) {
         cmq_mutex_unlock(&store->lock);
+        free(buf);
         return -1;
     }
-    memcpy(out->data, slot->data, slot->len);
-    out->len = slot->len;
-    out->timestamp_ms = slot->timestamp_ms;
-
+    oldest = (store->head_seq > store->cap) ? store->head_seq - store->cap : 1;
+    if (seq < oldest) {
+        cmq_mutex_unlock(&store->lock);
+        free(buf);
+        return -1;
+    }
+    idx = (size_t)(seq - 1) % store->cap;
+    slot = &store->ring[idx];
+    if (!slot->valid || slot->seq != seq || slot->len != len || !slot->data) {
+        cmq_mutex_unlock(&store->lock);
+        free(buf);
+        return -1;
+    }
+    memcpy(buf, slot->data, len);
     cmq_mutex_unlock(&store->lock);
+
+    out->seq = seq;
+    out->data = buf;
+    out->len = len;
+    out->timestamp_ms = ts;
     return 0;
 }
 
