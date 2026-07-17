@@ -296,8 +296,7 @@ int cmq_ws_parse_http_upgrade(const char *req, size_t req_len,
                 while (v < line + llen && (req[v] == ' ' || req[v] == '\t'))
                     v++;
                 size_t klen = (line + llen) - v;
-                if (klen == 0) return -1;
-                if (klen >= key_len) klen = key_len - 1;
+                if (klen == 0 || klen >= key_len) return -1;
                 memcpy(ws_key_out, req + v, klen);
                 ws_key_out[klen] = '\0';
                 return 0;

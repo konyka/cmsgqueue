@@ -4005,7 +4005,8 @@ static int http_header_value(const char *req, const char *name,
                 const char *v = line + nlen + 1;
                 while (*v == ' ' || *v == '\t') v++;
                 size_t vlen = (size_t)((line + llen) - v);
-                if (vlen >= out_sz) vlen = out_sz - 1;
+                /* Fail closed — truncated Origin/Host must not pass CSWSH. */
+                if (vlen >= out_sz) return -1;
                 memcpy(out, v, vlen);
                 out[vlen] = '\0';
                 return 0;
@@ -4044,17 +4045,22 @@ static int http_header_has_token(const char *val, const char *tok) {
     return 0;
 }
 
-/* Extract host[:port] from Origin URL or Host header into out. */
-static void http_host_from_value(const char *val, char *out, size_t out_sz) {
+/* Extract host[:port] from Origin URL or Host header into out.
+   Returns 0 on success, -1 if the host would be truncated. */
+static int http_host_from_value(const char *val, char *out, size_t out_sz) {
     out[0] = '\0';
-    if (!val || out_sz == 0) return;
+    if (!val || out_sz == 0) return -1;
     const char *host = val;
     if (strncmp(val, "http://", 7) == 0) host = val + 7;
     else if (strncmp(val, "https://", 8) == 0) host = val + 8;
     else if (strncmp(val, "ws://", 5) == 0) host = val + 5;
     else if (strncmp(val, "wss://", 6) == 0) host = val + 6;
     size_t i = 0;
-    while (host[i] && host[i] != '/' && host[i] != '?' && i + 1 < out_sz) {
+    while (host[i] && host[i] != '/' && host[i] != '?') {
+        if (i + 1 >= out_sz) {
+            out[0] = '\0';
+            return -1;
+        }
         char ch = host[i];
         if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
         out[i++] = ch;
@@ -4074,6 +4080,7 @@ static void http_host_from_value(const char *val, char *out, size_t out_sz) {
             if (digits) *colon = '\0';
         }
     }
+    return out[0] ? 0 : -1;
 }
 
 static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
@@ -4133,9 +4140,8 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
             free(req);
             return -1;
         }
-        http_host_from_value(origin_raw, origin_host, sizeof(origin_host));
-        http_host_from_value(host_raw, host_host, sizeof(host_host));
-        if (origin_host[0] == '\0' || host_host[0] == '\0' ||
+        if (http_host_from_value(origin_raw, origin_host, sizeof(origin_host)) != 0 ||
+            http_host_from_value(host_raw, host_host, sizeof(host_host)) != 0 ||
             strcmp(origin_host, host_host) != 0) {
             free(req);
             return -1;
