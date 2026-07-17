@@ -3634,6 +3634,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf accept reclaim + gateway fd_alive under lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf sticky reclaim</span></td><td>✅</td><td>Probe <code>leaf_fd_alive</code> under identity so unlock-stale alive cannot skip reclaim of dead accept slots.</td></tr>
+<tr><td><span class="component-name">gateway liveness</span></td><td>✅</td><td><code>has_live_peer</code> / connect sticky / slot claim / full-table reclaim probe under <code>io_lock</code>.</td></tr>
+</table>
+</div>
+
 
 
 

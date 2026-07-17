@@ -845,9 +845,7 @@ static int leaf_reclaim_one_sticky_dead(cmq_leaf_node_t *leaf) {
             continue;
         }
         memcpy(id, leaf->leaves[i].leaf_id, CMQ_NODE_ID_SIZE);
-        cmq_mutex_unlock(&leaf->lock);
-        int alive = leaf_fd_alive(efd);
-        cmq_mutex_lock(&leaf->lock);
+        /* Probe under identity — unlock-stale alive must not skip reclaim. */
         if (i >= leaf->leaf_count)
             return 0;
         int same = (leaf->leaves[i].connected && leaf->leaves[i].fd == efd &&
@@ -856,20 +854,16 @@ static int leaf_reclaim_one_sticky_dead(cmq_leaf_node_t *leaf) {
             i = 0;
             continue;
         }
-        if (alive) {
+        if (leaf_fd_alive(efd)) {
             i++;
             continue;
         }
-        /* Re-probe under identity — fd recycle must not close a live peer. */
-        if (!leaf_fd_alive(efd)) {
-            close(efd);
-            memmove(&leaf->leaves[i], &leaf->leaves[i + 1],
-                    (leaf->leaf_count - i - 1) * sizeof(cmq_leaf_conn_t));
-            leaf->leaf_count--;
-            memset(&leaf->leaves[leaf->leaf_count], 0, sizeof(cmq_leaf_conn_t));
-            return 1;
-        }
-        i++;
+        close(efd);
+        memmove(&leaf->leaves[i], &leaf->leaves[i + 1],
+                (leaf->leaf_count - i - 1) * sizeof(cmq_leaf_conn_t));
+        leaf->leaf_count--;
+        memset(&leaf->leaves[leaf->leaf_count], 0, sizeof(cmq_leaf_conn_t));
+        return 1;
     }
     return 0;
 }

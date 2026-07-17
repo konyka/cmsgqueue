@@ -105,27 +105,16 @@ static int gw_has_live_peer(cmq_gateway_t *gw, const char *cluster_name) {
             }
         }
         if (idx == (size_t)-1) return 0;
-        cmq_mutex_unlock(&gw->lock);
-        int alive = gw_fd_alive(efd);
-        cmq_mutex_lock(&gw->lock);
-        if (alive) {
-            if (idx < gw->conn_count) {
-                cmq_mutex_lock(&gw->io_locks[idx]);
-                int still =
-                    (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
-                     gw->conns[idx].connected && gw->conns[idx].fd == efd);
-                cmq_mutex_unlock(&gw->io_locks[idx]);
-                if (still) return 1;
-            }
-            continue;
-        }
+        /* Probe under io_lock — unlock-stale alive must not sticky-report live. */
         if (idx < gw->conn_count) {
             cmq_mutex_lock(&gw->io_locks[idx]);
-            int same =
+            int still =
                 (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
-                 gw->conns[idx].fd == efd);
+                 gw->conns[idx].connected && gw->conns[idx].fd == efd);
+            int live = still && gw_fd_alive(efd);
             cmq_mutex_unlock(&gw->io_locks[idx]);
-            if (same && !gw_fd_alive(efd))
+            if (live) return 1;
+            if (still && !gw_fd_alive(efd))
                 gw_slot_close_fd(gw, idx);
         }
     }
@@ -159,17 +148,15 @@ static int gw_slot_claim_install(cmq_gateway_t *gw, size_t slot,
     cmq_mutex_unlock(&gw->io_locks[slot]);
 
     if (same && connected && efd >= 0) {
-        cmq_mutex_unlock(&gw->lock);
-        int alive = gw_fd_alive(efd);
-        cmq_mutex_lock(&gw->lock);
         if (slot >= gw->conn_count) return -1;
         cmq_mutex_lock(&gw->io_locks[slot]);
         int still =
             (strcmp(gw->conns[slot].remote_cluster, cluster_name) == 0 &&
              gw->conns[slot].fd == efd);
+        int live = still && gw_fd_alive(efd);
         cmq_mutex_unlock(&gw->io_locks[slot]);
         if (!still) return -1;
-        if (alive) return 1;
+        if (live) return 1;
         if (!gw_fd_alive(efd)) {
             gw_slot_close_fd(gw, slot);
             gw_slot_install(gw, slot, cluster_name, addr, port, fd);
@@ -185,19 +172,15 @@ static int gw_slot_claim_install(cmq_gateway_t *gw, size_t slot,
     /* Cross-cluster sticky: reclaim only if TCP is dead (never steal live). */
     if (efd >= 0) {
         char other[64];
+        if (slot >= gw->conn_count) return -1;
         cmq_mutex_lock(&gw->io_locks[slot]);
         memcpy(other, gw->conns[slot].remote_cluster, sizeof(other));
         other[sizeof(other) - 1] = '\0';
-        cmq_mutex_unlock(&gw->io_locks[slot]);
-        cmq_mutex_unlock(&gw->lock);
-        int alive = gw_fd_alive(efd);
-        cmq_mutex_lock(&gw->lock);
-        if (slot >= gw->conn_count) return -1;
-        cmq_mutex_lock(&gw->io_locks[slot]);
         int still = (gw->conns[slot].fd == efd &&
                      strcmp(gw->conns[slot].remote_cluster, other) == 0);
+        int live = still && gw_fd_alive(efd);
         cmq_mutex_unlock(&gw->io_locks[slot]);
-        if (still && !alive && !gw_fd_alive(efd)) {
+        if (still && !live) {
             gw_slot_close_fd(gw, slot);
             gw_slot_install(gw, slot, cluster_name, addr, port, fd);
             return 0;
@@ -386,17 +369,15 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
         if (!match) continue;
         if (same_ep) {
             size_t idx = i;
-            cmq_mutex_unlock(&gw->lock);
-            int alive = gw_fd_alive(efd);
-            cmq_mutex_lock(&gw->lock);
             if (idx < gw->conn_count) {
                 cmq_mutex_lock(&gw->io_locks[idx]);
                 int same =
                     (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
                      gw->conns[idx].connected && gw->conns[idx].fd == efd);
+                /* Probe under io_lock — stale unlock-alive skips reconnect. */
+                int live = same && gw_fd_alive(efd);
                 cmq_mutex_unlock(&gw->io_locks[idx]);
-                /* Re-check identity after probe — fd recycle must not fake success. */
-                if (alive && same) {
+                if (live) {
                     cmq_mutex_unlock(&gw->lock);
                     return 0;
                 }
@@ -494,24 +475,22 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
                 slot = (int)i;
                 break;
             }
-            cmq_mutex_unlock(&gw->lock);
-            int alive = gw_fd_alive(efd);
-            cmq_mutex_lock(&gw->lock);
             if (i >= gw->conn_count)
                 break;
             cmq_mutex_lock(&gw->io_locks[i]);
             int same = (gw->conns[i].fd == efd);
+            int live = same && gw_fd_alive(efd);
             cmq_mutex_unlock(&gw->io_locks[i]);
-            if (!alive && same && !gw_fd_alive(efd)) {
+            if (!live && same) {
                 gw_slot_close_fd(gw, i);
                 slot = (int)i;
                 break;
             }
-            if (alive && same) {
+            if (live) {
                 i++;
                 continue;
             }
-            /* Slot mutated while unlocked — rescan. */
+            /* Slot mutated — rescan. */
             i = 0;
         }
         if (slot < 0) {
