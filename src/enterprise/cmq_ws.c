@@ -243,7 +243,11 @@ int cmq_ws_send_close(int fd, uint16_t code) {
 int cmq_ws_accept_key(const char *client_key, char *out_key, size_t out_len) {
     if (!client_key || !out_key || out_len < 29) return -1;
 
-    size_t key_len = strlen(client_key);
+    /* RFC keys are ~24 bytes; cap before size_t wrap on key_len + magic. */
+    enum { CMQ_WS_KEY_MAX = 128 };
+    size_t key_len = strnlen(client_key, CMQ_WS_KEY_MAX + 1);
+    if (key_len == 0 || key_len > CMQ_WS_KEY_MAX) return -1;
+    if (key_len > SIZE_MAX - (sizeof(WS_MAGIC) - 1)) return -1;
     size_t combined_len = key_len + sizeof(WS_MAGIC) - 1;
     uint8_t *combined = malloc(combined_len);
     if (!combined) return -1;

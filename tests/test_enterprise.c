@@ -500,6 +500,17 @@ TEST(ws, build_response) {
     ASSERT(strstr(resp, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != NULL);
 }
 
+TEST(ws, accept_key_bounds) {
+    char out[64];
+    ASSERT_EQ(cmq_ws_accept_key("dGhlIHNhbXBsZSBub25jZQ==", out, sizeof(out)), 0);
+    ASSERT_STR_EQ(out, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    ASSERT_EQ(cmq_ws_accept_key("", out, sizeof(out)), -1);
+    char huge[160];
+    memset(huge, 'A', sizeof(huge) - 1);
+    huge[sizeof(huge) - 1] = '\0';
+    ASSERT_EQ(cmq_ws_accept_key(huge, out, sizeof(out)), -1);
+}
+
 TEST(ws, parse_medium_frame) {
     uint8_t hdr[4] = {0x82, 0x7E, 0x00, 0x80};
     uint8_t buf[132];
