@@ -252,13 +252,17 @@ void cmq_gateway_destroy(cmq_gateway_t *gw) {
 
 static int gw_set_auth_impl(cmq_gateway_t *gw, const char *user, const char *pass) {
     if (!gw) return -1;
+    /* Align with CONNECT + config: wire caps creds at 255 bytes. */
+    if ((user && strnlen(user, sizeof(gw->auth_user)) >= sizeof(gw->auth_user)) ||
+        (pass && strnlen(pass, sizeof(gw->auth_pass)) >= sizeof(gw->auth_pass)))
+        return -1;
     cmq_mutex_lock(&gw->lock);
     memset(gw->auth_user, 0, sizeof(gw->auth_user));
     memset(gw->auth_pass, 0, sizeof(gw->auth_pass));
     if (user && user[0])
-        strncpy(gw->auth_user, user, sizeof(gw->auth_user) - 1);
+        snprintf(gw->auth_user, sizeof(gw->auth_user), "%s", user);
     if (pass && pass[0])
-        strncpy(gw->auth_pass, pass, sizeof(gw->auth_pass) - 1);
+        snprintf(gw->auth_pass, sizeof(gw->auth_pass), "%s", pass);
     cmq_mutex_unlock(&gw->lock);
     return 0;
 }

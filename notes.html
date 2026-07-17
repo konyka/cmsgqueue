@@ -3350,6 +3350,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf/gateway set_auth reject oversized creds</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">set_auth</span></td><td>✅</td><td>Reject user/pass ≥256 bytes so truncate cannot collide credentials vs CONNECT/config wire cap.</td></tr>
+</table>
+</div>
+
 
 
 

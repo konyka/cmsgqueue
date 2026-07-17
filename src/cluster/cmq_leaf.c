@@ -284,13 +284,17 @@ void cmq_leaf_destroy(cmq_leaf_node_t *leaf) {
 
 static int leaf_set_auth_impl(cmq_leaf_node_t *leaf, const char *user, const char *pass) {
     if (!leaf) return -1;
+    /* Align with CONNECT + config: wire caps creds at 255 bytes. */
+    if ((user && strnlen(user, sizeof(leaf->auth_user)) >= sizeof(leaf->auth_user)) ||
+        (pass && strnlen(pass, sizeof(leaf->auth_pass)) >= sizeof(leaf->auth_pass)))
+        return -1;
     cmq_mutex_lock(&leaf->lock);
     memset(leaf->auth_user, 0, sizeof(leaf->auth_user));
     memset(leaf->auth_pass, 0, sizeof(leaf->auth_pass));
     if (user && user[0])
-        strncpy(leaf->auth_user, user, sizeof(leaf->auth_user) - 1);
+        snprintf(leaf->auth_user, sizeof(leaf->auth_user), "%s", user);
     if (pass && pass[0])
-        strncpy(leaf->auth_pass, pass, sizeof(leaf->auth_pass) - 1);
+        snprintf(leaf->auth_pass, sizeof(leaf->auth_pass), "%s", pass);
     cmq_mutex_unlock(&leaf->lock);
     return 0;
 }
