@@ -9,6 +9,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdint.h>
+#include <stdatomic.h>
 
 #if CMQ_OS_LINUX
 #include <sys/epoll.h>
@@ -45,7 +47,26 @@ struct cmq_ev_loop {
     cmq_ev_timer_t timers[CMQ_EV_MAX_TIMERS];
     cmq_ev_tick_t post_tick;
     void *post_tick_data;
+    atomic_int in_flight; /* run/add/mod/del/timer vs destroy */
+    atomic_int dying;
 };
+
+static int ev_begin_op(cmq_ev_loop_t *loop) {
+    if (atomic_load_explicit(&loop->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&loop->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&loop->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&loop->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void ev_end_op(cmq_ev_loop_t *loop) {
+    atomic_fetch_sub_explicit(&loop->in_flight, 1, memory_order_acq_rel);
+}
+
+void cmq_ev_stop(cmq_ev_loop_t *loop);
 
 static uint64_t cmq_ev_now_ms(void) {
     struct timespec ts;
@@ -91,6 +112,8 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
     }
 
     cmq_atomic_store_int(&loop->running, 0, CMQ_ATOMIC_RELAXED);
+    atomic_init(&loop->in_flight, 0);
+    atomic_init(&loop->dying, 0);
     loop->next_timer_id = 1;
 
 #if CMQ_OS_LINUX
@@ -151,6 +174,12 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
 
 void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
     if (!loop) return;
+    atomic_store_explicit(&loop->dying, 1, memory_order_release);
+    cmq_ev_stop(loop);
+    while (atomic_load_explicit(&loop->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     if (loop->wakeup_fd >= 0) close(loop->wakeup_fd);
     if (loop->wakeup_wfd >= 0 && loop->wakeup_wfd != loop->wakeup_fd)
         close(loop->wakeup_wfd);
@@ -218,7 +247,8 @@ static int epoll_to_cmq_events(int ep) {
 
 int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *data) {
     if (!loop || fd < 0) return -1;
-    if (cmq_ev_ensure_watcher(loop, fd) != 0) return -1;
+    if (ev_begin_op(loop) != 0) return -1;
+    if (cmq_ev_ensure_watcher(loop, fd) != 0) { ev_end_op(loop); return -1; }
 
     /* Publish before epoll_ctl so a racing wait never sees cb==NULL. */
     watcher_publish(loop, fd, events, cb, data);
@@ -232,19 +262,23 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
         /* Stale epoll entry after a failed DEL + fd reuse — clear and retry. */
         if (errno != EEXIST) {
             watcher_clear(loop, fd);
+            ev_end_op(loop);
             return -1;
         }
         (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
         if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
             watcher_clear(loop, fd);
+            ev_end_op(loop);
             return -1;
         }
     }
+    ev_end_op(loop);
     return 0;
 }
 
 int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *data) {
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
+    if (ev_begin_op(loop) != 0) return -1;
 
     /* Publish before epoll_ctl so a racing wait never sees stale cb/data. */
     watcher_publish(loop, fd, events, cb, data);
@@ -262,30 +296,40 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
                ev_del (!present) cannot leave a silent epoll entry behind. */
             (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
             watcher_clear(loop, fd);
+            ev_end_op(loop);
             return -1;
         }
     }
+    ev_end_op(loop);
     return 0;
 }
 
 int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
+    if (ev_begin_op(loop) != 0) return -1;
     cmq_mutex_lock(&loop->watchers_lock);
     int present = (loop->watchers[fd].fd >= 0);
     cmq_mutex_unlock(&loop->watchers_lock);
-    if (!present) return -1;
+    if (!present) {
+        ev_end_op(loop);
+        return -1;
+    }
 
     /* Clear before DEL so wait cannot dispatch after teardown begins. */
     watcher_clear(loop, fd);
 
     if (epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL) != 0 &&
-        errno != ENOENT)
+        errno != ENOENT) {
+        ev_end_op(loop);
         return -1;
+    }
+    ev_end_op(loop);
     return 0;
 }
 
 int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
     if (!loop) return -1;
+    if (ev_begin_op(loop) != 0) return -1;
     cmq_atomic_store_int(&loop->running, 1, CMQ_ATOMIC_RELEASE);
 
     struct epoll_event events[CMQ_EV_MAX_EVENTS];
@@ -306,6 +350,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         int nfds = epoll_wait(loop->backend_fd, events, CMQ_EV_MAX_EVENTS, wait_ms);
         if (nfds < 0) {
             if (errno == EINTR) continue;
+            ev_end_op(loop);
             return -1;
         }
 
@@ -332,7 +377,10 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
                 if (t->cb) t->cb(t->timer_id, CMQ_EV_TIMER, t->data);
                 /* Callback may have called timer_del — only reschedule if live. */
                 if (t->active && t->repeat) {
-                    t->expire_ms = now + t->interval_ms;
+                    if (t->interval_ms > UINT64_MAX - now)
+                        t->expire_ms = UINT64_MAX;
+                    else
+                        t->expire_ms = now + t->interval_ms;
                 } else if (t->active) {
                     t->active = 0;
                 }
@@ -343,6 +391,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         if (timeout_ms >= 0) break;
     }
+    ev_end_op(loop);
     return 0;
 }
 
@@ -369,18 +418,22 @@ static int kqueue_add_filters(int kq, int fd, int events) {
 
 int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *data) {
     if (!loop || fd < 0) return -1;
-    if (cmq_ev_ensure_watcher(loop, fd) != 0) return -1;
+    if (ev_begin_op(loop) != 0) return -1;
+    if (cmq_ev_ensure_watcher(loop, fd) != 0) { ev_end_op(loop); return -1; }
 
     watcher_publish(loop, fd, events, cb, data);
     if (kqueue_add_filters(loop->backend_fd, fd, events) != 0) {
         watcher_clear(loop, fd);
+        ev_end_op(loop);
         return -1;
     }
+    ev_end_op(loop);
     return 0;
 }
 
 int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *data) {
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
+    if (ev_begin_op(loop) != 0) return -1;
 
     cmq_mutex_lock(&loop->watchers_lock);
     int old_events = loop->watchers[fd].events;
@@ -403,18 +456,24 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
         if (old_events != 0)
             (void)kqueue_add_filters(loop->backend_fd, fd, old_events);
         watcher_publish(loop, fd, old_events, cb, data);
+        ev_end_op(loop);
         return -1;
     }
+    ev_end_op(loop);
     return 0;
 }
 
 int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
+    if (ev_begin_op(loop) != 0) return -1;
     cmq_mutex_lock(&loop->watchers_lock);
     int present = (loop->watchers[fd].fd >= 0);
     int old_events = loop->watchers[fd].events;
     cmq_mutex_unlock(&loop->watchers_lock);
-    if (!present) return -1;
+    if (!present) {
+        ev_end_op(loop);
+        return -1;
+    }
 
     watcher_clear(loop, fd);
 
@@ -425,13 +484,17 @@ int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
     if (old_events & CMQ_EV_WRITE)
         EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
     if (n > 0 && kevent(loop->backend_fd, ev, n, NULL, 0, NULL) != 0 &&
-        errno != ENOENT)
+        errno != ENOENT) {
+        ev_end_op(loop);
         return -1;
+    }
+    ev_end_op(loop);
     return 0;
 }
 
 int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
     if (!loop) return -1;
+    if (ev_begin_op(loop) != 0) return -1;
     cmq_atomic_store_int(&loop->running, 1, CMQ_ATOMIC_RELEASE);
 
     struct kevent events[CMQ_EV_MAX_EVENTS];
@@ -460,6 +523,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         int nfds = kevent(loop->backend_fd, NULL, 0, events, CMQ_EV_MAX_EVENTS, tsp);
         if (nfds < 0) {
             if (errno == EINTR) continue;
+            ev_end_op(loop);
             return -1;
         }
 
@@ -485,7 +549,10 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             if (t->expire_ms <= now) {
                 if (t->cb) t->cb(t->timer_id, CMQ_EV_TIMER, t->data);
                 if (t->active && t->repeat) {
-                    t->expire_ms = now + t->interval_ms;
+                    if (t->interval_ms > UINT64_MAX - now)
+                        t->expire_ms = UINT64_MAX;
+                    else
+                        t->expire_ms = now + t->interval_ms;
                 } else if (t->active) {
                     t->active = 0;
                 }
@@ -496,6 +563,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         if (timeout_ms >= 0) break;
     }
+    ev_end_op(loop);
     return 0;
 }
 
@@ -510,33 +578,43 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) { (void)loop;(void)timeout_m
 
 int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_ms, cmq_ev_cb_t cb, void *data) {
     if (!loop) return -1;
+    if (ev_begin_op(loop) != 0) return -1;
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         if (!loop->timers[i].active) {
             uint64_t now = cmq_ev_now_ms();
             loop->timers[i].timer_id = loop->next_timer_id++;
-            loop->timers[i].expire_ms = now + delay_ms;
+            if (delay_ms > UINT64_MAX - now)
+                loop->timers[i].expire_ms = UINT64_MAX;
+            else
+                loop->timers[i].expire_ms = now + delay_ms;
             loop->timers[i].interval_ms = interval_ms;
             loop->timers[i].cb = cb;
             loop->timers[i].data = data;
             loop->timers[i].repeat = (interval_ms > 0) ? 1 : 0;
             loop->timers[i].active = 1;
-            return loop->timers[i].timer_id;
+            int tid = loop->timers[i].timer_id;
+            ev_end_op(loop);
+            return tid;
         }
     }
+    ev_end_op(loop);
     return -1;
 }
 
 int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
     if (!loop) return -1;
+    if (ev_begin_op(loop) != 0) return -1;
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         if (loop->timers[i].active && loop->timers[i].timer_id == timer_id) {
             loop->timers[i].active = 0;
             loop->timers[i].repeat = 0;
             loop->timers[i].cb = NULL;
             loop->timers[i].data = NULL;
+            ev_end_op(loop);
             return 0;
         }
     }
+    ev_end_op(loop);
     return -1;
 }
 

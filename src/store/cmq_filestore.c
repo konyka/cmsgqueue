@@ -16,6 +16,8 @@
 #include <errno.h>
 #include <stdint.h>
 #include <fcntl.h>
+#include <stdatomic.h>
+#include <time.h>
 
 #define CMQ_FS_MAGIC   0xCF510u
 #define CMQ_FS_VERSION 1
@@ -30,7 +32,24 @@ struct cmq_filestore {
     FILE *idx_fp;
     uint64_t next_seq;
     cmq_mutex_t lock;
+    atomic_int in_flight;
+    atomic_int dying;
 };
+
+static int fs_begin_op(cmq_filestore_t *fs) {
+    if (atomic_load_explicit(&fs->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&fs->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&fs->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&fs->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void fs_end_op(cmq_filestore_t *fs) {
+    atomic_fetch_sub_explicit(&fs->in_flight, 1, memory_order_acq_rel);
+}
 
 static uint32_t crc32_update(uint32_t crc, const uint8_t *data, size_t len) {
     for (size_t i = 0; i < len; i++) {
@@ -323,6 +342,8 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     if (!fs) return NULL;
     strncpy(fs->dir, dir, sizeof(fs->dir) - 1);
     strncpy(fs->prefix, prefix, sizeof(fs->prefix) - 1);
+    atomic_init(&fs->in_flight, 0);
+    atomic_init(&fs->dying, 0);
     cmq_mutex_init(&fs->lock);
     int dlen = snprintf(fs->data_path, sizeof(fs->data_path), "%s/%s.data",
                         fs->dir, fs->prefix);
@@ -370,6 +391,11 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
 
 void cmq_filestore_destroy(cmq_filestore_t *fs) {
     if (!fs) return;
+    atomic_store_explicit(&fs->dying, 1, memory_order_release);
+    while (atomic_load_explicit(&fs->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     /* Hold lock so concurrent append/get cannot use FILE* mid-fclose. */
     cmq_mutex_lock(&fs->lock);
     if (fs->data_fp) {
@@ -385,7 +411,7 @@ void cmq_filestore_destroy(cmq_filestore_t *fs) {
     free(fs);
 }
 
-int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
+static int filestore_append_impl(cmq_filestore_t *fs, const uint8_t *data, size_t len,
                           uint64_t *out_seq) {
     if (!fs || !data || len == 0 || len > (16u * 1024 * 1024)) return -1;
     cmq_mutex_lock(&fs->lock);
@@ -502,7 +528,7 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     return 0;
 }
 
-int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
+static int filestore_read_impl(cmq_filestore_t *fs, uint64_t seq,
                         uint8_t **out_data, size_t *out_len) {
     if (!fs || !out_data || !out_len || seq == 0) return -1;
     cmq_mutex_lock(&fs->lock);
@@ -592,7 +618,7 @@ fail:
     return -1;
 }
 
-uint64_t cmq_filestore_last_seq(cmq_filestore_t *fs) {
+static uint64_t filestore_last_seq_impl(cmq_filestore_t *fs) {
     if (!fs) return 0;
     cmq_mutex_lock(&fs->lock);
     uint64_t last = 0;
@@ -609,7 +635,7 @@ uint64_t cmq_filestore_last_seq(cmq_filestore_t *fs) {
     return last;
 }
 
-int cmq_filestore_sync(cmq_filestore_t *fs) {
+static int filestore_sync_impl(cmq_filestore_t *fs) {
     if (!fs) return -1;
     cmq_mutex_lock(&fs->lock);
     if (!fs->data_fp || fs_lock_pair(fs, LOCK_EX) != 0) {
@@ -629,3 +655,38 @@ int cmq_filestore_sync(cmq_filestore_t *fs) {
     cmq_mutex_unlock(&fs->lock);
     return rc;
 }
+
+int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
+                          uint64_t *out_seq) {
+    if (!fs || !data || len == 0) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_append_impl(fs, data, len, out_seq);
+    fs_end_op(fs);
+    return rc;
+}
+
+int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
+                        uint8_t **out_data, size_t *out_len) {
+    if (!fs) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_read_impl(fs, seq, out_data, out_len);
+    fs_end_op(fs);
+    return rc;
+}
+
+uint64_t cmq_filestore_last_seq(cmq_filestore_t *fs) {
+    if (!fs) return 0;
+    if (fs_begin_op(fs) != 0) return 0;
+    uint64_t s = filestore_last_seq_impl(fs);
+    fs_end_op(fs);
+    return s;
+}
+
+int cmq_filestore_sync(cmq_filestore_t *fs) {
+    if (!fs) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_sync_impl(fs);
+    fs_end_op(fs);
+    return rc;
+}
+

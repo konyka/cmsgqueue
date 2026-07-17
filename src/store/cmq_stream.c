@@ -75,7 +75,9 @@ void cmq_stream_destroy(cmq_stream_t *stream) {
 }
 
 const char *cmq_stream_name(cmq_stream_t *stream) {
-    return stream ? stream->name : NULL;
+    if (!stream || atomic_load_explicit(&stream->dying, memory_order_acquire))
+        return NULL;
+    return stream->name;
 }
 
 static uint64_t stream_append_impl(cmq_stream_t *stream, const uint8_t *data, size_t len) {

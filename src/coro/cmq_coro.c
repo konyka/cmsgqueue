@@ -2,6 +2,7 @@
 #include "cmq_coro.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 static void cmq_coro_trampoline(void);
 
@@ -16,7 +17,10 @@ static void cmq_coro_set_current(cmq_coro_t *coro) {
 }
 
 cmq_coro_t *cmq_coro_create(cmq_coro_func_t func, void *arg, size_t stack_size) {
+    /* Cap stack so base+size cannot wrap; keep room for initial frame. */
+    enum { CMQ_CORO_STACK_MAX = 8 * 1024 * 1024 };
     if (stack_size < 4096) stack_size = 4096;
+    if (stack_size > (size_t)CMQ_CORO_STACK_MAX) return NULL;
 
     cmq_coro_t *coro = (cmq_coro_t *)malloc(sizeof(cmq_coro_t));
     if (!coro) return NULL;
@@ -34,9 +38,20 @@ cmq_coro_t *cmq_coro_create(cmq_coro_func_t func, void *arg, size_t stack_size) 
     }
     coro->stack_base = stack_base;
 
-    uintptr_t end = (uintptr_t)stack_base + stack_size;
+    uintptr_t base = (uintptr_t)stack_base;
+    if (stack_size > UINTPTR_MAX - base || stack_size < 64) {
+        free(stack_base);
+        free(coro);
+        return NULL;
+    }
+    uintptr_t end = base + stack_size;
     uintptr_t *sp = (uintptr_t *)(end - 56);
     sp = (uintptr_t *)((uintptr_t)sp & ~(uintptr_t)0xF);
+    if ((uintptr_t)sp < base || (uintptr_t)(sp + 7) > end) {
+        free(stack_base);
+        free(coro);
+        return NULL;
+    }
 
     for (int i = 0; i < 6; ++i) sp[i] = 0;
     sp[6] = (uintptr_t)cmq_coro_trampoline;
