@@ -4921,6 +4921,7 @@ static void client_read_cb(int fd, int events, void *data) {
                         int rc = cmq_parser_feed(c->parser, c->ws_msg_buf,
                                                   c->ws_msg_len);
                         if (rc < 0) { client_teardown(c); return; }
+                        int feed_rc = rc;
                         while (rc == 1) {
                             const cmq_frame_t *frame = cmq_parser_frame(c->parser);
                             if (frame) handle_frame(srv, c, frame);
@@ -4930,6 +4931,13 @@ static void client_read_cb(int fd, int events, void *data) {
                                 return;
                             }
                             rc = cmq_parser_next(c->parser);
+                        }
+                        /* Mid-stream fatal after partial queue — do not keep
+                           a poisoned inbuf sticky until keepalive. */
+                        if (feed_rc == 1 &&
+                            cmq_parser_pending_error(c->parser)) {
+                            client_teardown(c);
+                            return;
                         }
                     }
                     c->ws_msg_len = 0;
@@ -4955,6 +4963,7 @@ static void client_read_cb(int fd, int events, void *data) {
         return;
     }
 
+    int feed_rc = rc;
     while (rc == 1) {
         const cmq_frame_t *frame = cmq_parser_frame(c->parser);
         if (frame) {
@@ -4965,6 +4974,11 @@ static void client_read_cb(int fd, int events, void *data) {
             return;
         }
         rc = cmq_parser_next(c->parser);
+    }
+    /* Mid-stream fatal after partial queue — do not keep a poisoned inbuf. */
+    if (feed_rc == 1 && cmq_parser_pending_error(c->parser)) {
+        client_teardown(c);
+        return;
     }
 }
 

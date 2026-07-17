@@ -306,6 +306,7 @@ TEST(parser, good_then_bad_magic) {
     buf[n + 2] = 0x01;
     buf[n + 3] = 0x00;
     ASSERT_EQ(cmq_parser_feed(p, buf, n + 4), 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 1);
     const cmq_frame_t *f = cmq_parser_frame(p);
     ASSERT(f != NULL);
     ASSERT_EQ(f->hdr.op, CMQ_OP_PING);

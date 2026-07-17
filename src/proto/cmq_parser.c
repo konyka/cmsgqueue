@@ -29,6 +29,7 @@ struct cmq_parser {
     size_t queued_bytes;            /* sum of queued payload lengths */
 
     size_t max_payload;             /* per-connection payload cap */
+    int pending_error;              /* fatal after partial queue — drain then die */
 };
 
 #define CMQ_MAX_PAYLOAD (16 * 1024 * 1024) /* 16 MB application body ceiling */
@@ -40,7 +41,7 @@ struct cmq_parser {
 #define CMQ_PARSER_QUEUED_BYTES_FACTOR 2
 
 static cmq_frame_node_t *cmq_push_frame(cmq_parser_t *p, cmq_frame_t *frame) {
-    if (p->queued >= CMQ_PARSER_FRAME_QUEUE_MAX) return NULL;
+    if (p->queued >= CMQ_PARSER_FRAME_QUEUE_MAX) return NULL; /* backpressure */
     size_t budget = p->max_payload;
     if (budget <= SIZE_MAX / CMQ_PARSER_QUEUED_BYTES_FACTOR)
         budget *= CMQ_PARSER_QUEUED_BYTES_FACTOR;
@@ -48,9 +49,12 @@ static cmq_frame_node_t *cmq_push_frame(cmq_parser_t *p, cmq_frame_t *frame) {
         budget = SIZE_MAX;
     if (p->queued_bytes > budget ||
         frame->payload_len > budget - p->queued_bytes)
-        return NULL;
+        return NULL; /* backpressure */
     cmq_frame_node_t *node = (cmq_frame_node_t *)malloc(sizeof(*node));
-    if (!node) return NULL;
+    if (!node) {
+        p->pending_error = 1; /* OOM is fatal — not retryable backpressure */
+        return NULL;
+    }
     node->frame = *frame;
     node->next = NULL;
     if (!p->head) {
@@ -79,6 +83,7 @@ cmq_parser_t *cmq_parser_create(void) {
     p->queued = 0;
     p->queued_bytes = 0;
     p->max_payload = CMQ_MAX_PAYLOAD;
+    p->pending_error = 0;
     return p;
 }
 
@@ -122,6 +127,7 @@ void cmq_parser_reset(cmq_parser_t *p) {
     p->head = p->tail = NULL;
     p->queued = 0;
     p->queued_bytes = 0;
+    p->pending_error = 0;
     /* reset inbuf */
     if (p->inbuf) {
         free(p->inbuf);
@@ -191,9 +197,11 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
         /* Align queue-full: keep already-queued frames when trailing bytes
            are corrupt / oversize / OOM (caller drains then tears down). */
         if (hb[0] != CMQ_PROTO_MAGIC_0 || hb[1] != CMQ_PROTO_MAGIC_1) {
+            p->pending_error = 1;
             return produced ? 1 : -1;
         }
         if (hb[2] != CMQ_PROTO_VERSION) {
+            p->pending_error = 1;
             return produced ? 1 : -1;
         }
 
@@ -201,6 +209,7 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
                                ((uint32_t)hb[7] << 16) | ((uint32_t)hb[8] << 24);
 
         if (payload_len > p->max_payload) {
+            p->pending_error = 1;
             return produced ? 1 : -1;
         }
 
@@ -220,6 +229,7 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
         if (payload_len > 0) {
             frame.payload = (uint8_t *)malloc(payload_len);
             if (!frame.payload) {
+                p->pending_error = 1;
                 return produced ? 1 : -1;
             }
             memcpy(frame.payload, hb + CMQ_HEADER_LEN, payload_len);
@@ -229,12 +239,23 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
 
         if (!cmq_push_frame(p, &frame)) {
             if (frame.payload) free(frame.payload);
-            /* Keep already-queued frames for the caller to drain. */
+            /* Keep already-queued frames for the caller to drain.
+               pending_error set only on push OOM (not queue-full). */
             return produced ? 1 : -1;
         }
 
         p->inbuf_off += total;
         produced = 1;
+    }
+
+    /* Trailing junk shorter than a full header still poisons the stream. */
+    if (p->inbuf_len - p->inbuf_off >= 3) {
+        const uint8_t *peek = p->inbuf + p->inbuf_off;
+        if (peek[0] != CMQ_PROTO_MAGIC_0 || peek[1] != CMQ_PROTO_MAGIC_1 ||
+            peek[2] != CMQ_PROTO_VERSION) {
+            p->pending_error = 1;
+            return produced ? 1 : -1;
+        }
     }
 
     /* Opportunistic compact when offset grows large. */
@@ -248,6 +269,10 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
     }
 
     return produced ? 1 : 0;
+}
+
+int cmq_parser_pending_error(const cmq_parser_t *p) {
+    return (p && p->pending_error) ? 1 : 0;
 }
 
 const cmq_frame_t *cmq_parser_frame(cmq_parser_t *p) {

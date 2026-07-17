@@ -25,6 +25,9 @@ void cmq_parser_set_max_payload(cmq_parser_t *p, size_t max_payload);
 int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len);
 const cmq_frame_t *cmq_parser_frame(cmq_parser_t *p);
 int cmq_parser_next(cmq_parser_t *p);
+/* 1 if feed hit a fatal mid-stream error after queuing (caller should
+   drain then tear down). 0 for normal / queue-full backpressure. */
+int cmq_parser_pending_error(const cmq_parser_t *p);
 
 size_t cmq_frame_encode(uint8_t *buf, size_t buf_size, cmq_op_t op, cmq_u8_t flags, const uint8_t *payload, size_t payload_len);
 
