@@ -4,6 +4,7 @@
 #include "cmq_proto.h"
 #include "cmq_thread.h"
 #include "cmq_types.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -188,10 +189,19 @@ typedef struct {
     int active;
 } cmq_route_interest_t;
 
+/* Desired outbound endpoint per node_id (gateway clusters[] analogue). */
+typedef struct {
+    char node_id[CMQ_NODE_ID_SIZE];
+    char addr[CMQ_NODE_ADDR_SIZE];
+    int port;
+} cmq_route_target_t;
+
 struct cmq_route_pool {
     cmq_cluster_t *cluster;
     cmq_route_conn_t conns[CMQ_ROUTE_MAX_CONNS];
     size_t conn_count;
+    cmq_route_target_t targets[CMQ_ROUTE_MAX_CONNS];
+    size_t target_count;
     cmq_route_interest_t interests[256];
     size_t interest_count;
     cmq_mutex_t lock;
@@ -280,6 +290,58 @@ static int route_ep_same(const char *slot_addr, int slot_port,
            strncmp(slot_addr, addr, CMQ_NODE_ADDR_SIZE) == 0;
 }
 
+/* Caller holds pool->lock. True if node_id still maps to addr:port
+   (connect may have rewritten the target while dial was unlocked). */
+static int route_endpoint_current(cmq_route_pool_t *pool, const char *node_id,
+                                  const char *addr, int port) {
+    if (!pool || !node_id || !addr) return 0;
+    for (size_t i = 0; i < pool->target_count; i++) {
+        if (strcmp(pool->targets[i].node_id, node_id) == 0)
+            return pool->targets[i].port == port &&
+                   strncmp(pool->targets[i].addr, addr, CMQ_NODE_ADDR_SIZE) == 0;
+    }
+    return 0;
+}
+
+/* Caller holds pool->lock. Publish desired endpoint; on change, drop
+   outbound peers stuck on the old addr (keep inbound empty-addr slots). */
+static int route_set_target(cmq_route_pool_t *pool, const char *node_id,
+                            const char *addr, int port) {
+    if (!pool || !node_id || !addr) return -1;
+    for (size_t i = 0; i < pool->target_count; i++) {
+        if (strcmp(pool->targets[i].node_id, node_id) != 0) continue;
+        int changed = (pool->targets[i].port != port) ||
+                      (strcmp(pool->targets[i].addr, addr) != 0);
+        snprintf(pool->targets[i].addr, sizeof(pool->targets[i].addr),
+                 "%s", addr);
+        pool->targets[i].port = port;
+        if (changed) {
+            for (size_t j = 0; j < pool->conn_count; j++) {
+                char ep[CMQ_NODE_ADDR_SIZE];
+                int eport = 0;
+                cmq_mutex_lock(&pool->io_locks[j]);
+                int match = (strcmp(pool->conns[j].remote_id, node_id) == 0);
+                if (match) {
+                    memcpy(ep, pool->conns[j].remote_addr, CMQ_NODE_ADDR_SIZE);
+                    ep[CMQ_NODE_ADDR_SIZE - 1] = '\0';
+                    eport = pool->conns[j].remote_port;
+                }
+                cmq_mutex_unlock(&pool->io_locks[j]);
+                if (match && ep[0] != '\0' &&
+                    !route_ep_same(ep, eport, addr, port))
+                    route_slot_close(pool, j);
+            }
+        }
+        return 0;
+    }
+    if (pool->target_count >= CMQ_ROUTE_MAX_CONNS) return -1;
+    cmq_route_target_t *t = &pool->targets[pool->target_count++];
+    snprintf(t->node_id, sizeof(t->node_id), "%s", node_id);
+    snprintf(t->addr, sizeof(t->addr), "%s", addr);
+    t->port = port;
+    return 0;
+}
+
 /* Publish a peer into a slot. Caller holds pool->lock.
    connected=0 stages inbound until handshake is drained.
    addr may be NULL for inbound/placeholder (no endpoint sticky). */
@@ -288,9 +350,11 @@ static void route_slot_install(cmq_route_pool_t *pool, size_t idx,
                                 int connected, const char *addr, int port) {
     cmq_mutex_lock(&pool->io_locks[idx]);
     memset(&pool->conns[idx], 0, sizeof(pool->conns[idx]));
-    strncpy(pool->conns[idx].remote_id, node_id, CMQ_NODE_ID_SIZE - 1);
+    snprintf(pool->conns[idx].remote_id, sizeof(pool->conns[idx].remote_id),
+             "%s", node_id);
     if (addr && addr[0]) {
-        strncpy(pool->conns[idx].remote_addr, addr, CMQ_NODE_ADDR_SIZE - 1);
+        snprintf(pool->conns[idx].remote_addr,
+                 sizeof(pool->conns[idx].remote_addr), "%s", addr);
         pool->conns[idx].remote_port = port;
     }
     pool->conns[idx].fd = fd;
@@ -334,8 +398,14 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
                        const char *addr, int port,
                        const char *auth_user, const char *auth_pass) {
     if (!pool || !node_id || !addr) return -1;
+    if (strnlen(node_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE) return -1;
+    if (strnlen(addr, CMQ_NODE_ADDR_SIZE) >= CMQ_NODE_ADDR_SIZE) return -1;
 
     cmq_mutex_lock(&pool->lock);
+    if (route_set_target(pool, node_id, addr, port) != 0) {
+        cmq_mutex_unlock(&pool->lock);
+        return -1;
+    }
     for (size_t i = 0; i < pool->conn_count; i++) {
         cmq_mutex_lock(&pool->io_locks[i]);
         int match = (strcmp(pool->conns[i].remote_id, node_id) == 0);
@@ -451,6 +521,12 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
     set_nonblock(fd);
 
     cmq_mutex_lock(&pool->lock);
+    /* Target may have moved while dial/handshake ran unlocked. */
+    if (!route_endpoint_current(pool, node_id, addr, port)) {
+        cmq_mutex_unlock(&pool->lock);
+        close(fd);
+        return -1;
+    }
     for (size_t i = 0; i < pool->conn_count; i++) {
         char rid[CMQ_NODE_ID_SIZE];
         int efd = -1;
@@ -470,6 +546,11 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
             cmq_mutex_unlock(&pool->lock);
             int alive = route_fd_alive(efd) && same_ep;
             cmq_mutex_lock(&pool->lock);
+            if (!route_endpoint_current(pool, node_id, addr, port)) {
+                cmq_mutex_unlock(&pool->lock);
+                close(fd);
+                return -1;
+            }
             if (idx < pool->conn_count) {
                 char rid2[CMQ_NODE_ID_SIZE];
                 int f2 = -1;
@@ -487,6 +568,9 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
                         close(fd);
                         return 0;
                     }
+                    /* Dead peer: reclaim. Wrong-ep live peer: only reclaim when
+                       our dial is still the desired target (stale dials already
+                       failed route_endpoint_current above). */
                     if (!route_fd_alive(efd) ||
                         (ep2[0] != '\0' &&
                          !route_ep_same(ep2, eport2, addr, port)))
@@ -528,6 +612,11 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
             cmq_mutex_unlock(&pool->lock);
             int alive = route_fd_alive(efd);
             cmq_mutex_lock(&pool->lock);
+            if (!route_endpoint_current(pool, node_id, addr, port)) {
+                cmq_mutex_unlock(&pool->lock);
+                close(fd);
+                return -1;
+            }
             if (i >= pool->conn_count)
                 break;
             int f2 = -1, c2 = 0;
@@ -556,7 +645,14 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
 
 static int route_add_conn_impl(cmq_route_pool_t *pool, const char *node_id, int fd,
                         const char *auth_user, const char *auth_pass) {
-    if (!pool || !node_id) return -1;
+    if (!pool || !node_id) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
+    if (strnlen(node_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
 
     /* Reject pool-full before handshake so caller-owned fds are closed cleanly
        without blocking on a peer that will never be retained. */
@@ -774,6 +870,7 @@ static int route_add_conn_impl(cmq_route_pool_t *pool, const char *node_id, int 
 
 static int route_attach_inbound_impl(cmq_route_pool_t *pool, const char *node_id, int fd) {
     if (!pool || !node_id || fd < 0) return -1;
+    if (strnlen(node_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE) return -1;
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
         char rid[CMQ_NODE_ID_SIZE];
