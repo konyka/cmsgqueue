@@ -105,33 +105,44 @@ static uint64_t stream_append_impl(cmq_stream_t *stream, const uint8_t *data, si
         if (floor < retain_floor) retain_floor = floor;
     }
 
-    /* Guard wrap: total_bytes + len must not overflow before max_bytes check. */
-    if (stream->max_bytes > 0 &&
-        (len > SIZE_MAX - stream->total_bytes ||
-         stream->total_bytes + len > stream->max_bytes)) {
-        uint64_t first = cmq_store_first_seq(stream->store);
-        uint64_t last = cmq_store_last_seq(stream->store);
-        while (first <= last &&
-               (len > SIZE_MAX - stream->total_bytes ||
-                stream->total_bytes + len > stream->max_bytes)) {
-            if (first >= retain_floor)
-                break; /* unacked — refuse rather than drop */
-            size_t mlen = 0;
-            if (cmq_store_seq_len(stream->store, first, &mlen) != 0)
-                break; /* cannot account bytes — stop eviction */
-            if (cmq_store_evict_seq(stream->store, first) != 0)
-                break; /* leave total_bytes unchanged */
-            if (stream->total_bytes >= mlen)
-                stream->total_bytes -= mlen;
-            else
-                stream->total_bytes = 0;
-            first++;
-        }
-        if (len > SIZE_MAX - stream->total_bytes ||
-            stream->total_bytes + len > stream->max_bytes) {
-            free(copy);
-            cmq_mutex_unlock(&stream->lock);
-            return 0; /* refuse append — do not exceed max_bytes */
+    /* Guard wrap / saturation: never rely on wrapping total_bytes + len. */
+    if (stream->max_bytes > 0) {
+        int over = (stream->total_bytes >= stream->max_bytes) ||
+                   (stream->total_bytes >= SIZE_MAX) ||
+                   (len > SIZE_MAX - stream->total_bytes) ||
+                   (stream->total_bytes + len > stream->max_bytes);
+        if (over) {
+            uint64_t first = cmq_store_first_seq(stream->store);
+            uint64_t last = cmq_store_last_seq(stream->store);
+            while (first <= last) {
+                over = (stream->total_bytes >= stream->max_bytes) ||
+                       (stream->total_bytes >= SIZE_MAX) ||
+                       (len > SIZE_MAX - stream->total_bytes) ||
+                       (stream->total_bytes + len > stream->max_bytes);
+                if (!over)
+                    break;
+                if (first >= retain_floor)
+                    break; /* unacked — refuse rather than drop */
+                size_t mlen = 0;
+                if (cmq_store_seq_len(stream->store, first, &mlen) != 0)
+                    break; /* cannot account bytes — stop eviction */
+                if (cmq_store_evict_seq(stream->store, first) != 0)
+                    break; /* leave total_bytes unchanged */
+                if (stream->total_bytes >= mlen)
+                    stream->total_bytes -= mlen;
+                else
+                    stream->total_bytes = 0;
+                first++;
+            }
+            over = (stream->total_bytes >= stream->max_bytes) ||
+                   (stream->total_bytes >= SIZE_MAX) ||
+                   (len > SIZE_MAX - stream->total_bytes) ||
+                   (stream->total_bytes + len > stream->max_bytes);
+            if (over) {
+                free(copy);
+                cmq_mutex_unlock(&stream->lock);
+                return 0; /* refuse append — do not exceed max_bytes */
+            }
         }
     }
 

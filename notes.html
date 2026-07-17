@@ -3412,6 +3412,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf connect honesty · SUBACK undo · stream byte cap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf connect</span></td><td>✅</td><td>Return −1 if <code>hub_fd</code> was stolen after the last SUBACK so callers do not see a false success.</td></tr>
+<tr><td><span class="component-name">leaf SUB undo</span></td><td>✅</td><td>Reconnect abort UNSUBs the current index when write succeeded (align with <code>subscribe_impl</code>).</td></tr>
+<tr><td><span class="component-name">stream max_bytes</span></td><td>✅</td><td>Treat saturated <code>total_bytes</code> / at-cap as over-limit before any wrapping add.</td></tr>
+</table>
+</div>
+
 
 
 

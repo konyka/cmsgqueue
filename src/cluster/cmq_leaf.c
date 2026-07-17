@@ -574,10 +574,12 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         cmq_mutex_lock(&leaf->lock);
         still = (leaf->hub_fd == fd);
         cmq_mutex_unlock(&leaf->lock);
-        if (!still || flen == 0 || write_all(fd, frame, flen) != 0 ||
+        int wr = (still && flen > 0) ? write_all(fd, frame, flen) : -1;
+        if (!still || flen == 0 || wr != 0 ||
             read_suback(fd, sub_id) != 0) {
             /* Best-effort UNSUB for subjects already pushed this reconnect so
                hub does not keep interest that leaf will re-play on next connect.
+               Include index i when write may have landed (align subscribe_impl).
                Only if we still own hub_fd — otherwise disconnect already closed. */
             int own = 0;
             cmq_mutex_lock(&leaf->lock);
@@ -588,7 +590,8 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
             }
             cmq_mutex_unlock(&leaf->lock);
             if (own) {
-                for (size_t u = 0; u < i; u++) {
+                size_t undo = i + (wr == 0 ? 1u : 0u);
+                for (size_t u = 0; u < undo; u++) {
                     uint32_t uid = ids[u];
                     uint8_t upay[4] = {
                         (uint8_t)(uid >> 24), (uint8_t)(uid >> 16),
@@ -612,14 +615,16 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         cmq_mutex_lock(&leaf->hub_io_lock);
     }
     cmq_mutex_lock(&leaf->lock);
-    if (leaf->hub_fd == fd)
+    /* Disconnect may have stolen hub_fd after the last SUBACK — do not lie. */
+    int ok = (leaf->hub_fd == fd);
+    if (ok)
         leaf->connected = 1;
     cmq_mutex_unlock(&leaf->lock);
     cmq_mutex_unlock(&leaf->hub_io_lock);
     for (size_t j = 0; j < n; j++) free(subjects[j]);
     free(subjects);
     free(ids);
-    return 0;
+    return ok ? 0 : -1;
 }
 
 static int leaf_disconnect_impl(cmq_leaf_node_t *leaf) {
