@@ -1259,13 +1259,15 @@ static int route_peer_live_impl(cmq_route_pool_t *pool, const char *node_id) {
         cmq_mutex_unlock(&pool->io_locks[i]);
         if (!match) continue;
         if (!cand) return 0;
-        int alive = route_fd_alive(fd);
         cmq_mutex_lock(&pool->io_locks[i]);
         int still = (strcmp(pool->conns[i].remote_id, node_id) == 0 &&
                      pool->conns[i].fd == fd);
-        cmq_mutex_unlock(&pool->io_locks[i]);
-        if (alive && still)
+        /* Re-probe under io_lock — stale alive after unlock skips reconnect. */
+        if (still && route_fd_alive(fd)) {
+            cmq_mutex_unlock(&pool->io_locks[i]);
             return 1;
+        }
+        cmq_mutex_unlock(&pool->io_locks[i]);
         cmq_mutex_lock(&pool->lock);
         if (i < pool->conn_count) {
             char rid2[CMQ_NODE_ID_SIZE];

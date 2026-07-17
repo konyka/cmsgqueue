@@ -3597,6 +3597,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — fd_alive probe under lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf is_connected / connect</span></td><td>✅</td><td>Probe <code>leaf_fd_alive</code> while holding <code>leaf-&gt;lock</code> so TCP death between unlock and relock cannot sticky-report connected.</td></tr>
+<tr><td><span class="component-name">route peer_live</span></td><td>✅</td><td>Re-probe under <code>io_lock</code> after identity match; avoids stale alive skipping cluster reconnect.</td></tr>
+</table>
+</div>
+
 
 
 
