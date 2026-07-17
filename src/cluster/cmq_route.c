@@ -318,8 +318,9 @@ static int route_endpoint_current(cmq_route_pool_t *pool, const char *node_id,
     return 0;
 }
 
-/* Caller holds pool->lock. Publish desired endpoint; on change, drop
-   outbound peers stuck on the old addr (keep inbound empty-addr slots). */
+/* Caller holds pool->lock. Publish desired endpoint; on change, drop all
+   peers for node_id (including inbound empty-addr) so connect can dial the
+   new addr — otherwise sticky inbound blocks outbound forever. */
 static int route_set_target(cmq_route_pool_t *pool, const char *node_id,
                             const char *addr, int port) {
     if (!pool || !node_id || !addr) return -1;
@@ -332,18 +333,10 @@ static int route_set_target(cmq_route_pool_t *pool, const char *node_id,
         pool->targets[i].port = port;
         if (changed) {
             for (size_t j = 0; j < pool->conn_count; j++) {
-                char ep[CMQ_NODE_ADDR_SIZE];
-                int eport = 0;
                 cmq_mutex_lock(&pool->io_locks[j]);
                 int match = (strcmp(pool->conns[j].remote_id, node_id) == 0);
-                if (match) {
-                    memcpy(ep, pool->conns[j].remote_addr, CMQ_NODE_ADDR_SIZE);
-                    ep[CMQ_NODE_ADDR_SIZE - 1] = '\0';
-                    eport = pool->conns[j].remote_port;
-                }
                 cmq_mutex_unlock(&pool->io_locks[j]);
-                if (match && ep[0] != '\0' &&
-                    !route_ep_same(ep, eport, addr, port))
+                if (match)
                     route_slot_close(pool, j);
             }
         }

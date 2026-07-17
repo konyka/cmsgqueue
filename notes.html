@@ -3402,6 +3402,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — MQTT/route endpoint move · leaf pending merge</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">MQTT endpoint</span></td><td>✅</td><td>Addr/port change drops the old live fd before dial; post-dial sticky requires matching endpoint.</td></tr>
+<tr><td><span class="component-name">route set_target</span></td><td>✅</td><td>Endpoint change closes all slots for <code>node_id</code> (including inbound) so outbound can dial the new addr.</td></tr>
+<tr><td><span class="component-name">leaf pending_unsub</span></td><td>✅</td><td>Reconnect UNSUB rollback memmoves concurrent pendings instead of shrinking count and silently dropping ids.</td></tr>
+</table>
+</div>
+
 
 
 

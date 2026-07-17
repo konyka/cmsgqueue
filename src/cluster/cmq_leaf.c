@@ -512,13 +512,24 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         if (!still || ulen == 0 || write_all(fd, uframe, ulen) != 0) {
             int own = 0;
             cmq_mutex_lock(&leaf->lock);
-            /* Prefer remaining reconnect UNSUBs over newer offline pendings. */
+            /* Prefer remaining reconnect UNSUBs; keep newest concurrent that fit.
+               Never shrink count without memmove — that silently drops ids. */
             {
                 size_t need = pn - i;
                 if (need > CMQ_LEAF_MAX_SUBS)
                     need = CMQ_LEAF_MAX_SUBS;
-                if (leaf->pending_unsub_count + need > CMQ_LEAF_MAX_SUBS)
-                    leaf->pending_unsub_count = CMQ_LEAF_MAX_SUBS - need;
+                if (need >= CMQ_LEAF_MAX_SUBS) {
+                    leaf->pending_unsub_count = 0;
+                } else {
+                    size_t room = CMQ_LEAF_MAX_SUBS - need;
+                    if (leaf->pending_unsub_count > room) {
+                        size_t drop = leaf->pending_unsub_count - room;
+                        memmove(leaf->pending_unsub,
+                                leaf->pending_unsub + drop,
+                                room * sizeof(uint32_t));
+                        leaf->pending_unsub_count = room;
+                    }
+                }
                 for (size_t r = i; r < i + need; r++)
                     leaf->pending_unsub[leaf->pending_unsub_count++] =
                         pending[r];

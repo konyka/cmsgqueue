@@ -180,8 +180,11 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
             mqtt_end_op(br);
             return 0;
         }
-        /* Only drop still-dead probed fd — fd recycle must not kill a new peer. */
-        if (br->fd == efd && !mqtt_fd_alive(efd))
+        /* Dead peer or endpoint move — drop before dialing the new broker.
+           fd recycle must not kill a peer that replaced efd under the lock. */
+        if (br->fd == efd &&
+            (ep != port || strncmp(ea, addr, sizeof(ea)) != 0 ||
+             !mqtt_fd_alive(efd)))
             mqtt_disconnect_unlocked(br);
     }
     int keepalive_ms = br->keepalive_ms;
@@ -232,7 +235,9 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
         /* Probe — a dead sticky peer must not win over this fresh dial. */
         int alive = mqtt_fd_alive(efd);
         cmq_mutex_lock(&br->lock);
-        if (alive && br->connected && br->fd == efd) {
+        /* Sticky only if the live peer is already the requested endpoint. */
+        if (alive && br->connected && br->fd == efd && br->port == port &&
+            strncmp(br->addr, addr, sizeof(br->addr)) == 0) {
             cmq_mutex_unlock(&br->lock);
             close(fd);
             mqtt_end_op(br);
