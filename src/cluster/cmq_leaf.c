@@ -379,7 +379,8 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         }
     }
     leaf->hub_fd = fd;
-    leaf->connected = 1;
+    /* connected=1 only after hub SUB replay — is_connected must not race. */
+    leaf->connected = 0;
     /* Flush offline UNSUBs before replaying live interest. */
     size_t pn = leaf->pending_unsub_count;
     uint32_t *pending = NULL;
@@ -531,6 +532,10 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
             return -1;
         }
     }
+    cmq_mutex_lock(&leaf->lock);
+    if (leaf->hub_fd == fd)
+        leaf->connected = 1;
+    cmq_mutex_unlock(&leaf->lock);
     cmq_mutex_unlock(&leaf->hub_io_lock);
     for (size_t j = 0; j < n; j++) free(subjects[j]);
     free(subjects);

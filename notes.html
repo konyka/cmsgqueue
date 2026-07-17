@@ -2964,6 +2964,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST wait drain mailbox · leaf connected after replay</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cross-worker REQUEST</span></td><td>✅</td><td>Wait loop drains own SEND mailbox (breaks A↔B deadlock); refreshes activity.</td></tr>
+<tr><td><span class="component-name">leaf connect</span></td><td>✅</td><td><code>connected=1</code> only after hub SUB/UNSUB replay completes.</td></tr>
+</table>
+</div>
+
 
 
 

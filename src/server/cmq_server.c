@@ -340,6 +340,135 @@ static int message_frame_subject(const uint8_t *buf, size_t len,
     return 0;
 }
 
+/* Deliver one SEND mailbox message (caller frees msg after). */
+static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
+    cmq_mutex_lock(&w->clients_lock);
+    cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
+    /* Owning worker thread: validate under lock, send after unlock so
+       keepalive/teardown scans are not blocked on slow consumers. */
+    int finish_dead = 0;
+    int do_send = 0;
+    if (target && target->conn_gen == msg->target_gen &&
+        target->state != CMQ_CLIENT_CLOSED &&
+        target->state != CMQ_CLIENT_CLOSING) {
+        if (!client_account_live(w->server, target)) {
+            target->state = CMQ_CLIENT_CLOSING;
+            finish_dead = 1;
+            if (w->server)
+                cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                          CMQ_ATOMIC_RELAXED);
+        } else if (msg->require_sub_id == 0 ||
+                   client_has_sub(target, msg->require_sub_id)) {
+            do_send = 1;
+        } else if (w->server) {
+            cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        }
+    } else if (w->server) {
+        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                  CMQ_ATOMIC_RELAXED);
+    }
+    cmq_mutex_unlock(&w->clients_lock);
+    int sync_ok = 0;
+    if (do_send && target) {
+        if (!client_account_live(w->server, target)) {
+            cmq_mutex_lock(&w->clients_lock);
+            if (target->conn_gen == msg->target_gen &&
+                target->state != CMQ_CLIENT_CLOSED &&
+                target->state != CMQ_CLIENT_CLOSING)
+                target->state = CMQ_CLIENT_CLOSING;
+            cmq_mutex_unlock(&w->clients_lock);
+            finish_dead = 1;
+            if (w->server)
+                cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                          CMQ_ATOMIC_RELAXED);
+        } else {
+            int acl_deny = 0;
+            if (msg->pub_account[0] != '\0' && w->server &&
+                w->server->accounts) {
+                char subj[CMQ_MAX_SUBJECT];
+                if (message_frame_subject(msg->buf, msg->len, subj,
+                                           sizeof(subj)) != 0 ||
+                    !cmq_account_may_deliver(w->server->accounts,
+                                              msg->pub_account,
+                                              target->account_name, subj))
+                    acl_deny = 1;
+            }
+            if (acl_deny) {
+                if (w->server)
+                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                              CMQ_ATOMIC_RELAXED);
+            } else if (cmq_client_send_local(target, msg->buf, msg->len) != 0) {
+                if (w->server)
+                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                              CMQ_ATOMIC_RELAXED);
+            } else if (msg->drain_sync &&
+                       client_drain_write_sync(target) != 0) {
+                if (w->server)
+                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
+                                              CMQ_ATOMIC_RELAXED);
+            } else {
+                sync_ok = 1;
+                if (msg->credit_out && w->server) {
+                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_out, 1,
+                                              CMQ_ATOMIC_RELAXED);
+                    if (msg->account_name[0] != '\0') {
+                        cmq_account_t *oacc =
+                            cmq_account_get(w->server->accounts,
+                                             msg->account_name, NULL);
+                        if (oacc)
+                            cmq_account_inc_msgs_out(
+                                oacc, msg->account_epoch,
+                                (uint64_t)msg->payload_bytes);
+                    }
+                }
+            }
+        }
+    }
+    if (msg->sync_result)
+        __atomic_store_n(msg->sync_result, sync_ok ? 1 : -1, __ATOMIC_RELEASE);
+    if (finish_dead && target)
+        client_finish_closing(target);
+    free(msg->buf);
+    free(msg);
+}
+
+/* Pop next SEND (skip TEARDOWN left in queue). Used to break AB REQUEST waits. */
+static cmq_worker_msg_t *worker_pop_send(cmq_worker_t *w) {
+    cmq_mutex_lock(&w->msg_lock);
+    cmq_worker_msg_t **pp = &w->msg_head;
+    cmq_worker_msg_t *prev = NULL;
+    while (*pp) {
+        cmq_worker_msg_t *m = *pp;
+        if (m->kind == CMQ_WORKER_MSG_TEARDOWN) {
+            prev = m;
+            pp = &m->next;
+            continue;
+        }
+        *pp = m->next;
+        if (w->msg_tail == m)
+            w->msg_tail = prev;
+        if (w->msg_pending > 0)
+            w->msg_pending--;
+        m->next = NULL;
+        if (!w->msg_head)
+            w->msg_tail = NULL;
+        cmq_mutex_unlock(&w->msg_lock);
+        return m;
+    }
+    cmq_mutex_unlock(&w->msg_lock);
+    return NULL;
+}
+
+static void worker_drain_sends(cmq_worker_t *w, int max_n) {
+    if (!w || max_n <= 0) return;
+    for (int i = 0; i < max_n; i++) {
+        cmq_worker_msg_t *m = worker_pop_send(w);
+        if (!m) break;
+        worker_deliver_send_msg(w, m);
+    }
+}
+
 static void worker_wakeup_cb(int fd, int events, void *data) {
     (void)events;
     cmq_worker_t *w = (cmq_worker_t *)data;
@@ -378,7 +507,6 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                 cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
                 cmq_mutex_unlock(&w->clients_lock);
                 if (target && target->conn_gen == msg->target_gen) {
-                    /* Flush pending DISCONNECT/ERROR before closing the fd. */
                     if (target->state != CMQ_CLIENT_CLOSED &&
                         target->state != CMQ_CLIENT_CLOSING)
                         target->state = CMQ_CLIENT_CLOSING;
@@ -388,108 +516,7 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                 msg = next;
                 continue;
             }
-
-            cmq_mutex_lock(&w->clients_lock);
-            cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
-            /* Owning worker thread: validate under lock, send after unlock so
-               keepalive/teardown scans are not blocked on slow consumers. */
-            int finish_dead = 0;
-            int do_send = 0;
-            if (target && target->conn_gen == msg->target_gen &&
-                target->state != CMQ_CLIENT_CLOSED &&
-                target->state != CMQ_CLIENT_CLOSING) {
-                if (!client_account_live(w->server, target)) {
-                    /* Soft-delete/reactivate: stop inbound delivery to stale epoch. */
-                    target->state = CMQ_CLIENT_CLOSING;
-                    finish_dead = 1;
-                    if (w->server)
-                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                                  CMQ_ATOMIC_RELAXED);
-                } else if (msg->require_sub_id == 0 ||
-                           client_has_sub(target, msg->require_sub_id)) {
-                    do_send = 1;
-                } else if (w->server) {
-                    /* Queued while subscribed; drain after unsub — count as drop. */
-                    cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                              CMQ_ATOMIC_RELAXED);
-                }
-            } else if (w->server) {
-                cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                          CMQ_ATOMIC_RELAXED);
-            }
-            cmq_mutex_unlock(&w->clients_lock);
-            /* Same-thread ownership: TEARDOWN cannot free target until we
-               return to the mailbox loop. Re-check account after unlock. */
-            int sync_ok = 0;
-            if (do_send && target) {
-                if (!client_account_live(w->server, target)) {
-                    cmq_mutex_lock(&w->clients_lock);
-                    if (target->conn_gen == msg->target_gen &&
-                        target->state != CMQ_CLIENT_CLOSED &&
-                        target->state != CMQ_CLIENT_CLOSING)
-                        target->state = CMQ_CLIENT_CLOSING;
-                    cmq_mutex_unlock(&w->clients_lock);
-                    finish_dead = 1;
-                    if (w->server)
-                        cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
-                                                  CMQ_ATOMIC_RELAXED);
-                } else {
-                    int acl_deny = 0;
-                    if (msg->pub_account[0] != '\0' && w->server &&
-                        w->server->accounts) {
-                        /* Recheck ACL after mailbox delay — revoke must stop send. */
-                        char subj[CMQ_MAX_SUBJECT];
-                        if (message_frame_subject(msg->buf, msg->len, subj,
-                                                   sizeof(subj)) != 0 ||
-                            !cmq_account_may_deliver(w->server->accounts,
-                                                      msg->pub_account,
-                                                      target->account_name,
-                                                      subj))
-                            acl_deny = 1;
-                    }
-                    if (acl_deny) {
-                        if (w->server)
-                            cmq_atomic_fetch_add_u64(
-                                &w->server->stat_messages_dropped, 1,
-                                CMQ_ATOMIC_RELAXED);
-                    } else if (cmq_client_send_local(target, msg->buf,
-                                                      msg->len) != 0) {
-                        if (w->server)
-                            cmq_atomic_fetch_add_u64(
-                                &w->server->stat_messages_dropped, 1,
-                                CMQ_ATOMIC_RELAXED);
-                    } else if (msg->drain_sync &&
-                               client_drain_write_sync(target) != 0) {
-                        if (w->server)
-                            cmq_atomic_fetch_add_u64(
-                                &w->server->stat_messages_dropped, 1,
-                                CMQ_ATOMIC_RELAXED);
-                    } else {
-                        sync_ok = 1;
-                        if (msg->credit_out && w->server) {
-                            cmq_atomic_fetch_add_u64(
-                                &w->server->stat_messages_out, 1,
-                                CMQ_ATOMIC_RELAXED);
-                            if (msg->account_name[0] != '\0') {
-                                cmq_account_t *oacc =
-                                    cmq_account_get(w->server->accounts,
-                                                     msg->account_name, NULL);
-                                if (oacc)
-                                    cmq_account_inc_msgs_out(
-                                        oacc, msg->account_epoch,
-                                        (uint64_t)msg->payload_bytes);
-                            }
-                        }
-                    }
-                }
-            }
-            if (msg->sync_result)
-                __atomic_store_n(msg->sync_result, sync_ok ? 1 : -1,
-                                 __ATOMIC_RELEASE);
-            if (finish_dead && target)
-                client_finish_closing(target);
-            free(msg->buf);
-            free(msg);
+            worker_deliver_send_msg(w, msg);
             msg = next;
         }
         if (!more) break;
@@ -1802,17 +1829,27 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
 
 /* Cross-worker REQUEST: mailbox + wait for owner send_local(+drain).
    Soft timeout unlinks if still queued; if already dequeued (in-flight drain),
-   keep waiting — never let stack sync_result go out of scope early (UAF). */
+   keep waiting — never let stack sync_result go out of scope early (UAF).
+   While waiting, drain our own SEND mailbox so A↔B sync REQUESTs cannot
+   deadlock two worker event threads. */
 static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                                        uint32_t client_id, uint32_t conn_gen,
                                        uint32_t sub_id, const uint8_t *frame,
-                                       size_t flen, const char *pub_account) {
+                                       size_t flen, const char *pub_account,
+                                       cmq_client_t *publisher) {
     cmq_worker_t *w = &srv->workers[worker_id];
+    cmq_worker_t *self =
+        (cmq_current_worker_id >= 0 && srv->workers &&
+         cmq_current_worker_id < srv->num_workers)
+            ? &srv->workers[cmq_current_worker_id]
+            : NULL;
     for (int attempt = 0; attempt < 4; attempt++) {
         int result = 0;
         if (worker_push_msg(w, client_id, conn_gen, frame, flen, sub_id,
                              0, NULL, 0, 0, &result, 1, pub_account) != 0) {
             if (attempt + 1 >= 4) break;
+            if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+            if (publisher) publisher->last_activity_ms = srv_now_ms();
             struct timespec ts = {0, 50000L};
             nanosleep(&ts, NULL);
             continue;
@@ -1822,6 +1859,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
             int v = __atomic_load_n(&result, __ATOMIC_ACQUIRE);
             if (v != 0)
                 return v == 1 ? 1 : 0;
+            if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+            if (publisher) publisher->last_activity_ms = srv_now_ms();
             if (waited >= 100000) {
                 /* ~5s soft deadline: cancel only while still queued. */
                 cmq_mutex_lock(&w->msg_lock);
@@ -1855,6 +1894,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     int v2 = __atomic_load_n(&result, __ATOMIC_ACQUIRE);
                     if (v2 != 0)
                         return v2 == 1 ? 1 : 0;
+                    if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+                    if (publisher) publisher->last_activity_ms = srv_now_ms();
                     if (extra == 40000) {
                         cmq_mutex_lock(&w->clients_lock);
                         cmq_client_t *t = cmq_idmap_get(w->idmap, client_id);
@@ -1870,6 +1911,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     int v2 = __atomic_load_n(&result, __ATOMIC_ACQUIRE);
                     if (v2 != 0)
                         return v2 == 1 ? 1 : 0;
+                    if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+                    if (publisher) publisher->last_activity_ms = srv_now_ms();
                     struct timespec ts2 = {0, 50000L};
                     nanosleep(&ts2, NULL);
                 }
@@ -1888,7 +1931,8 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                                      cmq_deliver_tgt_t *tgts, size_t ntgt,
                                      const char *subject, const char *reply_to,
                                      const char *pub_account,
-                                     const uint8_t *payload, size_t payload_len) {
+                                     const uint8_t *payload, size_t payload_len,
+                                     cmq_client_t *publisher) {
     if (!tgts || ntgt == 0) return 0;
     size_t flen = 0;
     uint8_t *frame = cmq_build_request_message_frame(0, subject, reply_to,
@@ -1915,7 +1959,7 @@ static size_t deliver_request_targets(cmq_server_t *srv,
             else
                 delivered = deliver_request_via_worker(
                     srv, t->worker_id, t->client_id, t->conn_gen, t->sub_id,
-                    frame, flen, pub_account);
+                    frame, flen, pub_account, publisher);
         } else {
             delivered = client_send_by_id_drain(srv, -1, t->client_id,
                                                  t->conn_gen, t->sub_id,
@@ -2991,7 +3035,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     if (tgts && ntgt > 0) {
         size_t n = deliver_request_targets(srv, tgts, ntgt, subject, reply_to,
                                             c->account_name,
-                                            msg_payload, msg_len);
+                                            msg_payload, msg_len, c);
         free(tgts);
         if (n > 0) {
             uint8_t ack[4] = {0};
