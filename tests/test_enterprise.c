@@ -145,6 +145,14 @@ TEST(account, exports_imports) {
     ASSERT_EQ(cmq_account_can_import(mgr, "globex", "acme.data"), 0);
     ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.>"), 0);
 
+    /* Import without export → can_import denies (align with may_deliver). */
+    ASSERT_EQ(cmq_account_add_import(mgr, "globex", "acme.>", "acme"), 0);
+    ASSERT_EQ(cmq_account_can_import(mgr, "globex", "acme.data"), 0);
+    ASSERT_EQ(cmq_account_add_export(mgr, "acme", "acme.>", "globex"), 0);
+    ASSERT_EQ(cmq_account_can_import(mgr, "globex", "acme.data"), 1);
+    ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.>"), 0);
+    ASSERT_EQ(cmq_account_remove_import(mgr, "globex", "acme.>"), 0);
+
     /* remove_export deletes all dests for the same subject. */
     ASSERT_EQ(cmq_account_add_export(mgr, "acme", "shared.>", "globex"), 0);
     ASSERT_EQ(cmq_account_add_export(mgr, "acme", "shared.>", "other"), 0);

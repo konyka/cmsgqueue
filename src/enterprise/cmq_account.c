@@ -582,11 +582,38 @@ static int account_can_import_impl(cmq_account_manager_t *mgr, const char *accou
     cmq_account_perms_t *p = find_perms(mgr, account);
     int ok = 1;
     if (p && p->import_count > 0) {
+        /* Import allow-list must also have a matching export (may_deliver). */
         ok = 0;
-        for (size_t i = 0; i < p->import_count; i++) {
-            if (subject_match(p->imports[i].subject, subject)) {
-                ok = 1;
-                break;
+        for (size_t i = 0; i < p->import_count && !ok; i++) {
+            if (!subject_match(p->imports[i].subject, subject))
+                continue;
+            const char *src = p->imports[i].source_account;
+            if (strcmp(src, "*") == 0) {
+                for (size_t ai = 0; ai < mgr->perms_count && !ok; ai++) {
+                    if (strcmp(mgr->perms[ai].account, account) == 0)
+                        continue;
+                    for (size_t j = 0; j < mgr->perms[ai].export_count; j++) {
+                        if (subject_match(mgr->perms[ai].exports[j].subject,
+                                          subject) &&
+                            acct_eq_or_star(
+                                mgr->perms[ai].exports[j].dest_account,
+                                account)) {
+                            ok = 1;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                cmq_account_perms_t *sp = find_perms(mgr, src);
+                if (!sp) continue;
+                for (size_t j = 0; j < sp->export_count; j++) {
+                    if (subject_match(sp->exports[j].subject, subject) &&
+                        acct_eq_or_star(sp->exports[j].dest_account,
+                                        account)) {
+                        ok = 1;
+                        break;
+                    }
+                }
             }
         }
     } else {

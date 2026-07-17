@@ -3358,6 +3358,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — import requires export · leaf pending UNSUB all-or-nothing</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">can_import</span></td><td>✅</td><td>Require a matching export before SUBACK so import-only rules cannot create silent no-delivery subs.</td></tr>
+<tr><td><span class="component-name">leaf pending</span></td><td>✅</td><td>Defer clearing <code>pending_unsub</code> until alloc succeeds; on flush fail prefer restoring remaining reconnect UNSUBs.</td></tr>
+</table>
+</div>
+
 
 
 

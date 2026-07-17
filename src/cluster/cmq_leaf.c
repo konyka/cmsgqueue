@@ -438,7 +438,8 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     leaf->hub_fd = fd;
     /* connected=1 only after hub SUB replay — is_connected must not race. */
     leaf->connected = 0;
-    /* Flush offline UNSUBs before replaying live interest. */
+    /* Flush offline UNSUBs before replaying live interest.
+       Keep pending_unsub until alloc succeeds so OOM cannot drop entries. */
     size_t pn = leaf->pending_unsub_count;
     uint32_t *pending = NULL;
     if (pn > 0) {
@@ -452,7 +453,6 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
             return -1;
         }
         memcpy(pending, leaf->pending_unsub, pn * sizeof(uint32_t));
-        leaf->pending_unsub_count = 0;
     }
     /* Keep next_sub_id; replay existing interest to the new hub. */
     size_t n = leaf->sub_count;
@@ -464,16 +464,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         if (!subjects || !ids) {
             free(subjects);
             free(ids);
-            if (pending) {
-                /* Restore pending so a later connect can retry. */
-                size_t restore = pn;
-                if (restore > CMQ_LEAF_MAX_SUBS - leaf->pending_unsub_count)
-                    restore = CMQ_LEAF_MAX_SUBS - leaf->pending_unsub_count;
-                memcpy(leaf->pending_unsub + leaf->pending_unsub_count, pending,
-                       restore * sizeof(uint32_t));
-                leaf->pending_unsub_count += restore;
-                free(pending);
-            }
+            free(pending);
             leaf->hub_fd = -1;
             leaf->connected = 0;
             cmq_mutex_unlock(&leaf->lock);
@@ -488,15 +479,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
                 for (size_t j = 0; j < i; j++) free(subjects[j]);
                 free(subjects);
                 free(ids);
-                if (pending) {
-                    size_t restore = pn;
-                    if (restore > CMQ_LEAF_MAX_SUBS - leaf->pending_unsub_count)
-                        restore = CMQ_LEAF_MAX_SUBS - leaf->pending_unsub_count;
-                    memcpy(leaf->pending_unsub + leaf->pending_unsub_count,
-                           pending, restore * sizeof(uint32_t));
-                    leaf->pending_unsub_count += restore;
-                    free(pending);
-                }
+                free(pending);
                 leaf->hub_fd = -1;
                 leaf->connected = 0;
                 cmq_mutex_unlock(&leaf->lock);
@@ -507,6 +490,8 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
             ids[i] = leaf->sub_ids[i];
         }
     }
+    /* Alloc ok — claim pending for this reconnect flush. */
+    leaf->pending_unsub_count = 0;
     cmq_mutex_unlock(&leaf->lock);
 
     /* Yield hub_io between frames so disconnect/subscribe are not starved for
@@ -527,11 +512,16 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         if (!still || ulen == 0 || write_all(fd, uframe, ulen) != 0) {
             int own = 0;
             cmq_mutex_lock(&leaf->lock);
-            /* Restore remaining pending UNSUBs for a later connect. */
-            for (size_t r = i; r < pn; r++) {
-                if (leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS)
-                    break;
-                leaf->pending_unsub[leaf->pending_unsub_count++] = pending[r];
+            /* Prefer remaining reconnect UNSUBs over newer offline pendings. */
+            {
+                size_t need = pn - i;
+                if (need > CMQ_LEAF_MAX_SUBS)
+                    need = CMQ_LEAF_MAX_SUBS;
+                if (leaf->pending_unsub_count + need > CMQ_LEAF_MAX_SUBS)
+                    leaf->pending_unsub_count = CMQ_LEAF_MAX_SUBS - need;
+                for (size_t r = i; r < i + need; r++)
+                    leaf->pending_unsub[leaf->pending_unsub_count++] =
+                        pending[r];
             }
             if (leaf->hub_fd == fd) {
                 leaf->hub_fd = -1;
