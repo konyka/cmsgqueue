@@ -1849,9 +1849,30 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     free(found);
                     return 0;
                 }
-                /* In-flight on owner — must wait for store (no UAF). */
-                waited = 0;
-                continue;
+                /* In-flight on owner — wait drain bound, then nudge EOF so a
+                   stuck slow consumer cannot pin this worker forever. */
+                for (int extra = 0; extra < 50000; extra++) { /* ~2.5s */
+                    int v2 = __atomic_load_n(&result, __ATOMIC_ACQUIRE);
+                    if (v2 != 0)
+                        return v2 == 1 ? 1 : 0;
+                    if (extra == 40000) {
+                        cmq_mutex_lock(&w->clients_lock);
+                        cmq_client_t *t = cmq_idmap_get(w->idmap, client_id);
+                        if (t && t->conn_gen == conn_gen && t->fd >= 0)
+                            (void)shutdown(t->fd, SHUT_RDWR);
+                        cmq_mutex_unlock(&w->clients_lock);
+                    }
+                    struct timespec ts2 = {0, 50000L};
+                    nanosleep(&ts2, NULL);
+                }
+                /* Drain/teardown should have stored; spin until then (no UAF). */
+                for (;;) {
+                    int v2 = __atomic_load_n(&result, __ATOMIC_ACQUIRE);
+                    if (v2 != 0)
+                        return v2 == 1 ? 1 : 0;
+                    struct timespec ts2 = {0, 50000L};
+                    nanosleep(&ts2, NULL);
+                }
             }
             struct timespec ts = {0, 50000L};
             nanosleep(&ts, NULL);

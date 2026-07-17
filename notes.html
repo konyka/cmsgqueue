@@ -2946,6 +2946,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — auth username+password · REQUEST in-flight bound</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">auth validate</span></td><td>✅</td><td>Username without password rejected; password-only still ok.</td></tr>
+<tr><td><span class="component-name">REQUEST via worker</span></td><td>✅</td><td>In-flight wait bounded + shutdown nudge (no infinite soft reset).</td></tr>
+</table>
+</div>
+
 
 
 

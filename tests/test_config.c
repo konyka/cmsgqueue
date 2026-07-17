@@ -206,6 +206,19 @@ TEST(config, validate_auth_cred_length) {
     ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
 }
 
+TEST(config, validate_username_requires_password) {
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.port = 7654;
+    config.auth_username = "admin";
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+    config.auth_password = "secret";
+    ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
+    /* Password-only remains allowed. */
+    config.auth_username = NULL;
+    ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
+}
+
 TEST(config, validate_tls_requires_certs) {
     cmq_config_t config;
     memset(&config, 0, sizeof(config));

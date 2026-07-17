@@ -209,6 +209,11 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         return CMQ_ERR_INVALID_ARG;
     if (config->auth_password && config->auth_password[0] == '\0')
         return CMQ_ERR_INVALID_ARG;
+    /* Username without password accepts any password — fail closed.
+       Password-only (no username) remains valid for shared-secret auth. */
+    if (config->auth_username && config->auth_username[0] &&
+        (!config->auth_password || !config->auth_password[0]))
+        return CMQ_ERR_INVALID_ARG;
     /* CONNECT compares into 256-byte pads — longer creds would truncate. */
     if (config->auth_username &&
         strnlen(config->auth_username, 256) >= 256)
