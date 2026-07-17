@@ -72,9 +72,10 @@ static void gw_slot_install(cmq_gateway_t *gw, size_t idx, const char *cluster,
                              const char *addr, int port, int fd) {
     cmq_mutex_lock(&gw->io_locks[idx]);
     memset(&gw->conns[idx], 0, sizeof(gw->conns[idx]));
-    strncpy(gw->conns[idx].remote_cluster, cluster,
-            sizeof(gw->conns[idx].remote_cluster) - 1);
-    strncpy(gw->conns[idx].remote_addr, addr, CMQ_NODE_ADDR_SIZE - 1);
+    snprintf(gw->conns[idx].remote_cluster,
+             sizeof(gw->conns[idx].remote_cluster), "%s", cluster);
+    snprintf(gw->conns[idx].remote_addr, sizeof(gw->conns[idx].remote_addr),
+             "%s", addr);
     gw->conns[idx].remote_port = port;
     gw->conns[idx].fd = fd;
     gw->conns[idx].connected = 1;
@@ -218,9 +219,12 @@ static int write_full(int fd, const uint8_t *data, size_t len) {
 
 cmq_gateway_t *cmq_gateway_create(const char *local_cluster) {
     if (!local_cluster) return NULL;
+    /* local_cluster[64] — reject before truncate-collide. */
+    if (strnlen(local_cluster, 64) >= 64)
+        return NULL;
     cmq_gateway_t *gw = calloc(1, sizeof(cmq_gateway_t));
     if (!gw) return NULL;
-    strncpy(gw->local_cluster, local_cluster, sizeof(gw->local_cluster) - 1);
+    snprintf(gw->local_cluster, sizeof(gw->local_cluster), "%s", local_cluster);
     atomic_init(&gw->in_flight, 0);
     atomic_init(&gw->dying, 0);
     cmq_mutex_init(&gw->lock);
@@ -278,6 +282,10 @@ static int gw_handshake(cmq_gateway_t *gw, int fd) {
 static int gw_add_remote_impl(cmq_gateway_t *gw, const char *cluster_name,
                             const char *addr, int port) {
     if (!gw || !cluster_name || !addr) return -1;
+    /* name[64] — reject before truncate can collide cluster identities. */
+    if (strnlen(cluster_name, 64) >= 64 ||
+        strnlen(addr, CMQ_NODE_ADDR_SIZE) >= CMQ_NODE_ADDR_SIZE)
+        return -1;
     cmq_mutex_lock(&gw->lock);
 
     for (size_t i = 0; i < gw->cluster_count; i++) {

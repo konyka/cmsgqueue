@@ -2297,26 +2297,15 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
                                        uint32_t publisher_gen,
                                        int publisher_worker_id,
                                        int suppress_fail_error) {
-    /* Bounded sync fan-out used when coro pool is full or coro alloc fails. */
-    #define CMQ_CORO_SYNC_CAP ((size_t)CMQ_CORO_DELIVER_BATCH * 8u)
+    /* Sync fan-out when coro pool is full or coro alloc fails.
+       Deliver every target — do not silently truncate large fan-outs. */
     #define CMQ_CORO_SYNC_FALLBACK(tgts, n, subj, pub, pay, plen, hdr, hlen) do { \
-        size_t _n = (n); \
-        size_t _lim = _n; \
-        int _trunc = 0; \
-        if (_lim > CMQ_CORO_SYNC_CAP) { \
-            cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, \
-                                      (uint64_t)(_lim - CMQ_CORO_SYNC_CAP), \
-                                      CMQ_ATOMIC_RELAXED); \
-            _lim = CMQ_CORO_SYNC_CAP; \
-            _trunc = 1; \
-        } \
-        int _rc = deliver_targets_sync(srv, (tgts), _lim, (subj), (pub), \
+        int _rc = deliver_targets_sync(srv, (tgts), (n), (subj), (pub), \
                                         (pay), (plen), (hdr), (hlen)); \
         free(tgts); \
         free((void *)(pay)); \
         if (hdr) free((void *)(hdr)); \
-        /* Truncation is a delivery failure — do not report success. */ \
-        return (_rc == 0 && !_trunc) ? 0 : -1; \
+        return _rc; \
     } while (0)
 
     cmq_deliver_ctx_t *ctx = calloc(1, sizeof(cmq_deliver_ctx_t));
@@ -2362,27 +2351,17 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
     if (w->coro_pool && w->coro_count < w->coro_cap) {
         w->coro_pool[w->coro_count++] = coro;
     } else {
-        /* Pool full: bounded sync fan-out — avoid stalling the worker loop. */
+        /* Pool full: sync fan-out for all targets (rare path). */
         cmq_coro_destroy(coro);
-        size_t lim = ctx->target_count;
-        int trunc = 0;
-        if (lim > CMQ_CORO_SYNC_CAP) {
-            cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped,
-                                      (uint64_t)(lim - CMQ_CORO_SYNC_CAP),
-                                      CMQ_ATOMIC_RELAXED);
-            lim = CMQ_CORO_SYNC_CAP;
-            trunc = 1;
-        }
-        int rc = deliver_targets_sync(srv, ctx->targets, lim,
+        int rc = deliver_targets_sync(srv, ctx->targets, ctx->target_count,
                                        ctx->subject, ctx->pub_account,
                                        ctx->payload, ctx->payload_len,
                                        ctx->headers, ctx->headers_len);
         deliver_ctx_free(ctx);
-        return (rc == 0 && !trunc) ? 0 : -1;
+        return rc;
     }
     return 0;
 #undef CMQ_CORO_SYNC_FALLBACK
-#undef CMQ_CORO_SYNC_CAP
 }
 
 /* Forward a framed op to cluster routes (heap-sized encode).

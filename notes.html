@@ -3315,6 +3315,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — coro sync fallback full fan-out · gateway name bounds</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">coro fallback</span></td><td>✅</td><td>Remove <code>CMQ_CORO_SYNC_CAP</code> truncation so pool-full/OOM sync fallback delivers every local target.</td></tr>
+<tr><td><span class="component-name">gateway names</span></td><td>✅</td><td>Reject oversized <code>local_cluster</code>/<code>cluster_name</code>/<code>addr</code> before truncate collision.</td></tr>
+</table>
+</div>
+
 
 
 
