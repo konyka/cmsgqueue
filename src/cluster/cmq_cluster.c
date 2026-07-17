@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_cluster.h"
 #include "cmq_thread.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -85,7 +86,9 @@ static int cluster_add_node_impl(cmq_cluster_t *cluster, const char *id,
 
     for (size_t i = 0; i < cluster->count; i++) {
         if (strcmp(cluster->nodes[i].id, id) == 0) {
-            strncpy(cluster->nodes[i].addr, addr, CMQ_NODE_ADDR_SIZE - 1);
+            /* snprintf clears leftover bytes when the new addr is shorter. */
+            snprintf(cluster->nodes[i].addr, sizeof(cluster->nodes[i].addr),
+                     "%s", addr);
             cluster->nodes[i].port = port;
             cluster->nodes[i].last_heartbeat_ms = now_ms();
             cmq_mutex_unlock(&cluster->lock);
@@ -94,8 +97,8 @@ static int cluster_add_node_impl(cmq_cluster_t *cluster, const char *id,
     }
 
     cmq_node_info_t *n = &cluster->nodes[cluster->count];
-    strncpy(n->id, id, CMQ_NODE_ID_SIZE - 1);
-    strncpy(n->addr, addr, CMQ_NODE_ADDR_SIZE - 1);
+    snprintf(n->id, sizeof(n->id), "%s", id);
+    snprintf(n->addr, sizeof(n->addr), "%s", addr);
     n->port = port;
     n->state = CMQ_NODE_JOINING;
     n->last_heartbeat_ms = now_ms();

@@ -2,6 +2,7 @@
 #include "cmq_gateway.h"
 #include "cmq_route.h"
 #include "cmq_thread.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -286,10 +287,11 @@ static int gw_add_remote_impl(cmq_gateway_t *gw, const char *cluster_name,
     for (size_t i = 0; i < gw->cluster_count; i++) {
         if (strcmp(gw->clusters[i].name, cluster_name) == 0) {
             int addr_changed =
-                (strncmp(gw->clusters[i].addr, addr, CMQ_NODE_ADDR_SIZE) != 0) ||
+                (strcmp(gw->clusters[i].addr, addr) != 0) ||
                 (gw->clusters[i].port != port);
-            strncpy(gw->clusters[i].addr, addr, CMQ_NODE_ADDR_SIZE - 1);
-            gw->clusters[i].addr[CMQ_NODE_ADDR_SIZE - 1] = '\0';
+            /* snprintf clears leftover bytes when the new addr is shorter. */
+            snprintf(gw->clusters[i].addr, sizeof(gw->clusters[i].addr),
+                     "%s", addr);
             gw->clusters[i].port = port;
             gw->clusters[i].known = 1;
             if (addr_changed) {
@@ -315,8 +317,8 @@ static int gw_add_remote_impl(cmq_gateway_t *gw, const char *cluster_name,
     }
 
     cmq_gw_cluster_info_t *ci = &gw->clusters[gw->cluster_count++];
-    strncpy(ci->name, cluster_name, sizeof(ci->name) - 1);
-    strncpy(ci->addr, addr, CMQ_NODE_ADDR_SIZE - 1);
+    snprintf(ci->name, sizeof(ci->name), "%s", cluster_name);
+    snprintf(ci->addr, sizeof(ci->addr), "%s", addr);
     ci->port = port;
     ci->known = 1;
 
