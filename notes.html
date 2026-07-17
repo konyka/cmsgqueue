@@ -3052,6 +3052,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — CONNECT clients_lock · atomic write stall · deliver malloc</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CONNECT publish</span></td><td>✅</td><td>Set <code>CONNECTED</code> under owner <code>clients_lock</code> (account written while INIT).</td></tr>
+<tr><td><span class="component-name">write stall</span></td><td>✅</td><td>Atomic <code>last_write_progress_ms</code>; clear on drain; keepalive ignores torn write_pos/len.</td></tr>
+<tr><td><span class="component-name">deliver malloc</span></td><td>✅</td><td>Reject <code>count * sizeof</code> wrap in snapshot/INBOX dead list.</td></tr>
+</table>
+</div>
+
 
 
 
