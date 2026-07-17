@@ -79,6 +79,8 @@ static void leaf_hub_drop_if_dead(cmq_leaf_node_t *leaf, int expect_fd) {
         leaf_hub_drop(leaf, expect_fd);
 }
 
+#define CMQ_LEAF_SUBACK_MS 2000
+
 /* Complete write on nonblocking hub fd (poll on EAGAIN). */
 static int write_all(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
@@ -108,6 +110,65 @@ static int write_all(int fd, const uint8_t *data, size_t len) {
         off += (size_t)n;
     }
     return 0;
+}
+
+/* Wait for SUBACK(sub_id) with code 0. Skips INFO/PONG; drains MESSAGE
+   (leaf API is interest-only — no RX consumer). Returns 0 ok, -1 fail. */
+static int read_suback(int fd, uint32_t expect_id) {
+    uint8_t rbuf[4096];
+    size_t rlen = 0;
+    int waited_ms = 0;
+    while (waited_ms < CMQ_LEAF_SUBACK_MS) {
+        while (rlen >= CMQ_PROTO_HDR_SIZE) {
+            if (rbuf[0] != CMQ_PROTO_MAGIC_0 || rbuf[1] != CMQ_PROTO_MAGIC_1)
+                return -1;
+            if (rbuf[2] != CMQ_PROTO_VERSION)
+                return -1;
+            uint8_t op = rbuf[4];
+            uint32_t plen = (uint32_t)rbuf[5] | ((uint32_t)rbuf[6] << 8) |
+                            ((uint32_t)rbuf[7] << 16) | ((uint32_t)rbuf[8] << 24);
+            size_t need = (size_t)CMQ_PROTO_HDR_SIZE + (size_t)plen;
+            if (need > sizeof(rbuf)) return -1;
+            if (rlen < need) break;
+
+            const uint8_t *pay = rbuf + CMQ_PROTO_HDR_SIZE;
+            if (op == (uint8_t)CMQ_OP_SUBACK) {
+                if (plen < 5) return -1;
+                uint8_t code = pay[0];
+                uint32_t sid = ((uint32_t)pay[1] << 24) | ((uint32_t)pay[2] << 16) |
+                               ((uint32_t)pay[3] << 8) | (uint32_t)pay[4];
+                memmove(rbuf, rbuf + need, rlen - need);
+                rlen -= need;
+                if (sid != expect_id) continue;
+                return code == 0 ? 0 : -1;
+            }
+            if (op == (uint8_t)CMQ_OP_ERROR || op == (uint8_t)CMQ_OP_DISCONNECT)
+                return -1;
+            /* INFO/PONG/MESSAGE/UNSUBACK — consume and keep waiting. */
+            memmove(rbuf, rbuf + need, rlen - need);
+            rlen -= need;
+        }
+
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        int pr = poll(&pfd, 1, 100);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (pr == 0) {
+            waited_ms += 100;
+            continue;
+        }
+        if (rlen >= sizeof(rbuf)) return -1;
+        ssize_t n = read(fd, rbuf + rlen, sizeof(rbuf) - rlen);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        rlen += (size_t)n;
+    }
+    return -1;
 }
 
 cmq_leaf_node_t *cmq_leaf_create(const char *hub_addr, int hub_port) {
@@ -381,7 +442,8 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         uint8_t frame[16 + 256];
         size_t flen = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_SUBSCRIBE,
                                         0, payload, po);
-        if (flen == 0 || write_all(fd, frame, flen) != 0) {
+        if (flen == 0 || write_all(fd, frame, flen) != 0 ||
+            read_suback(fd, sub_id) != 0) {
             /* Best-effort UNSUB for subjects already pushed this reconnect so
                hub does not keep interest that leaf will re-play on next connect. */
             for (size_t u = 0; u < i; u++) {
@@ -504,8 +566,22 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
                                     0, payload, po);
     /* Hub cannot switch while we hold hub_io (connect takes same lock). */
     int wr = (flen > 0) ? write_all(hub_fd, frame, flen) : -1;
-    if (flen == 0 || wr != 0) {
-        leaf_hub_drop(leaf, hub_fd);
+    int ack_ok = (wr == 0 && flen > 0) ? read_suback(hub_fd, sub_id) : -1;
+    if (flen == 0 || wr != 0 || ack_ok != 0) {
+        if (wr != 0 || flen == 0)
+            leaf_hub_drop(leaf, hub_fd);
+        else {
+            /* Hub refused — keep connection; roll back local interest. */
+            uint8_t upay[4] = {
+                (uint8_t)(sub_id >> 24), (uint8_t)(sub_id >> 16),
+                (uint8_t)(sub_id >> 8), (uint8_t)sub_id
+            };
+            uint8_t uframe[16];
+            size_t ulen = cmq_frame_encode(uframe, sizeof(uframe),
+                                            CMQ_OP_UNSUBSCRIBE, 0, upay, 4);
+            if (ulen > 0)
+                (void)write_all(hub_fd, uframe, ulen);
+        }
         cmq_mutex_lock(&leaf->lock);
         for (size_t i = 0; i < leaf->sub_count; i++) {
             if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&

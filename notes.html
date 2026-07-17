@@ -2820,6 +2820,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST sync PUBACK · leaf SUBACK</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">REQUEST PUBACK</span></td><td>✅</td><td>Same-worker <code>send_local</code> first; PUBACK only when sync delivery succeeds (not mailbox enqueue).</td></tr>
+<tr><td><span class="component-name">leaf SUBACK</span></td><td>✅</td><td><code>subscribe</code>/reconnect replay wait for SUBACK code 0; refuse rolls back local interest.</td></tr>
+</table>
+</div>
+
 
 
 
