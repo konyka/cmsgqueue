@@ -580,6 +580,49 @@ static void worker_drain_sends(cmq_worker_t *w, int max_n) {
     }
 }
 
+/* Process TEARDOWN while a cross-worker REQUEST wait holds the event thread
+   (worker_drain_sends skips TEARDOWN and would otherwise starve reclaim). */
+static void worker_drain_teardowns(cmq_worker_t *w, int max_n) {
+    if (!w || max_n <= 0) return;
+    for (int i = 0; i < max_n; i++) {
+        cmq_mutex_lock(&w->msg_lock);
+        cmq_worker_msg_t **pp = &w->msg_head;
+        cmq_worker_msg_t *prev = NULL;
+        cmq_worker_msg_t *msg = NULL;
+        while (*pp) {
+            cmq_worker_msg_t *m = *pp;
+            if (m->kind != CMQ_WORKER_MSG_TEARDOWN) {
+                prev = m;
+                pp = &m->next;
+                continue;
+            }
+            *pp = m->next;
+            if (w->msg_tail == m)
+                w->msg_tail = prev;
+            if (w->msg_pending > 0)
+                w->msg_pending--;
+            m->next = NULL;
+            if (!w->msg_head)
+                w->msg_tail = NULL;
+            msg = m;
+            break;
+        }
+        cmq_mutex_unlock(&w->msg_lock);
+        if (!msg) break;
+        worker_purge_send_for_id(w, msg->target_id, msg->target_gen);
+        cmq_mutex_lock(&w->clients_lock);
+        cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
+        cmq_mutex_unlock(&w->clients_lock);
+        if (target && target->conn_gen == msg->target_gen) {
+            if (target->state != CMQ_CLIENT_CLOSED &&
+                target->state != CMQ_CLIENT_CLOSING)
+                target->state = CMQ_CLIENT_CLOSING;
+            client_finish_closing(target);
+        }
+        free(msg);
+    }
+}
+
 static void worker_wakeup_cb(int fd, int events, void *data) {
     (void)events;
     cmq_worker_t *w = (cmq_worker_t *)data;
@@ -1994,7 +2037,10 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                              1) != 0) {
             free(sync);
             if (attempt + 1 >= 4) break;
-            if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+            if (self) {
+                worker_drain_teardowns(self, 8);
+                worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+            }
             if (publisher) client_touch_activity(publisher);
             struct timespec ts = {0, 50000L};
             nanosleep(&ts, NULL);
@@ -2007,7 +2053,10 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                 req_sync_release(sync);
                 return v == 1 ? 1 : 0;
             }
-            if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+            if (self) {
+                worker_drain_teardowns(self, 8);
+                worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+            }
             if (publisher) client_touch_activity(publisher);
             if (waited >= 100000) {
                 /* ~5s soft deadline: cancel only while still queued. */
@@ -2044,7 +2093,10 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                         req_sync_release(sync);
                         return v2 == 1 ? 1 : 0;
                     }
-                    if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+                    if (self) {
+                        worker_drain_teardowns(self, 8);
+                        worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+                    }
                     if (publisher) client_touch_activity(publisher);
                     if (extra == 40000) {
                         cmq_mutex_lock(&w->clients_lock);
@@ -2074,7 +2126,10 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                         continue;
                     }
                     /* Claimed (2) — wait for worker to resolve. */
-                    if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+                    if (self) {
+                        worker_drain_teardowns(self, 8);
+                        worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
+                    }
                     if (publisher) client_touch_activity(publisher);
                     struct timespec ts2 = {0, 50000L};
                     nanosleep(&ts2, NULL);
@@ -2258,34 +2313,53 @@ static void deliver_coro_func(void *arg) {
 done:
     if (!ctx->delivered_any && ctx->publisher_id != 0 &&
         !ctx->suppress_fail_error) {
-        static const char emsg[] = "delivery failed";
-        uint8_t ebuf[256];
-        size_t elen = cmq_frame_encode(ebuf, sizeof(ebuf), CMQ_OP_ERROR, 0,
-                                        (const uint8_t *)emsg, sizeof(emsg) - 1);
-        if (elen > 0) {
-            if (ctx->publisher_worker_id >= 0 && srv->workers &&
-                ctx->publisher_worker_id < srv->num_workers) {
-                cmq_worker_t *pw = &srv->workers[ctx->publisher_worker_id];
-                if (worker_push_msg(pw, ctx->publisher_id, ctx->publisher_gen,
-                                     ebuf, elen, 0, 0, NULL, 0, 0, NULL, 0,
-                                     NULL, 0) != 0) {
-                    /* Queue full — sync send or force EOF so publisher notices. */
-                    if (client_send_by_id(srv, ctx->publisher_worker_id,
-                                           ctx->publisher_id, ctx->publisher_gen,
-                                           0, ebuf, elen, NULL) != 0) {
-                        cmq_mutex_lock(&pw->clients_lock);
-                        cmq_client_t *pub =
-                            cmq_idmap_get(pw->idmap, ctx->publisher_id);
-                        if (pub && pub->conn_gen == ctx->publisher_gen &&
-                            pub->fd >= 0)
-                            shutdown(pub->fd, SHUT_RDWR);
-                        cmq_mutex_unlock(&pw->clients_lock);
+        /* Soft-delete during coro fan-out — do not ERROR a dead account. */
+        int pub_live = 0;
+        if (ctx->publisher_worker_id >= 0 && srv->workers &&
+            ctx->publisher_worker_id < srv->num_workers) {
+            cmq_worker_t *pw = &srv->workers[ctx->publisher_worker_id];
+            cmq_mutex_lock(&pw->clients_lock);
+            cmq_client_t *pub = cmq_idmap_get(pw->idmap, ctx->publisher_id);
+            pub_live = (pub && pub->conn_gen == ctx->publisher_gen &&
+                        client_account_live(srv, pub));
+            cmq_mutex_unlock(&pw->clients_lock);
+        } else {
+            cmq_mutex_lock(&srv->clients_lock);
+            cmq_client_t *pub = cmq_idmap_get(srv->idmap, ctx->publisher_id);
+            pub_live = (pub && pub->conn_gen == ctx->publisher_gen &&
+                        client_account_live(srv, pub));
+            cmq_mutex_unlock(&srv->clients_lock);
+        }
+        if (pub_live) {
+            static const char emsg[] = "delivery failed";
+            uint8_t ebuf[256];
+            size_t elen = cmq_frame_encode(ebuf, sizeof(ebuf), CMQ_OP_ERROR, 0,
+                                            (const uint8_t *)emsg, sizeof(emsg) - 1);
+            if (elen > 0) {
+                if (ctx->publisher_worker_id >= 0 && srv->workers &&
+                    ctx->publisher_worker_id < srv->num_workers) {
+                    cmq_worker_t *pw = &srv->workers[ctx->publisher_worker_id];
+                    if (worker_push_msg(pw, ctx->publisher_id, ctx->publisher_gen,
+                                         ebuf, elen, 0, 0, NULL, 0, 0, NULL, 0,
+                                         NULL, 0) != 0) {
+                        /* Queue full — sync send or force EOF so publisher notices. */
+                        if (client_send_by_id(srv, ctx->publisher_worker_id,
+                                               ctx->publisher_id, ctx->publisher_gen,
+                                               0, ebuf, elen, NULL) != 0) {
+                            cmq_mutex_lock(&pw->clients_lock);
+                            cmq_client_t *pub =
+                                cmq_idmap_get(pw->idmap, ctx->publisher_id);
+                            if (pub && pub->conn_gen == ctx->publisher_gen &&
+                                pub->fd >= 0)
+                                shutdown(pub->fd, SHUT_RDWR);
+                            cmq_mutex_unlock(&pw->clients_lock);
+                        }
                     }
+                } else {
+                    (void)client_send_by_id(srv, -1, ctx->publisher_id,
+                                             ctx->publisher_gen, 0, ebuf, elen,
+                                             NULL);
                 }
-            } else {
-                (void)client_send_by_id(srv, -1, ctx->publisher_id,
-                                         ctx->publisher_gen, 0, ebuf, elen,
-                                         NULL);
             }
         }
     }
@@ -3255,6 +3329,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                             c->account_name,
                                             msg_payload, msg_len, c);
         free(tgts);
+        /* Soft-delete may race during long cross-worker waits. */
+        if (!client_account_live(srv, c)) {
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
         if (n > 0) {
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
@@ -3264,6 +3344,11 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         }
     } else {
         free(tgts);
+        if (!client_account_live(srv, c)) {
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
         if (!c->is_route && route_sent > 0) {
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);

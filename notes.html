@@ -3461,6 +3461,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf UNSUB fail · REQUEST PUBACK · coro ERROR · TEARDOWN drain</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf UNSUB</span></td><td>✅</td><td>Online hub write failure queues <code>pending_unsub</code> and returns −1 (no silent success / ghost interest).</td></tr>
+<tr><td><span class="component-name">REQUEST PUBACK</span></td><td>✅</td><td>Re-check account liveness after deliver before PUBACK/ERROR.</td></tr>
+<tr><td><span class="component-name">coro ERROR</span></td><td>✅</td><td>Skip delivery-failed ERROR when publisher account is already inactive.</td></tr>
+<tr><td><span class="component-name">REQUEST wait</span></td><td>✅</td><td>Drain TEARDOWN while waiting so reclaim is not starved behind SEND-only drain.</td></tr>
+</table>
+</div>
+
 
 
 

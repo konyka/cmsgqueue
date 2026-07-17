@@ -808,8 +808,16 @@ static int leaf_unsubscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
         size_t flen = cmq_frame_encode(frame, sizeof(frame),
                                         CMQ_OP_UNSUBSCRIBE, 0, payload, 4);
         int wr = (flen > 0) ? write_all(hub_fd, frame, flen) : -1;
-        if (flen == 0 || wr != 0)
+        if (flen == 0 || wr != 0) {
+            /* Local already dropped — queue UNSUB for reconnect flush. */
+            cmq_mutex_lock(&leaf->lock);
+            if (leaf->pending_unsub_count < CMQ_LEAF_MAX_SUBS)
+                leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
+            cmq_mutex_unlock(&leaf->lock);
             leaf_hub_drop(leaf, hub_fd);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
+            return -1;
+        }
         cmq_mutex_unlock(&leaf->hub_io_lock);
         return 0;
     }
