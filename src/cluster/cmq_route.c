@@ -13,6 +13,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <stdatomic.h>
+#include <time.h>
 
 #define CMQ_ROUTE_MAX_CONNS 32
 #define CMQ_ROUTE_HANDSHAKE_MS 3000
@@ -194,7 +196,25 @@ struct cmq_route_pool {
     size_t interest_count;
     cmq_mutex_t lock;
     cmq_mutex_t io_locks[CMQ_ROUTE_MAX_CONNS]; /* per-slot write serialization */
+    atomic_int in_flight; /* connect/add_conn unlocked dial/handshake */
+    atomic_int dying;
 };
+
+
+static int route_begin_op(cmq_route_pool_t *pool) {
+    if (atomic_load_explicit(&pool->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&pool->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&pool->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&pool->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void route_end_op(cmq_route_pool_t *pool) {
+    atomic_fetch_sub_explicit(&pool->in_flight, 1, memory_order_acq_rel);
+}
 
 /* Drop slot fd. Owned → close; borrowed inbound → SHUT_RDWR so the server
    client_read_cb sees EOF (same as write-path death). Slot replace/reconnect
@@ -285,6 +305,8 @@ cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
     p->cluster = cluster;
     p->conn_count = 0;
     p->interest_count = 0;
+    atomic_init(&p->in_flight, 0);
+    atomic_init(&p->dying, 0);
     cmq_mutex_init(&p->lock);
     for (size_t i = 0; i < CMQ_ROUTE_MAX_CONNS; i++)
         cmq_mutex_init(&p->io_locks[i]);
@@ -293,6 +315,11 @@ cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
 
 void cmq_route_pool_destroy(cmq_route_pool_t *pool) {
     if (!pool) return;
+    atomic_store_explicit(&pool->dying, 1, memory_order_release);
+    while (atomic_load_explicit(&pool->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++)
         route_slot_close(pool, i);
@@ -303,7 +330,7 @@ void cmq_route_pool_destroy(cmq_route_pool_t *pool) {
     free(pool);
 }
 
-int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
+static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
                        const char *addr, int port,
                        const char *auth_user, const char *auth_pass) {
     if (!pool || !node_id || !addr) return -1;
@@ -527,7 +554,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
     return 0;
 }
 
-int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
+static int route_add_conn_impl(cmq_route_pool_t *pool, const char *node_id, int fd,
                         const char *auth_user, const char *auth_pass) {
     if (!pool || !node_id) return -1;
 
@@ -1165,4 +1192,30 @@ int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd) {
 void cmq_route_io_unlock_idx(cmq_route_pool_t *pool, int idx) {
     if (!pool || idx < 0 || (size_t)idx >= CMQ_ROUTE_MAX_CONNS) return;
     cmq_mutex_unlock(&pool->io_locks[idx]);
+}
+
+
+int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
+                       const char *addr, int port,
+                       const char *auth_user, const char *auth_pass) {
+    if (!pool) return -1;
+    if (route_begin_op(pool) != 0) return -1;
+    int rc = route_connect_impl(pool, node_id, addr, port, auth_user, auth_pass);
+    route_end_op(pool);
+    return rc;
+}
+
+int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
+                        const char *auth_user, const char *auth_pass) {
+    if (!pool) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
+    if (route_begin_op(pool) != 0) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
+    int rc = route_add_conn_impl(pool, node_id, fd, auth_user, auth_pass);
+    route_end_op(pool);
+    return rc;
 }

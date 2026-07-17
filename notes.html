@@ -3120,6 +3120,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf/gw/route lifecycle · gw write-fail clear identity</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf/gw/route</span></td><td>✅</td><td><code>dying</code>/<code>in_flight</code> wrap connect/accept/add_conn vs destroy.</td></tr>
+<tr><td><span class="component-name">gw write-fail</span></td><td>✅</td><td>Forward/broadcast write failure clears slot identity (no sticky tombstones).</td></tr>
+</table>
+</div>
+
 
 
 

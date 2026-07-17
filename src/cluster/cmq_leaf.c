@@ -14,6 +14,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <poll.h>
+#include <stdatomic.h>
+#include <time.h>
 
 #define CMQ_LEAF_MAX_SUBS 1024
 #define CMQ_LEAF_WRITE_MS 50
@@ -41,7 +43,25 @@ struct cmq_leaf_node {
 
     cmq_mutex_t lock;
     cmq_mutex_t hub_io_lock; /* serialize hub writes vs disconnect close */
+    atomic_int in_flight; /* connect/accept/is_connected unlocked windows */
+    atomic_int dying;
 };
+
+
+static int leaf_begin_op(cmq_leaf_node_t *leaf) {
+    if (atomic_load_explicit(&leaf->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&leaf->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&leaf->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&leaf->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void leaf_end_op(cmq_leaf_node_t *leaf) {
+    atomic_fetch_sub_explicit(&leaf->in_flight, 1, memory_order_acq_rel);
+}
 
 static void set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
@@ -226,6 +246,8 @@ cmq_leaf_node_t *cmq_leaf_create(const char *hub_addr, int hub_port) {
     l->next_sub_id = 1; /* server rejects sub_id 0 */
     l->sub_count = 0;
     l->leaf_count = 0;
+    atomic_init(&l->in_flight, 0);
+    atomic_init(&l->dying, 0);
     cmq_mutex_init(&l->lock);
     cmq_mutex_init(&l->hub_io_lock);
     return l;
@@ -233,6 +255,11 @@ cmq_leaf_node_t *cmq_leaf_create(const char *hub_addr, int hub_port) {
 
 void cmq_leaf_destroy(cmq_leaf_node_t *leaf) {
     if (!leaf) return;
+    atomic_store_explicit(&leaf->dying, 1, memory_order_release);
+    while (atomic_load_explicit(&leaf->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     cmq_mutex_lock(&leaf->hub_io_lock);
     cmq_mutex_lock(&leaf->lock);
     if (leaf->hub_fd >= 0) close(leaf->hub_fd);
@@ -287,7 +314,7 @@ int cmq_leaf_hub_port(cmq_leaf_node_t *leaf) {
     return leaf ? leaf->hub_port : 0;
 }
 
-int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
+static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     if (!leaf) return -1;
     cmq_mutex_lock(&leaf->lock);
 
@@ -564,7 +591,7 @@ int cmq_leaf_disconnect(cmq_leaf_node_t *leaf) {
     return 0;
 }
 
-int cmq_leaf_is_connected(cmq_leaf_node_t *leaf) {
+static int leaf_is_connected_impl(cmq_leaf_node_t *leaf) {
     if (!leaf) return 0;
     cmq_mutex_lock(&leaf->lock);
     int fd = leaf->hub_fd;
@@ -800,7 +827,7 @@ static int leaf_ensure_accept_slot(cmq_leaf_node_t *leaf, const char *leaf_id) {
     return 0;
 }
 
-int cmq_leaf_accept(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
+static int leaf_accept_impl(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
     if (!leaf || !leaf_id) return -1;
 
     cmq_mutex_lock(&leaf->lock);
@@ -867,4 +894,36 @@ int cmq_leaf_remove(cmq_leaf_node_t *leaf, const char *leaf_id) {
     }
     cmq_mutex_unlock(&leaf->lock);
     return -1;
+}
+
+
+int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
+    if (!leaf) return -1;
+    if (leaf_begin_op(leaf) != 0) return -1;
+    int rc = leaf_connect_impl(leaf);
+    leaf_end_op(leaf);
+    return rc;
+}
+
+int cmq_leaf_is_connected(cmq_leaf_node_t *leaf) {
+    if (!leaf) return 0;
+    if (leaf_begin_op(leaf) != 0) return 0;
+    int rc = leaf_is_connected_impl(leaf);
+    leaf_end_op(leaf);
+    return rc;
+}
+
+
+int cmq_leaf_accept(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
+    if (!leaf) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
+    if (leaf_begin_op(leaf) != 0) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
+    int rc = leaf_accept_impl(leaf, fd, leaf_id);
+    leaf_end_op(leaf);
+    return rc;
 }

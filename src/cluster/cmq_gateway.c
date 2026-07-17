@@ -11,6 +11,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <stdatomic.h>
+#include <time.h>
 
 struct cmq_gateway {
     char local_cluster[64];
@@ -22,10 +24,28 @@ struct cmq_gateway {
     size_t cluster_count;
     cmq_mutex_t lock;
     cmq_mutex_t io_locks[CMQ_GW_MAX_CONNECTIONS]; /* per-slot write serialization */
+    atomic_int in_flight; /* connect unlocked dial/handshake */
+    atomic_int dying;
 };
 
 #define CMQ_GW_WRITE_MS 50
 #define CMQ_GW_CONNECT_MS 2000
+
+
+static int gw_begin_op(cmq_gateway_t *gw) {
+    if (atomic_load_explicit(&gw->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&gw->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&gw->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&gw->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void gw_end_op(cmq_gateway_t *gw) {
+    atomic_fetch_sub_explicit(&gw->in_flight, 1, memory_order_acq_rel);
+}
 
 static void set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
@@ -191,6 +211,8 @@ cmq_gateway_t *cmq_gateway_create(const char *local_cluster) {
     cmq_gateway_t *gw = calloc(1, sizeof(cmq_gateway_t));
     if (!gw) return NULL;
     strncpy(gw->local_cluster, local_cluster, sizeof(gw->local_cluster) - 1);
+    atomic_init(&gw->in_flight, 0);
+    atomic_init(&gw->dying, 0);
     cmq_mutex_init(&gw->lock);
     for (size_t i = 0; i < CMQ_GW_MAX_CONNECTIONS; i++)
         cmq_mutex_init(&gw->io_locks[i]);
@@ -199,6 +221,11 @@ cmq_gateway_t *cmq_gateway_create(const char *local_cluster) {
 
 void cmq_gateway_destroy(cmq_gateway_t *gw) {
     if (!gw) return;
+    atomic_store_explicit(&gw->dying, 1, memory_order_release);
+    while (atomic_load_explicit(&gw->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     cmq_mutex_lock(&gw->lock);
     for (size_t i = 0; i < gw->conn_count; i++)
         gw_slot_close_fd(gw, i);
@@ -284,7 +311,7 @@ int cmq_gateway_add_remote(cmq_gateway_t *gw, const char *cluster_name,
     return 0;
 }
 
-int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
+static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
     if (!gw || !cluster_name) return -1;
     cmq_mutex_lock(&gw->lock);
 
@@ -641,10 +668,10 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
             cmq_mutex_unlock(&gw->io_locks[idx]);
             deferred++;
         } else {
-            /* Clear slot under io_lock before close (no fd reuse race). */
+            /* Clear identity too — sticky named tombstones fill the table. */
             if (gw->conns[idx].fd == fd) {
+                memset(&gw->conns[idx], 0, sizeof(gw->conns[idx]));
                 gw->conns[idx].fd = -1;
-                gw->conns[idx].connected = 0;
             }
             close(fd);
             cmq_mutex_unlock(&gw->io_locks[idx]);
@@ -703,8 +730,8 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
             deferred++;
         } else {
             if (gw->conns[idx].fd == fd) {
+                memset(&gw->conns[idx], 0, sizeof(gw->conns[idx]));
                 gw->conns[idx].fd = -1;
-                gw->conns[idx].connected = 0;
             }
             close(fd);
             cmq_mutex_unlock(&gw->io_locks[idx]);
@@ -751,4 +778,13 @@ int cmq_gateway_get_cluster(cmq_gateway_t *gw, const char *name,
     }
     cmq_mutex_unlock(&gw->lock);
     return -1;
+}
+
+
+int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
+    if (!gw) return -1;
+    if (gw_begin_op(gw) != 0) return -1;
+    int rc = gw_connect_remote_impl(gw, cluster_name);
+    gw_end_op(gw);
+    return rc;
 }
