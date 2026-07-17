@@ -36,7 +36,7 @@ static uint64_t srv_now_ms(void) {
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }
 
-/* Keepalive (acceptor) reads progress across threads — use atomics; clear on drain. */
+/* Keepalive (acceptor) reads progress/activity across threads — atomics. */
 static void client_mark_write_progress(cmq_client_t *c) {
     __atomic_store_n(&c->last_write_progress_ms, srv_now_ms(), __ATOMIC_RELAXED);
 }
@@ -50,6 +50,12 @@ static int client_write_stalled(const cmq_client_t *c, uint64_t now,
         return 0;
     uint64_t prog = __atomic_load_n(&c->last_write_progress_ms, __ATOMIC_RELAXED);
     return prog != 0 && (now - prog) > write_timeout_ms;
+}
+static void client_touch_activity(cmq_client_t *c) {
+    __atomic_store_n(&c->last_activity_ms, srv_now_ms(), __ATOMIC_RELAXED);
+}
+static uint64_t client_activity_ms(const cmq_client_t *c) {
+    return __atomic_load_n(&c->last_activity_ms, __ATOMIC_RELAXED);
 }
 
 static cmq_mutex_t *client_clients_lock(cmq_server_t *srv, const cmq_client_t *c) {
@@ -975,7 +981,7 @@ static cmq_client_t *cmq_client_create(int fd, uint32_t id,
     c->subs = NULL;
     c->username = NULL;
     c->next = NULL;
-    c->last_activity_ms = srv_now_ms();
+    client_touch_activity(c);
     return c;
 }
 
@@ -1301,7 +1307,7 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
     }
     /* Outbound keepalive refresh only for CONNECTED (INIT must stay frozen). */
     if (rc == 0 && c->state == CMQ_CLIENT_CONNECTED)
-        c->last_activity_ms = srv_now_ms();
+        client_touch_activity(c);
     return rc;
 }
 
@@ -1919,7 +1925,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
             free(sync);
             if (attempt + 1 >= 4) break;
             if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
-            if (publisher) publisher->last_activity_ms = srv_now_ms();
+            if (publisher) client_touch_activity(publisher);
             struct timespec ts = {0, 50000L};
             nanosleep(&ts, NULL);
             continue;
@@ -1932,7 +1938,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                 return v == 1 ? 1 : 0;
             }
             if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
-            if (publisher) publisher->last_activity_ms = srv_now_ms();
+            if (publisher) client_touch_activity(publisher);
             if (waited >= 100000) {
                 /* ~5s soft deadline: cancel only while still queued. */
                 cmq_mutex_lock(&w->msg_lock);
@@ -1969,7 +1975,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                         return v2 == 1 ? 1 : 0;
                     }
                     if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
-                    if (publisher) publisher->last_activity_ms = srv_now_ms();
+                    if (publisher) client_touch_activity(publisher);
                     if (extra == 40000) {
                         cmq_mutex_lock(&w->clients_lock);
                         cmq_client_t *t = cmq_idmap_get(w->idmap, client_id);
@@ -1988,7 +1994,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                         return v2 == 1 ? 1 : 0;
                     }
                     if (self) worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
-                    if (publisher) publisher->last_activity_ms = srv_now_ms();
+                    if (publisher) client_touch_activity(publisher);
                     struct timespec ts2 = {0, 50000L};
                     nanosleep(&ts2, NULL);
                 }
@@ -3726,7 +3732,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             cmq_mutex_t *clk = client_clients_lock(srv, c);
             cmq_mutex_lock(clk);
             c->state = CMQ_CLIENT_CONNECTED;
-            c->last_activity_ms = srv_now_ms();
+            client_touch_activity(c);
             cmq_mutex_unlock(clk);
         }
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
@@ -4169,7 +4175,7 @@ static void client_read_cb(int fd, int events, void *data) {
        WS: only complete frames / control refresh (see below) — FIN=0 spam
        must not bypass idle keepalive. */
     if (c->state == CMQ_CLIENT_CONNECTED && !c->is_websocket)
-        c->last_activity_ms = srv_now_ms();
+        client_touch_activity(c);
 
     /* HTTP upgrade may arrive fragmented or pipelined with the first WS frame.
        Accumulate into ws_recv_buf until headers complete, then keep any trailing
@@ -4290,7 +4296,7 @@ static void client_read_cb(int fd, int events, void *data) {
                 /* Only CONNECTED may refresh keepalive — WS ping must not
                    hold INIT slots forever (same rule as CMQ PING). */
                 if (c->state == CMQ_CLIENT_CONNECTED)
-                    c->last_activity_ms = srv_now_ms();
+                    client_touch_activity(c);
                 offset += (size_t)parsed;
                 continue;
             }
@@ -4302,7 +4308,7 @@ static void client_read_cb(int fd, int events, void *data) {
                     return;
                 }
                 if (c->state == CMQ_CLIENT_CONNECTED)
-                    c->last_activity_ms = srv_now_ms();
+                    client_touch_activity(c);
                 offset += (size_t)parsed;
                 continue;
             }
@@ -4360,7 +4366,7 @@ static void client_read_cb(int fd, int events, void *data) {
 
                 if (ws_frame.fin) {
                     if (c->state == CMQ_CLIENT_CONNECTED)
-                        c->last_activity_ms = srv_now_ms();
+                        client_touch_activity(c);
                     if (c->ws_msg_len > 0) {
                         int rc = cmq_parser_feed(c->parser, c->ws_msg_buf,
                                                   c->ws_msg_len);
@@ -4432,7 +4438,7 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
         int stalled = client_write_stalled(c, now, write_timeout_ms);
         /* CLOSING: stall → force teardown; idle → finish flush then teardown. */
         if (c->state == CMQ_CLIENT_CLOSING) {
-            int closing_idle = (now - c->last_activity_ms) > timeout_ms;
+            int closing_idle = (now - client_activity_ms(c)) > timeout_ms;
             if (stalled)
                 client_teardown(c);
             else if (closing_idle)
@@ -4441,7 +4447,7 @@ static void keepalive_scan_clients(cmq_client_t **clients, int count,
         }
         int idle = (c->state == CMQ_CLIENT_CONNECTED ||
                     c->state == CMQ_CLIENT_INIT) &&
-                   (now - c->last_activity_ms) > timeout_ms;
+                   (now - client_activity_ms(c)) > timeout_ms;
         if (!idle && !stalled) continue;
         if (c->state == CMQ_CLIENT_CONNECTED) {
             uint8_t disc[16];
@@ -4491,14 +4497,14 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                 }
                 int stalled = client_write_stalled(c, now, write_timeout_ms);
                 if (c->state == CMQ_CLIENT_CLOSING) {
-                    int closing_idle = (now - c->last_activity_ms) > timeout_ms;
+                    int closing_idle = (now - client_activity_ms(c)) > timeout_ms;
                     if ((stalled || closing_idle) && c->fd >= 0)
                         shutdown(c->fd, SHUT_RDWR);
                     continue;
                 }
                 int idle = (c->state == CMQ_CLIENT_CONNECTED ||
                             c->state == CMQ_CLIENT_INIT) &&
-                           (now - c->last_activity_ms) > timeout_ms;
+                           (now - client_activity_ms(c)) > timeout_ms;
                 if (idle || stalled)
                     client_force_closing(c);
             }
@@ -4544,12 +4550,12 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                         !client_account_live(srv, c)) {
                         doom = 1; /* soft-deleted — reclaim without idle wait */
                     } else if (c->state == CMQ_CLIENT_CLOSING) {
-                        int closing_idle = (now - c->last_activity_ms) > timeout_ms;
+                        int closing_idle = (now - client_activity_ms(c)) > timeout_ms;
                         doom = stalled || closing_idle;
                     } else {
                         int idle = (c->state == CMQ_CLIENT_CONNECTED ||
                                     c->state == CMQ_CLIENT_INIT) &&
-                                   (now - c->last_activity_ms) > timeout_ms;
+                                   (now - client_activity_ms(c)) > timeout_ms;
                         doom = idle || stalled;
                     }
                     if (!doom)
@@ -5303,33 +5309,25 @@ static void acceptor_process_drain(cmq_server_t *srv) {
     uint8_t disc[16];
     size_t disc_len = cmq_frame_encode(disc, sizeof(disc), CMQ_OP_DISCONNECT, 0, NULL, 0);
 
-    typedef struct {
-        cmq_client_t *c;
-        uint8_t send_disc;
-    } cmq_acc_drain_t;
-
     cmq_mutex_lock(&srv->clients_lock);
     int nacc = srv->clients_count;
-    cmq_acc_drain_t *acc_snap = NULL;
+    cmq_client_t **acc_snap = NULL;
     if (nacc > 0) {
-        acc_snap = malloc((size_t)nacc * sizeof(cmq_acc_drain_t));
+        acc_snap = malloc((size_t)nacc * sizeof(cmq_client_t *));
         if (acc_snap) {
             int n = 0;
             for (int i = 0; i < nacc; i++) {
                 cmq_client_t *c = srv->clients[i];
                 if (!c || c->state == CMQ_CLIENT_CLOSED)
                     continue;
-                uint8_t send_disc = 0;
-                if (c->state == CMQ_CLIENT_CONNECTED) {
-                    send_disc = (disc_len > 0) ? 1 : 0;
+                /* DISCONNECT while still CONNECTED — send_local rejects CLOSING. */
+                if (c->state == CMQ_CLIENT_CONNECTED && disc_len > 0)
+                    (void)cmq_client_send_local(c, disc, disc_len);
+                if (c->state == CMQ_CLIENT_CONNECTED ||
+                    c->state == CMQ_CLIENT_INIT)
                     c->state = CMQ_CLIENT_CLOSING;
-                } else if (c->state == CMQ_CLIENT_INIT) {
-                    c->state = CMQ_CLIENT_CLOSING;
-                }
                 /* Pre-existing CLOSING: finish below. */
-                acc_snap[n].c = c;
-                acc_snap[n].send_disc = send_disc;
-                n++;
+                acc_snap[n++] = c;
             }
             nacc = n;
         } else {
@@ -5352,11 +5350,8 @@ static void acceptor_process_drain(cmq_server_t *srv) {
     cmq_mutex_unlock(&srv->clients_lock);
     if (acc_snap) {
         for (int i = 0; i < nacc; i++) {
-            cmq_client_t *c = acc_snap[i].c;
-            if (!c) continue;
-            if (acc_snap[i].send_disc && disc_len > 0)
-                (void)cmq_client_send_local(c, disc, disc_len);
-            if (c->state == CMQ_CLIENT_CLOSING)
+            cmq_client_t *c = acc_snap[i];
+            if (c && c->state == CMQ_CLIENT_CLOSING)
                 client_finish_closing(c);
         }
         free(acc_snap);

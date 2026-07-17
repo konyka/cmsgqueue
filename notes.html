@@ -3062,6 +3062,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — drain DISCONNECT order · atomic activity · stream bytes wrap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">acceptor drain</span></td><td>✅</td><td>Send DISCONNECT under lock while <code>CONNECTED</code>, then mark <code>CLOSING</code>.</td></tr>
+<tr><td><span class="component-name">last_activity</span></td><td>✅</td><td>Atomic touch/load for keepalive idle (same pattern as write stall).</td></tr>
+<tr><td><span class="component-name">stream max_bytes</span></td><td>✅</td><td>Refuse append when <code>total_bytes + len</code> would wrap.</td></tr>
+</table>
+</div>
+
 
 
 

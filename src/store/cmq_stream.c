@@ -74,10 +74,15 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
         if (floor < retain_floor) retain_floor = floor;
     }
 
-    if (stream->max_bytes > 0 && stream->total_bytes + len > stream->max_bytes) {
+    /* Guard wrap: total_bytes + len must not overflow before max_bytes check. */
+    if (stream->max_bytes > 0 &&
+        (len > SIZE_MAX - stream->total_bytes ||
+         stream->total_bytes + len > stream->max_bytes)) {
         uint64_t first = cmq_store_first_seq(stream->store);
         uint64_t last = cmq_store_last_seq(stream->store);
-        while (first <= last && stream->total_bytes + len > stream->max_bytes) {
+        while (first <= last &&
+               (len > SIZE_MAX - stream->total_bytes ||
+                stream->total_bytes + len > stream->max_bytes)) {
             if (first >= retain_floor)
                 break; /* unacked — refuse rather than drop */
             size_t mlen = 0;
@@ -91,7 +96,8 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
                 stream->total_bytes = 0;
             first++;
         }
-        if (stream->total_bytes + len > stream->max_bytes) {
+        if (len > SIZE_MAX - stream->total_bytes ||
+            stream->total_bytes + len > stream->max_bytes) {
             free(copy);
             cmq_mutex_unlock(&stream->lock);
             return 0; /* refuse append — do not exceed max_bytes */
@@ -125,7 +131,10 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
             else
                 stream->total_bytes = 0;
         }
-        stream->total_bytes += len;
+        if (len > SIZE_MAX - stream->total_bytes)
+            stream->total_bytes = SIZE_MAX;
+        else
+            stream->total_bytes += len;
     }
 
     cmq_mutex_unlock(&stream->lock);
