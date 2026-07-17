@@ -219,6 +219,19 @@ TEST(config, validate_username_requires_password) {
     ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
 }
 
+TEST(config, validate_ping_write_timeout_cap) {
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.port = 7654;
+    config.ping_interval_ms = 86400000;
+    ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
+    config.ping_interval_ms = 86400001;
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+    config.ping_interval_ms = 30000;
+    config.write_timeout_ms = 86400001;
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+}
+
 TEST(config, validate_tls_requires_certs) {
     cmq_config_t config;
     memset(&config, 0, sizeof(config));

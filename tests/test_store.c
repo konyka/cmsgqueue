@@ -188,6 +188,18 @@ TEST(stream, retain_unacked_on_pressure) {
     cmq_stream_destroy(st);
 }
 
+TEST(stream, remove_consumer_unpins_retention) {
+    cmq_stream_t *st = cmq_stream_create("unpin", 100, 10);
+    ASSERT_EQ(cmq_stream_add_consumer(st, "zombie"), 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"12345", 5) > 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"67890", 5) > 0);
+    ASSERT_EQ(cmq_stream_append(st, (const uint8_t *)"abcdefgh", 8), (uint64_t)0);
+    ASSERT_EQ(cmq_stream_remove_consumer(st, "zombie"), 0);
+    ASSERT_EQ(cmq_stream_remove_consumer(st, "zombie"), -1);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"abcdefgh", 8) > 0);
+    cmq_stream_destroy(st);
+}
+
 TEST(stream, ack_rejects_beyond_last) {
     cmq_stream_t *st = cmq_stream_create("ackbound", 100, 10);
     ASSERT_EQ(cmq_stream_add_consumer(st, "c"), 0);

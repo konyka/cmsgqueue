@@ -4327,7 +4327,8 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     cmq_server_t *srv = (cmq_server_t *)data;
     int interval = srv->config.ping_interval_ms;
     if (interval <= 0) return;
-    uint64_t timeout_ms = (uint64_t)interval * 2;
+    /* Validate caps interval; widen before *2 so no signed overflow. */
+    uint64_t timeout_ms = (uint64_t)(unsigned)interval * 2u;
     uint64_t now = srv_now_ms();
     uint64_t write_timeout_ms = srv->config.write_timeout_ms > 0
                                     ? (uint64_t)srv->config.write_timeout_ms

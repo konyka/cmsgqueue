@@ -181,6 +181,26 @@ int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name) {
     return 0;
 }
 
+int cmq_stream_remove_consumer(cmq_stream_t *stream, const char *consumer_name) {
+    if (!stream || !consumer_name) return -1;
+    cmq_mutex_lock(&stream->lock);
+    for (size_t i = 0; i < stream->consumer_count; i++) {
+        if (strcmp(stream->consumers[i].name, consumer_name) != 0)
+            continue;
+        if (i + 1 < stream->consumer_count)
+            memmove(&stream->consumers[i], &stream->consumers[i + 1],
+                    (stream->consumer_count - i - 1) *
+                        sizeof(stream->consumers[0]));
+        stream->consumer_count--;
+        memset(&stream->consumers[stream->consumer_count], 0,
+               sizeof(stream->consumers[0]));
+        cmq_mutex_unlock(&stream->lock);
+        return 0;
+    }
+    cmq_mutex_unlock(&stream->lock);
+    return -1;
+}
+
 cmq_stream_consumer_t cmq_stream_consumer_state(cmq_stream_t *stream,
                                                    const char *consumer_name) {
     cmq_stream_consumer_t state = {0, 0};

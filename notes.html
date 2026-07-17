@@ -2955,6 +2955,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — ping/write timeout cap · stream remove_consumer</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">ping/write validate</span></td><td>✅</td><td>Cap at 24h; keepalive timeout uses unsigned widen before *2.</td></tr>
+<tr><td><span class="component-name">remove_consumer</span></td><td>✅</td><td>Unregister consumer so stopped ack cannot pin retention forever.</td></tr>
+</table>
+</div>
+
 
 
 

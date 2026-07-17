@@ -27,6 +27,8 @@ int cmq_stream_read(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out);
 void cmq_stream_msg_release(cmq_stream_msg_t *msg);
 
 int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name);
+/* Drop a consumer so a stopped ack watermark cannot pin retention forever. */
+int cmq_stream_remove_consumer(cmq_stream_t *stream, const char *consumer_name);
 cmq_stream_consumer_t cmq_stream_consumer_state(cmq_stream_t *stream, const char *consumer_name);
 uint64_t cmq_stream_consumer_next(cmq_stream_t *stream, const char *consumer_name);
 int cmq_stream_consumer_ack(cmq_stream_t *stream, const char *consumer_name, uint64_t seq);
