@@ -3722,6 +3722,7 @@ All 15 test suites passing, 0 warnings.
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">handle_subscribe</span></td><td>✅</td><td>After successful trie insert, link <code>c-&gt;subs</code> before unlocking (mirror UNSUB); closes race where PUBLISH matched then silent-dropped on <code>client_has_sub</code>.</td></tr>
+<tr><td><span class="component-name">SUBSCRIBE soft-delete rollback</span></td><td>✅</td><td>Account-dead rollback drops trie before unlinking <code>c-&gt;subs</code> (same silent-drop race as pre-link insert).</td></tr>
 </table>
 </div>
 

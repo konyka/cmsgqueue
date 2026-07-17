@@ -3280,13 +3280,8 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
             if (pre_credited && pre_acc)
                 cmq_account_dec_subscriptions(pre_acc, c->account_epoch);
             if (pre_acc) cmq_account_release(srv->accounts, pre_acc);
-            c->subs = entry->next;
-            if (c->sub_count > 0) c->sub_count--;
-            uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
-                                                CMQ_ATOMIC_RELAXED);
-            if (cur > 0)
-                cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
-                                          CMQ_ATOMIC_RELAXED);
+            /* Trie before unlink c->subs — mirror UNSUB / avoid PUBLISH match
+               then silent-drop on client_has_sub. */
             cmq_rwlock_wrlock(&srv->sublist_lock);
             if (entry->ref) {
                 cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
@@ -3294,6 +3289,13 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                 entry->ref = NULL;
             }
             cmq_rwlock_unlock(&srv->sublist_lock);
+            c->subs = entry->next;
+            if (c->sub_count > 0) c->sub_count--;
+            uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
+                                                CMQ_ATOMIC_RELAXED);
+            if (cur > 0)
+                cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
+                                          CMQ_ATOMIC_RELAXED);
             free(entry);
             cmq_send_suback(c, sub_id, 1);
             c->state = CMQ_CLIENT_CLOSING;
@@ -3303,6 +3305,13 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     } else if (!client_account_live(srv, c)) {
         /* Replace path: old entry already freed — roll back counts too or
            sub_count/stat/account quota stay inflated with zero live subs. */
+        cmq_rwlock_wrlock(&srv->sublist_lock);
+        if (entry->ref) {
+            cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
+            free(entry->ref);
+            entry->ref = NULL;
+        }
+        cmq_rwlock_unlock(&srv->sublist_lock);
         c->subs = entry->next;
         if (c->sub_count > 0) c->sub_count--;
         uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
@@ -3315,13 +3324,6 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
             cmq_account_dec_subscriptions(a, c->account_epoch);
             cmq_account_release(srv->accounts, a);
         }
-        cmq_rwlock_wrlock(&srv->sublist_lock);
-        if (entry->ref) {
-            cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
-            free(entry->ref);
-            entry->ref = NULL;
-        }
-        cmq_rwlock_unlock(&srv->sublist_lock);
         free(entry);
         cmq_send_suback(c, sub_id, 1);
         c->state = CMQ_CLIENT_CLOSING;
