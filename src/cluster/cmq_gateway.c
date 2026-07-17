@@ -182,6 +182,27 @@ static int gw_slot_claim_install(cmq_gateway_t *gw, size_t slot,
         gw_slot_install(gw, slot, cluster_name, addr, port, fd);
         return 0;
     }
+    /* Cross-cluster sticky: reclaim only if TCP is dead (never steal live). */
+    if (efd >= 0) {
+        char other[64];
+        cmq_mutex_lock(&gw->io_locks[slot]);
+        memcpy(other, gw->conns[slot].remote_cluster, sizeof(other));
+        other[sizeof(other) - 1] = '\0';
+        cmq_mutex_unlock(&gw->io_locks[slot]);
+        cmq_mutex_unlock(&gw->lock);
+        int alive = gw_fd_alive(efd);
+        cmq_mutex_lock(&gw->lock);
+        if (slot >= gw->conn_count) return -1;
+        cmq_mutex_lock(&gw->io_locks[slot]);
+        int still = (gw->conns[slot].fd == efd &&
+                     strcmp(gw->conns[slot].remote_cluster, other) == 0);
+        cmq_mutex_unlock(&gw->io_locks[slot]);
+        if (still && !alive && !gw_fd_alive(efd)) {
+            gw_slot_close_fd(gw, slot);
+            gw_slot_install(gw, slot, cluster_name, addr, port, fd);
+            return 0;
+        }
+    }
     return -1;
 }
 

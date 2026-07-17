@@ -3367,6 +3367,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — reclaim dead cross-cluster gateway slots</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">gw claim</span></td><td>✅</td><td><code>gw_slot_claim_install</code> reclaims dead sticky slots belonging to another cluster instead of growing <code>conn_count</code> until MAX.</td></tr>
+</table>
+</div>
+
 
 
 
