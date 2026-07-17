@@ -719,7 +719,11 @@ size_t cmq_gateway_connection_count(cmq_gateway_t *gw) {
     cmq_mutex_lock(&gw->lock);
     size_t c = 0;
     for (size_t i = 0; i < gw->conn_count; i++) {
-        if (gw->conns[i].remote_cluster[0] != '\0')
+        /* Identity published/cleared under io_lock — match forward/add_remote. */
+        cmq_mutex_lock(&gw->io_locks[i]);
+        int named = (gw->conns[i].remote_cluster[0] != '\0');
+        cmq_mutex_unlock(&gw->io_locks[i]);
+        if (named)
             c++;
     }
     cmq_mutex_unlock(&gw->lock);

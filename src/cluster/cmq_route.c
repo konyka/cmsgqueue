@@ -1004,7 +1004,10 @@ size_t cmq_route_pool_count(cmq_route_pool_t *pool) {
     cmq_mutex_lock(&pool->lock);
     size_t c = 0;
     for (size_t i = 0; i < pool->conn_count; i++) {
-        if (pool->conns[i].remote_id[0] != '\0')
+        /* Identity published/cleared under io_lock — match live_count/forward. */
+        char rid[CMQ_NODE_ID_SIZE];
+        route_slot_snap(pool, i, NULL, NULL, NULL, rid);
+        if (rid[0] != '\0')
             c++;
     }
     cmq_mutex_unlock(&pool->lock);

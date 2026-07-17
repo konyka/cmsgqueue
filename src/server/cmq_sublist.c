@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_sublist.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -150,7 +151,14 @@ static void rollback_created(cmq_sl_node_t **created, cmq_sl_node_t **parents,
 
 static int node_add_sub(cmq_sl_node_t *node, void *data) {
     if (node->sub_count >= node->sub_cap) {
-        size_t new_cap = node->sub_cap == 0 ? 4 : node->sub_cap * 2;
+        size_t new_cap;
+        if (node->sub_cap == 0) {
+            new_cap = 4;
+        } else {
+            if (node->sub_cap > SIZE_MAX / 2 / sizeof(void *)) return -1;
+            new_cap = node->sub_cap * 2;
+        }
+        if (new_cap > SIZE_MAX / sizeof(void *)) return -1;
         void **new_subs = realloc(node->subs, new_cap * sizeof(void *));
         if (!new_subs) return -1;
         node->subs = new_subs;
@@ -301,7 +309,14 @@ int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject, void *data) {
 
 static int result_append(cmq_sublist_result_t *result, void *data) {
     if (result->count >= result->cap) {
-        size_t new_cap = result->cap == 0 ? 8 : result->cap * 2;
+        size_t new_cap;
+        if (result->cap == 0) {
+            new_cap = 8;
+        } else {
+            if (result->cap > SIZE_MAX / 2 / sizeof(void *)) return -1;
+            new_cap = result->cap * 2;
+        }
+        if (new_cap > SIZE_MAX / sizeof(void *)) return -1;
         void **new_entries = realloc(result->entries, new_cap * sizeof(void *));
         if (!new_entries) return -1;
         result->entries = new_entries;

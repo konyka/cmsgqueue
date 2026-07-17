@@ -3043,6 +3043,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — sublist realloc overflow · route/gw count io_lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">sublist grow</span></td><td>✅</td><td><code>node_add_sub</code>/<code>result_append</code> reject <code>*2</code> wrap before realloc.</td></tr>
+<tr><td><span class="component-name">route/gw count</span></td><td>✅</td><td>Named-peer counts read identity under per-slot <code>io_lock</code>.</td></tr>
+</table>
+</div>
+
 
 
 
