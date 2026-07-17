@@ -561,12 +561,19 @@ int cmq_gateway_disconnect(cmq_gateway_t *gw, const char *cluster_name) {
     if (!gw || !cluster_name) return -1;
     cmq_mutex_lock(&gw->lock);
     for (size_t i = 0; i < gw->conn_count; i++) {
-        if (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0) {
+        cmq_mutex_lock(&gw->io_locks[i]);
+        int match = (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0);
+        cmq_mutex_unlock(&gw->io_locks[i]);
+        if (match) {
             gw_slot_close_fd(gw, i);
             while (gw->conn_count > 0) {
-                cmq_gw_conn_t *last = &gw->conns[gw->conn_count - 1];
-                if (last->remote_cluster[0] != '\0' || last->connected ||
-                    last->fd >= 0)
+                size_t last = gw->conn_count - 1;
+                cmq_mutex_lock(&gw->io_locks[last]);
+                int empty = (gw->conns[last].remote_cluster[0] == '\0' &&
+                             !gw->conns[last].connected &&
+                             gw->conns[last].fd < 0);
+                cmq_mutex_unlock(&gw->io_locks[last]);
+                if (!empty)
                     break;
                 gw->conn_count--;
             }

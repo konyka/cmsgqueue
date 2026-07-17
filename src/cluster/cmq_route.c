@@ -488,6 +488,33 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
         return 0;
     }
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
+        /* Post-handshake: reclaim sticky dead TCP before failing. */
+        for (size_t i = 0; i < pool->conn_count; ) {
+            int connected = 0, efd = -1;
+            route_slot_snap(pool, i, &connected, &efd, NULL, NULL);
+            if (!connected || efd < 0) {
+                i++;
+                continue;
+            }
+            cmq_mutex_unlock(&pool->lock);
+            int alive = route_fd_alive(efd);
+            cmq_mutex_lock(&pool->lock);
+            if (i >= pool->conn_count)
+                break;
+            int f2 = -1, c2 = 0;
+            route_slot_snap(pool, i, &c2, &f2, NULL, NULL);
+            if (!alive && f2 == efd && c2 && !route_fd_alive(efd)) {
+                route_slot_close(pool, i);
+                route_slot_install(pool, i, node_id, fd, 1, 1, addr, port);
+                cmq_mutex_unlock(&pool->lock);
+                return 0;
+            }
+            if (alive && f2 == efd) {
+                i++;
+                continue;
+            }
+            i = 0;
+        }
         cmq_mutex_unlock(&pool->lock);
         close(fd);
         return -1;
@@ -790,6 +817,33 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
         return 0;
     }
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
+        /* Inbound attach: reclaim sticky dead outbound before rejecting. */
+        for (size_t i = 0; i < pool->conn_count; ) {
+            int connected = 0, efd = -1;
+            route_slot_snap(pool, i, &connected, &efd, NULL, NULL);
+            if (!connected || efd < 0) {
+                i++;
+                continue;
+            }
+            cmq_mutex_unlock(&pool->lock);
+            int alive = route_fd_alive(efd);
+            cmq_mutex_lock(&pool->lock);
+            if (i >= pool->conn_count)
+                break;
+            int f2 = -1, c2 = 0;
+            route_slot_snap(pool, i, &c2, &f2, NULL, NULL);
+            if (!alive && f2 == efd && c2 && !route_fd_alive(efd)) {
+                route_slot_close(pool, i);
+                route_slot_install(pool, i, node_id, fd, 0, 0, NULL, 0);
+                cmq_mutex_unlock(&pool->lock);
+                return 0;
+            }
+            if (alive && f2 == efd) {
+                i++;
+                continue;
+            }
+            i = 0;
+        }
         cmq_mutex_unlock(&pool->lock);
         return -1;
     }
@@ -844,12 +898,17 @@ int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return -1;
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
-        if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
+        char rid[CMQ_NODE_ID_SIZE];
+        route_slot_snap(pool, i, NULL, NULL, NULL, rid);
+        if (strcmp(rid, node_id) == 0) {
             /* Tombstone in place — never memmove (io_locks are index-stable). */
             route_slot_close(pool, i);
             while (pool->conn_count > 0) {
-                cmq_route_conn_t *last = &pool->conns[pool->conn_count - 1];
-                if (last->remote_id[0] != '\0' || last->connected || last->fd >= 0)
+                size_t last = pool->conn_count - 1;
+                char lrid[CMQ_NODE_ID_SIZE];
+                int connected = 0, efd = -1;
+                route_slot_snap(pool, last, &connected, &efd, NULL, lrid);
+                if (lrid[0] != '\0' || connected || efd >= 0)
                     break;
                 pool->conn_count--;
             }
