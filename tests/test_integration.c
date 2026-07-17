@@ -107,6 +107,7 @@ TEST(integration, account_stats_on_connect) {
     cmq_account_t *def_acc = cmq_account_get(srv->accounts, "$default", NULL);
     ASSERT_NOT_NULL(def_acc);
     ASSERT_EQ(def_acc->connections, (uint64_t)0);
+    cmq_account_release(srv->accounts, def_acc);
 
     pthread_t tid;
     pthread_create(&tid, NULL, server_thread, srv);
@@ -122,6 +123,7 @@ TEST(integration, account_stats_on_connect) {
     cmq_account_t *acc_after = cmq_account_get(srv->accounts, "$default", NULL);
     ASSERT_NOT_NULL(acc_after);
     ASSERT(acc_after->connections >= 1);
+    cmq_account_release(srv->accounts, acc_after);
 
     cmq_parser_destroy(parser);
     close(fd);
@@ -194,6 +196,7 @@ TEST(integration, account_stats_on_pubsub) {
     ASSERT_NOT_NULL(acc);
     ASSERT(acc->messages_in >= 1);
     ASSERT(acc->subscriptions >= 1);
+    cmq_account_release(srv->accounts, acc);
 
     cmq_frame_t msg_frame;
     ASSERT_EQ(recv_frame(sub_fd, &msg_frame, sub_parser), 0);
@@ -201,7 +204,9 @@ TEST(integration, account_stats_on_pubsub) {
     free_frame_payload(&msg_frame);
 
     acc = cmq_account_get(srv->accounts, "$default", NULL);
+    ASSERT_NOT_NULL(acc);
     ASSERT(acc->messages_out >= 1);
+    cmq_account_release(srv->accounts, acc);
 
     cmq_parser_destroy(pub_parser);
     cmq_parser_destroy(sub_parser);
@@ -273,6 +278,7 @@ TEST(integration, account_create_delete_via_api) {
     cmq_account_t *acme = cmq_account_get(srv->accounts, "tenant-acme", NULL);
     ASSERT_NOT_NULL(acme);
     ASSERT_EQ(acme->active, 1);
+    cmq_account_release(srv->accounts, acme);
 
     ASSERT_EQ(cmq_account_delete(srv->accounts, "tenant-acme"), 0);
     ASSERT_EQ(cmq_account_count(srv->accounts), (size_t)2);

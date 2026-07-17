@@ -27,6 +27,7 @@ TEST(account, create_delete) {
     ASSERT_NOT_NULL(a);
     ASSERT_STR_EQ(a->name, "tenant-a");
     ASSERT_EQ(a->active, 1);
+    cmq_account_release(mgr, a);
 
     ASSERT_EQ(cmq_account_delete(mgr, "tenant-a"), 0);
     ASSERT_EQ(cmq_account_count(mgr), (size_t)1);
@@ -42,6 +43,7 @@ TEST(account, create_delete) {
     ASSERT_EQ(cmq_account_create(mgr, "other-name"), 0);
     ASSERT_STR_EQ(old->name, "keep-ptr"); /* pointer still names keep-ptr */
     ASSERT_EQ(old->active, 0);
+    cmq_account_release(mgr, old);
 
     /* When the table is full, inactive slots are reclaimed for new names. */
     {
@@ -54,7 +56,9 @@ TEST(account, create_delete) {
         ASSERT_EQ(cmq_account_create(full, "overflow"), -1);
         ASSERT_EQ(cmq_account_delete(full, "u0"), 0);
         ASSERT_EQ(cmq_account_create(full, "reclaimed"), 0);
-        ASSERT_NOT_NULL(cmq_account_get(full, "reclaimed", NULL));
+        cmq_account_t *rc = cmq_account_get(full, "reclaimed", NULL);
+        ASSERT_NOT_NULL(rc);
+        cmq_account_release(full, rc);
         ASSERT_NULL(cmq_account_get(full, "u0", NULL));
         cmq_account_manager_destroy(full);
     }
@@ -74,6 +78,7 @@ TEST(account, stats) {
     cmq_account_manager_t *mgr = cmq_account_manager_create();
     cmq_account_create(mgr, "s1");
     cmq_account_t *a = cmq_account_get(mgr, "s1", NULL);
+    ASSERT_NOT_NULL(a);
 
     cmq_account_inc_connections(a, a->epoch);
     cmq_account_inc_connections(a, a->epoch);
@@ -93,6 +98,7 @@ TEST(account, stats) {
     cmq_account_inc_msgs_out(a, a->epoch, 50);
     ASSERT_EQ(a->messages_out, (uint64_t)1);
     ASSERT_EQ(a->bytes_out, (uint64_t)50);
+    cmq_account_release(mgr, a);
 
     cmq_account_manager_destroy(mgr);
 }
@@ -189,6 +195,7 @@ TEST(account, may_deliver_cross_account) {
         /* Soft-delete itself bumps epoch so stale sessions cannot linger. */
         ASSERT(a->epoch != e0);
         e0 = a->epoch;
+        cmq_account_release(m2, a);
         /* CONNECT path must refuse soft-deleted names. */
         ASSERT_EQ(cmq_account_ensure(m2, "ep"), -1);
         ASSERT_EQ(cmq_account_create(m2, "ep"), 0);
@@ -197,6 +204,7 @@ TEST(account, may_deliver_cross_account) {
         ASSERT(a->epoch != e0);
         ASSERT_EQ(cmq_account_ensure(m2, "ep"), 0); /* already active */
         ASSERT_EQ(cmq_account_ensure(m2, "brand-new"), 0);
+        cmq_account_release(m2, a);
         (void)before;
         cmq_account_manager_destroy(m2);
     }

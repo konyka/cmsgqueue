@@ -3,6 +3,8 @@
 #include "cmq_thread.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
+#include <time.h>
 
 typedef struct {
     char account[CMQ_ACCOUNT_NAME_SIZE];
@@ -18,7 +20,24 @@ struct cmq_account_manager {
     cmq_account_perms_t perms[CMQ_ACCOUNT_MAX];
     size_t perms_count;
     cmq_mutex_t lock;
+    atomic_int in_flight; /* mgr APIs + outstanding get() holds */
+    atomic_int dying;
 };
+
+static int mgr_begin_op(cmq_account_manager_t *mgr) {
+    if (atomic_load_explicit(&mgr->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&mgr->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&mgr->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&mgr->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void mgr_end_op(cmq_account_manager_t *mgr) {
+    atomic_fetch_sub_explicit(&mgr->in_flight, 1, memory_order_acq_rel);
+}
 
 static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char *name);
 
@@ -61,17 +80,24 @@ static void account_undo_stale_inc(uint64_t *counter, uint64_t delta,
 cmq_account_manager_t *cmq_account_manager_create(void) {
     cmq_account_manager_t *mgr = calloc(1, sizeof(cmq_account_manager_t));
     if (!mgr) return NULL;
+    atomic_init(&mgr->in_flight, 0);
+    atomic_init(&mgr->dying, 0);
     cmq_mutex_init(&mgr->lock);
     return mgr;
 }
 
 void cmq_account_manager_destroy(cmq_account_manager_t *mgr) {
     if (!mgr) return;
+    atomic_store_explicit(&mgr->dying, 1, memory_order_release);
+    while (atomic_load_explicit(&mgr->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     cmq_mutex_destroy(&mgr->lock);
     free(mgr);
 }
 
-int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
+static int account_create_impl(cmq_account_manager_t *mgr, const char *name) {
     if (!mgr || !name) return -1;
     size_t nlen = strnlen(name, CMQ_ACCOUNT_NAME_SIZE);
     if (nlen == 0 || nlen >= CMQ_ACCOUNT_NAME_SIZE) return -1;
@@ -125,7 +151,7 @@ int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
     return 0;
 }
 
-int cmq_account_ensure(cmq_account_manager_t *mgr, const char *name) {
+static int account_ensure_impl(cmq_account_manager_t *mgr, const char *name) {
     if (!mgr || !name) return -1;
     size_t nlen = strnlen(name, CMQ_ACCOUNT_NAME_SIZE);
     if (nlen == 0 || nlen >= CMQ_ACCOUNT_NAME_SIZE) return -1;
@@ -170,7 +196,7 @@ int cmq_account_ensure(cmq_account_manager_t *mgr, const char *name) {
     return 0;
 }
 
-int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
+static int account_delete_impl(cmq_account_manager_t *mgr, const char *name) {
     if (!mgr || !name) return -1;
     cmq_mutex_lock(&mgr->lock);
     for (size_t i = 0; i < mgr->count; i++) {
@@ -195,6 +221,7 @@ cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name,
                                 uint32_t *out_epoch) {
     if (!mgr || !name) return NULL;
     if (strnlen(name, CMQ_ACCOUNT_NAME_SIZE) >= CMQ_ACCOUNT_NAME_SIZE) return NULL;
+    if (mgr_begin_op(mgr) != 0) return NULL;
     cmq_mutex_lock(&mgr->lock);
     cmq_account_t *found = NULL;
     for (size_t i = 0; i < mgr->count; i++) {
@@ -207,10 +234,20 @@ cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name,
         }
     }
     cmq_mutex_unlock(&mgr->lock);
+    if (!found) {
+        mgr_end_op(mgr);
+        return NULL;
+    }
+    /* Hold remains until cmq_account_release — covers get→inc vs destroy. */
     return found;
 }
 
-size_t cmq_account_count(cmq_account_manager_t *mgr) {
+void cmq_account_release(cmq_account_manager_t *mgr, cmq_account_t *acc) {
+    if (!mgr || !acc) return;
+    mgr_end_op(mgr);
+}
+
+static size_t account_count_impl(cmq_account_manager_t *mgr) {
     if (!mgr) return 0;
     cmq_mutex_lock(&mgr->lock);
     size_t c = 0;
@@ -379,7 +416,7 @@ static int peer_account_ok(cmq_account_manager_t *mgr, const char *name) {
     return account_is_active(mgr, name);
 }
 
-int cmq_account_add_export(cmq_account_manager_t *mgr, const char *account,
+static int account_add_export_impl(cmq_account_manager_t *mgr, const char *account,
                             const char *subject, const char *dest_account) {
     if (!mgr || !account_name_ok(account) || !acl_subject_ok(subject) ||
         !account_name_ok(dest_account))
@@ -413,7 +450,7 @@ int cmq_account_add_export(cmq_account_manager_t *mgr, const char *account,
     return 0;
 }
 
-int cmq_account_remove_export(cmq_account_manager_t *mgr, const char *account,
+static int account_remove_export_impl(cmq_account_manager_t *mgr, const char *account,
                                const char *subject) {
     if (!mgr || !account || !subject) return -1;
     cmq_mutex_lock(&mgr->lock);
@@ -434,7 +471,7 @@ int cmq_account_remove_export(cmq_account_manager_t *mgr, const char *account,
     return removed ? 0 : -1;
 }
 
-size_t cmq_account_export_count(cmq_account_manager_t *mgr, const char *account) {
+static size_t account_export_count_impl(cmq_account_manager_t *mgr, const char *account) {
     if (!mgr || !account) return 0;
     cmq_mutex_lock(&mgr->lock);
     cmq_account_perms_t *p = find_perms(mgr, account);
@@ -443,7 +480,7 @@ size_t cmq_account_export_count(cmq_account_manager_t *mgr, const char *account)
     return c;
 }
 
-int cmq_account_add_import(cmq_account_manager_t *mgr, const char *account,
+static int account_add_import_impl(cmq_account_manager_t *mgr, const char *account,
                             const char *subject, const char *source_account) {
     if (!mgr || !account_name_ok(account) || !acl_subject_ok(subject) ||
         !account_name_ok(source_account))
@@ -477,7 +514,7 @@ int cmq_account_add_import(cmq_account_manager_t *mgr, const char *account,
     return 0;
 }
 
-int cmq_account_remove_import(cmq_account_manager_t *mgr, const char *account,
+static int account_remove_import_impl(cmq_account_manager_t *mgr, const char *account,
                                const char *subject) {
     if (!mgr || !account || !subject) return -1;
     cmq_mutex_lock(&mgr->lock);
@@ -498,7 +535,7 @@ int cmq_account_remove_import(cmq_account_manager_t *mgr, const char *account,
     return removed ? 0 : -1;
 }
 
-size_t cmq_account_import_count(cmq_account_manager_t *mgr, const char *account) {
+static size_t account_import_count_impl(cmq_account_manager_t *mgr, const char *account) {
     if (!mgr || !account) return 0;
     cmq_mutex_lock(&mgr->lock);
     cmq_account_perms_t *p = find_perms(mgr, account);
@@ -534,7 +571,7 @@ static int acct_eq_or_star(const char *rule, const char *actual) {
     return strcmp(rule, "*") == 0 || strcmp(rule, actual) == 0;
 }
 
-int cmq_account_can_import(cmq_account_manager_t *mgr, const char *account,
+static int account_can_import_impl(cmq_account_manager_t *mgr, const char *account,
                             const char *subject) {
     if (!mgr || !account || !subject) return 0;
     cmq_mutex_lock(&mgr->lock);
@@ -570,7 +607,7 @@ out:
     return ok;
 }
 
-int cmq_account_can_export(cmq_account_manager_t *mgr, const char *account,
+static int account_can_export_impl(cmq_account_manager_t *mgr, const char *account,
                             const char *subject) {
     if (!mgr || !account || !subject) return 0;
     cmq_mutex_lock(&mgr->lock);
@@ -593,7 +630,7 @@ int cmq_account_can_export(cmq_account_manager_t *mgr, const char *account,
     return ok;
 }
 
-int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
+static int account_may_deliver_impl(cmq_account_manager_t *mgr, const char *pub_account,
                              const char *sub_account, const char *subject) {
     if (!mgr || !pub_account || !sub_account || !subject) return 0;
     cmq_mutex_lock(&mgr->lock);
@@ -652,3 +689,115 @@ int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
     cmq_mutex_unlock(&mgr->lock);
     return (export_ok && import_ok) ? 1 : 0;
 }
+
+int cmq_account_create(cmq_account_manager_t *mgr, const char *name) {
+    if (!mgr || !name) return -1;
+    if (mgr_begin_op(mgr) != 0) return -1;
+    int rc = account_create_impl(mgr, name);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+int cmq_account_ensure(cmq_account_manager_t *mgr, const char *name) {
+    if (!mgr || !name) return -1;
+    if (mgr_begin_op(mgr) != 0) return -1;
+    int rc = account_ensure_impl(mgr, name);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+int cmq_account_delete(cmq_account_manager_t *mgr, const char *name) {
+    if (!mgr || !name) return -1;
+    if (mgr_begin_op(mgr) != 0) return -1;
+    int rc = account_delete_impl(mgr, name);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+size_t cmq_account_count(cmq_account_manager_t *mgr) {
+    if (!mgr) return 0;
+    if (mgr_begin_op(mgr) != 0) return 0;
+    size_t c = account_count_impl(mgr);
+    mgr_end_op(mgr);
+    return c;
+}
+
+int cmq_account_add_export(cmq_account_manager_t *mgr, const char *account,
+                            const char *subject, const char *dest_account) {
+    if (!mgr) return -1;
+    if (mgr_begin_op(mgr) != 0) return -1;
+    int rc = account_add_export_impl(mgr, account, subject, dest_account);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+int cmq_account_remove_export(cmq_account_manager_t *mgr, const char *account,
+                               const char *subject) {
+    if (!mgr) return -1;
+    if (mgr_begin_op(mgr) != 0) return -1;
+    int rc = account_remove_export_impl(mgr, account, subject);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+size_t cmq_account_export_count(cmq_account_manager_t *mgr, const char *account) {
+    if (!mgr) return 0;
+    if (mgr_begin_op(mgr) != 0) return 0;
+    size_t c = account_export_count_impl(mgr, account);
+    mgr_end_op(mgr);
+    return c;
+}
+
+int cmq_account_add_import(cmq_account_manager_t *mgr, const char *account,
+                            const char *subject, const char *source_account) {
+    if (!mgr) return -1;
+    if (mgr_begin_op(mgr) != 0) return -1;
+    int rc = account_add_import_impl(mgr, account, subject, source_account);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+int cmq_account_remove_import(cmq_account_manager_t *mgr, const char *account,
+                               const char *subject) {
+    if (!mgr) return -1;
+    if (mgr_begin_op(mgr) != 0) return -1;
+    int rc = account_remove_import_impl(mgr, account, subject);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+size_t cmq_account_import_count(cmq_account_manager_t *mgr, const char *account) {
+    if (!mgr) return 0;
+    if (mgr_begin_op(mgr) != 0) return 0;
+    size_t c = account_import_count_impl(mgr, account);
+    mgr_end_op(mgr);
+    return c;
+}
+
+int cmq_account_can_import(cmq_account_manager_t *mgr, const char *account,
+                            const char *subject) {
+    if (!mgr) return 0;
+    if (mgr_begin_op(mgr) != 0) return 0;
+    int rc = account_can_import_impl(mgr, account, subject);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+int cmq_account_can_export(cmq_account_manager_t *mgr, const char *account,
+                            const char *subject) {
+    if (!mgr) return 0;
+    if (mgr_begin_op(mgr) != 0) return 0;
+    int rc = account_can_export_impl(mgr, account, subject);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
+                             const char *sub_account, const char *subject) {
+    if (!mgr) return 0;
+    if (mgr_begin_op(mgr) != 0) return 0;
+    int rc = account_may_deliver_impl(mgr, pub_account, sub_account, subject);
+    mgr_end_op(mgr);
+    return rc;
+}
+

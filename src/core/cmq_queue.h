@@ -13,6 +13,8 @@ typedef struct {
     cmq_queue_node_t *head;
     cmq_queue_node_t *tail;
     cmq_queue_node_t *stub;
+    cmq_atomic_int in_flight; /* push vs destroy */
+    cmq_atomic_int dying;
 } cmq_queue_t;
 
 void cmq_queue_init(cmq_queue_t *q);

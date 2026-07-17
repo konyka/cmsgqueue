@@ -23,9 +23,24 @@ struct cmq_log {
     pthread_mutex_t lock;
     cmq_log_appender_t appenders[CMQ_LOG_MAX_APPENDERS];
     size_t appender_count;
-    atomic_int in_flight; /* dispatch holding snapshot after unlock */
+    atomic_int in_flight; /* dispatch + set_level/add_appender vs destroy */
     atomic_int dying;     /* destroy claimed — no new dispatch */
 };
+
+static int log_begin_op(cmq_log_t *log) {
+    if (atomic_load_explicit(&log->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&log->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&log->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&log->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void log_end_op(cmq_log_t *log) {
+    atomic_fetch_sub_explicit(&log->in_flight, 1, memory_order_acq_rel);
+}
 
 
 static const char* level_to_string(cmq_log_level_t level) {
@@ -121,13 +136,16 @@ void cmq_log_destroy(cmq_log_t *log) {
 
 void cmq_log_set_level(cmq_log_t *log, cmq_log_level_t level) {
     if (!log) return;
+    if (log_begin_op(log) != 0) return;
     pthread_mutex_lock(&log->lock);
     log->level = level;
     pthread_mutex_unlock(&log->lock);
+    log_end_op(log);
 }
 
 int cmq_log_add_appender(cmq_log_t *log, cmq_log_appender_fn fn, void *ctx) {
     if (!log || !fn) return -1;
+    if (log_begin_op(log) != 0) return -1;
     int rc = -1;
     pthread_mutex_lock(&log->lock);
     if (log->appender_count < CMQ_LOG_MAX_APPENDERS) {
@@ -137,6 +155,7 @@ int cmq_log_add_appender(cmq_log_t *log, cmq_log_appender_fn fn, void *ctx) {
         rc = 0;
     }
     pthread_mutex_unlock(&log->lock);
+    log_end_op(log);
     return rc;
 }
 

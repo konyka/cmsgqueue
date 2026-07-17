@@ -1,5 +1,7 @@
+#define _POSIX_C_SOURCE 200809L
 #include "cmq_queue.h"
 #include <stdlib.h>
+#include <time.h>
 
 /* Lock-free MPSC queue (multiple producers, single consumer).
    Consumer must be a single thread — head is not CAS-protected. */
@@ -8,16 +10,25 @@ void cmq_queue_init(cmq_queue_t *q) {
     q->stub = malloc(sizeof(cmq_queue_node_t));
     if (!q->stub) {
         q->head = q->tail = NULL;
+        atomic_init(&q->in_flight, 0);
+        atomic_init(&q->dying, 0);
         return;
     }
     q->stub->next = NULL;
     q->stub->data = NULL;
     q->head = q->stub;
     q->tail = q->stub;
+    atomic_init(&q->in_flight, 0);
+    atomic_init(&q->dying, 0);
 }
 
 void cmq_queue_destroy(cmq_queue_t *q) {
     if (!q) return;
+    atomic_store_explicit(&q->dying, 1, memory_order_release);
+    while (atomic_load_explicit(&q->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     while (cmq_queue_pop(q) != NULL) {}
     /* After drain, head is the remaining sentinel (original stub may already
        have been freed by the first successful pop). */
@@ -29,13 +40,24 @@ void cmq_queue_destroy(cmq_queue_t *q) {
 
 int cmq_queue_push(cmq_queue_t *q, void *data) {
     if (!q || !q->tail) return -1;
+    if (atomic_load_explicit(&q->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&q->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&q->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&q->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
     cmq_queue_node_t *node = malloc(sizeof(cmq_queue_node_t));
-    if (!node) return -1;
+    if (!node) {
+        atomic_fetch_sub_explicit(&q->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
     node->data = data;
     node->next = NULL;
 
     cmq_queue_node_t *prev = __atomic_exchange_n(&q->tail, node, __ATOMIC_RELEASE);
     __atomic_store_n(&prev->next, node, __ATOMIC_RELEASE);
+    atomic_fetch_sub_explicit(&q->in_flight, 1, memory_order_acq_rel);
     return 0;
 }
 

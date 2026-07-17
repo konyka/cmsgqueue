@@ -3149,6 +3149,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — account get/release · cluster/log/queue destroy barriers</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">account hold</span></td><td>✅</td><td><code>get</code> holds <code>in_flight</code> until <code>cmq_account_release</code>; destroy drains.</td></tr>
+<tr><td><span class="component-name">cluster/log</span></td><td>✅</td><td>Public APIs + set_level/add_appender participate in <code>dying</code>/<code>in_flight</code>.</td></tr>
+<tr><td><span class="component-name">queue push</span></td><td>✅</td><td>MPSC <code>push</code> gated vs <code>destroy</code> drain.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -47,6 +47,8 @@ int cmq_account_delete(cmq_account_manager_t *mgr, const char *name);
 /* out_epoch (optional): snapshot under lock — pass to inc/dec to reject reclaim races. */
 cmq_account_t *cmq_account_get(cmq_account_manager_t *mgr, const char *name,
                                 uint32_t *out_epoch);
+/* Pair with every successful get() before manager destroy. */
+void cmq_account_release(cmq_account_manager_t *mgr, cmq_account_t *acc);
 size_t cmq_account_count(cmq_account_manager_t *mgr);
 
 void cmq_account_inc_stat(cmq_account_t *acc, size_t field_offset, uint64_t delta);
