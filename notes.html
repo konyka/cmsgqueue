@@ -3726,6 +3726,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — kqueue ev_mod rollback restores old cb/data</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ev_mod (kqueue)</span></td><td>✅</td><td>On <code>kqueue_add_filters</code> fail, republish prior <code>cb</code>/<code>data</code> with <code>old_events</code> (was restoring filters but leaving the new callback).</td></tr>
+</table>
+</div>
+
 
 
 

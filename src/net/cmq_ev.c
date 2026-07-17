@@ -456,6 +456,8 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
 
     cmq_mutex_lock(&loop->watchers_lock);
     int old_events = loop->watchers[fd].events;
+    cmq_ev_cb_t old_cb = loop->watchers[fd].cb;
+    void *old_data = loop->watchers[fd].data;
     cmq_mutex_unlock(&loop->watchers_lock);
 
     watcher_publish(loop, fd, events, cb, data);
@@ -471,10 +473,11 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     if (n > 0) kevent(loop->backend_fd, ev, n, NULL, 0, NULL);
 
     if (kqueue_add_filters(loop->backend_fd, fd, events) != 0) {
-        /* Restore previous filters — do not leave fd unwatched. */
+        /* Restore previous filters + cb/data — do not leave fd unwatched
+           with a mismatched new callback (wrong client on next dispatch). */
         if (old_events != 0)
             (void)kqueue_add_filters(loop->backend_fd, fd, old_events);
-        watcher_publish(loop, fd, old_events, cb, data);
+        watcher_publish(loop, fd, old_events, old_cb, old_data);
         ev_end_op(loop);
         return -1;
     }
