@@ -3552,6 +3552,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — stop reject late accept · WS INIT keepalive · route CONNACK order</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_server_stop</span></td><td>✅</td><td>Sets <code>acceptor_drain</code>; accept rechecks after TLS before idmap/ev_add.</td></tr>
+<tr><td><span class="component-name">WS INIT activity</span></td><td>✅</td><td>Touch keepalive on every WS data fragment while INIT (fragmented CONNECT).</td></tr>
+<tr><td><span class="component-name">route CONNECT</span></td><td>✅</td><td>Drain+<code>mark_connected</code> before CONNACK 0; failures send CONNACK 1.</td></tr>
+</table>
+</div>
+
 
 
 

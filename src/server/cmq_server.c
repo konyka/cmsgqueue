@@ -4210,14 +4210,14 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         }
         if (!c->is_websocket)
             send_info_frame(srv, c);
-        cmq_send_connack(c, 0);
         if (want_route) {
+            /* Promote pool before CONNACK 0 — never advertise success while
+               still staged (drain/mark fail must send CONNACK 1). */
             if (client_drain_write_sync(c) != 0 ||
                 c->state != CMQ_CLIENT_CONNECTED) {
-                /* Staged fd still looks live to peer_live — detach now so
-                   outbound reconnect is not blocked until teardown. */
                 cmq_route_detach_fd(srv->routes, c->fd);
                 c->is_route = 0;
+                cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
@@ -4225,11 +4225,13 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             if (cmq_route_mark_connected(srv->routes, c->fd) != 0) {
                 cmq_route_detach_fd(srv->routes, c->fd);
                 c->is_route = 0;
+                cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
         }
+        cmq_send_connack(c, 0);
         break;
     case CMQ_OP_PING:
         if (!client_account_live(srv, c)) {
@@ -4902,9 +4904,14 @@ static void client_read_cb(int fd, int events, void *data) {
                     c->ws_msg_len += ws_frame.payload_len;
                 }
 
+                /* INIT WS: refresh on every data fragment (slow CONNECT may
+                   span FIN=0 frames). CONNECTED: FIN-only (avoid FIN=0 spam). */
+                if (c->state == CMQ_CLIENT_INIT)
+                    client_touch_activity(c);
+                else if (ws_frame.fin && c->state == CMQ_CLIENT_CONNECTED)
+                    client_touch_activity(c);
+
                 if (ws_frame.fin) {
-                    if (c->state == CMQ_CLIENT_CONNECTED)
-                        client_touch_activity(c);
                     if (c->ws_msg_len > 0) {
                         int rc = cmq_parser_feed(c->parser, c->ws_msg_buf,
                                                   c->ws_msg_len);
@@ -5338,6 +5345,13 @@ static void accept_cb(int fd, int events, void *data) {
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
                 continue;
             }
+            /* stop()/drain may race during TLS handshake — reject late admits. */
+            if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+                cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
 
             /* Hold clients_lock through idmap publish + ev_add so TEARDOWN /
                keepalive cannot destroy the client mid-accept (they need the
@@ -5379,6 +5393,12 @@ static void accept_cb(int fd, int events, void *data) {
             }
             client->worker_id = -1;
             if (client_tls_handshake(srv, client) != 0) {
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+                cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
                 continue;
@@ -6048,8 +6068,13 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
 
 void cmq_server_stop(cmq_server_t *srv) {
     if (!srv) return;
+    /* Align drain: reject late accepts still in TLS/handshake before register. */
+    cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
-    if (srv->ev_loop) cmq_ev_stop(srv->ev_loop);
+    if (srv->ev_loop) {
+        cmq_ev_stop(srv->ev_loop);
+        cmq_ev_wakeup(srv->ev_loop);
+    }
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
             cmq_ev_stop(srv->workers[i].ev_loop);
