@@ -3734,6 +3734,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — epoll ev_mod restore before clear</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ev_mod (epoll)</span></td><td>✅</td><td>On MOD/re-ADD fail, restore prior interest+cb/data when possible (align kqueue); only DEL+<code>watcher_clear</code> if restore also fails.</td></tr>
+</table>
+</div>
+
 
 
 

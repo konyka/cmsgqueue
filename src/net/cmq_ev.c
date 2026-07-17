@@ -284,6 +284,13 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     if (!loop || fd < 0 || fd >= loop->watchers_cap) return -1;
     if (ev_begin_op(loop) != 0) return -1;
 
+    cmq_mutex_lock(&loop->watchers_lock);
+    int was_present = (loop->watchers[fd].fd >= 0);
+    int old_events = loop->watchers[fd].events;
+    cmq_ev_cb_t old_cb = loop->watchers[fd].cb;
+    void *old_data = loop->watchers[fd].data;
+    cmq_mutex_unlock(&loop->watchers_lock);
+
     /* Publish before epoll_ctl so a racing wait never sees stale cb/data. */
     watcher_publish(loop, fd, events, cb, data);
 
@@ -296,8 +303,24 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
         /* fd may have been dropped from the set; re-ADD once. */
         if (errno != ENOENT ||
             epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
-            /* Drop any leftover interest before clearing the table so a later
-               ev_del (!present) cannot leave a silent epoll entry behind. */
+            /* Align kqueue: restore prior interest+cb when possible. MOD fail
+               usually leaves the old epoll entry — do not clear into a silent
+               dispatch hole (or mismatched new cb over old filters). */
+            if (was_present && old_events != 0) {
+                struct epoll_event old_ev;
+                memset(&old_ev, 0, sizeof(old_ev));
+                old_ev.events = (uint32_t)cmq_to_epoll_events(old_events);
+                old_ev.data.fd = fd;
+                if (epoll_ctl(loop->backend_fd, EPOLL_CTL_MOD, fd, &old_ev) == 0 ||
+                    (errno == ENOENT &&
+                     epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd,
+                               &old_ev) == 0)) {
+                    watcher_publish(loop, fd, old_events, old_cb, old_data);
+                    ev_end_op(loop);
+                    return -1;
+                }
+            }
+            /* Restore failed — drop leftover interest then clear table. */
             (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
             watcher_clear(loop, fd);
             ev_end_op(loop);
