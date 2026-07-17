@@ -3643,6 +3643,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route remaining sticky reclaim under io_lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route connect/add/attach reclaim</span></td><td>✅</td><td>Post-handshake / pool-full / add_conn replace / inbound full-table reclaim and <code>live_count</code> probe under <code>io_lock</code> (no unlock-stale alive skip).</td></tr>
+</table>
+</div>
+
 
 
 
