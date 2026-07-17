@@ -2362,12 +2362,14 @@ done:
             cmq_mutex_lock(&pw->clients_lock);
             cmq_client_t *pub = cmq_idmap_get(pw->idmap, ctx->publisher_id);
             pub_live = (pub && pub->conn_gen == ctx->publisher_gen &&
+                        pub->state == CMQ_CLIENT_CONNECTED &&
                         client_account_live(srv, pub));
             cmq_mutex_unlock(&pw->clients_lock);
         } else {
             cmq_mutex_lock(&srv->clients_lock);
             cmq_client_t *pub = cmq_idmap_get(srv->idmap, ctx->publisher_id);
             pub_live = (pub && pub->conn_gen == ctx->publisher_gen &&
+                        pub->state == CMQ_CLIENT_CONNECTED &&
                         client_account_live(srv, pub));
             cmq_mutex_unlock(&srv->clients_lock);
         }
@@ -4201,9 +4203,12 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             char nid[CMQ_NODE_ID_SIZE];
             snprintf(nid, sizeof(nid), "r%d", route_ri);
             if (cmq_route_attach_inbound(srv->routes, nid, c->fd) != 0) {
-                /* CONNACK before CLOSING — send_direct rejects CLOSING. */
+                /* CONNACK before CLOSING — send_direct rejects CLOSING.
+                   Align drain/mark fail: nudge EOF so teardown can reclaim
+                   connection credit / slots promptly. */
                 cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
+                (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
             c->is_route = 1;

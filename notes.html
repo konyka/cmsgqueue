@@ -3570,6 +3570,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route attach fail EOF · coro ERROR only CONNECTED</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route attach fail</span></td><td>✅</td><td>CONNACK 1 path <code>SHUT_RDWR</code> (align drain/mark fail) so credit/slots reclaim promptly.</td></tr>
+<tr><td><span class="component-name">coro ERROR</span></td><td>✅</td><td>Notify publisher only when still <code>CONNECTED</code> + account live (skip CLOSING).</td></tr>
+</table>
+</div>
+
 
 
 
