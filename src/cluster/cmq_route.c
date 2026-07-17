@@ -273,12 +273,27 @@ static void route_slot_close(cmq_route_pool_t *pool, size_t idx) {
     cmq_mutex_unlock(&pool->io_locks[idx]);
 }
 
-/* Zero-timeout TCP liveness — sticky connected after peer death. */
-static int route_fd_alive(int fd) {
+/* Zero-timeout TCP liveness — detect peer FIN (poll events=0 misses it). */
+int cmq_tcp_fd_alive(int fd) {
     if (fd < 0) return 0;
-    struct pollfd pfd = { .fd = fd, .events = 0 };
+    struct pollfd pfd = { .fd = fd, .events = POLLIN | POLLERR | POLLHUP };
     int pr = poll(&pfd, 1, 0);
-    return pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL));
+    if (pr < 0)
+        return errno == EINTR;
+    if (pr > 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
+        return 0;
+    if (pr > 0 && (pfd.revents & POLLIN)) {
+        char b;
+        ssize_t n = recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (n == 0) return 0;
+        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+            return 0;
+    }
+    return 1;
+}
+
+static int route_fd_alive(int fd) {
+    return cmq_tcp_fd_alive(fd);
 }
 
 /* Empty remote_addr = inbound/placeholder (no configured endpoint). */

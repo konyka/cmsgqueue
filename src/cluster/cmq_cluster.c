@@ -40,10 +40,14 @@ static uint64_t now_ms(void) {
 
 cmq_cluster_t *cmq_cluster_create(const char *cluster_name, const char *self_id) {
     if (!cluster_name || !self_id) return NULL;
+    /* name[64] / self_id[CMQ_NODE_ID_SIZE] — reject before truncate-collide. */
+    if (strnlen(cluster_name, 64) >= 64 ||
+        strnlen(self_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE)
+        return NULL;
     cmq_cluster_t *c = calloc(1, sizeof(cmq_cluster_t));
     if (!c) return NULL;
-    strncpy(c->name, cluster_name, sizeof(c->name) - 1);
-    strncpy(c->self_id, self_id, CMQ_NODE_ID_SIZE - 1);
+    snprintf(c->name, sizeof(c->name), "%s", cluster_name);
+    snprintf(c->self_id, sizeof(c->self_id), "%s", self_id);
     c->count = 0;
     atomic_init(&c->in_flight, 0);
     atomic_init(&c->dying, 0);
@@ -77,6 +81,9 @@ const char *cmq_cluster_self_id(cmq_cluster_t *cluster) {
 static int cluster_add_node_impl(cmq_cluster_t *cluster, const char *id,
                           const char *addr, int port) {
     if (!cluster || !id || !addr) return -1;
+    if (strnlen(id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE ||
+        strnlen(addr, CMQ_NODE_ADDR_SIZE) >= CMQ_NODE_ADDR_SIZE)
+        return -1;
     cmq_mutex_lock(&cluster->lock);
 
     if (cluster->count >= CMQ_CLUSTER_MAX_NODES) {

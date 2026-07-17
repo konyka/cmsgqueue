@@ -81,12 +81,8 @@ static void gw_slot_install(cmq_gateway_t *gw, size_t idx, const char *cluster,
     cmq_mutex_unlock(&gw->io_locks[idx]);
 }
 
-/* Zero-timeout TCP liveness — sticky connected after peer death. */
 static int gw_fd_alive(int fd) {
-    if (fd < 0) return 0;
-    struct pollfd pfd = { .fd = fd, .events = 0 };
-    int pr = poll(&pfd, 1, 0);
-    return pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL));
+    return cmq_tcp_fd_alive(fd);
 }
 
 /* Caller holds gw->lock on entry/exit. 1 = probed-live peer for cluster.

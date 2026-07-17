@@ -5,6 +5,7 @@
 #include "cmq_proto.h"
 #include "cmq_thread.h"
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -84,10 +85,7 @@ static void leaf_hub_drop(cmq_leaf_node_t *leaf, int expect_fd) {
 }
 
 static int leaf_fd_alive(int fd) {
-    if (fd < 0) return 0;
-    struct pollfd pfd = { .fd = fd, .events = 0 };
-    int pr = poll(&pfd, 1, 0);
-    return pr >= 0 && !(pfd.revents & (POLLERR | POLLHUP | POLLNVAL));
+    return cmq_tcp_fd_alive(fd);
 }
 
 /* Caller holds hub_io_lock. Re-probe after identity match so a recycled
@@ -880,6 +878,10 @@ static int leaf_ensure_accept_slot(cmq_leaf_node_t *leaf, const char *leaf_id) {
 
 static int leaf_accept_impl(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
     if (!leaf || !leaf_id) return -1;
+    if (strnlen(leaf_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
 
     cmq_mutex_lock(&leaf->lock);
     if (leaf_ensure_accept_slot(leaf, leaf_id) != 0) {
@@ -921,8 +923,7 @@ static int leaf_accept_impl(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) 
         return -1;
     }
     cmq_leaf_conn_t *c = &leaf->leaves[leaf->leaf_count++];
-    strncpy(c->leaf_id, leaf_id, CMQ_NODE_ID_SIZE - 1);
-    c->leaf_id[CMQ_NODE_ID_SIZE - 1] = '\0';
+    snprintf(c->leaf_id, sizeof(c->leaf_id), "%s", leaf_id);
     c->fd = fd;
     c->connected = 1;
     c->subscriptions = 0;

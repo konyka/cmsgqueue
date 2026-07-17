@@ -30,6 +30,9 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
 int cmq_connect_timeout(int fd, const struct sockaddr *sa, socklen_t slen,
                          int timeout_ms);
 
+/* Zero-timeout TCP liveness: POLLHUP/ERR plus MSG_PEEK for peer FIN. */
+int cmq_tcp_fd_alive(int fd);
+
 cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster);
 void cmq_route_pool_destroy(cmq_route_pool_t *pool);
 

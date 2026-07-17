@@ -57,21 +57,7 @@ static void mqtt_end_op(cmq_mqtt_bridge_t *br) {
 }
 
 static int mqtt_fd_alive(int fd) {
-    if (fd < 0) return 0;
-    struct pollfd pfd = { .fd = fd, .events = POLLIN | POLLERR | POLLHUP };
-    int pr = poll(&pfd, 1, 0);
-    if (pr < 0)
-        return errno == EINTR;
-    if (pr > 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)))
-        return 0;
-    if (pr > 0 && (pfd.revents & POLLIN)) {
-        char b;
-        ssize_t n = recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
-        if (n == 0) return 0;
-        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
-            return 0;
-    }
-    return 1;
+    return cmq_tcp_fd_alive(fd);
 }
 
 static void mqtt_disconnect_unlocked(cmq_mqtt_bridge_t *br) {

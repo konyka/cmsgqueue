@@ -3306,6 +3306,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — TCP FIN liveness · reject oversized cluster/leaf ids</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">fd_alive</span></td><td>✅</td><td>Shared <code>cmq_tcp_fd_alive</code> uses POLLIN+MSG_PEEK so peer FIN is not treated as sticky-live (route/gateway/leaf/mqtt).</td></tr>
+<tr><td><span class="component-name">cluster/leaf id</span></td><td>✅</td><td>Reject oversized <code>node_id</code>/<code>addr</code>/<code>leaf_id</code> before truncate can duplicate table entries.</td></tr>
+</table>
+</div>
+
 
 
 
