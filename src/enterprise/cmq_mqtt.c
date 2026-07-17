@@ -237,11 +237,26 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
 
     cmq_mutex_lock(&br->lock);
     if (br->connected && br->fd >= 0) {
-        /* Lost race — keep existing live peer. */
+        int efd = br->fd;
         cmq_mutex_unlock(&br->lock);
-        close(fd);
-        mqtt_end_op(br);
-        return 0;
+        /* Probe — a dead sticky peer must not win over this fresh dial. */
+        int alive = mqtt_fd_alive(efd);
+        cmq_mutex_lock(&br->lock);
+        if (alive && br->connected && br->fd == efd) {
+            cmq_mutex_unlock(&br->lock);
+            close(fd);
+            mqtt_end_op(br);
+            return 0;
+        }
+        if (br->fd == efd && !mqtt_fd_alive(efd))
+            mqtt_disconnect_unlocked(br);
+        else if (br->connected && br->fd >= 0) {
+            /* Another connect installed a different live peer. */
+            cmq_mutex_unlock(&br->lock);
+            close(fd);
+            mqtt_end_op(br);
+            return 0;
+        }
     }
     mqtt_disconnect_unlocked(br);
     br->fd = fd;
