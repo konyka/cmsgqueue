@@ -1172,15 +1172,26 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
     return rc;
 }
 
-/* Drain write_buf before exposing fd to the route pool (handshake order). */
+/* Drain write_buf before exposing fd to the route pool (handshake order).
+   Cap total wait so a slow peer cannot stall the owning event thread (~256s). */
+#define CMQ_DRAIN_SYNC_MS 2000
 static int client_drain_write_sync(cmq_client_t *c) {
     if (!c || c->fd < 0) return -1;
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     for (int i = 0; i < 128; i++) {
         if (!c->write_buf || c->write_pos >= c->write_len) {
             c->write_len = 0;
             c->write_pos = 0;
             return 0;
         }
+        struct timespec t1;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        int64_t elapsed_ms =
+            (int64_t)(t1.tv_sec - t0.tv_sec) * 1000 +
+            (int64_t)(t1.tv_nsec - t0.tv_nsec) / 1000000;
+        if (elapsed_ms >= CMQ_DRAIN_SYNC_MS)
+            return -1;
         size_t rem = c->write_len - c->write_pos;
         ssize_t n = client_sock_write(c, c->write_buf + c->write_pos, rem);
         if (n > 0) {
@@ -1188,10 +1199,13 @@ static int client_drain_write_sync(cmq_client_t *c) {
             continue;
         }
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            int wait_ms = (int)(CMQ_DRAIN_SYNC_MS - elapsed_ms);
+            if (wait_ms > 200) wait_ms = 200;
+            if (wait_ms < 1) return -1;
             struct pollfd pfd = { .fd = c->fd, .events = POLLOUT };
             int pr;
             do {
-                pr = poll(&pfd, 1, 2000);
+                pr = poll(&pfd, 1, wait_ms);
             } while (pr < 0 && errno == EINTR);
             if (pr <= 0)
                 return -1;
@@ -2124,16 +2138,15 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
 
 /* True when configured cluster peers should have received this forward but
    none did — includes "routes configured but all dead" (align with BATCH).
-   Partial fan-out (route_sent > 0 with some EAGAIN) is not a total miss. */
+   Partial fan-out (route_sent > 0 with some EAGAIN) is not a total miss.
+   Staged-only peers (held, not mark_connected) do not receive broadcast —
+   treat as miss so remote-only PUBLISH/BATCH is not silently dropped. */
 static int cmq_route_forward_missed(cmq_server_t *srv, int route_rc,
                                     size_t route_sent) {
     if (route_rc != 0 && route_sent == 0) return 1;
     if (!srv || !srv->routes) return 0;
     size_t named = cmq_route_pool_count(srv->routes);
     size_t live = cmq_route_live_count(srv->routes);
-    /* Staged inbound (fd held, not yet mark_connected) is not a hard miss. */
-    if (live == 0 && cmq_route_held_count(srv->routes) > 0)
-        return 0;
     if (named > 0 && live == 0) return 1;
     if (live == 0) return 0;
     return route_sent == 0;

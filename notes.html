@@ -2864,6 +2864,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — staged-only is forward miss · drain budget 2s</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">forward_missed</span></td><td>✅</td><td>Held/staged peers no longer suppress miss — remote-only PUBLISH/BATCH get <code>route failed</code> to retry.</td></tr>
+<tr><td><span class="component-name">drain sync</span></td><td>✅</td><td><code>client_drain_write_sync</code> total wait capped at 2s (no ~256s event-thread stall).</td></tr>
+</table>
+</div>
+
 
 
 
