@@ -151,6 +151,16 @@ TEST(parser, frame_queue_cap) {
     /* Partial success — already-queued frames must remain drainable. */
     ASSERT_EQ(rc, 1);
     ASSERT(cmq_parser_frame(p) != NULL);
+    int nq = 0;
+    while (cmq_parser_frame(p)) {
+        nq++;
+        (void)cmq_parser_next(p);
+    }
+    ASSERT(nq == 64);
+    /* Without new bytes, stuck complete frame must become queueable. */
+    ASSERT_EQ(cmq_parser_drain_inbuf(p), 1);
+    ASSERT(cmq_parser_frame(p) != NULL);
+    ASSERT_EQ(cmq_parser_pending_error(p), 0);
     cmq_parser_destroy(p);
 }
 

@@ -155,33 +155,8 @@ static int ensure_inbuf(cmq_parser_t *p, size_t need) {
     return 0;
 }
 
-int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
-    if (!p || !data || len == 0) {
-        return 0;
-    }
-    if (!p->inbuf || p->inbuf_cap == 0)
-        return -1;
-
-    /* Compact before append if remaining + new won't fit without sliding. */
-    size_t used = p->inbuf_len - p->inbuf_off;
-    /* Hard cap: one max frame + header. Stops incomplete-frame memory DoS. */
-    size_t hard = CMQ_HEADER_LEN + p->max_payload;
-    if (used > hard || len > hard - used)
-        return -1;
-    if (p->inbuf_off > 0 && p->inbuf_off + used + len > p->inbuf_cap) {
-        if (used > 0)
-            memmove(p->inbuf, p->inbuf + p->inbuf_off, used);
-        p->inbuf_len = used;
-        p->inbuf_off = 0;
-    }
-    if (p->inbuf_len + len > p->inbuf_cap) {
-        if (ensure_inbuf(p, p->inbuf_len + len) != 0) {
-            return -1;
-        }
-    }
-    memcpy(p->inbuf + p->inbuf_len, data, len);
-    p->inbuf_len += len;
-
+/* Parse complete frames from inbuf into the queue. No append. */
+static int parser_parse_inbuf(cmq_parser_t *p) {
     int produced = 0;
     /* Early reject on unconsumed prefix (even before a full header). */
     if (p->inbuf_len - p->inbuf_off >= 3) {
@@ -269,6 +244,44 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
     }
 
     return produced ? 1 : 0;
+}
+
+int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
+    if (!p || !data || len == 0) {
+        return 0;
+    }
+    if (!p->inbuf || p->inbuf_cap == 0)
+        return -1;
+
+    /* Compact before append if remaining + new won't fit without sliding. */
+    size_t used = p->inbuf_len - p->inbuf_off;
+    /* Hard cap: one max frame + header. Stops incomplete-frame memory DoS. */
+    size_t hard = CMQ_HEADER_LEN + p->max_payload;
+    if (used > hard || len > hard - used)
+        return -1;
+    if (p->inbuf_off > 0 && p->inbuf_off + used + len > p->inbuf_cap) {
+        if (used > 0)
+            memmove(p->inbuf, p->inbuf + p->inbuf_off, used);
+        p->inbuf_len = used;
+        p->inbuf_off = 0;
+    }
+    if (p->inbuf_len + len > p->inbuf_cap) {
+        if (ensure_inbuf(p, p->inbuf_len + len) != 0) {
+            return -1;
+        }
+    }
+    memcpy(p->inbuf + p->inbuf_len, data, len);
+    p->inbuf_len += len;
+
+    return parser_parse_inbuf(p);
+}
+
+int cmq_parser_drain_inbuf(cmq_parser_t *p) {
+    if (!p || !p->inbuf || p->inbuf_cap == 0)
+        return -1;
+    if (p->pending_error)
+        return p->head ? 1 : -1;
+    return parser_parse_inbuf(p);
 }
 
 int cmq_parser_pending_error(const cmq_parser_t *p) {

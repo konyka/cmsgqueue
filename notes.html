@@ -3585,6 +3585,7 @@ All 15 test suites passing, 0 warnings.
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">parser mid-stream</span></td><td>✅</td><td>After a frame is queued, bad magic/version/oversize/OOM returns 1 (partial) so callers drain before teardown (align queue-full).</td></tr>
 <tr><td><span class="component-name">parser pending_error</span></td><td>✅</td><td>Fatal mid-stream sets <code>pending_error</code>; TCP/WS <code>client_read_cb</code> drains then teardowns (queue-full does not set the flag).</td></tr>
+<tr><td><span class="component-name">parser drain_inbuf</span></td><td>✅</td><td>After dispatch, <code>cmq_parser_drain_inbuf</code> retries complete frames stuck behind queue-full (no wait for extra TCP bytes).</td></tr>
 </table>
 </div>
 

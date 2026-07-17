@@ -4648,6 +4648,35 @@ static void client_finish_closing(cmq_client_t *c) {
     client_teardown(c);
 }
 
+/* Dispatch queued frames; after queue-full backpressure, re-parse inbuf so
+   complete frames are not stuck until the peer sends more bytes.
+   Returns -1 if the client was torn down / closing. */
+static int client_dispatch_parser(cmq_server_t *srv, cmq_client_t *c, int rc) {
+    for (;;) {
+        while (rc == 1) {
+            const cmq_frame_t *frame = cmq_parser_frame(c->parser);
+            if (frame)
+                handle_frame(srv, c, frame);
+            if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) {
+                client_finish_closing(c);
+                return -1;
+            }
+            rc = cmq_parser_next(c->parser);
+        }
+        if (cmq_parser_pending_error(c->parser)) {
+            client_teardown(c);
+            return -1;
+        }
+        rc = cmq_parser_drain_inbuf(c->parser);
+        if (rc < 0) {
+            client_teardown(c);
+            return -1;
+        }
+        if (rc == 0)
+            return 0;
+    }
+}
+
 static void client_read_cb(int fd, int events, void *data) {
     cmq_client_t *c = (cmq_client_t *)data;
     cmq_server_t *srv = c->server;
@@ -4921,24 +4950,8 @@ static void client_read_cb(int fd, int events, void *data) {
                         int rc = cmq_parser_feed(c->parser, c->ws_msg_buf,
                                                   c->ws_msg_len);
                         if (rc < 0) { client_teardown(c); return; }
-                        int feed_rc = rc;
-                        while (rc == 1) {
-                            const cmq_frame_t *frame = cmq_parser_frame(c->parser);
-                            if (frame) handle_frame(srv, c, frame);
-                            if (c->state == CMQ_CLIENT_CLOSING ||
-                                c->state == CMQ_CLIENT_CLOSED) {
-                                client_finish_closing(c);
-                                return;
-                            }
-                            rc = cmq_parser_next(c->parser);
-                        }
-                        /* Mid-stream fatal after partial queue — do not keep
-                           a poisoned inbuf sticky until keepalive. */
-                        if (feed_rc == 1 &&
-                            cmq_parser_pending_error(c->parser)) {
-                            client_teardown(c);
+                        if (client_dispatch_parser(srv, c, rc) != 0)
                             return;
-                        }
                     }
                     c->ws_msg_len = 0;
                     c->ws_msg_active = 0;
@@ -4962,24 +4975,7 @@ static void client_read_cb(int fd, int events, void *data) {
         client_teardown(c);
         return;
     }
-
-    int feed_rc = rc;
-    while (rc == 1) {
-        const cmq_frame_t *frame = cmq_parser_frame(c->parser);
-        if (frame) {
-            handle_frame(srv, c, frame);
-        }
-        if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) {
-            client_finish_closing(c);
-            return;
-        }
-        rc = cmq_parser_next(c->parser);
-    }
-    /* Mid-stream fatal after partial queue — do not keep a poisoned inbuf. */
-    if (feed_rc == 1 && cmq_parser_pending_error(c->parser)) {
-        client_teardown(c);
-        return;
-    }
+    (void)client_dispatch_parser(srv, c, rc);
 }
 
 static void keepalive_scan_clients(cmq_server_t *srv, cmq_client_t **clients,

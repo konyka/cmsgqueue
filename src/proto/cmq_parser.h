@@ -23,6 +23,10 @@ void cmq_parser_reset(cmq_parser_t *p);
 void cmq_parser_set_max_payload(cmq_parser_t *p, size_t max_payload);
 
 int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len);
+/* Retry parse/queue from existing inbuf without new bytes (after caller
+   drained the frame queue so queue-full backpressure can make progress).
+   Same return codes as feed: 1 produced, 0 idle, -1 fatal. */
+int cmq_parser_drain_inbuf(cmq_parser_t *p);
 const cmq_frame_t *cmq_parser_frame(cmq_parser_t *p);
 int cmq_parser_next(cmq_parser_t *p);
 /* 1 if feed hit a fatal mid-stream error after queuing (caller should
