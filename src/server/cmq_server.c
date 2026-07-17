@@ -3352,6 +3352,21 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+        } else if (!c->is_route) {
+            /* Local targets were ghost/CLOSING — try cluster responders. */
+            route_rc = cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
+                                             frame->payload, frame->payload_len,
+                                             &route_sent);
+            if (route_sent > 0) {
+                uint8_t ack[4] = {0};
+                size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK,
+                                                   0, NULL, 0);
+                if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+            } else if (cmq_route_forward_missed(srv, route_rc, route_sent)) {
+                cmq_send_error(c, "route failed");
+            } else {
+                cmq_send_error(c, "delivery failed");
+            }
         } else {
             cmq_send_error(c, "delivery failed");
         }
@@ -3466,8 +3481,24 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
 
     if (tgts && ntgt > 0) {
         if (deliver_targets_sync(srv, tgts, ntgt, subject, c->account_name,
-                                  msg_payload, msg_len, NULL, 0) != 0)
-            cmq_send_error(c, "delivery failed");
+                                  msg_payload, msg_len, NULL, 0) != 0) {
+            /* Local inbox targets were ghost/CLOSING — try cluster. */
+            if (!c->is_route) {
+                route_rc = cmq_route_forward_op(srv, CMQ_OP_RESPONSE,
+                                                 frame->hdr.flags,
+                                                 frame->payload,
+                                                 frame->payload_len,
+                                                 &route_sent);
+                if (route_sent == 0) {
+                    if (cmq_route_forward_missed(srv, route_rc, route_sent))
+                        cmq_send_error(c, "route failed");
+                    else
+                        cmq_send_error(c, "delivery failed");
+                }
+            } else {
+                cmq_send_error(c, "delivery failed");
+            }
+        }
     } else if (!c->is_route) {
         if (route_sent == 0) {
             if (cmq_route_forward_missed(srv, route_rc, route_sent))

@@ -45,6 +45,7 @@ struct cmq_ev_loop {
     int watchers_cap;
     cmq_mutex_t watchers_lock; /* publish/clear vs run snapshot (accept→worker) */
     cmq_ev_timer_t timers[CMQ_EV_MAX_TIMERS];
+    cmq_mutex_t timers_lock; /* timer_add/del vs run scan/fire */
     cmq_ev_tick_t post_tick;
     void *post_tick_data;
     atomic_int in_flight; /* run/add/mod/del/timer vs destroy */
@@ -106,6 +107,7 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
         loop->watchers[i].fd = -1;
     }
     cmq_mutex_init(&loop->watchers_lock);
+    cmq_mutex_init(&loop->timers_lock);
 
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         loop->timers[i].active = 0;
@@ -125,6 +127,7 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
 #endif
 
     if (loop->backend_fd < 0) {
+        cmq_mutex_destroy(&loop->timers_lock);
         cmq_mutex_destroy(&loop->watchers_lock);
         free(loop->watchers);
         free(loop);
@@ -184,6 +187,7 @@ void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
     if (loop->wakeup_wfd >= 0 && loop->wakeup_wfd != loop->wakeup_fd)
         close(loop->wakeup_wfd);
     if (loop->backend_fd >= 0) close(loop->backend_fd);
+    cmq_mutex_destroy(&loop->timers_lock);
     cmq_mutex_destroy(&loop->watchers_lock);
     free(loop->watchers);
     free(loop);
@@ -338,6 +342,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         int wait_ms = timeout_ms;
 
         uint64_t now = cmq_ev_now_ms();
+        cmq_mutex_lock(&loop->timers_lock);
         for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
             cmq_ev_timer_t *t = &loop->timers[i];
             if (!t->active) continue;
@@ -346,6 +351,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             if (diff > INT_MAX) diff = INT_MAX;
             if (diff < wait_ms || wait_ms < 0) wait_ms = (int)diff;
         }
+        cmq_mutex_unlock(&loop->timers_lock);
 
         int nfds = epoll_wait(loop->backend_fd, events, CMQ_EV_MAX_EVENTS, wait_ms);
         if (nfds < 0) {
@@ -371,20 +377,33 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         now = cmq_ev_now_ms();
         for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
+            cmq_ev_cb_t cb = NULL;
+            void *data = NULL;
+            int tid = 0;
+            cmq_mutex_lock(&loop->timers_lock);
             cmq_ev_timer_t *t = &loop->timers[i];
-            if (!t->active) continue;
-            if (t->expire_ms <= now) {
-                if (t->cb) t->cb(t->timer_id, CMQ_EV_TIMER, t->data);
-                /* Callback may have called timer_del — only reschedule if live. */
-                if (t->active && t->repeat) {
+            if (!t->active || t->expire_ms > now) {
+                cmq_mutex_unlock(&loop->timers_lock);
+                continue;
+            }
+            cb = t->cb;
+            data = t->data;
+            tid = t->timer_id;
+            cmq_mutex_unlock(&loop->timers_lock);
+            if (cb) cb(tid, CMQ_EV_TIMER, data);
+            /* Callback may have called timer_del — only reschedule if live. */
+            cmq_mutex_lock(&loop->timers_lock);
+            if (t->active && t->timer_id == tid) {
+                if (t->repeat) {
                     if (t->interval_ms > UINT64_MAX - now)
                         t->expire_ms = UINT64_MAX;
                     else
                         t->expire_ms = now + t->interval_ms;
-                } else if (t->active) {
+                } else {
                     t->active = 0;
                 }
             }
+            cmq_mutex_unlock(&loop->timers_lock);
         }
 
         if (loop->post_tick) loop->post_tick(loop->post_tick_data);
@@ -503,6 +522,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         int wait_ms = timeout_ms;
 
         uint64_t now = cmq_ev_now_ms();
+        cmq_mutex_lock(&loop->timers_lock);
         for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
             cmq_ev_timer_t *t = &loop->timers[i];
             if (!t->active) continue;
@@ -511,6 +531,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             if (diff > INT_MAX) diff = INT_MAX;
             if (diff < wait_ms || wait_ms < 0) wait_ms = (int)diff;
         }
+        cmq_mutex_unlock(&loop->timers_lock);
 
         struct timespec ts;
         struct timespec *tsp = NULL;
@@ -544,19 +565,32 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         now = cmq_ev_now_ms();
         for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
+            cmq_ev_cb_t cb = NULL;
+            void *data = NULL;
+            int tid = 0;
+            cmq_mutex_lock(&loop->timers_lock);
             cmq_ev_timer_t *t = &loop->timers[i];
-            if (!t->active) continue;
-            if (t->expire_ms <= now) {
-                if (t->cb) t->cb(t->timer_id, CMQ_EV_TIMER, t->data);
-                if (t->active && t->repeat) {
+            if (!t->active || t->expire_ms > now) {
+                cmq_mutex_unlock(&loop->timers_lock);
+                continue;
+            }
+            cb = t->cb;
+            data = t->data;
+            tid = t->timer_id;
+            cmq_mutex_unlock(&loop->timers_lock);
+            if (cb) cb(tid, CMQ_EV_TIMER, data);
+            cmq_mutex_lock(&loop->timers_lock);
+            if (t->active && t->timer_id == tid) {
+                if (t->repeat) {
                     if (t->interval_ms > UINT64_MAX - now)
                         t->expire_ms = UINT64_MAX;
                     else
                         t->expire_ms = now + t->interval_ms;
-                } else if (t->active) {
+                } else {
                     t->active = 0;
                 }
             }
+            cmq_mutex_unlock(&loop->timers_lock);
         }
 
         if (loop->post_tick) loop->post_tick(loop->post_tick_data);
@@ -579,6 +613,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) { (void)loop;(void)timeout_m
 int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_ms, cmq_ev_cb_t cb, void *data) {
     if (!loop) return -1;
     if (ev_begin_op(loop) != 0) return -1;
+    cmq_mutex_lock(&loop->timers_lock);
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         if (!loop->timers[i].active) {
             uint64_t now = cmq_ev_now_ms();
@@ -602,6 +637,7 @@ int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_m
                 }
             }
             if (tid < 0) {
+                cmq_mutex_unlock(&loop->timers_lock);
                 ev_end_op(loop);
                 return -1;
             }
@@ -615,10 +651,12 @@ int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_m
             loop->timers[i].data = data;
             loop->timers[i].repeat = (interval_ms > 0) ? 1 : 0;
             loop->timers[i].active = 1;
+            cmq_mutex_unlock(&loop->timers_lock);
             ev_end_op(loop);
             return tid;
         }
     }
+    cmq_mutex_unlock(&loop->timers_lock);
     ev_end_op(loop);
     return -1;
 }
@@ -626,16 +664,19 @@ int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_m
 int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
     if (!loop || timer_id <= 0) return -1;
     if (ev_begin_op(loop) != 0) return -1;
+    cmq_mutex_lock(&loop->timers_lock);
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         if (loop->timers[i].active && loop->timers[i].timer_id == timer_id) {
             loop->timers[i].active = 0;
             loop->timers[i].repeat = 0;
             loop->timers[i].cb = NULL;
             loop->timers[i].data = NULL;
+            cmq_mutex_unlock(&loop->timers_lock);
             ev_end_op(loop);
             return 0;
         }
     }
+    cmq_mutex_unlock(&loop->timers_lock);
     ev_end_op(loop);
     return -1;
 }

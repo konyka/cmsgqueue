@@ -3492,6 +3492,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST cluster fallback · detach remote_id · ev timers lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">REQUEST/RESPONSE</span></td><td>✅</td><td>When local deliver hits only ghost/CLOSING targets, fall back to <code>cmq_route_forward_op</code> instead of hard <code>delivery failed</code>.</td></tr>
+<tr><td><span class="component-name">route detach</span></td><td>✅</td><td>Clear <code>remote_id</code> on fd detach (align inbound hard-fail) so named tombstones cannot fake <code>pool_count</code>/<code>forward_missed</code>.</td></tr>
+<tr><td><span class="component-name">ev timers</span></td><td>✅</td><td><code>timers_lock</code> covers add/del vs run scan/fire; callbacks run unlocked so <code>timer_del</code> is safe.</td></tr>
+</table>
+</div>
+
 
 
 

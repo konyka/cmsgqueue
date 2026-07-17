@@ -1021,6 +1021,9 @@ static void route_detach_fd_impl(cmq_route_pool_t *pool, int fd) {
             pool->conns[i].fd = -1;
             pool->conns[i].connected = 0;
             pool->conns[i].fd_owned = 0;
+            /* Align with inbound hard-fail — drop named tombstone so
+               pool_count/forward_missed are not stuck until slot reuse. */
+            pool->conns[i].remote_id[0] = '\0';
         }
         cmq_mutex_unlock(&pool->io_locks[i]);
         break;
