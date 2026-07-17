@@ -322,6 +322,12 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     if (!leaf) return -1;
     cmq_mutex_lock(&leaf->lock);
 
+    /* Mid-replay: hub_fd published but connected=0 — do not race another dial. */
+    if (leaf->hub_fd >= 0 && !leaf->connected) {
+        cmq_mutex_unlock(&leaf->lock);
+        return -1;
+    }
+
     if (leaf->connected && leaf->hub_fd >= 0) {
         int fd = leaf->hub_fd;
         cmq_mutex_unlock(&leaf->lock);
@@ -417,6 +423,13 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
             leaf_hub_drop_if_dead(leaf, nfd);
             cmq_mutex_lock(&leaf->lock);
         }
+    }
+    /* Another connect claimed the hub during our unlocked dial window. */
+    if (leaf->hub_fd >= 0 && !leaf->connected) {
+        cmq_mutex_unlock(&leaf->lock);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        close(fd);
+        return -1;
     }
     leaf->hub_fd = fd;
     /* connected=1 only after hub SUB replay — is_connected must not race. */
@@ -648,6 +661,13 @@ static int leaf_subscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
     /* hub_io → leaf: claim serialized with unsubscribe drop. */
     cmq_mutex_lock(&leaf->hub_io_lock);
     cmq_mutex_lock(&leaf->lock);
+    /* Replay window: local-only SUB would never reach hub (snapshot already taken). */
+    if (leaf->hub_fd >= 0 && !leaf->connected) {
+        cmq_mutex_unlock(&leaf->lock);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        free(copy);
+        return -1;
+    }
     if (leaf->sub_count >= CMQ_LEAF_MAX_SUBS) {
         cmq_mutex_unlock(&leaf->lock);
         cmq_mutex_unlock(&leaf->hub_io_lock);
@@ -738,6 +758,12 @@ static int leaf_unsubscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
     /* hub_io → leaf: drop serialized with subscribe claim. */
     cmq_mutex_lock(&leaf->hub_io_lock);
     cmq_mutex_lock(&leaf->lock);
+    /* Replay window: local drop + pending would desync from in-flight SUB replay. */
+    if (leaf->hub_fd >= 0 && !leaf->connected) {
+        cmq_mutex_unlock(&leaf->lock);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        return -1;
+    }
     for (size_t i = 0; i < leaf->sub_count; i++) {
         if (strcmp(leaf->subs[i], subject) != 0)
             continue;

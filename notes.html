@@ -3215,6 +3215,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf fail-closed during hub replay</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">connect race</span></td><td>✅</td><td>Refuse second connect while <code>hub_fd</code> published and <code>connected==0</code> (no fd leak).</td></tr>
+<tr><td><span class="component-name">sub/unsub</span></td><td>✅</td><td>Fail closed during replay so local interest cannot desync from hub snapshot.</td></tr>
+</table>
+</div>
+
 
 
 
