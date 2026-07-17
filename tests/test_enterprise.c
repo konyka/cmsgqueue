@@ -498,6 +498,9 @@ TEST(ws, build_response) {
     ASSERT_EQ(r, 0);
     ASSERT(strstr(resp, "101 Switching Protocols") != NULL);
     ASSERT(strstr(resp, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != NULL);
+    /* Truncation / header injection must fail closed. */
+    ASSERT_EQ(cmq_ws_build_response("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", resp, 32), -1);
+    ASSERT_EQ(cmq_ws_build_response("bad\r\nX-Injected: 1", resp, sizeof(resp)), -1);
 }
 
 TEST(ws, accept_key_bounds) {

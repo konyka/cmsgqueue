@@ -310,10 +310,16 @@ int cmq_ws_parse_http_upgrade(const char *req, size_t req_len,
 }
 
 int cmq_ws_build_response(const char *accept_key, char *out, size_t out_len) {
-    if (!accept_key || !out) return -1;
-    return snprintf(out, out_len,
+    if (!accept_key || !out || out_len == 0) return -1;
+    /* Reject CR/LF so a tainted key cannot inject response headers. */
+    for (const char *p = accept_key; *p; p++) {
+        if (*p == '\r' || *p == '\n') return -1;
+    }
+    int n = snprintf(out, out_len,
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
-        "Sec-WebSocket-Accept: %s\r\n\r\n", accept_key) > 0 ? 0 : -1;
+        "Sec-WebSocket-Accept: %s\r\n\r\n", accept_key);
+    if (n < 0 || (size_t)n >= out_len) return -1;
+    return 0;
 }
