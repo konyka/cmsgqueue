@@ -253,9 +253,14 @@ int cmq_gateway_add_remote(cmq_gateway_t *gw, const char *cluster_name,
             gw->clusters[i].port = port;
             gw->clusters[i].known = 1;
             if (addr_changed) {
-                /* Invalidate live TCP so connect_remote must dial the new endpoint. */
+                /* Invalidate live TCP so connect_remote must dial the new endpoint.
+                   Read identity under io_lock (same as forward). */
                 for (size_t j = 0; j < gw->conn_count; j++) {
-                    if (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0)
+                    cmq_mutex_lock(&gw->io_locks[j]);
+                    int match =
+                        (strcmp(gw->conns[j].remote_cluster, cluster_name) == 0);
+                    cmq_mutex_unlock(&gw->io_locks[j]);
+                    if (match)
                         gw_slot_close_fd(gw, j);
                 }
             }

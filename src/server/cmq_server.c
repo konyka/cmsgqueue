@@ -3834,9 +3834,12 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
         "{\"version\":\"0.1.0\",\"proto\":1,\"connections\":%llu,\"subscriptions\":%llu,\"auth\":%s}",
         (unsigned long long)conns, (unsigned long long)subs,
         auth_configured(srv) ? "true" : "false");
-    size_t len = cmq_frame_encode(info_buf, sizeof(info_buf), CMQ_OP_INFO, 0,
-                                   (const uint8_t *)info_json, (size_t)info_len);
-    if (len > 0) cmq_client_send(c, info_buf, len);
+    /* Truncated snprintf returns would-be length — never encode past buffer. */
+    if (info_len > 0 && (size_t)info_len < sizeof(info_json)) {
+        size_t len = cmq_frame_encode(info_buf, sizeof(info_buf), CMQ_OP_INFO, 0,
+                                       (const uint8_t *)info_json, (size_t)info_len);
+        if (len > 0) cmq_client_send(c, info_buf, len);
+    }
     c->info_sent = 1;
 }
 

@@ -3024,6 +3024,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — INFO snprintf bound · gw add_remote io_lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">send_info_frame</span></td><td>✅</td><td>Skip encode when snprintf truncates (no over-read of info_json).</td></tr>
+<tr><td><span class="component-name">gw add_remote</span></td><td>✅</td><td>Addr-change invalidate reads <code>remote_cluster</code> under io_lock.</td></tr>
+</table>
+</div>
+
 
 
 
