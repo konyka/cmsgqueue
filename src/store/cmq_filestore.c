@@ -154,7 +154,9 @@ static int fs_refresh_next_seq(cmq_filestore_t *fs, int may_truncate) {
             if (fs_seek_end(fs->idx_fp) != 0) return -1;
         }
     }
-    fs->next_seq = (idx_sz / 8u) + 1;
+    uint64_t n = idx_sz / 8u;
+    if (n == UINT64_MAX) return -1; /* cannot form next_seq without wrap */
+    fs->next_seq = n + 1;
     return 0;
 }
 
@@ -428,6 +430,12 @@ static int filestore_append_impl(cmq_filestore_t *fs, const uint8_t *data, size_
     if (fs_refresh_next_seq(fs, 1) != 0) {
         clearerr(fs->idx_fp);
         clearerr(fs->data_fp);
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    /* Refuse when seq cannot advance without wrapping to 0. */
+    if (fs->next_seq == UINT64_MAX) {
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
         return -1;
