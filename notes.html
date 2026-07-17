@@ -3651,6 +3651,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — drain_write_sync hard-fail detaches route</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_drain_write_sync</span></td><td>✅</td><td>Hard write fail and <code>route_io_lock_fd</code> miss now <code>SHUT_RDWR</code> + detach (align flush/send_direct); REQUEST sync drain no longer leaves sticky-live pool slots.</td></tr>
+</table>
+</div>
+
 
 
 

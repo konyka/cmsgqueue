@@ -1471,7 +1471,13 @@ static int client_drain_write_sync(cmq_client_t *c) {
     int route_io_idx = -1;
     if (c->is_route && c->server && c->server->routes) {
         route_io_idx = cmq_route_io_lock_fd(c->server->routes, c->fd);
-        if (route_io_idx < 0) return -1;
+        if (route_io_idx < 0) {
+            /* Pool lost the fd — align send_direct io_lock fail. */
+            c->state = CMQ_CLIENT_CLOSING;
+            (void)shutdown(c->fd, SHUT_RDWR);
+            route_detach_under_io_lock(c->server, c->fd);
+            return -1;
+        }
     }
     int rc = -1;
     struct timespec t0;
@@ -1513,7 +1519,20 @@ static int client_drain_write_sync(cmq_client_t *c) {
         }
         if (n < 0 && errno == EINTR)
             continue;
-        goto out;
+        /* Hard write failure — unlock then CLOSING/detach (align flush). */
+        c->write_len = 0;
+        c->write_pos = 0;
+        client_clear_write_progress(c);
+        if (route_io_idx >= 0 && c->server && c->server->routes) {
+            cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+            route_io_idx = -1;
+        }
+        client_force_closing(c);
+        if (c->fd >= 0)
+            (void)shutdown(c->fd, SHUT_RDWR);
+        if (c->is_route && c->server && c->server->routes && c->fd >= 0)
+            route_detach_under_io_lock(c->server, c->fd);
+        return -1;
     }
     if (!(c->write_buf && c->write_pos < c->write_len))
         rc = 0;
