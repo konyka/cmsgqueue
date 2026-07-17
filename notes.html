@@ -3072,6 +3072,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — MQTT sticky expect_fd · idmap/store grow overflow</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">mqtt sticky</span></td><td>✅</td><td>Sticky miss only disconnects probed <code>efd</code> (no close of replacement peer).</td></tr>
+<tr><td><span class="component-name">idmap grow</span></td><td>✅</td><td>Create/rehash reject <code>cap*2</code> / calloc size wrap.</td></tr>
+<tr><td><span class="component-name">store create</span></td><td>✅</td><td>Reject <code>capacity * sizeof(slot)</code> overflow before calloc.</td></tr>
+</table>
+</div>
+
 
 
 

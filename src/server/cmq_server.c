@@ -173,7 +173,13 @@ static uint32_t cmq_idmap_hash(uint32_t id) {
 static cmq_idmap_t *cmq_idmap_create(size_t cap) {
     if (cap < 16) cap = 16;
     size_t c = 16;
-    while (c < cap) c <<= 1;
+    while (c < cap) {
+        if (c > SIZE_MAX / 2) return NULL;
+        c <<= 1;
+    }
+    if (c > SIZE_MAX / sizeof(uint32_t) ||
+        c > SIZE_MAX / sizeof(cmq_client_t *))
+        return NULL;
     cmq_idmap_t *m = calloc(1, sizeof(*m));
     if (!m) return NULL;
     m->keys = calloc(c, sizeof(uint32_t));
@@ -229,7 +235,12 @@ static int cmq_idmap_rehash(cmq_idmap_t *m, size_t ncap) {
 static int cmq_idmap_put(cmq_idmap_t *m, uint32_t id, cmq_client_t *c) {
     if (!m || id == 0 || id == CMQ_IDMAP_TOMB || !c) return -1;
     if ((m->live + m->tombs + 1) * 2 >= m->cap) {
-        if (cmq_idmap_rehash(m, m->cap * 2) != 0) return -1;
+        if (m->cap > SIZE_MAX / 2) return -1;
+        size_t ncap = m->cap * 2;
+        if (ncap > SIZE_MAX / sizeof(uint32_t) ||
+            ncap > SIZE_MAX / sizeof(cmq_client_t *))
+            return -1;
+        if (cmq_idmap_rehash(m, ncap) != 0) return -1;
     }
     size_t mask = m->cap - 1;
     size_t i = cmq_idmap_hash(id) & mask;

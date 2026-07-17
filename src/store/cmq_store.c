@@ -30,6 +30,7 @@ static uint64_t now_ms(void) {
 
 cmq_store_t *cmq_store_create(size_t capacity) {
     if (capacity == 0) capacity = 1024;
+    if (capacity > SIZE_MAX / sizeof(cmq_store_slot_t)) return NULL;
     cmq_store_t *s = calloc(1, sizeof(cmq_store_t));
     if (!s) return NULL;
     s->ring = calloc(capacity, sizeof(cmq_store_slot_t));
