@@ -316,14 +316,14 @@ TEST(mqtt, mapping) {
     ASSERT_EQ(cmq_mqtt_add_mapping(br, "ok", too_long, 0), -1);
     ASSERT_EQ(cmq_mqtt_add_mapping(br, too_long, "ok/topic", 0), -1);
 
-    cmq_mqtt_mapping_t *m = cmq_mqtt_find_mapping(br, "sensor/temp");
-    ASSERT_NOT_NULL(m);
-    ASSERT_STR_EQ(m->cmq_subject, "sensor.temp");
-    ASSERT_EQ(m->qos, 2);
+    cmq_mqtt_mapping_t m;
+    ASSERT_EQ(cmq_mqtt_find_mapping(br, "sensor/temp", &m), 0);
+    ASSERT_STR_EQ(m.cmq_subject, "sensor.temp");
+    ASSERT_EQ(m.qos, 2);
 
     ASSERT_EQ(cmq_mqtt_remove_mapping(br, "sensor/temp"), 0);
     ASSERT_EQ(cmq_mqtt_mapping_count(br), (size_t)1);
-    ASSERT_NULL(cmq_mqtt_find_mapping(br, "sensor/temp"));
+    ASSERT_EQ(cmq_mqtt_find_mapping(br, "sensor/temp", &m), -1);
 
     ASSERT_EQ(cmq_mqtt_remove_mapping(br, "nonexistent"), -1);
 

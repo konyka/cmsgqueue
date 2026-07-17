@@ -322,19 +322,19 @@ size_t cmq_mqtt_mapping_count(cmq_mqtt_bridge_t *br) {
     return c;
 }
 
-cmq_mqtt_mapping_t *cmq_mqtt_find_mapping(cmq_mqtt_bridge_t *br,
-                                            const char *mqtt_topic) {
-    if (!br || !mqtt_topic) return NULL;
+int cmq_mqtt_find_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic,
+                           cmq_mqtt_mapping_t *out) {
+    if (!br || !mqtt_topic || !out) return -1;
     cmq_mutex_lock(&br->lock);
     for (size_t i = 0; i < br->mapping_count; i++) {
         if (strcmp(br->mappings[i].mqtt_topic, mqtt_topic) == 0) {
-            cmq_mqtt_mapping_t *m = &br->mappings[i];
+            *out = br->mappings[i];
             cmq_mutex_unlock(&br->lock);
-            return m;
+            return 0;
         }
     }
     cmq_mutex_unlock(&br->lock);
-    return NULL;
+    return -1;
 }
 
 const char *cmq_mqtt_topic_to_subject(const char *mqtt_topic, char *buf, size_t len) {
