@@ -2882,6 +2882,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route/leaf sticky-alive recheck after probe</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route connect</span></td><td>✅</td><td>After <code>fd_alive</code>, require slot still holds same <code>fd</code>+endpoint before success.</td></tr>
+<tr><td><span class="component-name">leaf connect</span></td><td>✅</td><td>After probe, require <code>hub_fd</code> still matches before treating as connected.</td></tr>
+</table>
+</div>
+
 
 
 

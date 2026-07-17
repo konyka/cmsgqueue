@@ -325,8 +325,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
             size_t idx = i;
             int same_ep = route_ep_same(ep, eport, addr, port);
             cmq_mutex_unlock(&pool->lock);
-            if (route_fd_alive(efd) && same_ep)
-                return 0;
+            int alive = route_fd_alive(efd) && same_ep;
             cmq_mutex_lock(&pool->lock);
             if (idx < pool->conn_count) {
                 cmq_mutex_lock(&pool->io_locks[idx]);
@@ -340,6 +339,11 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                     eport2 = pool->conns[idx].remote_port;
                 }
                 cmq_mutex_unlock(&pool->io_locks[idx]);
+                /* Re-check identity after probe — fd recycle must not fake success. */
+                if (alive && same && route_ep_same(ep2, eport2, addr, port)) {
+                    cmq_mutex_unlock(&pool->lock);
+                    return 0;
+                }
                 /* Drop dead or wrong-endpoint outbound; never steal inbound. */
                 if (same &&
                     (!route_fd_alive(efd) ||
@@ -408,10 +412,7 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
             cmq_mutex_unlock(&pool->io_locks[idx]);
             int same_ep = route_ep_same(ep, eport, addr, port);
             cmq_mutex_unlock(&pool->lock);
-            if (route_fd_alive(efd) && same_ep) {
-                close(fd);
-                return 0;
-            }
+            int alive = route_fd_alive(efd) && same_ep;
             cmq_mutex_lock(&pool->lock);
             if (idx < pool->conn_count) {
                 char rid2[CMQ_NODE_ID_SIZE];
@@ -425,6 +426,11 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                     ep2[CMQ_NODE_ADDR_SIZE - 1] = '\0';
                     eport2 = pool->conns[idx].remote_port;
                     cmq_mutex_unlock(&pool->io_locks[idx]);
+                    if (alive && route_ep_same(ep2, eport2, addr, port)) {
+                        cmq_mutex_unlock(&pool->lock);
+                        close(fd);
+                        return 0;
+                    }
                     if (!route_fd_alive(efd) ||
                         (ep2[0] != '\0' &&
                          !route_ep_same(ep2, eport2, addr, port)))

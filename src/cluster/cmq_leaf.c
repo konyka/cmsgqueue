@@ -285,8 +285,13 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
     if (leaf->connected && leaf->hub_fd >= 0) {
         int fd = leaf->hub_fd;
         cmq_mutex_unlock(&leaf->lock);
-        if (leaf_fd_alive(fd))
+        int alive = leaf_fd_alive(fd);
+        cmq_mutex_lock(&leaf->lock);
+        if (alive && leaf->connected && leaf->hub_fd == fd) {
+            cmq_mutex_unlock(&leaf->lock);
             return 0;
+        }
+        cmq_mutex_unlock(&leaf->lock);
         cmq_mutex_lock(&leaf->hub_io_lock);
         leaf_hub_drop_if_dead(leaf, fd);
         cmq_mutex_unlock(&leaf->hub_io_lock);
@@ -294,8 +299,13 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         if (leaf->connected && leaf->hub_fd >= 0) {
             int nfd = leaf->hub_fd;
             cmq_mutex_unlock(&leaf->lock);
-            if (leaf_fd_alive(nfd))
+            alive = leaf_fd_alive(nfd);
+            cmq_mutex_lock(&leaf->lock);
+            if (alive && leaf->connected && leaf->hub_fd == nfd) {
+                cmq_mutex_unlock(&leaf->lock);
                 return 0;
+            }
+            cmq_mutex_unlock(&leaf->lock);
             cmq_mutex_lock(&leaf->hub_io_lock);
             leaf_hub_drop_if_dead(leaf, nfd);
             cmq_mutex_unlock(&leaf->hub_io_lock);
@@ -338,22 +348,32 @@ int cmq_leaf_connect(cmq_leaf_node_t *leaf) {
         int efd = leaf->hub_fd;
         cmq_mutex_unlock(&leaf->lock);
         cmq_mutex_unlock(&leaf->hub_io_lock);
-        if (leaf_fd_alive(efd)) {
+        int alive = leaf_fd_alive(efd);
+        cmq_mutex_lock(&leaf->hub_io_lock);
+        cmq_mutex_lock(&leaf->lock);
+        if (alive && leaf->connected && leaf->hub_fd == efd) {
+            cmq_mutex_unlock(&leaf->lock);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
             close(fd);
             return 0;
         }
-        cmq_mutex_lock(&leaf->hub_io_lock);
+        cmq_mutex_unlock(&leaf->lock);
         leaf_hub_drop_if_dead(leaf, efd);
         cmq_mutex_lock(&leaf->lock);
         if (leaf->connected && leaf->hub_fd >= 0) {
             int nfd = leaf->hub_fd;
             cmq_mutex_unlock(&leaf->lock);
             cmq_mutex_unlock(&leaf->hub_io_lock);
-            if (leaf_fd_alive(nfd)) {
+            alive = leaf_fd_alive(nfd);
+            cmq_mutex_lock(&leaf->hub_io_lock);
+            cmq_mutex_lock(&leaf->lock);
+            if (alive && leaf->connected && leaf->hub_fd == nfd) {
+                cmq_mutex_unlock(&leaf->lock);
+                cmq_mutex_unlock(&leaf->hub_io_lock);
                 close(fd);
                 return 0;
             }
-            cmq_mutex_lock(&leaf->hub_io_lock);
+            cmq_mutex_unlock(&leaf->lock);
             leaf_hub_drop_if_dead(leaf, nfd);
             cmq_mutex_lock(&leaf->lock);
         }
