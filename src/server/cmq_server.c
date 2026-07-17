@@ -2079,14 +2079,19 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     struct timespec ts2 = {0, 50000L};
                     nanosleep(&ts2, NULL);
                 }
-                /* Still unresolved: CAS-fail only — never overwrite a late 1. */
+                /* Still unresolved: only abandon pending (0). Never CAS 2→-1 —
+                   worker may already be on the wire; publisher fails closed. */
                 {
                     int cur = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
                     if (req_sync_terminal(cur)) {
                         req_sync_release(sync);
                         return cur == 1 ? 1 : 0;
                     }
-                    int expected = cur; /* 0 or 2 */
+                    if (cur == 2) {
+                        req_sync_release(sync);
+                        return 0;
+                    }
+                    int expected = 0;
                     if (__atomic_compare_exchange_n(
                             &sync->result, &expected, -1, 0,
                             __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
@@ -3231,6 +3236,13 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "delivery failed");
         return;
     }
+    /* Soft-delete may race during match/snapshot — align with PUBLISH. */
+    if (!client_account_live(srv, c)) {
+        free(tgts);
+        cmq_send_error(c, "account inactive");
+        c->state = CMQ_CLIENT_CLOSING;
+        return;
+    }
     /* Only forward REQUEST when no local responders — otherwise peers
        also answer the same _INBOX and the client sees duplicate replies. */
     if (!c->is_route && ntgt == 0)
@@ -3338,6 +3350,13 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     cmq_rwlock_unlock(&srv->sublist_lock);
     if (ntgt == SIZE_MAX) {
         cmq_send_error(c, "delivery failed");
+        return;
+    }
+    /* Soft-delete may race during match/snapshot — align with PUBLISH. */
+    if (!client_account_live(srv, c)) {
+        free(tgts);
+        cmq_send_error(c, "account inactive");
+        c->state = CMQ_CLIENT_CLOSING;
         return;
     }
     /* Only forward RESPONSE when no local inbox — avoid broadcasting

@@ -1075,11 +1075,9 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
     size_t idxs[CMQ_ROUTE_MAX_CONNS];
     char ids[CMQ_ROUTE_MAX_CONNS][CMQ_NODE_ID_SIZE];
     size_t n = 0;
-    size_t nslots;
+    /* Snapshot under pool→io so conn_count cannot grow mid-scan (missed peers). */
     cmq_mutex_lock(&pool->lock);
-    nslots = pool->conn_count;
-    cmq_mutex_unlock(&pool->lock);
-    /* Read fd/connected/identity under io_lock (same as write-fail clears). */
+    size_t nslots = pool->conn_count;
     for (size_t i = 0; i < nslots && n < CMQ_ROUTE_MAX_CONNS; i++) {
         cmq_mutex_lock(&pool->io_locks[i]);
         cmq_route_conn_t *c = &pool->conns[i];
@@ -1092,6 +1090,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
         }
         cmq_mutex_unlock(&pool->io_locks[i]);
     }
+    cmq_mutex_unlock(&pool->lock);
 
     size_t sent = 0;
     size_t deferred = 0;
