@@ -3535,6 +3535,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — UNSUB trie-first · route forward if live</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">UNSUBSCRIBE</span></td><td>✅</td><td>Remove from sublist before unlinking <code>c->subs</code> so PUBLISH cannot match then silent-drop on missing sub_id.</td></tr>
+<tr><td><span class="component-name">route_forward_if_live</span></td><td>✅</td><td>PUBLISH/REQUEST/RESPONSE/BATCH re-check account immediately before <code>cmq_route_forward_op</code> (soft-delete TOCTOU).</td></tr>
+</table>
+</div>
+
 
 
 

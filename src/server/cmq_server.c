@@ -34,6 +34,21 @@ static int client_account_live(cmq_server_t *srv, const cmq_client_t *c) {
     return ok;
 }
 
+static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
+                                 const uint8_t *payload, size_t payload_len,
+                                 size_t *out_sent);
+
+/* Recheck live immediately before cluster fan-out (soft-delete TOCTOU).
+   Returns -2 if inactive (caller should CLOSING); else cmq_route_forward_op rc. */
+static int route_forward_if_live(cmq_server_t *srv, cmq_client_t *c,
+                                  cmq_op_t op, uint8_t flags,
+                                  const uint8_t *payload, size_t payload_len,
+                                  size_t *out_sent) {
+    if (!client_account_live(srv, c))
+        return -2;
+    return cmq_route_forward_op(srv, op, flags, payload, payload_len, out_sent);
+}
+
 static uint64_t srv_now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -2702,10 +2717,16 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             return;
         }
         /* Remote-only: forward after local match succeeded (no OOM ghost). */
-        if (!c->is_route)
-            route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
-                                             frame->payload, frame->payload_len,
-                                             &route_sent);
+        if (!c->is_route) {
+            route_rc = route_forward_if_live(srv, c, CMQ_OP_PUBLISH,
+                                              frame->hdr.flags, frame->payload,
+                                              frame->payload_len, &route_sent);
+            if (route_rc == -2) {
+                cmq_send_error(c, "account inactive");
+                c->state = CMQ_CLIENT_CLOSING;
+                return;
+            }
+        }
         if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent))
             cmq_send_error(c, "route failed");
         return;
@@ -2734,10 +2755,16 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             c->state = CMQ_CLIENT_CLOSING;
             return;
         }
-        if (!c->is_route)
-            route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
-                                             frame->payload, frame->payload_len,
-                                             &route_sent);
+        if (!c->is_route) {
+            route_rc = route_forward_if_live(srv, c, CMQ_OP_PUBLISH,
+                                              frame->hdr.flags, frame->payload,
+                                              frame->payload_len, &route_sent);
+            if (route_rc == -2) {
+                cmq_send_error(c, "account inactive");
+                c->state = CMQ_CLIENT_CLOSING;
+                return;
+            }
+        }
         if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent))
             cmq_send_error(c, "route failed");
         return;
@@ -2752,10 +2779,17 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     }
 
     /* Cluster forward only after local snapshot succeeded. */
-    if (!c->is_route)
-        route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
-                                         frame->payload, frame->payload_len,
-                                         &route_sent);
+    if (!c->is_route) {
+        route_rc = route_forward_if_live(srv, c, CMQ_OP_PUBLISH,
+                                          frame->hdr.flags, frame->payload,
+                                          frame->payload_len, &route_sent);
+        if (route_rc == -2) {
+            free(tgts);
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
+    }
 
     /* Soft-delete during cluster forward — do not continue local fan-out. */
     if (!client_account_live(srv, c)) {
@@ -3249,8 +3283,8 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
     while (*pp) {
         if ((*pp)->sub_id == sub_id) {
             cmq_sub_entry_t *entry = *pp;
-            *pp = entry->next;
-
+            /* Drop trie interest before unlinking c->subs (align SUB replace)
+               so PUBLISH cannot match then silent-drop on missing sub_id. */
             cmq_rwlock_wrlock(&srv->sublist_lock);
             if (entry->ref) {
                 cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
@@ -3258,6 +3292,7 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
                 entry->ref = NULL;
             }
             cmq_rwlock_unlock(&srv->sublist_lock);
+            *pp = entry->next;
 
             free(entry);
             if (c->sub_count > 0) c->sub_count--;
@@ -3395,10 +3430,17 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     }
     /* Only forward REQUEST when no local responders — otherwise peers
        also answer the same _INBOX and the client sees duplicate replies. */
-    if (!c->is_route && ntgt == 0)
-        route_rc = cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
-                                         frame->payload, frame->payload_len,
-                                         &route_sent);
+    if (!c->is_route && ntgt == 0) {
+        route_rc = route_forward_if_live(srv, c, CMQ_OP_REQUEST, frame->hdr.flags,
+                                          frame->payload, frame->payload_len,
+                                          &route_sent);
+        if (route_rc == -2) {
+            free(tgts);
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
+    }
 
     if (tgts && ntgt > 0) {
         int ambiguous = 0;
@@ -3423,9 +3465,14 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_error(c, "delivery failed");
         } else if (!c->is_route) {
             /* Local targets were ghost/CLOSING — try cluster responders. */
-            route_rc = cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
-                                             frame->payload, frame->payload_len,
-                                             &route_sent);
+            route_rc = route_forward_if_live(srv, c, CMQ_OP_REQUEST,
+                                              frame->hdr.flags, frame->payload,
+                                              frame->payload_len, &route_sent);
+            if (route_rc == -2) {
+                cmq_send_error(c, "account inactive");
+                c->state = CMQ_CLIENT_CLOSING;
+                return;
+            }
             if (route_sent > 0) {
                 uint8_t ack[4] = {0};
                 size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK,
@@ -3543,10 +3590,17 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     }
     /* Only forward RESPONSE when no local inbox — avoid broadcasting
        private _INBOX payloads to every cluster peer. */
-    if (!c->is_route && ntgt == 0)
-        route_rc = cmq_route_forward_op(srv, CMQ_OP_RESPONSE, frame->hdr.flags,
-                                         frame->payload, frame->payload_len,
-                                         &route_sent);
+    if (!c->is_route && ntgt == 0) {
+        route_rc = route_forward_if_live(srv, c, CMQ_OP_RESPONSE,
+                                          frame->hdr.flags, frame->payload,
+                                          frame->payload_len, &route_sent);
+        if (route_rc == -2) {
+            free(tgts);
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
+    }
 
     if (tgts && ntgt > 0) {
         if (deliver_targets_sync(srv, tgts, ntgt, subject, c->account_name,
@@ -3560,11 +3614,17 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
             }
             /* Local inbox targets were ghost/CLOSING — try cluster. */
             if (!c->is_route) {
-                route_rc = cmq_route_forward_op(srv, CMQ_OP_RESPONSE,
-                                                 frame->hdr.flags,
-                                                 frame->payload,
-                                                 frame->payload_len,
-                                                 &route_sent);
+                route_rc = route_forward_if_live(srv, c, CMQ_OP_RESPONSE,
+                                                  frame->hdr.flags,
+                                                  frame->payload,
+                                                  frame->payload_len,
+                                                  &route_sent);
+                if (route_rc == -2) {
+                    free(tgts);
+                    cmq_send_error(c, "account inactive");
+                    c->state = CMQ_CLIENT_CLOSING;
+                    return;
+                }
                 if (route_sent == 0) {
                     if (cmq_route_forward_missed(srv, route_rc, route_sent))
                         cmq_send_error(c, "route failed");
@@ -3883,9 +3943,16 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                 }
                 if (payload_len > 0)
                     memcpy(pub + po, msg_payload, payload_len);
-                int route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, 0,
-                                                     pub, pub_len, &route_sent);
+                int route_rc = route_forward_if_live(srv, c, CMQ_OP_PUBLISH, 0,
+                                                      pub, pub_len, &route_sent);
                 free(pub);
+                if (route_rc == -2) {
+                    for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
+                    free(prep);
+                    cmq_send_error(c, "account inactive");
+                    c->state = CMQ_CLIENT_CLOSING;
+                    return;
+                }
                 if (route_sent > 0)
                     any_delivered = 1;
                 /* Remote-only entries must reach at least one live peer. */
