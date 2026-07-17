@@ -521,15 +521,17 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                     return 0;
                 }
                 cmq_mutex_unlock(&pool->lock);
-                if (route_fd_alive(efd)) {
-                    if (fd >= 0) close(fd);
-                    return 0;
-                }
+                int alive = route_fd_alive(efd);
                 cmq_mutex_lock(&pool->lock);
                 if (idx < pool->conn_count) {
                     int f2 = -1;
                     char rid2[CMQ_NODE_ID_SIZE];
                     route_slot_snap(pool, idx, NULL, &f2, NULL, rid2);
+                    if (alive && strcmp(rid2, node_id) == 0 && f2 == efd) {
+                        cmq_mutex_unlock(&pool->lock);
+                        if (fd >= 0) close(fd);
+                        return 0;
+                    }
                     if (strcmp(rid2, node_id) == 0 && f2 == efd &&
                         !route_fd_alive(efd)) {
                         route_slot_close(pool, idx);
@@ -571,10 +573,7 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                 return 0;
             }
             cmq_mutex_unlock(&pool->lock);
-            if (route_fd_alive(efd)) {
-                if (fd >= 0) close(fd);
-                return 0;
-            }
+            int alive = route_fd_alive(efd);
             cmq_mutex_lock(&pool->lock);
             if (idx >= pool->conn_count) {
                 i = (size_t)-1;
@@ -586,6 +585,11 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
             if (strcmp(rid2, node_id) != 0) {
                 i = (size_t)-1;
                 continue;
+            }
+            if (alive && f2 == efd) {
+                cmq_mutex_unlock(&pool->lock);
+                if (fd >= 0) close(fd);
+                return 0;
             }
             if (f2 == efd && !route_fd_alive(efd)) {
                 route_slot_close(pool, idx);
@@ -955,7 +959,12 @@ int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id) {
         cmq_mutex_unlock(&pool->io_locks[i]);
         if (!match) continue;
         if (!cand) return 0;
-        if (route_fd_alive(fd))
+        int alive = route_fd_alive(fd);
+        cmq_mutex_lock(&pool->io_locks[i]);
+        int still = (strcmp(pool->conns[i].remote_id, node_id) == 0 &&
+                     pool->conns[i].fd == fd);
+        cmq_mutex_unlock(&pool->io_locks[i]);
+        if (alive && still)
             return 1;
         cmq_mutex_lock(&pool->lock);
         if (i < pool->conn_count) {

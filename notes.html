@@ -2891,6 +2891,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — gateway/peer_live/add_conn sticky recheck</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">gw connect</span></td><td>✅</td><td>Same-ep sticky success requires cluster+connected+fd still match after probe.</td></tr>
+<tr><td><span class="component-name">peer_live</span></td><td>✅</td><td>Alive probe + identity recheck; avoids reconnect skip on recycled fds.</td></tr>
+</table>
+</div>
+
 
 
 

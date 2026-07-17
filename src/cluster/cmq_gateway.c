@@ -311,15 +311,19 @@ int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
         if (same_ep) {
             size_t idx = i;
             cmq_mutex_unlock(&gw->lock);
-            if (gw_fd_alive(efd))
-                return 0;
+            int alive = gw_fd_alive(efd);
             cmq_mutex_lock(&gw->lock);
             if (idx < gw->conn_count) {
                 cmq_mutex_lock(&gw->io_locks[idx]);
                 int same =
                     (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
-                     gw->conns[idx].fd == efd);
+                     gw->conns[idx].connected && gw->conns[idx].fd == efd);
                 cmq_mutex_unlock(&gw->io_locks[idx]);
+                /* Re-check identity after probe — fd recycle must not fake success. */
+                if (alive && same) {
+                    cmq_mutex_unlock(&gw->lock);
+                    return 0;
+                }
                 if (same && !gw_fd_alive(efd))
                     gw_slot_close_fd(gw, idx);
             }
