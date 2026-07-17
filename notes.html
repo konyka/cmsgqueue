@@ -3273,6 +3273,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS max_payload fits write_buf · TLS path NUL</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">WS payload</span></td><td>✅</td><td><code>CMQ_MAX_PAYLOAD_LIMIT</code> reserves ≤10B WS binary header so max frames fit <code>CMQ_WRITE_BUF_LIMIT</code>.</td></tr>
+<tr><td><span class="component-name">TLS paths</span></td><td>✅</td><td><code>cmq_tls_set_*</code> always NUL-terminates cert/key/ca/server_name buffers.</td></tr>
+</table>
+</div>
+
 
 
 

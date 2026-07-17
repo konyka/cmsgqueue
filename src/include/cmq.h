@@ -28,8 +28,9 @@ extern "C" {
 /* Hard ceiling for max_clients / clients[] growth (prevents int wrap on *2). */
 #define CMQ_MAX_CLIENTS_LIMIT    1000000
 #define CMQ_DEFAULT_MAX_PAYLOAD  (1024 * 1024)  /* 1 MB */
-/* Ceiling: encoded MESSAGE must fit server write_buf (4MiB − framing). */
-#define CMQ_MAX_PAYLOAD_LIMIT    ((4 * 1024 * 1024) - (256 * 2 + 65536 + 64))
+/* Ceiling: encoded MESSAGE (+ WS binary header ≤10) must fit write_buf 4MiB. */
+#define CMQ_MAX_PAYLOAD_LIMIT \
+    ((4 * 1024 * 1024) - (256 * 2 + 65536 + 64 + 10))
 #define CMQ_DEFAULT_MAX_SUBS_PER_CLIENT 1024
 #define CMQ_DEFAULT_PING_INTERVAL 30000  /* 30 seconds */
 #define CMQ_DEFAULT_WRITE_TIMEOUT  5000  /* 5 seconds */

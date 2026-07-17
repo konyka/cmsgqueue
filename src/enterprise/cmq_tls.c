@@ -37,6 +37,7 @@ void cmq_tls_config_destroy(cmq_tls_config_t *cfg) {
 int cmq_tls_set_cert(cmq_tls_config_t *cfg, const char *cert_path) {
     if (!cfg || !cert_path) return -1;
     strncpy(cfg->cert, cert_path, CMQ_TLS_PATH_MAX - 1);
+    cfg->cert[CMQ_TLS_PATH_MAX - 1] = '\0';
     cfg->has_cert = 1;
     return 0;
 }
@@ -44,6 +45,7 @@ int cmq_tls_set_cert(cmq_tls_config_t *cfg, const char *cert_path) {
 int cmq_tls_set_key(cmq_tls_config_t *cfg, const char *key_path) {
     if (!cfg || !key_path) return -1;
     strncpy(cfg->key, key_path, CMQ_TLS_PATH_MAX - 1);
+    cfg->key[CMQ_TLS_PATH_MAX - 1] = '\0';
     cfg->has_key = 1;
     return 0;
 }
@@ -51,6 +53,7 @@ int cmq_tls_set_key(cmq_tls_config_t *cfg, const char *key_path) {
 int cmq_tls_set_ca(cmq_tls_config_t *cfg, const char *ca_path) {
     if (!cfg || !ca_path) return -1;
     strncpy(cfg->ca, ca_path, CMQ_TLS_PATH_MAX - 1);
+    cfg->ca[CMQ_TLS_PATH_MAX - 1] = '\0';
     return 0;
 }
 
@@ -63,6 +66,7 @@ int cmq_tls_set_verify(cmq_tls_config_t *cfg, int verify_peer) {
 int cmq_tls_set_server_name(cmq_tls_config_t *cfg, const char *name) {
     if (!cfg || !name) return -1;
     strncpy(cfg->server_name, name, CMQ_TLS_NAME_MAX - 1);
+    cfg->server_name[CMQ_TLS_NAME_MAX - 1] = '\0';
     return 0;
 }
 
