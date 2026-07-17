@@ -3606,6 +3606,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route connect/attach + MQTT fd_alive under lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route connect</span></td><td>✅</td><td>Sticky success and post-dial discard probe <code>route_fd_alive</code> under <code>io_lock</code> (same class as peer_live).</td></tr>
+<tr><td><span class="component-name">route attach inbound</span></td><td>✅</td><td>Reject-live path re-probes under <code>io_lock</code> so dead peers do not block inbound replace.</td></tr>
+<tr><td><span class="component-name">MQTT bridge liveness</span></td><td>✅</td><td><code>connect</code>/<code>is_connected</code> probe under <code>br-&gt;lock</code>.</td></tr>
+</table>
+</div>
+
 
 
 

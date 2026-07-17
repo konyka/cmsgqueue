@@ -418,45 +418,35 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
         cmq_mutex_lock(&pool->io_locks[i]);
         int match = (strcmp(pool->conns[i].remote_id, node_id) == 0);
         int efd = pool->conns[i].fd;
-        char ep[CMQ_NODE_ADDR_SIZE];
-        int eport = 0;
-        if (match && efd >= 0) {
-            memcpy(ep, pool->conns[i].remote_addr, CMQ_NODE_ADDR_SIZE);
-            ep[CMQ_NODE_ADDR_SIZE - 1] = '\0';
-            eport = pool->conns[i].remote_port;
-        }
         cmq_mutex_unlock(&pool->io_locks[i]);
         /* Live or staged (fd>=0). Sticky only for same configured endpoint;
            inbound/empty addr keeps any alive peer (do not steal staged). */
         if (match && efd >= 0) {
             size_t idx = i;
-            int same_ep = route_ep_same(ep, eport, addr, port);
-            cmq_mutex_unlock(&pool->lock);
-            int alive = route_fd_alive(efd) && same_ep;
-            cmq_mutex_lock(&pool->lock);
-            if (idx < pool->conn_count) {
-                cmq_mutex_lock(&pool->io_locks[idx]);
-                int same = (strcmp(pool->conns[idx].remote_id, node_id) == 0 &&
-                            pool->conns[idx].fd == efd);
-                char ep2[CMQ_NODE_ADDR_SIZE];
-                int eport2 = 0;
-                if (same) {
-                    memcpy(ep2, pool->conns[idx].remote_addr, CMQ_NODE_ADDR_SIZE);
-                    ep2[CMQ_NODE_ADDR_SIZE - 1] = '\0';
-                    eport2 = pool->conns[idx].remote_port;
-                }
-                cmq_mutex_unlock(&pool->io_locks[idx]);
-                /* Re-check identity after probe — fd recycle must not fake success. */
-                if (alive && same && route_ep_same(ep2, eport2, addr, port)) {
-                    cmq_mutex_unlock(&pool->lock);
-                    return 0;
-                }
-                /* Drop dead or wrong-endpoint outbound; never steal inbound. */
-                if (same &&
-                    (!route_fd_alive(efd) ||
-                     (ep2[0] != '\0' && !route_ep_same(ep2, eport2, addr, port))))
-                    route_slot_close(pool, idx);
+            cmq_mutex_lock(&pool->io_locks[idx]);
+            int same = (strcmp(pool->conns[idx].remote_id, node_id) == 0 &&
+                        pool->conns[idx].fd == efd);
+            char ep2[CMQ_NODE_ADDR_SIZE];
+            int eport2 = 0;
+            int live = 0;
+            if (same) {
+                memcpy(ep2, pool->conns[idx].remote_addr, CMQ_NODE_ADDR_SIZE);
+                ep2[CMQ_NODE_ADDR_SIZE - 1] = '\0';
+                eport2 = pool->conns[idx].remote_port;
+                /* Probe under io_lock — stale unlock-alive skips reconnect. */
+                live = route_ep_same(ep2, eport2, addr, port) &&
+                       route_fd_alive(efd);
             }
+            cmq_mutex_unlock(&pool->io_locks[idx]);
+            if (live) {
+                cmq_mutex_unlock(&pool->lock);
+                return 0;
+            }
+            /* Drop dead or wrong-endpoint outbound; never steal inbound. */
+            if (same &&
+                (!route_fd_alive(efd) ||
+                 (ep2[0] != '\0' && !route_ep_same(ep2, eport2, addr, port))))
+                route_slot_close(pool, idx);
             break;
         }
     }
@@ -481,24 +471,20 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
                 usable = 1;
                 break;
             }
-            cmq_mutex_unlock(&pool->lock);
-            int alive = route_fd_alive(efd);
-            cmq_mutex_lock(&pool->lock);
-            if (i >= pool->conn_count)
-                break;
-            int f2 = -1, c2 = 0;
-            route_slot_snap(pool, i, &c2, &f2, NULL, NULL);
-            if (!alive && f2 == efd && c2 && !route_fd_alive(efd)) {
+            cmq_mutex_lock(&pool->io_locks[i]);
+            int still = (pool->conns[i].fd == efd && pool->conns[i].connected);
+            int live = still && route_fd_alive(efd);
+            cmq_mutex_unlock(&pool->io_locks[i]);
+            if (!still) {
+                i = 0;
+                continue;
+            }
+            if (!live) {
                 route_slot_close(pool, i);
                 usable = 1;
                 break;
             }
-            if (alive && f2 == efd) {
-                i++;
-                continue;
-            }
-            /* Slot mutated while unlocked — rescan. */
-            i = 0;
+            i++;
         }
         if (!usable) {
             cmq_mutex_unlock(&pool->lock);
@@ -543,17 +529,6 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
         /* Another thread may have restored a live or staged egress. */
         if (efd >= 0) {
             size_t idx = i;
-            char ep[CMQ_NODE_ADDR_SIZE];
-            int eport = 0;
-            cmq_mutex_lock(&pool->io_locks[idx]);
-            memcpy(ep, pool->conns[idx].remote_addr, CMQ_NODE_ADDR_SIZE);
-            ep[CMQ_NODE_ADDR_SIZE - 1] = '\0';
-            eport = pool->conns[idx].remote_port;
-            cmq_mutex_unlock(&pool->io_locks[idx]);
-            int same_ep = route_ep_same(ep, eport, addr, port);
-            cmq_mutex_unlock(&pool->lock);
-            int alive = route_fd_alive(efd) && same_ep;
-            cmq_mutex_lock(&pool->lock);
             if (!route_endpoint_current(pool, node_id, addr, port)) {
                 cmq_mutex_unlock(&pool->lock);
                 close(fd);
@@ -570,8 +545,11 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
                     memcpy(ep2, pool->conns[idx].remote_addr, CMQ_NODE_ADDR_SIZE);
                     ep2[CMQ_NODE_ADDR_SIZE - 1] = '\0';
                     eport2 = pool->conns[idx].remote_port;
+                    /* Probe under io_lock — do not discard a fresh dial on stale alive. */
+                    int live = route_ep_same(ep2, eport2, addr, port) &&
+                               route_fd_alive(efd);
                     cmq_mutex_unlock(&pool->io_locks[idx]);
-                    if (alive && route_ep_same(ep2, eport2, addr, port)) {
+                    if (live) {
                         cmq_mutex_unlock(&pool->lock);
                         close(fd);
                         return 0;
@@ -893,9 +871,7 @@ static int route_attach_inbound_impl(cmq_route_pool_t *pool, const char *node_id
                 cmq_mutex_unlock(&pool->lock);
                 return -1;
             }
-            cmq_mutex_unlock(&pool->lock);
-            int alive = route_fd_alive(efd);
-            cmq_mutex_lock(&pool->lock);
+            /* Identity + live probe under pool/io locks (no unlock-stale alive). */
             if (idx >= pool->conn_count) {
                 i = (size_t)-1;
                 continue;
@@ -908,8 +884,10 @@ static int route_attach_inbound_impl(cmq_route_pool_t *pool, const char *node_id
                 continue;
             }
             if (f2 == efd) {
-                /* Probe+identity: recycled fd must not reject attach forever. */
-                if (alive) {
+                cmq_mutex_lock(&pool->io_locks[idx]);
+                int live = (pool->conns[idx].fd == efd && route_fd_alive(efd));
+                cmq_mutex_unlock(&pool->io_locks[idx]);
+                if (live) {
                     cmq_mutex_unlock(&pool->lock);
                     return -1;
                 }
