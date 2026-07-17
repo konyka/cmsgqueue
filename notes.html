@@ -3282,6 +3282,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — reject oversized cluster identity in config</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cluster id</span></td><td>✅</td><td>Validate <code>cluster_node_id</code>/<code>cluster_name</code> lengths before <code>strncpy</code> truncate can collide IDs.</td></tr>
+</table>
+</div>
+
 
 
 

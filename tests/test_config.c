@@ -264,6 +264,22 @@ TEST(config, validate_max_subs_cap) {
     ASSERT(cmq_config_validate(&config) != CMQ_OK);
 }
 
+TEST(config, validate_cluster_id_len) {
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.port = 7654;
+    char ok_id[16];
+    memset(ok_id, 'a', 15);
+    ok_id[15] = '\0';
+    config.cluster_node_id = ok_id;
+    ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
+    char long_id[17];
+    memset(long_id, 'b', 16);
+    long_id[16] = '\0';
+    config.cluster_node_id = long_id;
+    ASSERT(cmq_config_validate(&config) != CMQ_OK);
+}
+
 TEST(config, load_skip_sections) {
     const char *path = write_test_config(
         "[server]\n"

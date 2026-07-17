@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_config.h"
+#include "cmq_cluster.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,6 +8,9 @@
 #include <ctype.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+
+/* Matches cmq_cluster.name[64] in cmq_cluster_create. */
+#define CMQ_CLUSTER_NAME_MAX 64
 
 static void trim(char *s) {
     char *start = s;
@@ -245,6 +249,13 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         (!config->cluster_name || !config->cluster_node_id ||
          config->cluster_name[0] == '\0' ||
          config->cluster_node_id[0] == '\0'))
+        return CMQ_ERR_INVALID_ARG;
+    /* strncpy into fixed pads — reject so IDs cannot collide after truncate. */
+    if (config->cluster_node_id &&
+        strnlen(config->cluster_node_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->cluster_name &&
+        strnlen(config->cluster_name, CMQ_CLUSTER_NAME_MAX) >= CMQ_CLUSTER_NAME_MAX)
         return CMQ_ERR_INVALID_ARG;
     /* Inbound route identity is by peer IP only — duplicate IPs collide on rN. */
     for (int i = 0; i < config->route_count; i++) {
