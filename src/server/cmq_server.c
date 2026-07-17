@@ -4191,6 +4191,16 @@ static void client_closing_discard_inbound(cmq_client_t *c) {
 
 static void client_finish_closing(cmq_client_t *c) {
     if (!c || c->state != CMQ_CLIENT_CLOSING) return;
+    /* Acceptor-owned: serialize with worker REQUEST drain (holds clients_lock). */
+    cmq_server_t *srv = c->server;
+    int acc = (c->worker_id < 0 && srv != NULL);
+    if (acc)
+        cmq_mutex_lock(&srv->clients_lock);
+    if (c->state != CMQ_CLIENT_CLOSING) {
+        if (acc)
+            cmq_mutex_unlock(&srv->clients_lock);
+        return;
+    }
     if (c->write_buf && c->write_pos < c->write_len) {
         /* Peer may still send; drain RX so our final frames are not blocked
            by a full TCP receive window (keepalive skips CLOSING). */
@@ -4204,9 +4214,13 @@ static void client_finish_closing(cmq_client_t *c) {
                            client_read_cb, c) != 0) {
                 (void)shutdown(c->fd, SHUT_RDWR);
             }
+            if (acc)
+                cmq_mutex_unlock(&srv->clients_lock);
             return;
         }
     }
+    if (acc)
+        cmq_mutex_unlock(&srv->clients_lock);
     client_teardown(c);
 }
 
@@ -4521,47 +4535,67 @@ static void client_read_cb(int fd, int events, void *data) {
     }
 }
 
-static void keepalive_scan_clients(cmq_client_t **clients, int count,
-                                    uint64_t now, uint64_t timeout_ms,
+static void keepalive_scan_clients(cmq_server_t *srv, cmq_client_t **clients,
+                                    int count, uint64_t now,
+                                    uint64_t timeout_ms,
                                     uint64_t write_timeout_ms) {
-    /* Acceptor-thread clients only — teardown is safe on this thread.
-       Single pass, no heap: OOM must not skip an entire keepalive tick. */
-    if (count <= 0) return;
+    /* Acceptor clients: take clients_lock so we serialize with worker drain.
+       Under lock only force_closing/shutdown — teardown re-locks. */
+    if (!srv || count <= 0) return;
     for (int i = 0; i < count; i++) {
         cmq_client_t *c = clients[i];
-        if (!c || c->state == CMQ_CLIENT_CLOSED)
+        if (!c) continue;
+        cmq_mutex_lock(&srv->clients_lock);
+        int present = 0;
+        for (int j = 0; j < srv->clients_count; j++) {
+            if (srv->clients[j] == c) {
+                present = 1;
+                break;
+            }
+        }
+        if (!present || c->state == CMQ_CLIENT_CLOSED) {
+            cmq_mutex_unlock(&srv->clients_lock);
             continue;
-        /* Soft-deleted accounts: reclaim slot without waiting for idle timeout. */
-        if (c->state == CMQ_CLIENT_CONNECTED && c->server &&
-            !client_account_live(c->server, c)) {
-            c->state = CMQ_CLIENT_CLOSING;
+        }
+        if (c->state == CMQ_CLIENT_CONNECTED &&
+            !client_account_live(srv, c)) {
+            client_force_closing(c);
+            cmq_mutex_unlock(&srv->clients_lock);
             client_finish_closing(c);
             continue;
         }
         int stalled = client_write_stalled(c, now, write_timeout_ms);
-        /* CLOSING: stall → force teardown; idle → finish flush then teardown. */
         if (c->state == CMQ_CLIENT_CLOSING) {
             int closing_idle = (now - client_activity_ms(c)) > timeout_ms;
-            if (stalled)
-                client_teardown(c);
-            else if (closing_idle)
+            if (stalled && c->fd >= 0)
+                (void)shutdown(c->fd, SHUT_RDWR);
+            cmq_mutex_unlock(&srv->clients_lock);
+            if (stalled || closing_idle)
                 client_finish_closing(c);
             continue;
         }
         int idle = (c->state == CMQ_CLIENT_CONNECTED ||
                     c->state == CMQ_CLIENT_INIT) &&
                    (now - client_activity_ms(c)) > timeout_ms;
-        if (!idle && !stalled) continue;
+        if (!idle && !stalled) {
+            cmq_mutex_unlock(&srv->clients_lock);
+            continue;
+        }
         if (c->state == CMQ_CLIENT_CONNECTED) {
             uint8_t disc[16];
             size_t disc_len = cmq_frame_encode(disc, sizeof(disc),
                                                 CMQ_OP_DISCONNECT, 0, NULL, 0);
             if (disc_len > 0)
                 (void)cmq_client_send_local(c, disc, disc_len);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_force_closing(c);
+            cmq_mutex_unlock(&srv->clients_lock);
             client_finish_closing(c);
         } else {
-            client_teardown(c);
+            client_force_closing(c);
+            if (c->fd >= 0)
+                (void)shutdown(c->fd, SHUT_RDWR);
+            cmq_mutex_unlock(&srv->clients_lock);
+            client_finish_closing(c);
         }
     }
 }
@@ -4615,7 +4649,7 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     }
     cmq_mutex_unlock(&srv->clients_lock);
     if (snap) {
-        keepalive_scan_clients(snap, n, now, timeout_ms, write_timeout_ms);
+        keepalive_scan_clients(srv, snap, n, now, timeout_ms, write_timeout_ms);
         free(snap);
     }
 

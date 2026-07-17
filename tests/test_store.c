@@ -215,6 +215,20 @@ TEST(stream, ack_rejects_beyond_last) {
     cmq_stream_destroy(st);
 }
 
+TEST(stream, ack_rejects_evicted_seq) {
+    cmq_stream_t *st = cmq_stream_create("ackevict", 2, 0);
+    ASSERT_EQ(cmq_stream_add_consumer(st, "c"), 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"a", 1) > 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"b", 1) > 0);
+    ASSERT_EQ(cmq_stream_consumer_ack(st, "c", 2), 0);
+    ASSERT(cmq_stream_append(st, (const uint8_t *)"c", 1) > 0); /* wraps seq 1 */
+    ASSERT_EQ(cmq_stream_first_seq(st), (uint64_t)2);
+    /* Stale ack of evicted seq must be rejected. */
+    ASSERT_EQ(cmq_stream_consumer_ack(st, "c", 1), -1);
+    ASSERT_EQ(cmq_stream_consumer_ack(st, "c", 2), 0);
+    cmq_stream_destroy(st);
+}
+
 TEST(filestore, create_destroy) {
     const char *dir = "/tmp/cmq_fs_test1";
     mkdir(dir, 0755);

@@ -3375,6 +3375,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — stream ack window · acceptor finish_closing vs drain</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">stream ack</span></td><td>✅</td><td>Reject/clamp acks below <code>first_seq</code> so stale watermarks cannot permanently refuse appends.</td></tr>
+<tr><td><span class="component-name">finish_closing</span></td><td>✅</td><td>Acceptor <code>client_finish_closing</code> takes <code>clients_lock</code> around flush so it serializes with worker REQUEST drain; keepalive verifies presence under the same lock.</td></tr>
+</table>
+</div>
+
 
 
 

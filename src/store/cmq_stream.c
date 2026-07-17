@@ -93,11 +93,15 @@ static uint64_t stream_append_impl(cmq_stream_t *stream, const uint8_t *data, si
 
     /* Do not evict past the slowest consumer's ack watermark. */
     uint64_t last_seq = cmq_store_last_seq(stream->store);
+    uint64_t first_seq = cmq_store_first_seq(stream->store);
     uint64_t retain_floor = UINT64_MAX;
     for (size_t i = 0; i < stream->consumer_count; i++) {
         uint64_t acked = stream->consumers[i].acked_seq;
         if (acked > last_seq) acked = last_seq; /* clamp stale/bad ack */
         uint64_t floor = acked + 1;
+        /* Evicted prefix must not pin retain_floor below the store window. */
+        if (first_seq > 0 && floor < first_seq)
+            floor = first_seq;
         if (floor < retain_floor) retain_floor = floor;
     }
 
@@ -286,7 +290,9 @@ static int stream_consumer_ack_impl(cmq_stream_t *stream, const char *consumer_n
     cmq_mutex_lock(&stream->lock);
     int found = -1;
     uint64_t last = cmq_store_last_seq(stream->store);
-    if (seq > last) {
+    uint64_t first = cmq_store_first_seq(stream->store);
+    /* Reject beyond-last and already-evicted seqs (stale ack must not pin). */
+    if (seq > last || (first > 0 && seq < first)) {
         cmq_mutex_unlock(&stream->lock);
         return -1;
     }
@@ -294,7 +300,7 @@ static int stream_consumer_ack_impl(cmq_stream_t *stream, const char *consumer_n
         if (strcmp(stream->consumers[i].name, consumer_name) == 0) {
             /* Cumulative ack (JetStream-style): seq advances watermark up to
                last; gap-ack of unread seqs is intentional API. Beyond-last
-               rejected above so retain_floor cannot jump past store end. */
+               / pre-first rejected above so retain_floor stays in window. */
             if (seq > stream->consumers[i].acked_seq)
                 stream->consumers[i].acked_seq = seq;
             found = 0;
