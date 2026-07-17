@@ -2838,6 +2838,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST sync timeout cancel / no UAF</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">sync timeout</span></td><td>✅</td><td>Soft timeout unlinks+frees queued sync msg; in-flight drain keeps waiting (no stack <code>sync_result</code> UAF / late false fail).</td></tr>
+</table>
+</div>
+
 
 
 

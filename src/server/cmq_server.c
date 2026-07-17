@@ -1704,7 +1704,9 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
     return client_drain_write_sync(c) == 0 ? 1 : 0;
 }
 
-/* Cross-worker REQUEST: mailbox + wait for owner send_local(+drain). */
+/* Cross-worker REQUEST: mailbox + wait for owner send_local(+drain).
+   Soft timeout unlinks if still queued; if already dequeued (in-flight drain),
+   keep waiting — never let stack sync_result go out of scope early (UAF). */
 static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                                        uint32_t client_id, uint32_t conn_gen,
                                        uint32_t sub_id, const uint8_t *frame,
@@ -1719,24 +1721,46 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
             nanosleep(&ts, NULL);
             continue;
         }
-        for (int wait = 0; wait < 100000; wait++) {
+        int waited = 0;
+        for (;;) {
             int v = __atomic_load_n(&result, __ATOMIC_ACQUIRE);
             if (v != 0)
                 return v == 1 ? 1 : 0;
+            if (waited >= 100000) {
+                /* ~5s soft deadline: cancel only while still queued. */
+                cmq_mutex_lock(&w->msg_lock);
+                cmq_worker_msg_t **pp = &w->msg_head;
+                cmq_worker_msg_t *prev = NULL;
+                cmq_worker_msg_t *found = NULL;
+                while (*pp) {
+                    cmq_worker_msg_t *m = *pp;
+                    if (m->sync_result == &result) {
+                        *pp = m->next;
+                        if (w->msg_tail == m)
+                            w->msg_tail = prev;
+                        if (w->msg_pending > 0)
+                            w->msg_pending--;
+                        m->next = NULL;
+                        found = m;
+                        break;
+                    }
+                    prev = m;
+                    pp = &m->next;
+                }
+                cmq_mutex_unlock(&w->msg_lock);
+                if (found) {
+                    free(found->buf);
+                    free(found);
+                    return 0;
+                }
+                /* In-flight on owner — must wait for store (no UAF). */
+                waited = 0;
+                continue;
+            }
             struct timespec ts = {0, 50000L};
             nanosleep(&ts, NULL);
+            waited++;
         }
-        /* Detach sync so a late owner completion cannot touch stack. */
-        cmq_mutex_lock(&w->msg_lock);
-        for (cmq_worker_msg_t *m = w->msg_head; m; m = m->next) {
-            if (m->sync_result == &result) {
-                m->sync_result = NULL;
-                break;
-            }
-        }
-        cmq_mutex_unlock(&w->msg_lock);
-        int v = __atomic_load_n(&result, __ATOMIC_ACQUIRE);
-        return v == 1 ? 1 : 0;
     }
     return 0;
 }
