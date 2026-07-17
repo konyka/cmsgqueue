@@ -3432,6 +3432,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — keepalive lock order · route inbound drop · OOM scan</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">keepalive TEARDOWN</span></td><td>✅</td><td>Never <code>worker_push_teardown</code> under <code>clients_lock</code> (avoids AB-BA with <code>msg_lock</code>); overflow beyond cap uses SHUT_RDWR only.</td></tr>
+<tr><td><span class="component-name">route inbound</span></td><td>✅</td><td>Broadcast hard-fail on borrowed fds SHUT_RDWR without clearing the slot, so reconnect cannot dual-dial before detach.</td></tr>
+<tr><td><span class="component-name">acceptor KA OOM</span></td><td>✅</td><td>Stack-snapshot doomed acceptor clients and still run <code>keepalive_scan_clients</code>/<code>finish_closing</code>.</td></tr>
+</table>
+</div>
+
 
 
 

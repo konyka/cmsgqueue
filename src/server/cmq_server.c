@@ -4686,34 +4686,40 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     cmq_mutex_lock(&srv->clients_lock);
     int n = srv->clients_count;
     cmq_client_t **snap = NULL;
+    enum { CMQ_KA_ACC_STACK = 64 };
+    cmq_client_t *stack_snap[CMQ_KA_ACC_STACK];
+    int stack_n = 0;
     if (n > 0) {
         snap = malloc((size_t)n * sizeof(cmq_client_t *));
         if (snap) {
             memcpy(snap, srv->clients, (size_t)n * sizeof(cmq_client_t *));
         } else {
-            /* OOM: force-close idle/stalled/epoch-dead without heap snapshot. */
+            /* OOM: stack-snapshot doomed clients so finish_closing still runs. */
             for (int i = 0; i < n; i++) {
                 cmq_client_t *c = srv->clients[i];
                 if (!c || c->state == CMQ_CLIENT_CLOSED)
                     continue;
-                if (c->state == CMQ_CLIENT_CONNECTED &&
-                    !client_account_live(srv, c)) {
-                    /* Safe under clients_lock: mark CLOSING, no teardown. */
-                    client_force_closing(c);
-                    continue;
-                }
                 int stalled = client_write_stalled(c, now, write_timeout_ms);
-                if (c->state == CMQ_CLIENT_CLOSING) {
-                    int closing_idle = (now - client_activity_ms(c)) > timeout_ms;
-                    if ((stalled || closing_idle) && c->fd >= 0)
-                        shutdown(c->fd, SHUT_RDWR);
-                    continue;
+                int doom = 0;
+                if (c->state == CMQ_CLIENT_CONNECTED &&
+                    !client_account_live(srv, c))
+                    doom = 1;
+                else if (c->state == CMQ_CLIENT_CLOSING) {
+                    int closing_idle =
+                        (now - client_activity_ms(c)) > timeout_ms;
+                    doom = stalled || closing_idle;
+                } else {
+                    int idle = (c->state == CMQ_CLIENT_CONNECTED ||
+                                c->state == CMQ_CLIENT_INIT) &&
+                               (now - client_activity_ms(c)) > timeout_ms;
+                    doom = idle || stalled;
                 }
-                int idle = (c->state == CMQ_CLIENT_CONNECTED ||
-                            c->state == CMQ_CLIENT_INIT) &&
-                           (now - client_activity_ms(c)) > timeout_ms;
-                if (idle || stalled)
-                    client_force_closing(c);
+                if (!doom)
+                    continue;
+                if (stack_n < CMQ_KA_ACC_STACK)
+                    stack_snap[stack_n++] = c;
+                else if (c->fd >= 0)
+                    (void)shutdown(c->fd, SHUT_RDWR);
             }
         }
     }
@@ -4721,6 +4727,9 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     if (snap) {
         keepalive_scan_clients(srv, snap, n, now, timeout_ms, write_timeout_ms);
         free(snap);
+    } else if (stack_n > 0) {
+        keepalive_scan_clients(srv, stack_snap, stack_n, now, timeout_ms,
+                               write_timeout_ms);
     }
 
     if (srv->workers) {
@@ -4780,12 +4789,11 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                         if (c->fd >= 0)
                             shutdown(c->fd, SHUT_RDWR);
                     } else {
-                        /* Beyond overflow slots: shutdown + post TEARDOWN now
-                           (safe: worker never holds msg_lock across clients_lock). */
-                        uint32_t tid = c->id, tgen = c->conn_gen;
+                        /* Beyond overflow slots: SHUT_RDWR only. Never push
+                           TEARDOWN under clients_lock (AB-BA with msg_lock).
+                           EOF / next keepalive tick completes reclaim. */
                         if (c->fd >= 0)
                             shutdown(c->fd, SHUT_RDWR);
-                        (void)worker_push_teardown(w, tid, tgen);
                     }
                 }
             }
