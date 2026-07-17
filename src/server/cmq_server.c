@@ -2997,8 +2997,20 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         }
         if (a) cmq_account_release(srv->accounts, a);
     } else if (!client_account_live(srv, c)) {
-        /* Replace path: same soft-delete TOCTOU as new-sub credit. */
+        /* Replace path: old entry already freed — roll back counts too or
+           sub_count/stat/account quota stay inflated with zero live subs. */
         c->subs = entry->next;
+        if (c->sub_count > 0) c->sub_count--;
+        uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
+                                            CMQ_ATOMIC_RELAXED);
+        if (cur > 0)
+            cmq_atomic_fetch_sub_u64(&srv->stat_subscriptions, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        cmq_account_t *a = cmq_account_get(srv->accounts, c->account_name, NULL);
+        if (a) {
+            cmq_account_dec_subscriptions(a, c->account_epoch);
+            cmq_account_release(srv->accounts, a);
+        }
         cmq_rwlock_wrlock(&srv->sublist_lock);
         if (entry->ref) {
             cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);

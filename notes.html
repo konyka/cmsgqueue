@@ -3265,6 +3265,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — SUBSCRIBE replace rollback decrements counts</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">sub replace</span></td><td>✅</td><td>Account soft-delete TOCTOU on replace now decs <code>sub_count</code>/<code>stat_subscriptions</code>/account quota (old entry already freed).</td></tr>
+</table>
+</div>
+
 
 
 
