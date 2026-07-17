@@ -3502,6 +3502,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST claim-abandon skips cluster fallback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">REQUEST fallback</span></td><td>✅</td><td>Cross-worker hard-abandon while claimed (2) returns −1; <code>handle_request</code> fails closed without cluster fan-out (avoids local+peer duplicate).</td></tr>
+</table>
+</div>
+
 
 
 

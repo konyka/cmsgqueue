@@ -2016,7 +2016,8 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
 /* Cross-worker REQUEST: mailbox + wait for owner send_local(+drain).
    Heap refcounted sync slot — publisher may abandon without UAF/livelock.
    While waiting, drain our own SEND mailbox so A↔B sync REQUESTs cannot
-   deadlock two worker event threads. */
+   deadlock two worker event threads.
+   Returns 1 success, 0 clean fail, -1 abandoned while claimed (may still wire). */
 static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                                        uint32_t client_id, uint32_t conn_gen,
                                        uint32_t sub_id, const uint8_t *frame,
@@ -2135,7 +2136,9 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     nanosleep(&ts2, NULL);
                 }
                 /* Still unresolved: only abandon pending (0). Never CAS 2→-1 —
-                   worker may already be on the wire; publisher fails closed. */
+                   worker may already be on the wire; publisher fails closed.
+                   Return -1 when claimed so callers skip cluster fallback
+                   (local delivery may still complete). */
                 {
                     int cur = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
                     if (req_sync_terminal(cur)) {
@@ -2144,7 +2147,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     }
                     if (cur == 2) {
                         req_sync_release(sync);
-                        return 0;
+                        return -1;
                     }
                     int expected = 0;
                     if (__atomic_compare_exchange_n(
@@ -2166,13 +2169,17 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
 }
 
 /* REQUEST fan-out by client_id after sublist unlock (same safety as publish).
-   Returns number of successful on-wire deliveries (for honest PUBACK). */
+   Returns number of successful on-wire deliveries (for honest PUBACK).
+   If out_claim_abandon is set, *out_claim_abandon=1 when a cross-worker
+   wait abandoned while claimed (2) — local delivery may still complete. */
 static size_t deliver_request_targets(cmq_server_t *srv,
                                      cmq_deliver_tgt_t *tgts, size_t ntgt,
                                      const char *subject, const char *reply_to,
                                      const char *pub_account,
                                      const uint8_t *payload, size_t payload_len,
-                                     cmq_client_t *publisher) {
+                                     cmq_client_t *publisher,
+                                     int *out_claim_abandon) {
+    if (out_claim_abandon) *out_claim_abandon = 0;
     if (!tgts || ntgt == 0) return 0;
     size_t flen = 0;
     uint8_t *frame = cmq_build_request_message_frame(0, subject, reply_to,
@@ -2205,7 +2212,7 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                                                  t->conn_gen, t->sub_id,
                                                  frame, flen, pub_account);
         }
-        if (delivered) {
+        if (delivered > 0) {
             delivered_n++;
             cmq_atomic_fetch_add_u64(&srv->stat_messages_out, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -2216,6 +2223,9 @@ static size_t deliver_request_targets(cmq_server_t *srv,
                                          (uint64_t)payload_len);
                 cmq_account_release(srv->accounts, oacc);
             }
+        } else if (delivered < 0) {
+            if (out_claim_abandon) *out_claim_abandon = 1;
+            /* Ambiguous in-flight — do not count as a clean drop. */
         } else {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
@@ -3338,9 +3348,11 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                          &route_sent);
 
     if (tgts && ntgt > 0) {
+        int claim_abandon = 0;
         size_t n = deliver_request_targets(srv, tgts, ntgt, subject, reply_to,
                                             c->account_name,
-                                            msg_payload, msg_len, c);
+                                            msg_payload, msg_len, c,
+                                            &claim_abandon);
         free(tgts);
         /* Soft-delete may race during long cross-worker waits. */
         if (!client_account_live(srv, c)) {
@@ -3352,6 +3364,10 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+        } else if (claim_abandon) {
+            /* Local worker may still be on the wire — do not also fan out
+               to the cluster (would duplicate REQUEST / _INBOX replies). */
+            cmq_send_error(c, "delivery failed");
         } else if (!c->is_route) {
             /* Local targets were ghost/CLOSING — try cluster responders. */
             route_rc = cmq_route_forward_op(srv, CMQ_OP_REQUEST, frame->hdr.flags,
