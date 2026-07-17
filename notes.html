@@ -3384,6 +3384,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — count hard-write misses · MQTT packet ids</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/gw write</span></td><td>✅</td><td>Hard-write failures increment the undelivered counter (same as EAGAIN) so drop stats are honest.</td></tr>
+<tr><td><span class="component-name">MQTT ids</span></td><td>✅</td><td><code>encode_publish</code>/<code>encode_subscribe</code> take caller packet ids; reject id 0 when required.</td></tr>
+</table>
+</div>
+
 
 
 

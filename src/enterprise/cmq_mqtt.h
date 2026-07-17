@@ -51,9 +51,13 @@ const char *cmq_mqtt_subject_to_topic(const char *subject, char *buf, size_t len
 
 int cmq_mqtt_encode_connect(uint8_t *buf, size_t len, const char *client_id,
                              int keepalive, int clean_session);
+/* packet_id required and non-zero when qos > 0; ignored for qos 0. */
 int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
-                             const uint8_t *payload, size_t payload_len, int qos);
-int cmq_mqtt_encode_subscribe(uint8_t *buf, size_t len, const char *topic, int qos);
+                             const uint8_t *payload, size_t payload_len, int qos,
+                             uint16_t packet_id);
+/* packet_id must be non-zero (MQTT SUBSCRIBE always carries a packet id). */
+int cmq_mqtt_encode_subscribe(uint8_t *buf, size_t len, const char *topic,
+                               int qos, uint16_t packet_id);
 int cmq_mqtt_encode_pingreq(uint8_t *buf, size_t len);
 
 int cmq_mqtt_decode_connack(const uint8_t *buf, size_t len);

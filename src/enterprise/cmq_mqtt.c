@@ -507,9 +507,11 @@ int cmq_mqtt_encode_connect(uint8_t *buf, size_t len, const char *client_id,
 }
 
 int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
-                             const uint8_t *payload, size_t payload_len, int qos) {
+                             const uint8_t *payload, size_t payload_len, int qos,
+                             uint16_t packet_id) {
     if (!buf || !topic) return -1;
     if (qos < 0 || qos > 2) return -1;
+    if (qos > 0 && packet_id == 0) return -1;
     if (payload_len > 0 && !payload) return -1;
     size_t topic_len = strlen(topic);
     if (topic_len > 0xFFFFu || topic_len > SIZE_MAX - 2) return -1;
@@ -534,8 +536,8 @@ int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
     pos += topic_len;
 
     if (qos > 0) {
-        buf[pos++] = 0x00;
-        buf[pos++] = 0x01;
+        buf[pos++] = (uint8_t)(packet_id >> 8);
+        buf[pos++] = (uint8_t)(packet_id & 0xFF);
     }
 
     if (payload_len > 0)
@@ -543,9 +545,11 @@ int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,
     return (int)(pos + payload_len);
 }
 
-int cmq_mqtt_encode_subscribe(uint8_t *buf, size_t len, const char *topic, int qos) {
+int cmq_mqtt_encode_subscribe(uint8_t *buf, size_t len, const char *topic,
+                               int qos, uint16_t packet_id) {
     if (!buf || !topic) return -1;
     if (qos < 0 || qos > 2) return -1;
+    if (packet_id == 0) return -1;
     size_t topic_len = strlen(topic);
     if (topic_len > 0xFFFFu || topic_len > SIZE_MAX - 5) return -1;
     size_t var_len = 2 + 2 + topic_len + 1;
@@ -557,7 +561,8 @@ int cmq_mqtt_encode_subscribe(uint8_t *buf, size_t len, const char *topic, int q
     size_t pos = (size_t)(1 + rl);
     if (pos > len || len - pos < var_len) return -1;
 
-    buf[pos++] = 0x00; buf[pos++] = 0x01;
+    buf[pos++] = (uint8_t)(packet_id >> 8);
+    buf[pos++] = (uint8_t)(packet_id & 0xFF);
     buf[pos++] = (uint8_t)((topic_len >> 8) & 0xFF);
     buf[pos++] = (uint8_t)(topic_len & 0xFF);
     memcpy(&buf[pos], topic, topic_len);

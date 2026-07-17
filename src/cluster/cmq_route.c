@@ -1131,10 +1131,12 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
             cmq_mutex_unlock(&pool->io_locks[idx]);
             deferred++;
         } else {
-            /* Drop under io_lock so other writers cannot race close/shutdown. */
+            /* Drop under io_lock so other writers cannot race close/shutdown.
+               Count as undelivered (same as EAGAIN) for drop stats. */
             if (pool->conns[idx].fd == fd)
                 conn_drop_fd(&pool->conns[idx]);
             cmq_mutex_unlock(&pool->io_locks[idx]);
+            deferred++;
         }
     }
     if (out_eagain) *out_eagain = deferred;

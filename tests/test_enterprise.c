@@ -377,21 +377,27 @@ TEST(mqtt, encode_publish) {
     uint8_t buf[256];
     const uint8_t *payload = (const uint8_t *)"hello";
     int len = cmq_mqtt_encode_publish(buf, sizeof(buf), "test/topic",
-                                       payload, 5, 0);
+                                       payload, 5, 0, 0);
     ASSERT(len > 0);
     ASSERT_EQ(cmq_mqtt_decode_packet_type(buf, (size_t)len), 3);
-    len = cmq_mqtt_encode_publish(buf, sizeof(buf), "empty/topic", NULL, 0, 0);
+    len = cmq_mqtt_encode_publish(buf, sizeof(buf), "empty/topic", NULL, 0, 0, 0);
     ASSERT(len > 0);
-    ASSERT_EQ(cmq_mqtt_encode_publish(buf, sizeof(buf), "t", payload, 5, 3), -1);
-    ASSERT_EQ(cmq_mqtt_encode_publish(buf, sizeof(buf), "t", payload, 5, -1), -1);
+    len = cmq_mqtt_encode_publish(buf, sizeof(buf), "t", payload, 5, 1, 7);
+    ASSERT(len > 0);
+    ASSERT_EQ(buf[len - 7], 0x00); /* packet id hi before payload "hello" */
+    ASSERT_EQ(buf[len - 6], 0x07);
+    ASSERT_EQ(cmq_mqtt_encode_publish(buf, sizeof(buf), "t", payload, 5, 1, 0), -1);
+    ASSERT_EQ(cmq_mqtt_encode_publish(buf, sizeof(buf), "t", payload, 5, 3, 1), -1);
+    ASSERT_EQ(cmq_mqtt_encode_publish(buf, sizeof(buf), "t", payload, 5, -1, 1), -1);
 }
 
 TEST(mqtt, encode_subscribe) {
     uint8_t buf[256];
-    int len = cmq_mqtt_encode_subscribe(buf, sizeof(buf), "test/topic", 1);
+    int len = cmq_mqtt_encode_subscribe(buf, sizeof(buf), "test/topic", 1, 9);
     ASSERT(len > 0);
     ASSERT_EQ(cmq_mqtt_decode_packet_type(buf, (size_t)len), 8);
-    ASSERT_EQ(cmq_mqtt_encode_subscribe(buf, sizeof(buf), "test/topic", 3), -1);
+    ASSERT_EQ(cmq_mqtt_encode_subscribe(buf, sizeof(buf), "test/topic", 1, 0), -1);
+    ASSERT_EQ(cmq_mqtt_encode_subscribe(buf, sizeof(buf), "test/topic", 3, 1), -1);
 }
 
 TEST(mqtt, encode_pingreq) {

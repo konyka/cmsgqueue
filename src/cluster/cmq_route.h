@@ -57,6 +57,7 @@ int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id);
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject,
                        const uint8_t *data, size_t len,
                        const char *exclude_id);
+/* out_eagain: peers not fully written (EAGAIN or hard-write failure). */
 size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
                              size_t len, const char *exclude_id,
                              size_t *out_eagain);

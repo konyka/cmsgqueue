@@ -733,13 +733,15 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
             cmq_mutex_unlock(&gw->io_locks[idx]);
             deferred++;
         } else {
-            /* Clear identity too — sticky named tombstones fill the table. */
+            /* Clear identity too — sticky named tombstones fill the table.
+               Count as undelivered for drop/observability stats. */
             if (gw->conns[idx].fd == fd) {
                 memset(&gw->conns[idx], 0, sizeof(gw->conns[idx]));
                 gw->conns[idx].fd = -1;
             }
             close(fd);
             cmq_mutex_unlock(&gw->io_locks[idx]);
+            deferred++;
         }
     }
     if (out_eagain) *out_eagain = deferred;
@@ -802,6 +804,7 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
             }
             close(fd);
             cmq_mutex_unlock(&gw->io_locks[idx]);
+            deferred++;
         }
     }
     if (out_eagain) *out_eagain = deferred;
