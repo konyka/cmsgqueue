@@ -119,6 +119,7 @@ typedef struct cmq_worker_msg {
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
     char pub_account[CMQ_ACCOUNT_NAME_SIZE]; /* non-empty: recheck may_deliver */
     int *sync_result;               /* NULL=async; else 0 pending, 1 ok, -1 fail */
+    uint8_t sync_heap;              /* 1: sync_result is cmq_req_sync_t (refcount) */
     uint8_t *buf;
     size_t len;
     struct cmq_worker_msg *next;

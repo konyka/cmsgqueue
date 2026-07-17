@@ -2973,6 +2973,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — REQUEST heap sync abandon · leaf destroy under lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">REQUEST sync_heap</span></td><td>✅</td><td>Refcounted heap slot; hard-abandon after nudge (no infinite worker spin).</td></tr>
+<tr><td><span class="component-name">leaf destroy</span></td><td>✅</td><td>Close hub/leaf fds and clear slots under lock (no race with accept).</td></tr>
+</table>
+</div>
+
 
 
 

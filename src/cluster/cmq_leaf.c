@@ -233,14 +233,18 @@ void cmq_leaf_destroy(cmq_leaf_node_t *leaf) {
     if (leaf->hub_fd >= 0) close(leaf->hub_fd);
     leaf->hub_fd = -1;
     leaf->connected = 0;
-    cmq_mutex_unlock(&leaf->lock);
-    cmq_mutex_unlock(&leaf->hub_io_lock);
     for (size_t i = 0; i < leaf->leaf_count; i++) {
         if (leaf->leaves[i].fd >= 0) close(leaf->leaves[i].fd);
+        leaf->leaves[i].fd = -1;
     }
+    leaf->leaf_count = 0;
     for (size_t i = 0; i < leaf->sub_count; i++) {
         free(leaf->subs[i]);
+        leaf->subs[i] = NULL;
     }
+    leaf->sub_count = 0;
+    cmq_mutex_unlock(&leaf->lock);
+    cmq_mutex_unlock(&leaf->hub_io_lock);
     cmq_mutex_destroy(&leaf->hub_io_lock);
     cmq_mutex_destroy(&leaf->lock);
     free(leaf);
