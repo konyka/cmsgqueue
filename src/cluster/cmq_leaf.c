@@ -112,8 +112,36 @@ static int write_all(int fd, const uint8_t *data, size_t len) {
     return 0;
 }
 
+/* Discard `nbyte` from fd (after partial buffer already dropped). */
+static int leaf_discard_bytes(int fd, size_t nbyte, int *waited_ms) {
+    uint8_t junk[1024];
+    while (nbyte > 0) {
+        if (*waited_ms >= CMQ_LEAF_SUBACK_MS) return -1;
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        int pr = poll(&pfd, 1, 100);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (pr == 0) {
+            *waited_ms += 100;
+            continue;
+        }
+        size_t chunk = nbyte > sizeof(junk) ? sizeof(junk) : nbyte;
+        ssize_t n = read(fd, junk, chunk);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        nbyte -= (size_t)n;
+    }
+    return 0;
+}
+
 /* Wait for SUBACK(sub_id) with code 0. Skips INFO/PONG; drains MESSAGE
-   (leaf API is interest-only — no RX consumer). Returns 0 ok, -1 fail. */
+   (leaf API is interest-only — no RX consumer). Oversized frames are
+   stream-discarded so a large MESSAGE cannot abort SUBACK wait. */
 static int read_suback(int fd, uint32_t expect_id) {
     uint8_t rbuf[4096];
     size_t rlen = 0;
@@ -128,7 +156,18 @@ static int read_suback(int fd, uint32_t expect_id) {
             uint32_t plen = (uint32_t)rbuf[5] | ((uint32_t)rbuf[6] << 8) |
                             ((uint32_t)rbuf[7] << 16) | ((uint32_t)rbuf[8] << 24);
             size_t need = (size_t)CMQ_PROTO_HDR_SIZE + (size_t)plen;
-            if (need > sizeof(rbuf)) return -1;
+            if (need > sizeof(rbuf)) {
+                /* Drop buffered prefix; discard the rest from the socket. */
+                size_t have = rlen;
+                rlen = 0;
+                if (have > need) return -1;
+                if (leaf_discard_bytes(fd, need - have, &waited_ms) != 0)
+                    return -1;
+                if (op == (uint8_t)CMQ_OP_ERROR ||
+                    op == (uint8_t)CMQ_OP_DISCONNECT)
+                    return -1;
+                continue;
+            }
             if (rlen < need) break;
 
             const uint8_t *pay = rbuf + CMQ_PROTO_HDR_SIZE;
@@ -571,7 +610,7 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
         if (wr != 0 || flen == 0)
             leaf_hub_drop(leaf, hub_fd);
         else {
-            /* Hub refused — keep connection; roll back local interest. */
+            /* Roll back hub interest; drop hub if UNSUB cannot be written. */
             uint8_t upay[4] = {
                 (uint8_t)(sub_id >> 24), (uint8_t)(sub_id >> 16),
                 (uint8_t)(sub_id >> 8), (uint8_t)sub_id
@@ -579,8 +618,8 @@ int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject) {
             uint8_t uframe[16];
             size_t ulen = cmq_frame_encode(uframe, sizeof(uframe),
                                             CMQ_OP_UNSUBSCRIBE, 0, upay, 4);
-            if (ulen > 0)
-                (void)write_all(hub_fd, uframe, ulen);
+            if (ulen == 0 || write_all(hub_fd, uframe, ulen) != 0)
+                leaf_hub_drop(leaf, hub_fd);
         }
         cmq_mutex_lock(&leaf->lock);
         for (size_t i = 0; i < leaf->sub_count; i++) {

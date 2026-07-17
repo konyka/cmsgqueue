@@ -2855,6 +2855,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — TEARDOWN sync_result zero · leaf oversized SUBACK skip</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">TEARDOWN init</span></td><td>✅</td><td><code>worker_push_teardown</code> uses <code>calloc</code> so destroy never writes junk <code>sync_result</code>.</td></tr>
+<tr><td><span class="component-name">leaf SUBACK skip</span></td><td>✅</td><td>Stream-discard oversized frames while waiting SUBACK; UNSUB write fail drops hub.</td></tr>
+</table>
+</div>
+
 
 
 

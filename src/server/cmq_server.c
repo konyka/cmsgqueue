@@ -605,15 +605,12 @@ static int worker_push_teardown(cmq_worker_t *w, uint32_t target_id,
     }
     cmq_mutex_unlock(&w->msg_lock);
 
-    cmq_worker_msg_t *msg = malloc(sizeof(cmq_worker_msg_t));
+    cmq_worker_msg_t *msg = calloc(1, sizeof(cmq_worker_msg_t));
     if (!msg) return -1;
     msg->target_id = target_id;
     msg->target_gen = target_gen;
     msg->kind = CMQ_WORKER_MSG_TEARDOWN;
-    msg->require_sub_id = 0;
-    msg->buf = NULL;
-    msg->len = 0;
-    msg->next = NULL;
+    /* sync_result/credit_out/drain_sync remain 0 — destroy must not write junk. */
 
     cmq_mutex_lock(&w->msg_lock);
     for (cmq_worker_msg_t *m = w->msg_head; m; m = m->next) {
