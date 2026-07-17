@@ -2910,6 +2910,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route pool-full zombie reclaim · MQTT sticky recheck</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route connect/add_conn</span></td><td>✅</td><td>Full table reclaims sticky connected=1 dead TCP (mirror gateway).</td></tr>
+<tr><td><span class="component-name">mqtt connect/is_connected</span></td><td>✅</td><td>Probe + fd/endpoint identity recheck before sticky success.</td></tr>
+</table>
+</div>
+
 
 
 

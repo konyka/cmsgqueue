@@ -134,8 +134,16 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (!br || !addr) return -1;
     /* Sticky only for the same endpoint — addr/port change must reconnect. */
     if (br->connected) {
-        if (br->fd >= 0 && mqtt_fd_alive(br->fd) && br->port == port &&
-            strncmp(br->addr, addr, sizeof(br->addr)) == 0)
+        int efd = br->fd, ep = br->port;
+        char ea[sizeof(br->addr)];
+        strncpy(ea, br->addr, sizeof(ea) - 1);
+        ea[sizeof(ea) - 1] = '\0';
+        int alive = (efd >= 0 && ep == port &&
+                     strncmp(ea, addr, sizeof(ea)) == 0 &&
+                     mqtt_fd_alive(efd));
+        /* Re-check identity after probe — fd recycle must not fake success. */
+        if (alive && br->connected && br->fd == efd && br->port == ep &&
+            strncmp(br->addr, ea, sizeof(br->addr)) == 0)
             return 0;
         cmq_mqtt_bridge_disconnect(br);
     }
@@ -187,11 +195,12 @@ int cmq_mqtt_bridge_disconnect(cmq_mqtt_bridge_t *br) {
 
 int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br) {
     if (!br || !br->connected || br->fd < 0) return 0;
-    if (!mqtt_fd_alive(br->fd)) {
-        cmq_mqtt_bridge_disconnect(br);
-        return 0;
-    }
-    return 1;
+    int efd = br->fd;
+    int alive = mqtt_fd_alive(efd);
+    if (alive && br->connected && br->fd == efd)
+        return 1;
+    cmq_mqtt_bridge_disconnect(br);
+    return 0;
 }
 
 const char *cmq_mqtt_client_id(cmq_mqtt_bridge_t *br) {

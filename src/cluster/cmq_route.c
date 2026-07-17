@@ -366,6 +366,33 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                 break;
             }
         }
+        /* Also reclaim sticky connected=1 slots whose TCP is already dead. */
+        for (size_t i = 0; !usable && i < pool->conn_count; ) {
+            int connected = 0, efd = -1;
+            route_slot_snap(pool, i, &connected, &efd, NULL, NULL);
+            if (!connected || efd < 0) {
+                usable = 1;
+                break;
+            }
+            cmq_mutex_unlock(&pool->lock);
+            int alive = route_fd_alive(efd);
+            cmq_mutex_lock(&pool->lock);
+            if (i >= pool->conn_count)
+                break;
+            int f2 = -1, c2 = 0;
+            route_slot_snap(pool, i, &c2, &f2, NULL, NULL);
+            if (!alive && f2 == efd && c2 && !route_fd_alive(efd)) {
+                route_slot_close(pool, i);
+                usable = 1;
+                break;
+            }
+            if (alive && f2 == efd) {
+                i++;
+                continue;
+            }
+            /* Slot mutated while unlocked — rescan. */
+            i = 0;
+        }
         if (!usable) {
             cmq_mutex_unlock(&pool->lock);
             return -1;
@@ -492,9 +519,37 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
             dead = (int)i;
     }
     if (replace < 0 && dead < 0 && pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
-        cmq_mutex_unlock(&pool->lock);
-        if (fd >= 0) close(fd);
-        return -1;
+        /* Reclaim sticky connected=1 dead TCP before failing pool-full. */
+        for (size_t i = 0; i < pool->conn_count; ) {
+            int connected = 0, efd = -1;
+            route_slot_snap(pool, i, &connected, &efd, NULL, NULL);
+            if (!connected || efd < 0) {
+                dead = (int)i;
+                break;
+            }
+            cmq_mutex_unlock(&pool->lock);
+            int alive = route_fd_alive(efd);
+            cmq_mutex_lock(&pool->lock);
+            if (i >= pool->conn_count)
+                break;
+            int f2 = -1, c2 = 0;
+            route_slot_snap(pool, i, &c2, &f2, NULL, NULL);
+            if (!alive && f2 == efd && c2 && !route_fd_alive(efd)) {
+                route_slot_close(pool, i);
+                dead = (int)i;
+                break;
+            }
+            if (alive && f2 == efd) {
+                i++;
+                continue;
+            }
+            i = 0;
+        }
+        if (replace < 0 && dead < 0) {
+            cmq_mutex_unlock(&pool->lock);
+            if (fd >= 0) close(fd);
+            return -1;
+        }
     }
     cmq_mutex_unlock(&pool->lock);
 
@@ -625,6 +680,32 @@ int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
         return 0;
     }
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
+        for (size_t i = 0; i < pool->conn_count; ) {
+            int connected = 0, efd = -1;
+            route_slot_snap(pool, i, &connected, &efd, NULL, NULL);
+            if (!connected || efd < 0) {
+                i++;
+                continue;
+            }
+            cmq_mutex_unlock(&pool->lock);
+            int alive = route_fd_alive(efd);
+            cmq_mutex_lock(&pool->lock);
+            if (i >= pool->conn_count)
+                break;
+            int f2 = -1, c2 = 0;
+            route_slot_snap(pool, i, &c2, &f2, NULL, NULL);
+            if (!alive && f2 == efd && c2 && !route_fd_alive(efd)) {
+                route_slot_close(pool, i);
+                route_slot_install(pool, i, node_id, fd, fd >= 0, 1, NULL, 0);
+                cmq_mutex_unlock(&pool->lock);
+                return 0;
+            }
+            if (alive && f2 == efd) {
+                i++;
+                continue;
+            }
+            i = 0;
+        }
         cmq_mutex_unlock(&pool->lock);
         if (fd >= 0) close(fd);
         return -1;
