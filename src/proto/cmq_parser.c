@@ -188,18 +188,20 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
 
     while (p->inbuf_len - p->inbuf_off >= CMQ_HEADER_LEN) {
         const uint8_t *hb = p->inbuf + p->inbuf_off;
+        /* Align queue-full: keep already-queued frames when trailing bytes
+           are corrupt / oversize / OOM (caller drains then tears down). */
         if (hb[0] != CMQ_PROTO_MAGIC_0 || hb[1] != CMQ_PROTO_MAGIC_1) {
-            return -1;
+            return produced ? 1 : -1;
         }
         if (hb[2] != CMQ_PROTO_VERSION) {
-            return -1;
+            return produced ? 1 : -1;
         }
 
         uint32_t payload_len = (uint32_t)hb[5] | ((uint32_t)hb[6] << 8) |
                                ((uint32_t)hb[7] << 16) | ((uint32_t)hb[8] << 24);
 
         if (payload_len > p->max_payload) {
-            return -1;
+            return produced ? 1 : -1;
         }
 
         size_t total = CMQ_HEADER_LEN + (size_t)payload_len;
@@ -218,7 +220,7 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
         if (payload_len > 0) {
             frame.payload = (uint8_t *)malloc(payload_len);
             if (!frame.payload) {
-                return -1;
+                return produced ? 1 : -1;
             }
             memcpy(frame.payload, hb + CMQ_HEADER_LEN, payload_len);
         } else {

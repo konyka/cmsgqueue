@@ -3579,6 +3579,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — parser keep frames after trailing garbage</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">parser mid-stream</span></td><td>✅</td><td>After a frame is queued, bad magic/version/oversize/OOM returns 1 (partial) so callers drain before teardown (align queue-full).</td></tr>
+</table>
+</div>
+
 
 
 

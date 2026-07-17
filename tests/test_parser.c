@@ -295,6 +295,23 @@ TEST(parser, frame_hard_cap_above_body) {
     cmq_parser_destroy(p);
 }
 
+/* Valid frame then trailing garbage: keep queued frame (partial=1). */
+TEST(parser, good_then_bad_magic) {
+    cmq_parser_t *p = cmq_parser_create();
+    uint8_t buf[32];
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PING, 0, NULL, 0);
+    ASSERT(n > 0 && n + 4 <= sizeof(buf));
+    buf[n] = 0xDE;
+    buf[n + 1] = 0xAD;
+    buf[n + 2] = 0x01;
+    buf[n + 3] = 0x00;
+    ASSERT_EQ(cmq_parser_feed(p, buf, n + 4), 1);
+    const cmq_frame_t *f = cmq_parser_frame(p);
+    ASSERT(f != NULL);
+    ASSERT_EQ(f->hdr.op, CMQ_OP_PING);
+    cmq_parser_destroy(p);
+}
+
 /* Incomplete stream must not grow past header + max_payload. */
 TEST(parser, inbuf_hard_cap) {
     cmq_parser_t *p = cmq_parser_create();
