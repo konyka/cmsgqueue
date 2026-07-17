@@ -3207,6 +3207,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — leaf hub reconnect yields hub_io</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf replay</span></td><td>✅</td><td>Connect UNSUB/SUB replay unlocks <code>hub_io</code> between frames; rechecks <code>hub_fd</code>; avoids double-close after disconnect.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -492,6 +492,8 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     }
     cmq_mutex_unlock(&leaf->lock);
 
+    /* Yield hub_io between frames so disconnect/subscribe are not starved for
+       the full 1024×SUBACK window; re-check hub_fd after each reacquire. */
     for (size_t i = 0; i < pn; i++) {
         uint32_t uid = pending[i];
         uint8_t upay[4] = {
@@ -501,7 +503,12 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         uint8_t uframe[16];
         size_t ulen = cmq_frame_encode(uframe, sizeof(uframe),
                                         CMQ_OP_UNSUBSCRIBE, 0, upay, 4);
-        if (ulen == 0 || write_all(fd, uframe, ulen) != 0) {
+        int still = 0;
+        cmq_mutex_lock(&leaf->lock);
+        still = (leaf->hub_fd == fd);
+        cmq_mutex_unlock(&leaf->lock);
+        if (!still || ulen == 0 || write_all(fd, uframe, ulen) != 0) {
+            int own = 0;
             cmq_mutex_lock(&leaf->lock);
             /* Restore remaining pending UNSUBs for a later connect. */
             for (size_t r = i; r < pn; r++) {
@@ -512,6 +519,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
             if (leaf->hub_fd == fd) {
                 leaf->hub_fd = -1;
                 leaf->connected = 0;
+                own = 1;
             }
             cmq_mutex_unlock(&leaf->lock);
             for (size_t j = 0; j < n; j++) free(subjects[j]);
@@ -519,9 +527,11 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
             free(ids);
             free(pending);
             cmq_mutex_unlock(&leaf->hub_io_lock);
-            close(fd);
+            if (own) close(fd);
             return -1;
         }
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        cmq_mutex_lock(&leaf->hub_io_lock);
     }
     free(pending);
 
@@ -542,35 +552,46 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         uint8_t frame[16 + 256];
         size_t flen = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_SUBSCRIBE,
                                         0, payload, po);
-        if (flen == 0 || write_all(fd, frame, flen) != 0 ||
+        int still = 0;
+        cmq_mutex_lock(&leaf->lock);
+        still = (leaf->hub_fd == fd);
+        cmq_mutex_unlock(&leaf->lock);
+        if (!still || flen == 0 || write_all(fd, frame, flen) != 0 ||
             read_suback(fd, sub_id) != 0) {
             /* Best-effort UNSUB for subjects already pushed this reconnect so
-               hub does not keep interest that leaf will re-play on next connect. */
-            for (size_t u = 0; u < i; u++) {
-                uint32_t uid = ids[u];
-                uint8_t upay[4] = {
-                    (uint8_t)(uid >> 24), (uint8_t)(uid >> 16),
-                    (uint8_t)(uid >> 8), (uint8_t)uid
-                };
-                uint8_t uframe[16];
-                size_t ulen = cmq_frame_encode(uframe, sizeof(uframe),
-                                                CMQ_OP_UNSUBSCRIBE, 0, upay, 4);
-                if (ulen > 0)
-                    (void)write_all(fd, uframe, ulen);
-            }
-            for (size_t j = 0; j < n; j++) free(subjects[j]);
-            free(subjects);
-            free(ids);
+               hub does not keep interest that leaf will re-play on next connect.
+               Only if we still own hub_fd — otherwise disconnect already closed. */
+            int own = 0;
             cmq_mutex_lock(&leaf->lock);
-            if (leaf->hub_fd == fd) {
+            own = (leaf->hub_fd == fd);
+            if (own) {
                 leaf->hub_fd = -1;
                 leaf->connected = 0;
             }
             cmq_mutex_unlock(&leaf->lock);
+            if (own) {
+                for (size_t u = 0; u < i; u++) {
+                    uint32_t uid = ids[u];
+                    uint8_t upay[4] = {
+                        (uint8_t)(uid >> 24), (uint8_t)(uid >> 16),
+                        (uint8_t)(uid >> 8), (uint8_t)uid
+                    };
+                    uint8_t uframe[16];
+                    size_t ulen = cmq_frame_encode(uframe, sizeof(uframe),
+                                                    CMQ_OP_UNSUBSCRIBE, 0, upay, 4);
+                    if (ulen > 0)
+                        (void)write_all(fd, uframe, ulen);
+                }
+                close(fd);
+            }
+            for (size_t j = 0; j < n; j++) free(subjects[j]);
+            free(subjects);
+            free(ids);
             cmq_mutex_unlock(&leaf->hub_io_lock);
-            close(fd);
             return -1;
         }
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        cmq_mutex_lock(&leaf->hub_io_lock);
     }
     cmq_mutex_lock(&leaf->lock);
     if (leaf->hub_fd == fd)
