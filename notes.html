@@ -3442,6 +3442,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — drop stats · soft-delete publish recheck</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cross-worker drop</span></td><td>✅</td><td>Mailbox queue-full path increments <code>stat_messages_dropped</code> (align with worker drain).</td></tr>
+<tr><td><span class="component-name">publish account</span></td><td>✅</td><td>Re-check <code>client_account_live</code> after match/snapshot and before BATCH pass 2b/2c so soft-delete cannot keep forwarding.</td></tr>
+</table>
+</div>
+
 
 
 

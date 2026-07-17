@@ -1749,6 +1749,8 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
                                  pub_account, 0) == 0)
                 return 1;
             /* Queue full — nudge EOF; do not race write_buf/subs cross-thread. */
+            cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                                      CMQ_ATOMIC_RELAXED);
             cmq_mutex_lock(&w->clients_lock);
             cmq_client_t *c = cmq_idmap_get(w->idmap, client_id);
             if (c && c->conn_gen == conn_gen && c->fd >= 0)
@@ -2588,6 +2590,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     if (result.count == 0) {
         cmq_sublist_result_free(&result);
         cmq_rwlock_unlock(&srv->sublist_lock);
+        /* Soft-delete may race after the entry check — revalidate. */
+        if (!client_account_live(srv, c)) {
+            cmq_send_error(c, "account inactive");
+            c->state = CMQ_CLIENT_CLOSING;
+            return;
+        }
         /* Remote-only: forward after local match succeeded (no OOM ghost). */
         if (!c->is_route)
             route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
@@ -2607,6 +2615,13 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "delivery failed");
         return;
     }
+    /* Soft-delete may race during match/snapshot — stop before fan-out. */
+    if (!client_account_live(srv, c)) {
+        free(tgts);
+        cmq_send_error(c, "account inactive");
+        c->state = CMQ_CLIENT_CLOSING;
+        return;
+    }
     if (!tgts || ntgt == 0) {
         free(tgts);
         if (!c->is_route)
@@ -2623,6 +2638,14 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         route_rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, frame->hdr.flags,
                                          frame->payload, frame->payload_len,
                                          &route_sent);
+
+    /* Soft-delete during cluster forward — do not continue local fan-out. */
+    if (!client_account_live(srv, c)) {
+        free(tgts);
+        cmq_send_error(c, "account inactive");
+        c->state = CMQ_CLIENT_CLOSING;
+        return;
+    }
 
     if (ntgt > CMQ_CORO_DELIVER_BATCH && srv->num_workers > 0) {
         cmq_worker_t *w = &srv->workers[cmq_current_worker_id >= 0 ?
@@ -3584,6 +3607,15 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         }
     }
 
+    /* Soft-delete may race during pass 2a snapshots — stop before fan-out. */
+    if (!client_account_live(srv, c)) {
+        for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
+        free(prep);
+        cmq_send_error(c, "account inactive");
+        c->state = CMQ_CLIENT_CLOSING;
+        return;
+    }
+
     /* Pass 2b: cluster forward first (same order as single PUBLISH) so a
        remote-only failure cannot ERROR after local subscribers already got
        the batch. Attempt every entry — do not skip the tail after a miss. */
@@ -3646,6 +3678,13 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
     /* Pass 2c: always attempt local delivers — even after a remote-only cluster
        failure — so subscribers are not starved when earlier entries already
        reached the cluster (align with single-PUBLISH local-after-route). */
+    if (!client_account_live(srv, c)) {
+        for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
+        free(prep);
+        cmq_send_error(c, "account inactive");
+        c->state = CMQ_CLIENT_CLOSING;
+        return;
+    }
     for (uint16_t msg = 0; msg < count; msg++) {
         const uint8_t *msg_payload = prep[msg].msg_payload;
         uint32_t payload_len = prep[msg].payload_len;
