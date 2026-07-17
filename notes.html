@@ -3616,6 +3616,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route inbound hard-fail clears fd · leaf pending UNSUB overflow</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route broadcast hard-fail</span></td><td>✅</td><td>Borrowed inbound uses <code>conn_drop_fd</code> (<code>fd=-1</code>) + clear <code>remote_id</code> so attach can reuse the slot.</td></tr>
+<tr><td><span class="component-name">leaf online UNSUB fail</span></td><td>✅</td><td>When <code>pending_unsub</code> is full, drop oldest then enqueue (no silent ghost interest on hub).</td></tr>
+</table>
+</div>
+
 
 
 

@@ -795,10 +795,15 @@ static int leaf_unsubscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
                                         CMQ_OP_UNSUBSCRIBE, 0, payload, 4);
         int wr = (flen > 0) ? write_all(hub_fd, frame, flen) : -1;
         if (flen == 0 || wr != 0) {
-            /* Local already dropped — queue UNSUB for reconnect flush. */
+            /* Local already dropped — queue UNSUB for reconnect flush.
+               Drop oldest pending if full (align reconnect rollback). */
             cmq_mutex_lock(&leaf->lock);
-            if (leaf->pending_unsub_count < CMQ_LEAF_MAX_SUBS)
-                leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
+            if (leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
+                memmove(leaf->pending_unsub, leaf->pending_unsub + 1,
+                        (CMQ_LEAF_MAX_SUBS - 1) * sizeof(uint32_t));
+                leaf->pending_unsub_count = CMQ_LEAF_MAX_SUBS - 1;
+            }
+            leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
             cmq_mutex_unlock(&leaf->lock);
             leaf_hub_drop(leaf, hub_fd);
             cmq_mutex_unlock(&leaf->hub_io_lock);
