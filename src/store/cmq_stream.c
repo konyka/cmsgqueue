@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdatomic.h>
+#include <time.h>
 
 #define CMQ_MAX_CONSUMERS 64
 #define CMQ_MAX_NAME 128
@@ -23,7 +25,24 @@ struct cmq_stream {
     size_t max_bytes;
     size_t total_bytes;
     cmq_mutex_t lock;
+    atomic_int in_flight;
+    atomic_int dying;
 };
+
+static int stream_begin_op(cmq_stream_t *stream) {
+    if (atomic_load_explicit(&stream->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&stream->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&stream->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&stream->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void stream_end_op(cmq_stream_t *stream) {
+    atomic_fetch_sub_explicit(&stream->in_flight, 1, memory_order_acq_rel);
+}
 
 cmq_stream_t *cmq_stream_create(const char *name, size_t max_msgs, size_t max_bytes) {
     if (!name) return NULL;
@@ -37,12 +56,19 @@ cmq_stream_t *cmq_stream_create(const char *name, size_t max_msgs, size_t max_by
     s->max_msgs = max_msgs > 0 ? max_msgs : 1024;
     s->max_bytes = max_bytes;
     s->total_bytes = 0;
+    atomic_init(&s->in_flight, 0);
+    atomic_init(&s->dying, 0);
     cmq_mutex_init(&s->lock);
     return s;
 }
 
 void cmq_stream_destroy(cmq_stream_t *stream) {
     if (!stream) return;
+    atomic_store_explicit(&stream->dying, 1, memory_order_release);
+    while (atomic_load_explicit(&stream->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     cmq_store_destroy(stream->store);
     cmq_mutex_destroy(&stream->lock);
     free(stream);
@@ -52,7 +78,7 @@ const char *cmq_stream_name(cmq_stream_t *stream) {
     return stream ? stream->name : NULL;
 }
 
-uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len) {
+static uint64_t stream_append_impl(cmq_stream_t *stream, const uint8_t *data, size_t len) {
     if (!stream || !data || len == 0) return 0;
     cmq_mutex_lock(&stream->lock);
 
@@ -141,7 +167,7 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
     return seq;
 }
 
-int cmq_stream_read(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out) {
+static int stream_read_impl(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out) {
     if (!stream || !out) return -1;
     cmq_mutex_lock(&stream->lock);
     cmq_store_msg_t msg;
@@ -165,7 +191,7 @@ void cmq_stream_msg_release(cmq_stream_msg_t *msg) {
     msg->len = 0;
 }
 
-int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name) {
+static int stream_add_consumer_impl(cmq_stream_t *stream, const char *consumer_name) {
     if (!stream || !consumer_name) return -1;
     cmq_mutex_lock(&stream->lock);
     if (stream->consumer_count >= CMQ_MAX_CONSUMERS) {
@@ -190,7 +216,7 @@ int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name) {
     return 0;
 }
 
-int cmq_stream_remove_consumer(cmq_stream_t *stream, const char *consumer_name) {
+static int stream_remove_consumer_impl(cmq_stream_t *stream, const char *consumer_name) {
     if (!stream || !consumer_name) return -1;
     cmq_mutex_lock(&stream->lock);
     for (size_t i = 0; i < stream->consumer_count; i++) {
@@ -210,7 +236,7 @@ int cmq_stream_remove_consumer(cmq_stream_t *stream, const char *consumer_name) 
     return -1;
 }
 
-cmq_stream_consumer_t cmq_stream_consumer_state(cmq_stream_t *stream,
+static cmq_stream_consumer_t stream_consumer_state_impl(cmq_stream_t *stream,
                                                    const char *consumer_name) {
     cmq_stream_consumer_t state = {0, 0};
     if (!stream || !consumer_name) return state;
@@ -235,7 +261,7 @@ cmq_stream_consumer_t cmq_stream_consumer_state(cmq_stream_t *stream,
     return state;
 }
 
-uint64_t cmq_stream_consumer_next(cmq_stream_t *stream, const char *consumer_name) {
+static uint64_t stream_consumer_next_impl(cmq_stream_t *stream, const char *consumer_name) {
     if (!stream || !consumer_name) return 0;
     cmq_mutex_lock(&stream->lock);
     uint64_t next = 0;
@@ -255,7 +281,7 @@ uint64_t cmq_stream_consumer_next(cmq_stream_t *stream, const char *consumer_nam
     return next;
 }
 
-int cmq_stream_consumer_ack(cmq_stream_t *stream, const char *consumer_name,
+static int stream_consumer_ack_impl(cmq_stream_t *stream, const char *consumer_name,
                              uint64_t seq) {
     if (!stream || !consumer_name || seq == 0) return -1;
     cmq_mutex_lock(&stream->lock);
@@ -280,7 +306,7 @@ int cmq_stream_consumer_ack(cmq_stream_t *stream, const char *consumer_name,
     return found;
 }
 
-size_t cmq_stream_msg_count(cmq_stream_t *stream) {
+static size_t stream_msg_count_impl(cmq_stream_t *stream) {
     if (!stream) return 0;
     cmq_mutex_lock(&stream->lock);
     size_t n = cmq_store_count(stream->store);
@@ -288,7 +314,7 @@ size_t cmq_stream_msg_count(cmq_stream_t *stream) {
     return n;
 }
 
-uint64_t cmq_stream_first_seq(cmq_stream_t *stream) {
+static uint64_t stream_first_seq_impl(cmq_stream_t *stream) {
     if (!stream) return 0;
     cmq_mutex_lock(&stream->lock);
     uint64_t s = cmq_store_first_seq(stream->store);
@@ -296,10 +322,94 @@ uint64_t cmq_stream_first_seq(cmq_stream_t *stream) {
     return s;
 }
 
-uint64_t cmq_stream_last_seq(cmq_stream_t *stream) {
+static uint64_t stream_last_seq_impl(cmq_stream_t *stream) {
     if (!stream) return 0;
     cmq_mutex_lock(&stream->lock);
     uint64_t s = cmq_store_last_seq(stream->store);
     cmq_mutex_unlock(&stream->lock);
     return s;
 }
+
+uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len) {
+    if (!stream || !data || len == 0) return 0;
+    if (stream_begin_op(stream) != 0) return 0;
+    uint64_t seq = stream_append_impl(stream, data, len);
+    stream_end_op(stream);
+    return seq;
+}
+
+int cmq_stream_read(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out) {
+    if (!stream || !out) return -1;
+    if (stream_begin_op(stream) != 0) return -1;
+    int rc = stream_read_impl(stream, seq, out);
+    stream_end_op(stream);
+    return rc;
+}
+
+int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name) {
+    if (!stream || !consumer_name) return -1;
+    if (stream_begin_op(stream) != 0) return -1;
+    int rc = stream_add_consumer_impl(stream, consumer_name);
+    stream_end_op(stream);
+    return rc;
+}
+
+int cmq_stream_remove_consumer(cmq_stream_t *stream, const char *consumer_name) {
+    if (!stream || !consumer_name) return -1;
+    if (stream_begin_op(stream) != 0) return -1;
+    int rc = stream_remove_consumer_impl(stream, consumer_name);
+    stream_end_op(stream);
+    return rc;
+}
+
+cmq_stream_consumer_t cmq_stream_consumer_state(cmq_stream_t *stream,
+                                                   const char *consumer_name) {
+    cmq_stream_consumer_t state = {0, 0};
+    if (!stream || !consumer_name) return state;
+    if (stream_begin_op(stream) != 0) return state;
+    state = stream_consumer_state_impl(stream, consumer_name);
+    stream_end_op(stream);
+    return state;
+}
+
+uint64_t cmq_stream_consumer_next(cmq_stream_t *stream, const char *consumer_name) {
+    if (!stream || !consumer_name) return 0;
+    if (stream_begin_op(stream) != 0) return 0;
+    uint64_t n = stream_consumer_next_impl(stream, consumer_name);
+    stream_end_op(stream);
+    return n;
+}
+
+int cmq_stream_consumer_ack(cmq_stream_t *stream, const char *consumer_name,
+                             uint64_t seq) {
+    if (!stream || !consumer_name || seq == 0) return -1;
+    if (stream_begin_op(stream) != 0) return -1;
+    int rc = stream_consumer_ack_impl(stream, consumer_name, seq);
+    stream_end_op(stream);
+    return rc;
+}
+
+size_t cmq_stream_msg_count(cmq_stream_t *stream) {
+    if (!stream) return 0;
+    if (stream_begin_op(stream) != 0) return 0;
+    size_t n = stream_msg_count_impl(stream);
+    stream_end_op(stream);
+    return n;
+}
+
+uint64_t cmq_stream_first_seq(cmq_stream_t *stream) {
+    if (!stream) return 0;
+    if (stream_begin_op(stream) != 0) return 0;
+    uint64_t s = stream_first_seq_impl(stream);
+    stream_end_op(stream);
+    return s;
+}
+
+uint64_t cmq_stream_last_seq(cmq_stream_t *stream) {
+    if (!stream) return 0;
+    if (stream_begin_op(stream) != 0) return 0;
+    uint64_t s = stream_last_seq_impl(stream);
+    stream_end_op(stream);
+    return s;
+}
+

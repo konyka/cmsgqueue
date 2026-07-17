@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <stdatomic.h>
 
 typedef struct cmq_store_slot {
     uint64_t seq;
@@ -20,7 +21,24 @@ struct cmq_store {
     uint64_t head_seq;
     size_t count;
     cmq_mutex_t lock;
+    atomic_int in_flight;
+    atomic_int dying;
 };
+
+static int store_begin_op(cmq_store_t *store) {
+    if (atomic_load_explicit(&store->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&store->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&store->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&store->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void store_end_op(cmq_store_t *store) {
+    atomic_fetch_sub_explicit(&store->in_flight, 1, memory_order_acq_rel);
+}
 
 static uint64_t now_ms(void) {
     struct timespec ts;
@@ -38,12 +56,19 @@ cmq_store_t *cmq_store_create(size_t capacity) {
     s->cap = capacity;
     s->head_seq = 1;
     s->count = 0;
+    atomic_init(&s->in_flight, 0);
+    atomic_init(&s->dying, 0);
     cmq_mutex_init(&s->lock);
     return s;
 }
 
 void cmq_store_destroy(cmq_store_t *store) {
     if (!store) return;
+    atomic_store_explicit(&store->dying, 1, memory_order_release);
+    while (atomic_load_explicit(&store->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     for (size_t i = 0; i < store->cap; i++) {
         free(store->ring[i].data);
     }
@@ -52,7 +77,7 @@ void cmq_store_destroy(cmq_store_t *store) {
     free(store);
 }
 
-uint64_t cmq_store_put_owned(cmq_store_t *store, uint8_t *data, size_t len) {
+static uint64_t store_put_owned_impl(cmq_store_t *store, uint8_t *data, size_t len) {
     if (!store || !data || len == 0) {
         free(data);
         return 0;
@@ -87,16 +112,16 @@ uint64_t cmq_store_put_owned(cmq_store_t *store, uint8_t *data, size_t len) {
     return assigned;
 }
 
-uint64_t cmq_store_put(cmq_store_t *store, const uint8_t *data, size_t len) {
+static uint64_t store_put_impl(cmq_store_t *store, const uint8_t *data, size_t len) {
     if (!store || !data || len == 0) return 0;
     if (len > (16u * 1024 * 1024)) return 0;
     uint8_t *nd = malloc(len);
     if (!nd) return 0;
     memcpy(nd, data, len);
-    return cmq_store_put_owned(store, nd, len);
+    return store_put_owned_impl(store, nd, len);
 }
 
-int cmq_store_get(cmq_store_t *store, uint64_t seq, cmq_store_msg_t *out) {
+static int store_get_impl(cmq_store_t *store, uint64_t seq, cmq_store_msg_t *out) {
     if (!store || !out || seq == 0) return -1;
     cmq_mutex_lock(&store->lock);
 
@@ -133,7 +158,7 @@ int cmq_store_get(cmq_store_t *store, uint64_t seq, cmq_store_msg_t *out) {
     return 0;
 }
 
-int cmq_store_seq_len(cmq_store_t *store, uint64_t seq, size_t *out_len) {
+static int store_seq_len_impl(cmq_store_t *store, uint64_t seq, size_t *out_len) {
     if (!store || !out_len || seq == 0) return -1;
     cmq_mutex_lock(&store->lock);
     if (seq >= store->head_seq) {
@@ -163,7 +188,7 @@ void cmq_store_msg_release(cmq_store_msg_t *msg) {
     msg->len = 0;
 }
 
-size_t cmq_store_count(cmq_store_t *store) {
+static size_t store_count_impl(cmq_store_t *store) {
     if (!store) return 0;
     cmq_mutex_lock(&store->lock);
     size_t c = store->count;
@@ -171,7 +196,7 @@ size_t cmq_store_count(cmq_store_t *store) {
     return c;
 }
 
-uint64_t cmq_store_first_seq(cmq_store_t *store) {
+static uint64_t store_first_seq_impl(cmq_store_t *store) {
     if (!store) return 0;
     cmq_mutex_lock(&store->lock);
     uint64_t first = 0;
@@ -181,7 +206,7 @@ uint64_t cmq_store_first_seq(cmq_store_t *store) {
     return first;
 }
 
-uint64_t cmq_store_last_seq(cmq_store_t *store) {
+static uint64_t store_last_seq_impl(cmq_store_t *store) {
     if (!store) return 0;
     cmq_mutex_lock(&store->lock);
     uint64_t last = (store->count > 0) ? store->head_seq - 1 : 0;
@@ -189,7 +214,7 @@ uint64_t cmq_store_last_seq(cmq_store_t *store) {
     return last;
 }
 
-void cmq_store_truncate(cmq_store_t *store, uint64_t before_seq) {
+static void store_truncate_impl(cmq_store_t *store, uint64_t before_seq) {
     if (!store || before_seq <= 1) return;
     cmq_mutex_lock(&store->lock);
     /* Prefix-only: walk first_seq upward so count/first_seq stay hole-free. */
@@ -209,7 +234,7 @@ void cmq_store_truncate(cmq_store_t *store, uint64_t before_seq) {
     cmq_mutex_unlock(&store->lock);
 }
 
-int cmq_store_evict_seq(cmq_store_t *store, uint64_t seq) {
+static int store_evict_seq_impl(cmq_store_t *store, uint64_t seq) {
     if (!store || seq == 0) return -1;
     cmq_mutex_lock(&store->lock);
     /* Prefix-only eviction keeps first_seq = head_seq - count hole-free. */
@@ -234,3 +259,81 @@ int cmq_store_evict_seq(cmq_store_t *store, uint64_t seq) {
     cmq_mutex_unlock(&store->lock);
     return 0;
 }
+
+uint64_t cmq_store_put_owned(cmq_store_t *store, uint8_t *data, size_t len) {
+    if (!store || !data || len == 0) {
+        free(data);
+        return 0;
+    }
+    if (store_begin_op(store) != 0) {
+        free(data);
+        return 0;
+    }
+    uint64_t seq = store_put_owned_impl(store, data, len);
+    store_end_op(store);
+    return seq;
+}
+
+uint64_t cmq_store_put(cmq_store_t *store, const uint8_t *data, size_t len) {
+    if (!store || !data || len == 0) return 0;
+    if (store_begin_op(store) != 0) return 0;
+    uint64_t seq = store_put_impl(store, data, len);
+    store_end_op(store);
+    return seq;
+}
+
+int cmq_store_get(cmq_store_t *store, uint64_t seq, cmq_store_msg_t *out) {
+    if (!store || !out || seq == 0) return -1;
+    if (store_begin_op(store) != 0) return -1;
+    int rc = store_get_impl(store, seq, out);
+    store_end_op(store);
+    return rc;
+}
+
+int cmq_store_seq_len(cmq_store_t *store, uint64_t seq, size_t *out_len) {
+    if (!store || !out_len || seq == 0) return -1;
+    if (store_begin_op(store) != 0) return -1;
+    int rc = store_seq_len_impl(store, seq, out_len);
+    store_end_op(store);
+    return rc;
+}
+
+size_t cmq_store_count(cmq_store_t *store) {
+    if (!store) return 0;
+    if (store_begin_op(store) != 0) return 0;
+    size_t c = store_count_impl(store);
+    store_end_op(store);
+    return c;
+}
+
+uint64_t cmq_store_first_seq(cmq_store_t *store) {
+    if (!store) return 0;
+    if (store_begin_op(store) != 0) return 0;
+    uint64_t s = store_first_seq_impl(store);
+    store_end_op(store);
+    return s;
+}
+
+uint64_t cmq_store_last_seq(cmq_store_t *store) {
+    if (!store) return 0;
+    if (store_begin_op(store) != 0) return 0;
+    uint64_t s = store_last_seq_impl(store);
+    store_end_op(store);
+    return s;
+}
+
+void cmq_store_truncate(cmq_store_t *store, uint64_t before_seq) {
+    if (!store || before_seq <= 1) return;
+    if (store_begin_op(store) != 0) return;
+    store_truncate_impl(store, before_seq);
+    store_end_op(store);
+}
+
+int cmq_store_evict_seq(cmq_store_t *store, uint64_t seq) {
+    if (!store || seq == 0) return -1;
+    if (store_begin_op(store) != 0) return -1;
+    int rc = store_evict_seq_impl(store, seq);
+    store_end_op(store);
+    return rc;
+}
+

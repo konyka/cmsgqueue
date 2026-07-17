@@ -772,7 +772,7 @@ static int route_add_conn_impl(cmq_route_pool_t *pool, const char *node_id, int 
     return 0;
 }
 
-int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd) {
+static int route_attach_inbound_impl(cmq_route_pool_t *pool, const char *node_id, int fd) {
     if (!pool || !node_id || fd < 0) return -1;
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
@@ -882,7 +882,7 @@ int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd
     return 0;
 }
 
-int cmq_route_mark_connected(cmq_route_pool_t *pool, int fd) {
+static int route_mark_connected_impl(cmq_route_pool_t *pool, int fd) {
     if (!pool || fd < 0) return -1;
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
@@ -903,7 +903,7 @@ int cmq_route_mark_connected(cmq_route_pool_t *pool, int fd) {
     return -1;
 }
 
-void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd) {
+static void route_detach_fd_impl(cmq_route_pool_t *pool, int fd) {
     if (!pool || fd < 0) return;
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
@@ -923,7 +923,7 @@ void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd) {
     cmq_mutex_unlock(&pool->lock);
 }
 
-int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id) {
+static int route_disconnect_impl(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return -1;
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
@@ -1030,7 +1030,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
     return sent;
 }
 
-size_t cmq_route_pool_count(cmq_route_pool_t *pool) {
+static size_t route_pool_count_impl(cmq_route_pool_t *pool) {
     if (!pool) return 0;
     cmq_mutex_lock(&pool->lock);
     size_t c = 0;
@@ -1045,7 +1045,7 @@ size_t cmq_route_pool_count(cmq_route_pool_t *pool) {
     return c;
 }
 
-size_t cmq_route_live_count(cmq_route_pool_t *pool) {
+static size_t route_live_count_impl(cmq_route_pool_t *pool) {
     if (!pool) return 0;
     size_t nslots;
     cmq_mutex_lock(&pool->lock);
@@ -1086,7 +1086,7 @@ size_t cmq_route_live_count(cmq_route_pool_t *pool) {
     return n;
 }
 
-size_t cmq_route_held_count(cmq_route_pool_t *pool) {
+static size_t route_held_count_impl(cmq_route_pool_t *pool) {
     if (!pool) return 0;
     size_t nslots;
     cmq_mutex_lock(&pool->lock);
@@ -1102,7 +1102,7 @@ size_t cmq_route_held_count(cmq_route_pool_t *pool) {
     return n;
 }
 
-int cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id,
+static int route_get_conn_impl(cmq_route_pool_t *pool, const char *node_id,
                         cmq_route_conn_t *out) {
     if (!pool || !node_id || !out) return -1;
     size_t nslots;
@@ -1122,7 +1122,7 @@ int cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id,
     return -1;
 }
 
-int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id) {
+static int route_peer_live_impl(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return 0;
     size_t nslots;
     cmq_mutex_lock(&pool->lock);
@@ -1165,6 +1165,7 @@ int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id) {
 
 int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd) {
     if (!pool || fd < 0) return -1;
+    if (route_begin_op(pool) != 0) return -1;
     cmq_mutex_lock(&pool->lock);
     int idx = -1;
     for (size_t i = 0; i < pool->conn_count; i++) {
@@ -1177,6 +1178,7 @@ int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd) {
     }
     if (idx < 0) {
         cmq_mutex_unlock(&pool->lock);
+        route_end_op(pool);
         return -1;
     }
     /* pool→io (never reverse). Hold pool until io_lock so close+reconnect
@@ -1185,6 +1187,7 @@ int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd) {
     if ((size_t)idx >= pool->conn_count || pool->conns[idx].fd != fd) {
         cmq_mutex_unlock(&pool->io_locks[idx]);
         cmq_mutex_unlock(&pool->lock);
+        route_end_op(pool);
         return -1;
     }
     cmq_mutex_unlock(&pool->lock);
@@ -1194,8 +1197,82 @@ int cmq_route_io_lock_fd(cmq_route_pool_t *pool, int fd) {
 void cmq_route_io_unlock_idx(cmq_route_pool_t *pool, int idx) {
     if (!pool || idx < 0 || (size_t)idx >= CMQ_ROUTE_MAX_CONNS) return;
     cmq_mutex_unlock(&pool->io_locks[idx]);
+    route_end_op(pool);
 }
 
+
+
+int cmq_route_attach_inbound(cmq_route_pool_t *pool, const char *node_id, int fd) {
+    if (!pool || !node_id || fd < 0) return -1;
+    if (route_begin_op(pool) != 0) return -1;
+    int rc = route_attach_inbound_impl(pool, node_id, fd);
+    route_end_op(pool);
+    return rc;
+}
+
+int cmq_route_mark_connected(cmq_route_pool_t *pool, int fd) {
+    if (!pool || fd < 0) return -1;
+    if (route_begin_op(pool) != 0) return -1;
+    int rc = route_mark_connected_impl(pool, fd);
+    route_end_op(pool);
+    return rc;
+}
+
+void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd) {
+    if (!pool || fd < 0) return;
+    if (route_begin_op(pool) != 0) return;
+    route_detach_fd_impl(pool, fd);
+    route_end_op(pool);
+}
+
+int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id) {
+    if (!pool || !node_id) return -1;
+    if (route_begin_op(pool) != 0) return -1;
+    int rc = route_disconnect_impl(pool, node_id);
+    route_end_op(pool);
+    return rc;
+}
+
+size_t cmq_route_pool_count(cmq_route_pool_t *pool) {
+    if (!pool) return 0;
+    if (route_begin_op(pool) != 0) return 0;
+    size_t c = route_pool_count_impl(pool);
+    route_end_op(pool);
+    return c;
+}
+
+size_t cmq_route_live_count(cmq_route_pool_t *pool) {
+    if (!pool) return 0;
+    if (route_begin_op(pool) != 0) return 0;
+    size_t c = route_live_count_impl(pool);
+    route_end_op(pool);
+    return c;
+}
+
+size_t cmq_route_held_count(cmq_route_pool_t *pool) {
+    if (!pool) return 0;
+    if (route_begin_op(pool) != 0) return 0;
+    size_t c = route_held_count_impl(pool);
+    route_end_op(pool);
+    return c;
+}
+
+int cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id,
+                        cmq_route_conn_t *out) {
+    if (!pool || !node_id || !out) return -1;
+    if (route_begin_op(pool) != 0) return -1;
+    int rc = route_get_conn_impl(pool, node_id, out);
+    route_end_op(pool);
+    return rc;
+}
+
+int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id) {
+    if (!pool || !node_id) return 0;
+    if (route_begin_op(pool) != 0) return 0;
+    int rc = route_peer_live_impl(pool, node_id);
+    route_end_op(pool);
+    return rc;
+}
 
 int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                        const char *addr, int port,

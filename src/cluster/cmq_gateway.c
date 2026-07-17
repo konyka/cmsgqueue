@@ -236,7 +236,7 @@ void cmq_gateway_destroy(cmq_gateway_t *gw) {
     free(gw);
 }
 
-int cmq_gateway_set_auth(cmq_gateway_t *gw, const char *user, const char *pass) {
+static int gw_set_auth_impl(cmq_gateway_t *gw, const char *user, const char *pass) {
     if (!gw) return -1;
     cmq_mutex_lock(&gw->lock);
     memset(gw->auth_user, 0, sizeof(gw->auth_user));
@@ -265,7 +265,7 @@ static int gw_handshake(cmq_gateway_t *gw, int fd) {
     return cmq_peer_handshake(fd, user[0] ? user : NULL, pass[0] ? pass : NULL, 0);
 }
 
-int cmq_gateway_add_remote(cmq_gateway_t *gw, const char *cluster_name,
+static int gw_add_remote_impl(cmq_gateway_t *gw, const char *cluster_name,
                             const char *addr, int port) {
     if (!gw || !cluster_name || !addr) return -1;
     cmq_mutex_lock(&gw->lock);
@@ -589,7 +589,7 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
     return 0;
 }
 
-int cmq_gateway_disconnect(cmq_gateway_t *gw, const char *cluster_name) {
+static int gw_disconnect_impl(cmq_gateway_t *gw, const char *cluster_name) {
     if (!gw || !cluster_name) return -1;
     cmq_mutex_lock(&gw->lock);
     for (size_t i = 0; i < gw->conn_count; i++) {
@@ -745,7 +745,7 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
     return sent;
 }
 
-size_t cmq_gateway_connection_count(cmq_gateway_t *gw) {
+static size_t gw_connection_count_impl(cmq_gateway_t *gw) {
     if (!gw) return 0;
     cmq_mutex_lock(&gw->lock);
     size_t c = 0;
@@ -761,7 +761,7 @@ size_t cmq_gateway_connection_count(cmq_gateway_t *gw) {
     return c;
 }
 
-size_t cmq_gateway_known_cluster_count(cmq_gateway_t *gw) {
+static size_t gw_known_cluster_count_impl(cmq_gateway_t *gw) {
     if (!gw) return 0;
     cmq_mutex_lock(&gw->lock);
     size_t c = gw->cluster_count;
@@ -769,7 +769,7 @@ size_t cmq_gateway_known_cluster_count(cmq_gateway_t *gw) {
     return c;
 }
 
-int cmq_gateway_get_cluster(cmq_gateway_t *gw, const char *name,
+static int gw_get_cluster_impl(cmq_gateway_t *gw, const char *name,
                              cmq_gw_cluster_info_t *out) {
     if (!gw || !name || !out) return -1;
     cmq_mutex_lock(&gw->lock);
@@ -784,6 +784,57 @@ int cmq_gateway_get_cluster(cmq_gateway_t *gw, const char *name,
     return -1;
 }
 
+
+
+int cmq_gateway_set_auth(cmq_gateway_t *gw, const char *user, const char *pass) {
+    if (!gw) return -1;
+    if (gw_begin_op(gw) != 0) return -1;
+    int rc = gw_set_auth_impl(gw, user, pass);
+    gw_end_op(gw);
+    return rc;
+}
+
+int cmq_gateway_add_remote(cmq_gateway_t *gw, const char *cluster_name,
+                            const char *addr, int port) {
+    if (!gw || !cluster_name || !addr) return -1;
+    if (gw_begin_op(gw) != 0) return -1;
+    int rc = gw_add_remote_impl(gw, cluster_name, addr, port);
+    gw_end_op(gw);
+    return rc;
+}
+
+int cmq_gateway_disconnect(cmq_gateway_t *gw, const char *cluster_name) {
+    if (!gw || !cluster_name) return -1;
+    if (gw_begin_op(gw) != 0) return -1;
+    int rc = gw_disconnect_impl(gw, cluster_name);
+    gw_end_op(gw);
+    return rc;
+}
+
+size_t cmq_gateway_connection_count(cmq_gateway_t *gw) {
+    if (!gw) return 0;
+    if (gw_begin_op(gw) != 0) return 0;
+    size_t c = gw_connection_count_impl(gw);
+    gw_end_op(gw);
+    return c;
+}
+
+size_t cmq_gateway_known_cluster_count(cmq_gateway_t *gw) {
+    if (!gw) return 0;
+    if (gw_begin_op(gw) != 0) return 0;
+    size_t c = gw_known_cluster_count_impl(gw);
+    gw_end_op(gw);
+    return c;
+}
+
+int cmq_gateway_get_cluster(cmq_gateway_t *gw, const char *name,
+                             cmq_gw_cluster_info_t *out) {
+    if (!gw || !name || !out) return -1;
+    if (gw_begin_op(gw) != 0) return -1;
+    int rc = gw_get_cluster_impl(gw, name, out);
+    gw_end_op(gw);
+    return rc;
+}
 
 int cmq_gateway_connect_remote(cmq_gateway_t *gw, const char *cluster_name) {
     if (!gw) return -1;

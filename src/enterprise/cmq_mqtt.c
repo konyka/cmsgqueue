@@ -254,7 +254,7 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     return 0;
 }
 
-int cmq_mqtt_bridge_disconnect(cmq_mqtt_bridge_t *br) {
+static int mqtt_bridge_disconnect_impl(cmq_mqtt_bridge_t *br) {
     if (!br) return -1;
     cmq_mutex_lock(&br->lock);
     mqtt_disconnect_unlocked(br);
@@ -292,7 +292,7 @@ const char *cmq_mqtt_client_id(cmq_mqtt_bridge_t *br) {
     return br ? br->client_id : NULL;
 }
 
-cmq_mqtt_bridge_info_t cmq_mqtt_bridge_info(cmq_mqtt_bridge_t *br) {
+static cmq_mqtt_bridge_info_t mqtt_bridge_info_impl(cmq_mqtt_bridge_t *br) {
     cmq_mqtt_bridge_info_t info = {0};
     if (!br) return info;
     cmq_mutex_lock(&br->lock);
@@ -308,7 +308,7 @@ cmq_mqtt_bridge_info_t cmq_mqtt_bridge_info(cmq_mqtt_bridge_t *br) {
     return info;
 }
 
-int cmq_mqtt_add_mapping(cmq_mqtt_bridge_t *br, const char *cmq_subject,
+static int mqtt_add_mapping_impl(cmq_mqtt_bridge_t *br, const char *cmq_subject,
                           const char *mqtt_topic, int qos) {
     if (!br || !cmq_subject || !mqtt_topic) return -1;
     if (qos < 0 || qos > 2) return -1;
@@ -342,7 +342,7 @@ int cmq_mqtt_add_mapping(cmq_mqtt_bridge_t *br, const char *cmq_subject,
     return 0;
 }
 
-int cmq_mqtt_remove_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic) {
+static int mqtt_remove_mapping_impl(cmq_mqtt_bridge_t *br, const char *mqtt_topic) {
     if (!br || !mqtt_topic) return -1;
     cmq_mutex_lock(&br->lock);
     for (size_t i = 0; i < br->mapping_count; i++) {
@@ -358,7 +358,7 @@ int cmq_mqtt_remove_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic) {
     return -1;
 }
 
-size_t cmq_mqtt_mapping_count(cmq_mqtt_bridge_t *br) {
+static size_t mqtt_mapping_count_impl(cmq_mqtt_bridge_t *br) {
     if (!br) return 0;
     cmq_mutex_lock(&br->lock);
     size_t c = br->mapping_count;
@@ -366,7 +366,7 @@ size_t cmq_mqtt_mapping_count(cmq_mqtt_bridge_t *br) {
     return c;
 }
 
-int cmq_mqtt_find_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic,
+static int mqtt_find_mapping_impl(cmq_mqtt_bridge_t *br, const char *mqtt_topic,
                            cmq_mqtt_mapping_t *out) {
     if (!br || !mqtt_topic || !out) return -1;
     cmq_mutex_lock(&br->lock);
@@ -379,6 +379,58 @@ int cmq_mqtt_find_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic,
     }
     cmq_mutex_unlock(&br->lock);
     return -1;
+}
+
+
+int cmq_mqtt_bridge_disconnect(cmq_mqtt_bridge_t *br) {
+    if (!br) return -1;
+    if (mqtt_begin_op(br) != 0) return -1;
+    int rc = mqtt_bridge_disconnect_impl(br);
+    mqtt_end_op(br);
+    return rc;
+}
+
+cmq_mqtt_bridge_info_t cmq_mqtt_bridge_info(cmq_mqtt_bridge_t *br) {
+    cmq_mqtt_bridge_info_t info = {0};
+    if (!br) return info;
+    if (mqtt_begin_op(br) != 0) return info;
+    info = mqtt_bridge_info_impl(br);
+    mqtt_end_op(br);
+    return info;
+}
+
+int cmq_mqtt_add_mapping(cmq_mqtt_bridge_t *br, const char *cmq_subject,
+                          const char *mqtt_topic, int qos) {
+    if (!br || !cmq_subject || !mqtt_topic) return -1;
+    if (mqtt_begin_op(br) != 0) return -1;
+    int rc = mqtt_add_mapping_impl(br, cmq_subject, mqtt_topic, qos);
+    mqtt_end_op(br);
+    return rc;
+}
+
+int cmq_mqtt_remove_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic) {
+    if (!br || !mqtt_topic) return -1;
+    if (mqtt_begin_op(br) != 0) return -1;
+    int rc = mqtt_remove_mapping_impl(br, mqtt_topic);
+    mqtt_end_op(br);
+    return rc;
+}
+
+size_t cmq_mqtt_mapping_count(cmq_mqtt_bridge_t *br) {
+    if (!br) return 0;
+    if (mqtt_begin_op(br) != 0) return 0;
+    size_t c = mqtt_mapping_count_impl(br);
+    mqtt_end_op(br);
+    return c;
+}
+
+int cmq_mqtt_find_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic,
+                           cmq_mqtt_mapping_t *out) {
+    if (!br || !mqtt_topic || !out) return -1;
+    if (mqtt_begin_op(br) != 0) return -1;
+    int rc = mqtt_find_mapping_impl(br, mqtt_topic, out);
+    mqtt_end_op(br);
+    return rc;
 }
 
 const char *cmq_mqtt_topic_to_subject(const char *mqtt_topic, char *buf, size_t len) {

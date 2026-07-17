@@ -3139,6 +3139,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route/gw/mqtt public API barriers · stream/store destroy drain</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route APIs</span></td><td>✅</td><td>attach/mark/detach/disconnect/counts/peer_live/io_lock gated vs destroy.</td></tr>
+<tr><td><span class="component-name">gw/mqtt APIs</span></td><td>✅</td><td>set_auth/add_remote/disconnect/mappings/info hold <code>in_flight</code>.</td></tr>
+<tr><td><span class="component-name">stream/store</span></td><td>✅</td><td><code>dying</code>+<code>in_flight</code> drain concurrent ops before free.</td></tr>
+</table>
+</div>
+
 
 
 
