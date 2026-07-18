@@ -25,6 +25,8 @@ typedef struct {
     void *data;
     int repeat;
     int active;
+    int firing;    /* 1 while callback runs unlocked */
+    int cancelled; /* del during firing — suppress reschedule */
 } cmq_ev_timer_t;
 
 cmq_ev_loop_t *cmq_ev_loop_create(int max_events);

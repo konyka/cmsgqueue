@@ -50,7 +50,61 @@ struct cmq_ev_loop {
     void *post_tick_data;
     atomic_int in_flight; /* run/add/mod/del/timer vs destroy */
     atomic_int dying;
+    atomic_int in_timer_cb; /* run thread inside timer callback (reentrant del) */
 };
+
+/* Fire due timers. One-shot disarms under lock before unlock+cb so concurrent
+   timer_del cannot return success while the callback still runs. Repeat timers
+   use firing/cancelled; cross-thread del waits until firing clears. */
+static void cmq_ev_timers_dispatch(cmq_ev_loop_t *loop, uint64_t now) {
+    for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
+        cmq_ev_cb_t cb = NULL;
+        void *data = NULL;
+        int tid = 0;
+        int was_repeat = 0;
+        cmq_mutex_lock(&loop->timers_lock);
+        cmq_ev_timer_t *t = &loop->timers[i];
+        if (!t->active || t->expire_ms > now) {
+            cmq_mutex_unlock(&loop->timers_lock);
+            continue;
+        }
+        cb = t->cb;
+        data = t->data;
+        tid = t->timer_id;
+        was_repeat = t->repeat;
+        t->firing = 1;
+        t->cancelled = 0;
+        if (!was_repeat)
+            t->active = 0;
+        cmq_mutex_unlock(&loop->timers_lock);
+
+        atomic_store_explicit(&loop->in_timer_cb, 1, memory_order_release);
+        if (cb) cb(tid, CMQ_EV_TIMER, data);
+        atomic_store_explicit(&loop->in_timer_cb, 0, memory_order_release);
+
+        cmq_mutex_lock(&loop->timers_lock);
+        t->firing = 0;
+        if (t->timer_id != tid) {
+            /* Slot reused under a different id — leave the new timer alone. */
+        } else if (t->cancelled || !was_repeat) {
+            t->active = 0;
+            t->repeat = 0;
+            t->cb = NULL;
+            t->data = NULL;
+            t->cancelled = 0;
+        } else if (t->active) {
+            if (t->interval_ms > UINT64_MAX - now)
+                t->expire_ms = UINT64_MAX;
+            else
+                t->expire_ms = now + t->interval_ms;
+        } else {
+            t->repeat = 0;
+            t->cb = NULL;
+            t->data = NULL;
+        }
+        cmq_mutex_unlock(&loop->timers_lock);
+    }
+}
 
 static int ev_begin_op(cmq_ev_loop_t *loop) {
     if (atomic_load_explicit(&loop->dying, memory_order_acquire))
@@ -116,6 +170,7 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
     cmq_atomic_store_int(&loop->running, 0, CMQ_ATOMIC_RELAXED);
     atomic_init(&loop->in_flight, 0);
     atomic_init(&loop->dying, 0);
+    atomic_init(&loop->in_timer_cb, 0);
     loop->next_timer_id = 1;
 
 #if CMQ_OS_LINUX
@@ -425,35 +480,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         }
 
         now = cmq_ev_now_ms();
-        for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
-            cmq_ev_cb_t cb = NULL;
-            void *data = NULL;
-            int tid = 0;
-            cmq_mutex_lock(&loop->timers_lock);
-            cmq_ev_timer_t *t = &loop->timers[i];
-            if (!t->active || t->expire_ms > now) {
-                cmq_mutex_unlock(&loop->timers_lock);
-                continue;
-            }
-            cb = t->cb;
-            data = t->data;
-            tid = t->timer_id;
-            cmq_mutex_unlock(&loop->timers_lock);
-            if (cb) cb(tid, CMQ_EV_TIMER, data);
-            /* Callback may have called timer_del — only reschedule if live. */
-            cmq_mutex_lock(&loop->timers_lock);
-            if (t->active && t->timer_id == tid) {
-                if (t->repeat) {
-                    if (t->interval_ms > UINT64_MAX - now)
-                        t->expire_ms = UINT64_MAX;
-                    else
-                        t->expire_ms = now + t->interval_ms;
-                } else {
-                    t->active = 0;
-                }
-            }
-            cmq_mutex_unlock(&loop->timers_lock);
-        }
+        cmq_ev_timers_dispatch(loop, now);
 
         if (loop->post_tick) loop->post_tick(loop->post_tick_data);
 
@@ -616,34 +643,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         }
 
         now = cmq_ev_now_ms();
-        for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
-            cmq_ev_cb_t cb = NULL;
-            void *data = NULL;
-            int tid = 0;
-            cmq_mutex_lock(&loop->timers_lock);
-            cmq_ev_timer_t *t = &loop->timers[i];
-            if (!t->active || t->expire_ms > now) {
-                cmq_mutex_unlock(&loop->timers_lock);
-                continue;
-            }
-            cb = t->cb;
-            data = t->data;
-            tid = t->timer_id;
-            cmq_mutex_unlock(&loop->timers_lock);
-            if (cb) cb(tid, CMQ_EV_TIMER, data);
-            cmq_mutex_lock(&loop->timers_lock);
-            if (t->active && t->timer_id == tid) {
-                if (t->repeat) {
-                    if (t->interval_ms > UINT64_MAX - now)
-                        t->expire_ms = UINT64_MAX;
-                    else
-                        t->expire_ms = now + t->interval_ms;
-                } else {
-                    t->active = 0;
-                }
-            }
-            cmq_mutex_unlock(&loop->timers_lock);
-        }
+        cmq_ev_timers_dispatch(loop, now);
 
         if (loop->post_tick) loop->post_tick(loop->post_tick_data);
 
@@ -667,7 +667,8 @@ int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_m
     if (ev_begin_op(loop) != 0) return -1;
     cmq_mutex_lock(&loop->timers_lock);
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
-        if (!loop->timers[i].active) {
+        /* Skip slots still in unlocked callback (one-shot already disarmed). */
+        if (!loop->timers[i].active && !loop->timers[i].firing) {
             uint64_t now = cmq_ev_now_ms();
             /* Avoid signed overflow UB; skip 0 and ids still in use after wrap. */
             int tid = -1;
@@ -677,7 +678,7 @@ int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_m
                 int cand = loop->next_timer_id++;
                 int clash = 0;
                 for (int j = 0; j < CMQ_EV_MAX_TIMERS; j++) {
-                    if (loop->timers[j].active &&
+                    if ((loop->timers[j].active || loop->timers[j].firing) &&
                         loop->timers[j].timer_id == cand) {
                         clash = 1;
                         break;
@@ -702,6 +703,8 @@ int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_m
             loop->timers[i].cb = cb;
             loop->timers[i].data = data;
             loop->timers[i].repeat = (interval_ms > 0) ? 1 : 0;
+            loop->timers[i].firing = 0;
+            loop->timers[i].cancelled = 0;
             loop->timers[i].active = 1;
             cmq_mutex_unlock(&loop->timers_lock);
             ev_end_op(loop);
@@ -718,15 +721,57 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
     if (ev_begin_op(loop) != 0) return -1;
     cmq_mutex_lock(&loop->timers_lock);
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
-        if (loop->timers[i].active && loop->timers[i].timer_id == timer_id) {
-            loop->timers[i].active = 0;
-            loop->timers[i].repeat = 0;
-            loop->timers[i].cb = NULL;
-            loop->timers[i].data = NULL;
+        cmq_ev_timer_t *t = &loop->timers[i];
+        if (t->timer_id != timer_id)
+            continue;
+        /* One-shot already committed to fire (disarmed under lock). */
+        if (t->firing && !t->active) {
             cmq_mutex_unlock(&loop->timers_lock);
+            ev_end_op(loop);
+            return -1;
+        }
+        if (!t->active) {
+            cmq_mutex_unlock(&loop->timers_lock);
+            ev_end_op(loop);
+            return -1;
+        }
+        if (t->firing) {
+            /* Repeat timer: suppress reschedule; wait so userdata is unused. */
+            t->cancelled = 1;
+            t->active = 0;
+            t->repeat = 0;
+            cmq_mutex_unlock(&loop->timers_lock);
+            if (!atomic_load_explicit(&loop->in_timer_cb, memory_order_acquire)) {
+                for (;;) {
+                    cmq_mutex_lock(&loop->timers_lock);
+                    int done = !t->firing || t->timer_id != timer_id;
+                    if (done) {
+                        if (t->timer_id == timer_id) {
+                            t->cb = NULL;
+                            t->data = NULL;
+                            t->cancelled = 0;
+                        }
+                        cmq_mutex_unlock(&loop->timers_lock);
+                        ev_end_op(loop);
+                        return 0;
+                    }
+                    cmq_mutex_unlock(&loop->timers_lock);
+                    struct timespec ts = {0, 100000L}; /* 0.1ms */
+                    nanosleep(&ts, NULL);
+                }
+            }
+            /* Reentrant del from timer cb — dispatch clears after return. */
             ev_end_op(loop);
             return 0;
         }
+        t->active = 0;
+        t->repeat = 0;
+        t->cb = NULL;
+        t->data = NULL;
+        t->cancelled = 0;
+        cmq_mutex_unlock(&loop->timers_lock);
+        ev_end_op(loop);
+        return 0;
     }
     cmq_mutex_unlock(&loop->timers_lock);
     ev_end_op(loop);

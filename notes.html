@@ -3787,6 +3787,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — timer_del vs fire (no success+callback)</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ev_timers_dispatch</span></td><td>✅</td><td>One-shot disarms under lock before cb; repeat uses <code>firing</code>/<code>cancelled</code>; cross-thread <code>timer_del</code> waits until fire ends (reentrant del from cb does not wait).</td></tr>
+<tr><td><span class="component-name">timer_add slot</span></td><td>✅</td><td>Do not reuse a slot while <code>firing</code>; id clash check includes firing timers (ABA / wrap).</td></tr>
+</table>
+</div>
+
 
 
 
