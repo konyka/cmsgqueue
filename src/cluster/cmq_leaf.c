@@ -364,6 +364,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     strncpy(addr_copy, leaf->hub_addr, sizeof(addr_copy) - 1);
     addr_copy[sizeof(addr_copy) - 1] = '\0';
     int port_copy = leaf->hub_port;
+    uint32_t dial_gen = leaf->hub_gen;
     cmq_mutex_unlock(&leaf->lock);
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -414,6 +415,13 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
             leaf_hub_drop_if_dead(leaf, nfd);
             cmq_mutex_lock(&leaf->lock);
         }
+    }
+    /* disconnect / other connect during unlocked dial — do not resurrect. */
+    if (leaf->hub_gen != dial_gen) {
+        cmq_mutex_unlock(&leaf->lock);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        close(fd);
+        return -1;
     }
     /* Another connect claimed the hub during our unlocked dial window. */
     if (leaf->hub_fd >= 0 && !leaf->connected) {
@@ -622,6 +630,10 @@ static int leaf_disconnect_impl(cmq_leaf_node_t *leaf) {
     if (leaf->hub_fd >= 0) close(leaf->hub_fd);
     leaf->hub_fd = -1;
     leaf->connected = 0;
+    /* Bump so in-flight connect cannot publish after explicit disconnect. */
+    leaf->hub_gen++;
+    if (leaf->hub_gen == 0)
+        leaf->hub_gen = 1;
     cmq_mutex_unlock(&leaf->lock);
     cmq_mutex_unlock(&leaf->hub_io_lock);
     return 0;

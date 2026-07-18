@@ -22,12 +22,35 @@ struct cmq_gateway {
     cmq_gw_conn_t conns[CMQ_GW_MAX_CONNECTIONS];
     size_t conn_count;
     cmq_gw_cluster_info_t clusters[CMQ_GW_MAX_CLUSTERS];
+    uint32_t cluster_cancel_gen[CMQ_GW_MAX_CLUSTERS]; /* disconnect aborts dial */
     size_t cluster_count;
     cmq_mutex_t lock;
     cmq_mutex_t io_locks[CMQ_GW_MAX_CONNECTIONS]; /* per-slot write serialization */
     atomic_int in_flight; /* connect unlocked dial/handshake */
     atomic_int dying;
 };
+
+/* Caller holds gw->lock. */
+static ssize_t gw_find_cluster(cmq_gateway_t *gw, const char *name) {
+    if (!gw || !name) return -1;
+    for (size_t i = 0; i < gw->cluster_count; i++) {
+        if (strcmp(gw->clusters[i].name, name) == 0)
+            return (ssize_t)i;
+    }
+    return -1;
+}
+
+static uint32_t gw_cluster_cancel_snap(cmq_gateway_t *gw, const char *name) {
+    ssize_t i = gw_find_cluster(gw, name);
+    return i >= 0 ? gw->cluster_cancel_gen[i] : 0;
+}
+
+static int gw_cluster_cancel_changed(cmq_gateway_t *gw, const char *name,
+                                      uint32_t gen) {
+    ssize_t i = gw_find_cluster(gw, name);
+    if (i < 0) return 1;
+    return gw->cluster_cancel_gen[i] != gen;
+}
 
 #define CMQ_GW_WRITE_MS 50
 #define CMQ_GW_CONNECT_MS 2000
@@ -307,8 +330,8 @@ static int gw_add_remote_impl(cmq_gateway_t *gw, const char *cluster_name,
             gw->clusters[i].port = port;
             gw->clusters[i].known = 1;
             if (addr_changed) {
-                /* Invalidate live TCP so connect_remote must dial the new endpoint.
-                   Read identity under io_lock (same as forward). */
+                /* Invalidate live TCP + cancel in-flight dials to the old ep. */
+                gw->cluster_cancel_gen[i]++;
                 for (size_t j = 0; j < gw->conn_count; j++) {
                     cmq_mutex_lock(&gw->io_locks[j]);
                     int match =
@@ -395,6 +418,7 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
         addr_copy[sizeof(addr_copy) - 1] = '\0';
         int port_copy = port;
         size_t slot = i;
+        uint32_t cgen = gw_cluster_cancel_snap(gw, cluster_name);
         cmq_mutex_unlock(&gw->lock);
 
         int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -417,6 +441,11 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
         }
         set_nonblock(fd);
         cmq_mutex_lock(&gw->lock);
+        if (gw_cluster_cancel_changed(gw, cluster_name, cgen)) {
+            cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            return -1;
+        }
         /* Another thread may have published a live peer meanwhile. */
         if (gw_has_live_peer(gw, cluster_name)) {
             cmq_mutex_unlock(&gw->lock);
@@ -502,6 +531,7 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
         strncpy(addr_copy, addr, sizeof(addr_copy) - 1);
         addr_copy[sizeof(addr_copy) - 1] = '\0';
         int port_copy = port;
+        uint32_t cgen = gw_cluster_cancel_snap(gw, cluster_name);
         cmq_mutex_unlock(&gw->lock);
 
         int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -524,6 +554,11 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
         }
         set_nonblock(fd);
         cmq_mutex_lock(&gw->lock);
+        if (gw_cluster_cancel_changed(gw, cluster_name, cgen)) {
+            cmq_mutex_unlock(&gw->lock);
+            close(fd);
+            return -1;
+        }
         if (gw_has_live_peer(gw, cluster_name)) {
             cmq_mutex_unlock(&gw->lock);
             close(fd);
@@ -562,6 +597,7 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
     strncpy(addr_copy, addr, sizeof(addr_copy) - 1);
     addr_copy[sizeof(addr_copy) - 1] = '\0';
     int port_copy = port;
+    uint32_t cgen = gw_cluster_cancel_snap(gw, cluster_name);
     cmq_mutex_unlock(&gw->lock);
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -587,6 +623,11 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
     set_nonblock(fd);
 
     cmq_mutex_lock(&gw->lock);
+    if (gw_cluster_cancel_changed(gw, cluster_name, cgen)) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        return -1;
+    }
     /* Dedup after unlocked connect — avoid duplicate live peers. */
     if (gw_has_live_peer(gw, cluster_name)) {
         cmq_mutex_unlock(&gw->lock);
@@ -636,6 +677,10 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
 static int gw_disconnect_impl(cmq_gateway_t *gw, const char *cluster_name) {
     if (!gw || !cluster_name) return -1;
     cmq_mutex_lock(&gw->lock);
+    /* Always bump cancel_gen so an in-flight dial cannot reinstall. */
+    ssize_t ci = gw_find_cluster(gw, cluster_name);
+    if (ci >= 0)
+        gw->cluster_cancel_gen[ci]++;
     for (size_t i = 0; i < gw->conn_count; i++) {
         cmq_mutex_lock(&gw->io_locks[i]);
         int match = (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0);
@@ -658,7 +703,8 @@ static int gw_disconnect_impl(cmq_gateway_t *gw, const char *cluster_name) {
         }
     }
     cmq_mutex_unlock(&gw->lock);
-    return -1;
+    /* Known cluster with no live slot: cancel still succeeded. */
+    return ci >= 0 ? 0 : -1;
 }
 
 size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,

@@ -3869,6 +3869,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — gateway/leaf disconnect cancels in-flight dial</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_gateway</span></td><td>✅</td><td>Per-cluster <code>cluster_cancel_gen</code>; disconnect/addr-change bump; post-dial install aborts if gen changed.</td></tr>
+<tr><td><span class="component-name">cmq_leaf</span></td><td>✅</td><td>Disconnect bumps <code>hub_gen</code>; connect snapshots before dial and refuses publish on mismatch.</td></tr>
+</table>
+</div>
+
 
 
 
