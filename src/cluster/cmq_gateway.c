@@ -105,16 +105,18 @@ static int gw_has_live_peer(cmq_gateway_t *gw, const char *cluster_name) {
             }
         }
         if (idx == (size_t)-1) return 0;
-        /* Probe under io_lock — unlock-stale alive must not sticky-report live. */
+        /* Probe under io_lock — never re-probe bare efd after unlock (EINTR
+           sticky-alive / fd reuse). Decision to reclaim uses locked result. */
         if (idx < gw->conn_count) {
             cmq_mutex_lock(&gw->io_locks[idx]);
             int still =
                 (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
                  gw->conns[idx].connected && gw->conns[idx].fd == efd);
             int live = still && gw_fd_alive(efd);
+            int reclaim = still && !live;
             cmq_mutex_unlock(&gw->io_locks[idx]);
             if (live) return 1;
-            if (still && !gw_fd_alive(efd))
+            if (reclaim)
                 gw_slot_close_fd(gw, idx);
         }
     }
@@ -157,12 +159,10 @@ static int gw_slot_claim_install(cmq_gateway_t *gw, size_t slot,
         cmq_mutex_unlock(&gw->io_locks[slot]);
         if (!still) return -1;
         if (live) return 1;
-        if (!gw_fd_alive(efd)) {
-            gw_slot_close_fd(gw, slot);
-            gw_slot_install(gw, slot, cluster_name, addr, port, fd);
-            return 0;
-        }
-        return 1;
+        /* Locked probe said dead — reclaim; do not re-probe unlocked efd. */
+        gw_slot_close_fd(gw, slot);
+        gw_slot_install(gw, slot, cluster_name, addr, port, fd);
+        return 0;
     }
     if (!connected || empty || same) {
         gw_slot_close_fd(gw, slot);
@@ -374,14 +374,15 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
                 int same =
                     (strcmp(gw->conns[idx].remote_cluster, cluster_name) == 0 &&
                      gw->conns[idx].connected && gw->conns[idx].fd == efd);
-                /* Probe under io_lock — stale unlock-alive skips reconnect. */
+                /* Probe under io_lock — do not re-probe bare efd after unlock. */
                 int live = same && gw_fd_alive(efd);
+                int reclaim = same && !live;
                 cmq_mutex_unlock(&gw->io_locks[idx]);
                 if (live) {
                     cmq_mutex_unlock(&gw->lock);
                     return 0;
                 }
-                if (same && !gw_fd_alive(efd))
+                if (reclaim)
                     gw_slot_close_fd(gw, idx);
             }
             /* Rescan — avoid closing a peer installed while unlocked. */

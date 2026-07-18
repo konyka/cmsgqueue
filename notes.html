@@ -3804,6 +3804,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — gateway reclaim uses locked probe only</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">gw_has_live_peer / claim / connect</span></td><td>✅</td><td>Drop unlock-then-<code>gw_fd_alive(efd)</code> second probe; reclaim/keep from the <code>io_lock</code> result only (avoids EINTR sticky-keep and fd-reuse false-alive).</td></tr>
+</table>
+</div>
+
 
 
 
