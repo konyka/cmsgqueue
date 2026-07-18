@@ -539,6 +539,11 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
                 if (w->server)
                     cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                               CMQ_ATOMIC_RELAXED);
+                /* send_direct FORCE_CLOSE (OOM / buf limit) leaves CLOSING
+                   without WRITE/EOF — finish now (align account-dead). */
+                if (target->state == CMQ_CLIENT_CLOSING ||
+                    target->state == CMQ_CLIENT_CLOSED)
+                    finish_dead = 1;
             } else {
                 /* Bytes may be in write_buf / partial TCP — mark before drain
                    so publisher can skip cluster fallback on drain timeout. */
@@ -552,6 +557,9 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
                         cmq_atomic_fetch_add_u64(
                             &w->server->stat_messages_dropped, 1,
                             CMQ_ATOMIC_RELAXED);
+                    if (target->state == CMQ_CLIENT_CLOSING ||
+                        target->state == CMQ_CLIENT_CLOSED)
+                        finish_dead = 1;
                 } else {
                     sync_ok = 1;
                     if (msg->credit_out && w->server) {
@@ -1916,6 +1924,10 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
                 /* ACL revoked mid-flight — drop. */
             } else if (cmq_client_send_local(c, frame, flen) == 0) {
                 ok = 1;
+            } else if (c->state == CMQ_CLIENT_CLOSING ||
+                       c->state == CMQ_CLIENT_CLOSED) {
+                /* FORCE_CLOSE from send_direct — reclaim promptly. */
+                worker_teardown_or_shutdown(w, client_id, conn_gen);
             }
         }
         /* Soft-deleted account: drop ghost subs promptly via worker teardown. */
@@ -1936,6 +1948,12 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         if (deliver_acl_ok(srv, pub_account, c->account_name, frame, flen) &&
             cmq_client_send_local(c, frame, flen) == 0)
             ok = 1;
+        else if (c->state == CMQ_CLIENT_CLOSING ||
+                 c->state == CMQ_CLIENT_CLOSED) {
+            /* FORCE_CLOSE: nudge EOF so owning loop finishes (not on this thr). */
+            dead_acct = 1;
+            dead_fd = c->fd;
+        }
     } else if (c && c->conn_gen == conn_gen &&
                c->state == CMQ_CLIENT_CONNECTED &&
                !client_account_live(srv, c)) {
