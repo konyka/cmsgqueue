@@ -2471,10 +2471,10 @@ done:
                     if (worker_push_msg(pw, ctx->publisher_id, ctx->publisher_gen,
                                          ebuf, elen, 0, 0, NULL, 0, 0, NULL, 0,
                                          NULL, 0) != 0) {
-                        /* Queue full — sync send or force EOF so publisher notices. */
+                        /* Queue full — sync send; force EOF only if send fails. */
                         if (client_send_by_id(srv, ctx->publisher_worker_id,
                                                ctx->publisher_id, ctx->publisher_gen,
-                                               0, ebuf, elen, NULL) != 0) {
+                                               0, ebuf, elen, NULL) == 0) {
                             cmq_mutex_lock(&pw->clients_lock);
                             cmq_client_t *pub =
                                 cmq_idmap_get(pw->idmap, ctx->publisher_id);

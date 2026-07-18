@@ -3853,6 +3853,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — coro ERROR fallback SHUT only on send fail</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">deliver_coro_func</span></td><td>✅</td><td>Mailbox-full ERROR path: <code>client_send_by_id == 0</code> before <code>SHUT_RDWR</code> (was inverted; killed publisher after successful ERROR).</td></tr>
+</table>
+</div>
+
 
 
 
