@@ -3779,6 +3779,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — drain keeps gate; waits active_clients</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_server_drain</span></td><td>✅</td><td>Do not clear <code>acceptor_drain</code> before <code>stop</code> (gate stays raised for late TLS admits); wait until <code>clients_count</code> and <code>active_clients</code> are both 0.</td></tr>
+</table>
+</div>
+
 
 
 

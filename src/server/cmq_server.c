@@ -6195,14 +6195,15 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
                 cmq_mutex_unlock(&srv->workers[i].clients_lock);
             }
         }
-        if (n == 0) {
-            cmq_atomic_store_int(&srv->acceptor_drain, 0, CMQ_ATOMIC_RELEASE);
+        /* Also wait for in-flight accepts (active_clients) still in TLS/
+           register — they are not yet in clients[]. Do not clear
+           acceptor_drain here: stop() keeps the gate raised; clearing
+           would let a handshake finish and admit after "drain done". */
+        if (n == 0 &&
+            cmq_atomic_load_u32(&srv->active_clients, CMQ_ATOMIC_ACQUIRE) == 0)
             break;
-        }
-        if ((int)(srv_now_ms() - start) >= timeout) {
-            cmq_atomic_store_int(&srv->acceptor_drain, 0, CMQ_ATOMIC_RELEASE);
+        if ((int)(srv_now_ms() - start) >= timeout)
             break;
-        }
         /* Re-kick acceptor drain in case a late accept slipped in. */
         if (srv->ev_loop &&
             cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
