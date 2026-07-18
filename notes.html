@@ -3812,6 +3812,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route reclaim uses locked probe only</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route connect/add/attach/live/peer</span></td><td>✅</td><td>Align gateway: drop unlock-then-<code>route_fd_alive(efd)</code>; reclaim from <code>io_lock</code> result only (EINTR sticky-keep / discarded dial).</td></tr>
+</table>
+</div>
+
 
 
 
