@@ -656,6 +656,10 @@ static int route_add_conn_impl(cmq_route_pool_t *pool, const char *node_id, int 
         if (fd >= 0) close(fd);
         return -1;
     }
+    if (route_dial_gated(pool)) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
 
     /* Reject pool-full before handshake so caller-owned fds are closed cleanly
        without blocking on a peer that will never be retained. */
@@ -712,8 +716,17 @@ static int route_add_conn_impl(cmq_route_pool_t *pool, const char *node_id, int 
         }
         set_nonblock(fd);
     }
+    if (route_dial_gated(pool)) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
 
     cmq_mutex_lock(&pool->lock);
+    if (route_dial_gated(pool)) {
+        cmq_mutex_unlock(&pool->lock);
+        if (fd >= 0) close(fd);
+        return -1;
+    }
     if (replace >= 0 && (size_t)replace < pool->conn_count) {
         char rid[CMQ_NODE_ID_SIZE];
         int connected = 0, efd = -1;
@@ -872,7 +885,13 @@ static int route_add_conn_impl(cmq_route_pool_t *pool, const char *node_id, int 
 static int route_attach_inbound_impl(cmq_route_pool_t *pool, const char *node_id, int fd) {
     if (!pool || !node_id || fd < 0) return -1;
     if (strnlen(node_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE) return -1;
+    /* Borrowed fd — do not close on gate; caller owns the socket. */
+    if (route_dial_gated(pool)) return -1;
     cmq_mutex_lock(&pool->lock);
+    if (route_dial_gated(pool)) {
+        cmq_mutex_unlock(&pool->lock);
+        return -1;
+    }
     for (size_t i = 0; i < pool->conn_count; i++) {
         char rid[CMQ_NODE_ID_SIZE];
         int connected = 0, efd = -1;
@@ -979,7 +998,12 @@ static int route_attach_inbound_impl(cmq_route_pool_t *pool, const char *node_id
 
 static int route_mark_connected_impl(cmq_route_pool_t *pool, int fd) {
     if (!pool || fd < 0) return -1;
+    if (route_dial_gated(pool)) return -1;
     cmq_mutex_lock(&pool->lock);
+    if (route_dial_gated(pool)) {
+        cmq_mutex_unlock(&pool->lock);
+        return -1;
+    }
     for (size_t i = 0; i < pool->conn_count; i++) {
         int efd = -1;
         route_slot_snap(pool, i, NULL, &efd, NULL, NULL);

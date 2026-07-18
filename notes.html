@@ -3759,6 +3759,7 @@ All 15 test suites passing, 0 warnings.
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">route_reconnect_thread</span></td><td>✅</td><td>Honor <code>acceptor_drain</code> like <code>accept_cb</code> — no outbound cluster dials during graceful drain (before <code>running=0</code>).</td></tr>
 <tr><td><span class="component-name">route dial_gate</span></td><td>✅</td><td>Post-handshake install aborted when <code>acceptor_drain</code> (in-flight dial during drain cannot install new egress).</td></tr>
+<tr><td><span class="component-name">dial_gate inbound</span></td><td>✅</td><td>Also gate <code>attach_inbound</code>/<code>add_conn</code>/<code>mark_connected</code> so drain cannot promote late CONNECT peers to broadcast-live.</td></tr>
 </table>
 </div>
 

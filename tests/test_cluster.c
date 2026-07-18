@@ -2,6 +2,7 @@
 #include "cmq_route.h"
 #include "cmq_gateway.h"
 #include "cmq_leaf.h"
+#include "cmq_atomic.h"
 #include "cmq_test.h"
 #include <stdlib.h>
 #include <string.h>
@@ -83,6 +84,24 @@ TEST(route, create_destroy) {
     ASSERT_NOT_NULL(rp);
     ASSERT_EQ(cmq_route_pool_count(rp), (size_t)0);
     ASSERT_EQ(cmq_route_target_count(rp), (size_t)0);
+    cmq_route_pool_destroy(rp);
+    cmq_cluster_destroy(c);
+}
+
+/* dial_gate rejects attach/add/mark (align outbound connect abort on drain). */
+TEST(route, dial_gate_blocks_inbound) {
+    cmq_cluster_t *c = cmq_cluster_create("c1", "n1");
+    cmq_route_pool_t *rp = cmq_route_pool_create(c);
+    cmq_atomic_int gate;
+    cmq_atomic_store_int(&gate, 1, CMQ_ATOMIC_RELEASE);
+    cmq_route_pool_set_dial_gate(rp, &gate);
+    int a[2];
+    ASSERT_EQ(pipe(a), 0);
+    ASSERT_EQ(cmq_route_attach_inbound(rp, "r0", a[1]), -1);
+    ASSERT_EQ(cmq_route_add_conn(rp, "n2", -1, NULL, NULL), -1);
+    ASSERT_EQ(write(a[1], "x", 1), 1); /* borrow not closed */
+    close(a[0]);
+    close(a[1]);
     cmq_route_pool_destroy(rp);
     cmq_cluster_destroy(c);
 }
