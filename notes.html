@@ -3828,6 +3828,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — WS PING PONG send fail finishes CLOSING</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">WS PING</span></td><td>✅</td><td>After PONG <code>send_direct</code>, if state is <code>CLOSING</code>/<code>CLOSED</code> call <code>client_finish_closing</code> and return (align CLOSE; no more batch frames).</td></tr>
+</table>
+</div>
+
 
 
 

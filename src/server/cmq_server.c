@@ -4981,6 +4981,13 @@ static void client_read_cb(int fd, int events, void *data) {
                 int plen = cmq_ws_frame_serialize(&pf, pong, sizeof(pong));
                 if (plen > 0)
                     cmq_client_send_direct(c, pong, (size_t)plen);
+                /* send_direct may FORCE_CLOSE (buf full / OOM / ev_mod) —
+                   align WS CLOSE: finish now, do not parse more frames. */
+                if (c->state == CMQ_CLIENT_CLOSING ||
+                    c->state == CMQ_CLIENT_CLOSED) {
+                    client_finish_closing(c);
+                    return;
+                }
                 /* Only CONNECTED may refresh keepalive — WS ping must not
                    hold INIT slots forever (same rule as CMQ PING). */
                 if (c->state == CMQ_CLIENT_CONNECTED)
