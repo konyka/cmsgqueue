@@ -194,6 +194,7 @@ typedef struct {
     char node_id[CMQ_NODE_ID_SIZE];
     char addr[CMQ_NODE_ADDR_SIZE];
     int port;
+    uint32_t cancel_gen; /* disconnect / endpoint change aborts in-flight dial */
 } cmq_route_target_t;
 
 struct cmq_route_pool {
@@ -306,6 +307,29 @@ static int route_ep_same(const char *slot_addr, int slot_port,
            strncmp(slot_addr, addr, CMQ_NODE_ADDR_SIZE) == 0;
 }
 
+/* Caller holds pool->lock. */
+static ssize_t route_find_target(cmq_route_pool_t *pool, const char *node_id) {
+    if (!pool || !node_id) return -1;
+    for (size_t i = 0; i < pool->target_count; i++) {
+        if (strcmp(pool->targets[i].node_id, node_id) == 0)
+            return (ssize_t)i;
+    }
+    return -1;
+}
+
+static uint32_t route_target_cancel_snap(cmq_route_pool_t *pool,
+                                          const char *node_id) {
+    ssize_t i = route_find_target(pool, node_id);
+    return i >= 0 ? pool->targets[i].cancel_gen : 0;
+}
+
+static int route_target_cancel_changed(cmq_route_pool_t *pool,
+                                        const char *node_id, uint32_t gen) {
+    ssize_t i = route_find_target(pool, node_id);
+    if (i < 0) return 1;
+    return pool->targets[i].cancel_gen != gen;
+}
+
 /* Caller holds pool->lock. True if node_id still maps to addr:port
    (connect may have rewritten the target while dial was unlocked). */
 static int route_endpoint_current(cmq_route_pool_t *pool, const char *node_id,
@@ -333,6 +357,8 @@ static int route_set_target(cmq_route_pool_t *pool, const char *node_id,
                  "%s", addr);
         pool->targets[i].port = port;
         if (changed) {
+            /* Cancel in-flight dials to the old endpoint. */
+            pool->targets[i].cancel_gen++;
             for (size_t j = 0; j < pool->conn_count; j++) {
                 cmq_mutex_lock(&pool->io_locks[j]);
                 int match = (strcmp(pool->conns[j].remote_id, node_id) == 0);
@@ -348,6 +374,7 @@ static int route_set_target(cmq_route_pool_t *pool, const char *node_id,
     snprintf(t->node_id, sizeof(t->node_id), "%s", node_id);
     snprintf(t->addr, sizeof(t->addr), "%s", addr);
     t->port = port;
+    t->cancel_gen = 0;
     return 0;
 }
 
@@ -506,6 +533,7 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
             return -1;
         }
     }
+    uint32_t cgen = route_target_cancel_snap(pool, node_id);
     cmq_mutex_unlock(&pool->lock);
 
     /* Connect + handshake outside the pool lock so broadcast can proceed. */
@@ -536,8 +564,9 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
     }
 
     cmq_mutex_lock(&pool->lock);
-    /* Target may have moved while dial/handshake ran unlocked. */
-    if (!route_endpoint_current(pool, node_id, addr, port) ||
+    /* disconnect / endpoint change / drain during unlocked dial. */
+    if (route_target_cancel_changed(pool, node_id, cgen) ||
+        !route_endpoint_current(pool, node_id, addr, port) ||
         route_dial_gated(pool)) {
         cmq_mutex_unlock(&pool->lock);
         close(fd);
@@ -1072,6 +1101,10 @@ static void route_detach_fd_impl(cmq_route_pool_t *pool, int fd) {
 static int route_disconnect_impl(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return -1;
     cmq_mutex_lock(&pool->lock);
+    /* Always bump cancel_gen so an in-flight dial cannot reinstall. */
+    ssize_t ti = route_find_target(pool, node_id);
+    if (ti >= 0)
+        pool->targets[ti].cancel_gen++;
     for (size_t i = 0; i < pool->conn_count; i++) {
         char rid[CMQ_NODE_ID_SIZE];
         route_slot_snap(pool, i, NULL, NULL, NULL, rid);
@@ -1092,7 +1125,8 @@ static int route_disconnect_impl(cmq_route_pool_t *pool, const char *node_id) {
         }
     }
     cmq_mutex_unlock(&pool->lock);
-    return -1;
+    /* Known target with no live slot: cancel still succeeded. */
+    return ti >= 0 ? 0 : -1;
 }
 
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__((unused)),
