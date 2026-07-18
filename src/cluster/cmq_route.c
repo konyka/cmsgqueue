@@ -208,6 +208,7 @@ struct cmq_route_pool {
     cmq_mutex_t io_locks[CMQ_ROUTE_MAX_CONNS]; /* per-slot write serialization */
     atomic_int in_flight; /* connect/add_conn unlocked dial/handshake */
     atomic_int dying;
+    cmq_atomic_int *dial_gate; /* optional; non-zero aborts post-dial install */
 };
 
 
@@ -377,12 +378,24 @@ cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
     p->cluster = cluster;
     p->conn_count = 0;
     p->interest_count = 0;
+    p->dial_gate = NULL;
     atomic_init(&p->in_flight, 0);
     atomic_init(&p->dying, 0);
     cmq_mutex_init(&p->lock);
     for (size_t i = 0; i < CMQ_ROUTE_MAX_CONNS; i++)
         cmq_mutex_init(&p->io_locks[i]);
     return p;
+}
+
+void cmq_route_pool_set_dial_gate(cmq_route_pool_t *pool, cmq_atomic_int *gate) {
+    if (!pool) return;
+    pool->dial_gate = gate;
+}
+
+/* 1 if server drain (or similar) forbids installing a freshly dialed peer. */
+static int route_dial_gated(const cmq_route_pool_t *pool) {
+    if (!pool || !pool->dial_gate) return 0;
+    return cmq_atomic_load_int(pool->dial_gate, CMQ_ATOMIC_ACQUIRE) != 0;
 }
 
 void cmq_route_pool_destroy(cmq_route_pool_t *pool) {
@@ -514,9 +527,16 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
     }
     set_nonblock(fd);
 
+    /* Drain may have started during unlocked dial — do not install egress. */
+    if (route_dial_gated(pool)) {
+        close(fd);
+        return -1;
+    }
+
     cmq_mutex_lock(&pool->lock);
     /* Target may have moved while dial/handshake ran unlocked. */
-    if (!route_endpoint_current(pool, node_id, addr, port)) {
+    if (!route_endpoint_current(pool, node_id, addr, port) ||
+        route_dial_gated(pool)) {
         cmq_mutex_unlock(&pool->lock);
         close(fd);
         return -1;

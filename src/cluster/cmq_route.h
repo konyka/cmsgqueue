@@ -2,6 +2,7 @@
 #define CMQ_ROUTE_H
 
 #include "cmq_cluster.h"
+#include "cmq_atomic.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <sys/socket.h>
@@ -35,6 +36,8 @@ int cmq_tcp_fd_alive(int fd);
 
 cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster);
 void cmq_route_pool_destroy(cmq_route_pool_t *pool);
+/* Optional: when *gate != 0, post-dial install is aborted (server drain). */
+void cmq_route_pool_set_dial_gate(cmq_route_pool_t *pool, cmq_atomic_int *gate);
 
 /* auth_user/auth_pass may be NULL when the peer has no auth configured.
    Sends CONNECT and waits for CONNACK before returning (blocking handshake). */

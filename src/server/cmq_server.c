@@ -5743,6 +5743,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                                            srv->config.cluster_node_id);
         if (srv->cluster) {
             srv->routes = cmq_route_pool_create(srv->cluster);
+            if (srv->routes)
+                cmq_route_pool_set_dial_gate(srv->routes, &srv->acceptor_drain);
         }
     }
     /* Configured routes without a pool would silently no-op all cluster
