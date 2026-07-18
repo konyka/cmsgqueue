@@ -3796,6 +3796,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — watcher gen drops stale fd-reuse events</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">watcher gen</span></td><td>✅</td><td>Bump on publish; pack into epoll <code>data.u64</code> / kqueue <code>udata</code>; snapshot requires gen match so TEARDOWN→close→accept reuse cannot deliver queued HUP/ERR to the new client.</td></tr>
+</table>
+</div>
+
 
 
 

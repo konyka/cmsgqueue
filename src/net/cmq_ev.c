@@ -33,7 +33,18 @@ typedef struct {
     int events;
     cmq_ev_cb_t cb;
     void *data;
+    uint32_t gen; /* bumped on publish; 0 = cleared — drop stale wait events */
 } cmq_ev_watcher_t;
+
+/* epoll data.u64 / kqueue udata: bind interest to a watcher generation. */
+static uint64_t ev_pack_fd_gen(int fd, uint32_t gen) {
+    return ((uint64_t)gen << 32) | (uint32_t)fd;
+}
+
+static void ev_unpack_fd_gen(uint64_t u, int *fd, uint32_t *gen) {
+    *fd = (int)(uint32_t)u;
+    *gen = (uint32_t)(u >> 32);
+}
 
 struct cmq_ev_loop {
     int backend_fd;
@@ -202,7 +213,7 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
         struct epoll_event ev;
         memset(&ev, 0, sizeof(ev));
         ev.events = EPOLLIN;
-        ev.data.fd = loop->wakeup_fd;
+        ev.data.u64 = ev_pack_fd_gen(loop->wakeup_fd, 0);
         if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, loop->wakeup_fd, &ev) != 0)
             goto fail_loop;
         loop->wakeup_wfd = loop->wakeup_fd;
@@ -263,14 +274,18 @@ void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
     free(loop);
 }
 
-static void watcher_publish(cmq_ev_loop_t *loop, int fd, int events,
-                             cmq_ev_cb_t cb, void *data) {
+static uint32_t watcher_publish(cmq_ev_loop_t *loop, int fd, int events,
+                                 cmq_ev_cb_t cb, void *data) {
     cmq_mutex_lock(&loop->watchers_lock);
+    uint32_t g = loop->watchers[fd].gen + 1;
+    if (g == 0) g = 1;
     loop->watchers[fd].fd = fd;
     loop->watchers[fd].events = events;
     loop->watchers[fd].cb = cb;
     loop->watchers[fd].data = data;
+    loop->watchers[fd].gen = g;
     cmq_mutex_unlock(&loop->watchers_lock);
+    return g;
 }
 
 static void watcher_clear(cmq_ev_loop_t *loop, int fd) {
@@ -279,13 +294,16 @@ static void watcher_clear(cmq_ev_loop_t *loop, int fd) {
     loop->watchers[fd].events = 0;
     loop->watchers[fd].cb = NULL;
     loop->watchers[fd].data = NULL;
+    loop->watchers[fd].gen = 0;
     cmq_mutex_unlock(&loop->watchers_lock);
 }
 
-static int watcher_snapshot(cmq_ev_loop_t *loop, int fd, cmq_ev_cb_t *cb,
-                             void **data) {
+static int watcher_snapshot(cmq_ev_loop_t *loop, int fd, uint32_t expect_gen,
+                             cmq_ev_cb_t *cb, void **data) {
     cmq_mutex_lock(&loop->watchers_lock);
-    int ok = (fd >= 0 && fd < loop->watchers_cap && loop->watchers[fd].cb);
+    int ok = (fd >= 0 && fd < loop->watchers_cap && expect_gen != 0 &&
+              loop->watchers[fd].cb &&
+              loop->watchers[fd].gen == expect_gen);
     if (ok) {
         *cb = loop->watchers[fd].cb;
         *data = loop->watchers[fd].data;
@@ -325,12 +343,12 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     if (cmq_ev_ensure_watcher(loop, fd) != 0) { ev_end_op(loop); return -1; }
 
     /* Publish before epoll_ctl so a racing wait never sees cb==NULL. */
-    watcher_publish(loop, fd, events, cb, data);
+    uint32_t gen = watcher_publish(loop, fd, events, cb, data);
 
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.events = (uint32_t)cmq_to_epoll_events(events);
-    ev.data.fd = fd;
+    ev.data.u64 = ev_pack_fd_gen(fd, gen);
 
     if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
         /* Stale epoll entry after a failed DEL + fd reuse. Prefer MOD so we
@@ -373,12 +391,12 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     cmq_mutex_unlock(&loop->watchers_lock);
 
     /* Publish before epoll_ctl so a racing wait never sees stale cb/data. */
-    watcher_publish(loop, fd, events, cb, data);
+    uint32_t gen = watcher_publish(loop, fd, events, cb, data);
 
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.events = (uint32_t)cmq_to_epoll_events(events);
-    ev.data.fd = fd;
+    ev.data.u64 = ev_pack_fd_gen(fd, gen);
 
     if (epoll_ctl(loop->backend_fd, EPOLL_CTL_MOD, fd, &ev) != 0) {
         /* fd may have been dropped from the set; re-ADD once. */
@@ -388,15 +406,16 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
                usually leaves the old epoll entry — do not clear into a silent
                dispatch hole (or mismatched new cb over old filters). */
             if (was_present && old_events != 0) {
+                uint32_t rgen =
+                    watcher_publish(loop, fd, old_events, old_cb, old_data);
                 struct epoll_event old_ev;
                 memset(&old_ev, 0, sizeof(old_ev));
                 old_ev.events = (uint32_t)cmq_to_epoll_events(old_events);
-                old_ev.data.fd = fd;
+                old_ev.data.u64 = ev_pack_fd_gen(fd, rgen);
                 if (epoll_ctl(loop->backend_fd, EPOLL_CTL_MOD, fd, &old_ev) == 0 ||
                     (errno == ENOENT &&
                      epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd,
                                &old_ev) == 0)) {
-                    watcher_publish(loop, fd, old_events, old_cb, old_data);
                     ev_end_op(loop);
                     return -1;
                 }
@@ -465,7 +484,9 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         }
 
         for (int i = 0; i < nfds; i++) {
-            int fd = events[i].data.fd;
+            int fd;
+            uint32_t gen;
+            ev_unpack_fd_gen(events[i].data.u64, &fd, &gen);
             if (fd == loop->wakeup_fd) {
                 uint64_t val;
                 read(fd, &val, sizeof(val));
@@ -473,7 +494,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             }
             cmq_ev_cb_t cb = NULL;
             void *data = NULL;
-            if (watcher_snapshot(loop, fd, &cb, &data)) {
+            if (watcher_snapshot(loop, fd, gen, &cb, &data)) {
                 int ev = epoll_to_cmq_events((int)events[i].events);
                 cb(fd, ev, data);
             }
@@ -500,13 +521,14 @@ static int kqueue_to_cmq_events(short filter, int flags) {
     return events;
 }
 
-static int kqueue_add_filters(int kq, int fd, int events) {
+static int kqueue_add_filters(int kq, int fd, int events, uint32_t gen) {
     struct kevent ev[2];
     int n = 0;
+    void *ud = (void *)(uintptr_t)gen;
     if (events & CMQ_EV_READ)
-        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, ud);
     if (events & CMQ_EV_WRITE)
-        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
+        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, ud);
     if (n == 0) return -1;
     return kevent(kq, ev, n, NULL, 0, NULL) == 0 ? 0 : -1;
 }
@@ -516,8 +538,8 @@ int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     if (ev_begin_op(loop) != 0) return -1;
     if (cmq_ev_ensure_watcher(loop, fd) != 0) { ev_end_op(loop); return -1; }
 
-    watcher_publish(loop, fd, events, cb, data);
-    if (kqueue_add_filters(loop->backend_fd, fd, events) != 0) {
+    uint32_t gen = watcher_publish(loop, fd, events, cb, data);
+    if (kqueue_add_filters(loop->backend_fd, fd, events, gen) != 0) {
         watcher_clear(loop, fd);
         ev_end_op(loop);
         return -1;
@@ -536,7 +558,7 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     void *old_data = loop->watchers[fd].data;
     cmq_mutex_unlock(&loop->watchers_lock);
 
-    watcher_publish(loop, fd, events, cb, data);
+    uint32_t gen = watcher_publish(loop, fd, events, cb, data);
 
     struct kevent ev[2];
     int n = 0;
@@ -548,12 +570,16 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
 
     if (n > 0) kevent(loop->backend_fd, ev, n, NULL, 0, NULL);
 
-    if (kqueue_add_filters(loop->backend_fd, fd, events) != 0) {
+    if (kqueue_add_filters(loop->backend_fd, fd, events, gen) != 0) {
         /* Restore previous filters + cb/data — do not leave fd unwatched
            with a mismatched new callback (wrong client on next dispatch). */
-        if (old_events != 0)
-            (void)kqueue_add_filters(loop->backend_fd, fd, old_events);
-        watcher_publish(loop, fd, old_events, old_cb, old_data);
+        if (old_events != 0) {
+            uint32_t rgen =
+                watcher_publish(loop, fd, old_events, old_cb, old_data);
+            (void)kqueue_add_filters(loop->backend_fd, fd, old_events, rgen);
+        } else {
+            watcher_clear(loop, fd);
+        }
         ev_end_op(loop);
         return -1;
     }
@@ -629,6 +655,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         for (int i = 0; i < nfds; i++) {
             int fd = (int)events[i].ident;
+            uint32_t gen = (uint32_t)(uintptr_t)events[i].udata;
             if (fd == loop->wakeup_fd) {
                 char buf[64];
                 while (read(fd, buf, sizeof(buf)) > 0) { }
@@ -636,7 +663,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             }
             cmq_ev_cb_t cb = NULL;
             void *data = NULL;
-            if (watcher_snapshot(loop, fd, &cb, &data)) {
+            if (watcher_snapshot(loop, fd, gen, &cb, &data)) {
                 int ev = kqueue_to_cmq_events(events[i].filter, (int)events[i].flags);
                 cb(fd, ev, data);
             }
