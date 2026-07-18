@@ -89,13 +89,14 @@ static int leaf_fd_alive(int fd) {
     return cmq_tcp_fd_alive(fd);
 }
 
-/* Caller holds hub_io_lock. Re-probe after identity match so a recycled
-   live hub_fd is not closed (connect installs under the same lock). */
+/* Caller holds hub_io_lock. Identity + alive under leaf->lock — do not
+   re-probe bare expect_fd after unlock (EINTR sticky-alive skips reclaim). */
 static void leaf_hub_drop_if_dead(cmq_leaf_node_t *leaf, int expect_fd) {
     cmq_mutex_lock(&leaf->lock);
     int same = (expect_fd >= 0 && leaf->hub_fd == expect_fd);
+    int dead = same && !leaf_fd_alive(expect_fd);
     cmq_mutex_unlock(&leaf->lock);
-    if (same && !leaf_fd_alive(expect_fd))
+    if (dead)
         leaf_hub_drop(leaf, expect_fd);
 }
 
