@@ -6206,6 +6206,9 @@ void cmq_server_stop(cmq_server_t *srv) {
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
             cmq_ev_stop(srv->workers[i].ev_loop);
+            /* Belt-and-suspenders: workers also sleep on mailbox wakeup fd. */
+            if (srv->workers[i].wakeup_wfd >= 0)
+                (void)wakeup_fd_signal(srv->workers[i].wakeup_wfd);
         }
     }
 }
@@ -6217,8 +6220,11 @@ void cmq_server_destroy(cmq_server_t *srv) {
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
     if (srv->ev_loop) cmq_ev_stop(srv->ev_loop);
     if (srv->workers) {
-        for (int i = 0; i < srv->num_workers; i++)
+        for (int i = 0; i < srv->num_workers; i++) {
             cmq_ev_stop(srv->workers[i].ev_loop);
+            if (srv->workers[i].wakeup_wfd >= 0)
+                (void)wakeup_fd_signal(srv->workers[i].wakeup_wfd);
+        }
     }
     if (__atomic_exchange_n(&srv->route_reconn_started, 0, __ATOMIC_ACQ_REL))
         cmq_thread_join(srv->route_reconn_thr);

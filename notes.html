@@ -3743,6 +3743,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — idle worker stop wakeup reliable</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ev_wakeup</span></td><td>✅</td><td>Align mailbox signal: retry <code>EINTR</code>; <code>EAGAIN</code> = already pending (no lost stop wake).</td></tr>
+<tr><td><span class="component-name">ev_loop_create wakeup</span></td><td>✅</td><td>Fail-closed if eventfd/pipe cannot be registered (idle <code>epoll_wait(-1)</code> otherwise unstoppable).</td></tr>
+<tr><td><span class="component-name">server_stop/destroy</span></td><td>✅</td><td>Also <code>wakeup_fd_signal</code> each worker mailbox fd after <code>cmq_ev_stop</code>.</td></tr>
+</table>
+</div>
+
 
 
 

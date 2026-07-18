@@ -138,41 +138,56 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
     loop->wakeup_wfd = -1;
 
 #if CMQ_OS_LINUX
+    /* Fail-closed: workers block in epoll_wait(-1) with no timer; without a
+       registered wakeup, cmq_ev_stop cannot interrupt an idle loop. */
     loop->wakeup_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (loop->wakeup_fd >= 0) {
+    if (loop->wakeup_fd < 0)
+        goto fail_loop;
+    {
         struct epoll_event ev;
         memset(&ev, 0, sizeof(ev));
         ev.events = EPOLLIN;
         ev.data.fd = loop->wakeup_fd;
-        if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, loop->wakeup_fd, &ev) != 0) {
-            close(loop->wakeup_fd);
-            loop->wakeup_fd = -1;
-        } else {
-            loop->wakeup_wfd = loop->wakeup_fd;
-        }
+        if (epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, loop->wakeup_fd, &ev) != 0)
+            goto fail_loop;
+        loop->wakeup_wfd = loop->wakeup_fd;
     }
 #elif CMQ_OS_MACOS || CMQ_OS_FREEBSD || CMQ_OS_OPENBSD || CMQ_OS_NETBSD
     {
         int fds[2];
-        if (pipe(fds) == 0) {
-            int flags0 = fcntl(fds[0], F_GETFL, 0);
-            int flags1 = fcntl(fds[1], F_GETFL, 0);
-            if (flags0 >= 0) fcntl(fds[0], F_SETFL, flags0 | O_NONBLOCK);
-            if (flags1 >= 0) fcntl(fds[1], F_SETFL, flags1 | O_NONBLOCK);
-            struct kevent kev;
-            EV_SET(&kev, (uintptr_t)fds[0], EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
-            if (kevent(loop->backend_fd, &kev, 1, NULL, 0, NULL) != 0) {
-                close(fds[0]);
-                close(fds[1]);
-            } else {
-                loop->wakeup_fd = fds[0];
-                loop->wakeup_wfd = fds[1];
-            }
+        if (pipe(fds) != 0)
+            goto fail_loop;
+        int flags0 = fcntl(fds[0], F_GETFL, 0);
+        int flags1 = fcntl(fds[1], F_GETFL, 0);
+        if (flags0 >= 0) fcntl(fds[0], F_SETFL, flags0 | O_NONBLOCK);
+        if (flags1 >= 0) fcntl(fds[1], F_SETFL, flags1 | O_NONBLOCK);
+        struct kevent kev;
+        EV_SET(&kev, (uintptr_t)fds[0], EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+        if (kevent(loop->backend_fd, &kev, 1, NULL, 0, NULL) != 0) {
+            close(fds[0]);
+            close(fds[1]);
+            goto fail_loop;
         }
+        loop->wakeup_fd = fds[0];
+        loop->wakeup_wfd = fds[1];
     }
 #endif
 
     return loop;
+
+#if CMQ_OS_LINUX || CMQ_OS_MACOS || CMQ_OS_FREEBSD || CMQ_OS_OPENBSD || \
+    CMQ_OS_NETBSD
+fail_loop:
+    if (loop->wakeup_fd >= 0) close(loop->wakeup_fd);
+    if (loop->wakeup_wfd >= 0 && loop->wakeup_wfd != loop->wakeup_fd)
+        close(loop->wakeup_wfd);
+    if (loop->backend_fd >= 0) close(loop->backend_fd);
+    cmq_mutex_destroy(&loop->timers_lock);
+    cmq_mutex_destroy(&loop->watchers_lock);
+    free(loop->watchers);
+    free(loop);
+    return NULL;
+#endif
 }
 
 void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
@@ -725,11 +740,28 @@ void cmq_ev_stop(cmq_ev_loop_t *loop) {
 }
 
 void cmq_ev_wakeup(cmq_ev_loop_t *loop) {
-    if (!loop) return;
-    if (loop->wakeup_wfd >= 0) {
-        uint64_t val = 1;
-        (void)write(loop->wakeup_wfd, &val, sizeof(val));
+    if (!loop || loop->wakeup_wfd < 0) return;
+#if CMQ_OS_LINUX
+    uint64_t val = 1;
+    for (;;) {
+        ssize_t n = write(loop->wakeup_wfd, &val, sizeof(val));
+        if (n == (ssize_t)sizeof(val)) return;
+        if (n < 0 && errno == EINTR) continue;
+        /* Saturated eventfd is already readable — treat as woken. */
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+        return;
     }
+#else
+    char c = 1;
+    for (;;) {
+        ssize_t n = write(loop->wakeup_wfd, &c, 1);
+        if (n == 1) return;
+        if (n < 0 && errno == EINTR) continue;
+        /* Pipe full → pending bytes already wake the reader. */
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+        return;
+    }
+#endif
 }
 
 int cmq_ev_fd(cmq_ev_loop_t *loop) {
