@@ -39,6 +39,7 @@ struct cmq_mqtt_bridge {
     cmq_mqtt_mapping_t mappings[CMQ_MQTT_MAX_MAPPINGS];
     size_t mapping_count;
     cmq_mutex_t lock;
+    uint32_t cancel_gen; /* bumped on disconnect — aborts in-flight install */
     atomic_int in_flight; /* connect/is_connected unlocked dial/probe */
     atomic_int dying;
 };
@@ -199,6 +200,7 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     int clean_session = br->clean_session;
     char client_id[CMQ_MQTT_CLIENT_ID];
     memcpy(client_id, br->client_id, sizeof(client_id));
+    uint32_t gen = br->cancel_gen;
     cmq_mutex_unlock(&br->lock);
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -237,6 +239,13 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     }
 
     cmq_mutex_lock(&br->lock);
+    /* disconnect during unlocked dial — do not resurrect the bridge. */
+    if (br->cancel_gen != gen) {
+        cmq_mutex_unlock(&br->lock);
+        close(fd);
+        mqtt_end_op(br);
+        return -1;
+    }
     if (br->connected && br->fd >= 0) {
         int efd = br->fd;
         /* Sticky only if the live peer is already the requested endpoint. */
@@ -273,6 +282,7 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
 static int mqtt_bridge_disconnect_impl(cmq_mqtt_bridge_t *br) {
     if (!br) return -1;
     cmq_mutex_lock(&br->lock);
+    br->cancel_gen++;
     mqtt_disconnect_unlocked(br);
     cmq_mutex_unlock(&br->lock);
     return 0;
