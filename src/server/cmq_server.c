@@ -5331,9 +5331,13 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
 static void *route_reconnect_thread(void *arg) {
     cmq_server_t *srv = arg;
     while (cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE)) {
+        /* Align accept_cb: drain must not dial new cluster peers. */
+        if (cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
+            break;
         if (srv->routes && srv->config.route_count > 0) {
             for (int i = 0; i < srv->config.route_count; i++) {
-                if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE))
+                if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+                    cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
                     break;
                 char nid[CMQ_NODE_ID_SIZE];
                 snprintf(nid, sizeof(nid), "r%d", i);
@@ -5347,6 +5351,8 @@ static void *route_reconnect_thread(void *arg) {
                       strncmp(snap.remote_addr, addr, sizeof(snap.remote_addr)) == 0)) &&
                     cmq_route_peer_live(srv->routes, nid))
                     continue;
+                if (cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
+                    break;
                 if (cmq_route_connect(srv->routes, nid, addr, port,
                                       srv->config.auth_username,
                                       srv->config.auth_password) == 0) {
@@ -5357,7 +5363,8 @@ static void *route_reconnect_thread(void *arg) {
             }
         }
         for (int s = 0; s < 10; s++) {
-            if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE))
+            if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+                cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
                 break;
             struct timespec ts = {0, 100000000L};
             nanosleep(&ts, NULL);
