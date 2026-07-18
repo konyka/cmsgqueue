@@ -6236,7 +6236,9 @@ void cmq_server_stop(cmq_server_t *srv) {
 void cmq_server_destroy(cmq_server_t *srv) {
     if (!srv) return;
 
-    /* Stop reconn before tearing down routes (connect unlocks mid-dial). */
+    /* Align stop/drain: dial_gate is acceptor_drain — raise before join so
+       in-flight route_connect cannot install egress after handshake. */
+    cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
     if (srv->ev_loop) cmq_ev_stop(srv->ev_loop);
     if (srv->workers) {
