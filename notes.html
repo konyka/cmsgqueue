@@ -3763,6 +3763,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — mark_connected after CONNACK drain</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">inbound route CONNECT</span></td><td>✅</td><td>Drain INFO → send+drain CONNACK 0 → <code>mark_connected</code>; avoids broadcast injecting PUBLISH into peer <code>cmq_peer_handshake</code>.</td></tr>
+</table>
+</div>
+
 
 
 

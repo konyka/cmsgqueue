@@ -4285,8 +4285,9 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         if (!c->is_websocket)
             send_info_frame(srv, c);
         if (want_route) {
-            /* Promote pool before CONNACK 0 — never advertise success while
-               still staged (drain/mark fail must send CONNACK 1). */
+            /* Drain INFO, then CONNACK 0, then mark — broadcast writes the
+               raw socket under io_lock; marking before CONNACK is on the wire
+               can inject PUBLISH into cmq_peer_handshake and fail the dialer. */
             if (client_drain_write_sync(c) != 0 ||
                 c->state != CMQ_CLIENT_CONNECTED) {
                 cmq_route_detach_fd(srv->routes, c->fd);
@@ -4296,14 +4297,24 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
-            if (cmq_route_mark_connected(srv->routes, c->fd) != 0) {
+            cmq_send_connack(c, 0);
+            if (client_drain_write_sync(c) != 0 ||
+                c->state != CMQ_CLIENT_CONNECTED) {
                 cmq_route_detach_fd(srv->routes, c->fd);
                 c->is_route = 0;
-                cmq_send_connack(c, 1);
                 c->state = CMQ_CLIENT_CLOSING;
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
+            if (cmq_route_mark_connected(srv->routes, c->fd) != 0) {
+                /* CONNACK 0 already on wire — fail-closed with EOF. */
+                cmq_route_detach_fd(srv->routes, c->fd);
+                c->is_route = 0;
+                c->state = CMQ_CLIENT_CLOSING;
+                (void)shutdown(c->fd, SHUT_RDWR);
+                break;
+            }
+            break; /* CONNACK 0 already drained */
         }
         cmq_send_connack(c, 0);
         break;
