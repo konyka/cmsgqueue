@@ -2098,22 +2098,41 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
         if (!client_account_live(srv, c)) return 0;
         if (!deliver_acl_ok(srv, pub_account, c->account_name, frame, flen))
             return 0;
-        if (cmq_client_send_local(c, frame, flen) != 0) return 0;
+        if (cmq_client_send_local(c, frame, flen) != 0) {
+            /* Align client_send_by_id: FORCE_CLOSE leaves CLOSING w/o WRITE. */
+            if (c->state == CMQ_CLIENT_CLOSING ||
+                c->state == CMQ_CLIENT_CLOSED)
+                worker_teardown_or_shutdown(w, client_id, conn_gen);
+            return 0;
+        }
         /* Drain fail after buffer: ambiguous (epoll may still flush). */
-        return client_drain_write_sync(c) == 0 ? 1 : -1;
+        int drained = client_drain_write_sync(c);
+        if (drained != 0 &&
+            (c->state == CMQ_CLIENT_CLOSING ||
+             c->state == CMQ_CLIENT_CLOSED))
+            worker_teardown_or_shutdown(w, client_id, conn_gen);
+        return drained == 0 ? 1 : -1;
     }
     /* Acceptor-owned: hold clients_lock across send+drain (no bare-c* UAF). */
     cmq_mutex_lock(&srv->clients_lock);
     cmq_client_t *c = cmq_idmap_get(srv->idmap, client_id);
     int ok = 0;
+    int nudge_fd = -1;
     if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
         client_account_live(srv, c) &&
         (require_sub_id == 0 || client_has_sub(c, require_sub_id)) &&
         deliver_acl_ok(srv, pub_account, c->account_name, frame, flen)) {
         if (cmq_client_send_local(c, frame, flen) == 0)
             ok = client_drain_write_sync(c) == 0 ? 1 : -1;
+        if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED)
+            nudge_fd = c->fd;
     }
     cmq_mutex_unlock(&srv->clients_lock);
+    if (nudge_fd >= 0) {
+        (void)shutdown(nudge_fd, SHUT_RDWR);
+        if (srv->ev_loop)
+            cmq_ev_wakeup(srv->ev_loop);
+    }
     return ok;
 }
 
