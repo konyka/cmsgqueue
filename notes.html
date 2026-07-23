@@ -3886,6 +3886,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+<h2>Phase — route add_conn honors cancel; dedicated cancel table</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_route_add_conn</span></td><td>✅</td><td>Snap/check cancel across unlocked handshake (align <code>route_connect</code>); disconnect cannot be undone by late install.</td></tr>
+<tr><td><span class="component-name">route cancels[]</span></td><td>✅</td><td>Per-node cancel tokens independent of <code>targets[]</code> so placeholder <code>add_conn</code> paths cancel without inflating <code>target_count</code>.</td></tr>
+</table>
+</div>
+
 
 
 
