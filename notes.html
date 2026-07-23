@@ -3887,11 +3887,20 @@ All 15 test suites passing, 0 warnings.
 </div>
 
 <div class="phase">
-<h2>Phase — route add_conn honors cancel; dedicated cancel table</h2>
+  <h2>Phase — route add_conn honors cancel; dedicated cancel table</h2>
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">cmq_route_add_conn</span></td><td>✅</td><td>Snap/check cancel across unlocked handshake (align <code>route_connect</code>); disconnect cannot be undone by late install.</td></tr>
 <tr><td><span class="component-name">route cancels[]</span></td><td>✅</td><td>Per-node cancel tokens independent of <code>targets[]</code> so placeholder <code>add_conn</code> paths cancel without inflating <code>target_count</code>.</td></tr>
+</table>
+</div>
+
+<div class="phase">
+  <h2>Phase — leaf accept honors remove cancel</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_leaf_accept</span></td><td>✅</td><td>Snap/check per-<code>leaf_id</code> cancel across unlocked handshake; <code>remove</code> cannot be undone by late install.</td></tr>
+<tr><td><span class="component-name">leaf cancels[]</span></td><td>✅</td><td>Dedicated cancel tokens (hub <code>hub_gen</code> only covers dial); <code>remove</code> bumps even if slot not yet installed.</td></tr>
 </table>
 </div>
 

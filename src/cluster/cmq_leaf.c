@@ -22,6 +22,13 @@
 #define CMQ_LEAF_WRITE_MS 50
 #define CMQ_LEAF_CONNECT_MS 2000
 
+/* Per-leaf_id cancel tokens for accept's unlocked handshake — keep off
+   leaves[] so remove of a not-yet-installed id still cancels in-flight. */
+typedef struct {
+    char leaf_id[CMQ_NODE_ID_SIZE];
+    uint32_t gen;
+} cmq_leaf_cancel_t;
+
 struct cmq_leaf_node {
     char hub_addr[CMQ_NODE_ADDR_SIZE];
     int hub_port;
@@ -42,6 +49,8 @@ struct cmq_leaf_node {
 
     cmq_leaf_conn_t leaves[CMQ_LEAF_MAX_CONNECTIONS];
     size_t leaf_count;
+    cmq_leaf_cancel_t cancels[CMQ_LEAF_MAX_CONNECTIONS];
+    size_t cancel_count;
 
     cmq_mutex_t lock;
     cmq_mutex_t hub_io_lock; /* serialize hub writes vs disconnect close */
@@ -894,6 +903,47 @@ static int leaf_ensure_accept_slot(cmq_leaf_node_t *leaf, const char *leaf_id) {
     return 0;
 }
 
+/* Caller holds leaf->lock. */
+static ssize_t leaf_find_cancel(cmq_leaf_node_t *leaf, const char *leaf_id) {
+    if (!leaf || !leaf_id) return -1;
+    for (size_t i = 0; i < leaf->cancel_count; i++) {
+        if (strcmp(leaf->cancels[i].leaf_id, leaf_id) == 0)
+            return (ssize_t)i;
+    }
+    return -1;
+}
+
+/* Bump (or create) per-leaf_id cancel gen. Caller holds leaf->lock. */
+static void leaf_bump_cancel(cmq_leaf_node_t *leaf, const char *leaf_id) {
+    if (!leaf || !leaf_id) return;
+    ssize_t i = leaf_find_cancel(leaf, leaf_id);
+    if (i >= 0) {
+        leaf->cancels[i].gen++;
+        return;
+    }
+    if (leaf->cancel_count >= CMQ_LEAF_MAX_CONNECTIONS) {
+        for (size_t j = 0; j < leaf->cancel_count; j++)
+            leaf->cancels[j].gen++;
+        return;
+    }
+    cmq_leaf_cancel_t *c = &leaf->cancels[leaf->cancel_count++];
+    snprintf(c->leaf_id, sizeof(c->leaf_id), "%s", leaf_id);
+    c->gen = 1;
+}
+
+static uint32_t leaf_cancel_snap(cmq_leaf_node_t *leaf, const char *leaf_id) {
+    ssize_t i = leaf_find_cancel(leaf, leaf_id);
+    return i >= 0 ? leaf->cancels[i].gen : 0;
+}
+
+static int leaf_cancel_changed(cmq_leaf_node_t *leaf, const char *leaf_id,
+                                uint32_t gen) {
+    ssize_t i = leaf_find_cancel(leaf, leaf_id);
+    if (i < 0)
+        return gen != 0;
+    return leaf->cancels[i].gen != gen;
+}
+
 static int leaf_accept_impl(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) {
     if (!leaf || !leaf_id) return -1;
     if (strnlen(leaf_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE) {
@@ -907,6 +957,7 @@ static int leaf_accept_impl(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) 
         if (fd >= 0) close(fd);
         return -1;
     }
+    uint32_t cgen = leaf_cancel_snap(leaf, leaf_id);
     cmq_mutex_unlock(&leaf->lock);
 
     /* fd < 0: placeholder slot (tests). Live fd: cluster handshake first. */
@@ -919,6 +970,12 @@ static int leaf_accept_impl(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) 
     }
 
     cmq_mutex_lock(&leaf->lock);
+    /* Align route_add_conn: remove during unlocked handshake must not install. */
+    if (leaf_cancel_changed(leaf, leaf_id, cgen)) {
+        cmq_mutex_unlock(&leaf->lock);
+        if (fd >= 0) close(fd);
+        return -1;
+    }
     if (leaf_ensure_accept_slot(leaf, leaf_id) != 0) {
         cmq_mutex_unlock(&leaf->lock);
         if (fd >= 0) close(fd);
@@ -952,6 +1009,8 @@ static int leaf_accept_impl(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) 
 static int leaf_remove_impl(cmq_leaf_node_t *leaf, const char *leaf_id) {
     if (!leaf || !leaf_id) return -1;
     cmq_mutex_lock(&leaf->lock);
+    /* Always bump — cancel in-flight accept even if slot not installed yet. */
+    leaf_bump_cancel(leaf, leaf_id);
     for (size_t i = 0; i < leaf->leaf_count; i++) {
         if (strcmp(leaf->leaves[i].leaf_id, leaf_id) == 0) {
             if (leaf->leaves[i].fd >= 0) close(leaf->leaves[i].fd);
