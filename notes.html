@@ -4161,6 +4161,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — MQTT wildcard topic↔subject map</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_mqtt_topic_to_subject</span></td><td>✅</td><td>Map <code>+</code>↔<code>*</code> and <code>#</code>↔<code>&gt;</code> with <code>/</code>↔<code>.</code>. Separator-only conversion left wildcards literal so bridge wildcard interest silently missed matches.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -476,7 +476,11 @@ const char *cmq_mqtt_topic_to_subject(const char *mqtt_topic, char *buf, size_t 
     if (!mqtt_topic || !buf || len == 0) return NULL;
     size_t i = 0;
     for (; i < len - 1 && mqtt_topic[i]; i++) {
-        buf[i] = (mqtt_topic[i] == '/') ? '.' : mqtt_topic[i];
+        char c = mqtt_topic[i];
+        if (c == '/') c = '.';
+        else if (c == '+') c = '*'; /* single-level wildcard */
+        else if (c == '#') c = '>'; /* multi-level wildcard */
+        buf[i] = c;
     }
     buf[i] = '\0';
     return buf;
@@ -486,7 +490,11 @@ const char *cmq_mqtt_subject_to_topic(const char *subject, char *buf, size_t len
     if (!subject || !buf || len == 0) return NULL;
     size_t i = 0;
     for (; i < len - 1 && subject[i]; i++) {
-        buf[i] = (subject[i] == '.') ? '/' : subject[i];
+        char c = subject[i];
+        if (c == '.') c = '/';
+        else if (c == '*') c = '+';
+        else if (c == '>') c = '#';
+        buf[i] = c;
     }
     buf[i] = '\0';
     return buf;

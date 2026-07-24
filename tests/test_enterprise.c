@@ -357,6 +357,14 @@ TEST(mqtt, topic_conversion) {
     const char *top = cmq_mqtt_subject_to_topic("sensor.temperature.room1", buf, sizeof(buf));
     ASSERT_NOT_NULL(top);
     ASSERT_STR_EQ(top, "sensor/temperature/room1");
+
+    /* MQTT + and # map to NATS * and > */
+    sub = cmq_mqtt_topic_to_subject("a/+/b/#", buf, sizeof(buf));
+    ASSERT_NOT_NULL(sub);
+    ASSERT_STR_EQ(sub, "a.*.b.>");
+    top = cmq_mqtt_subject_to_topic("a.*.b.>", buf, sizeof(buf));
+    ASSERT_NOT_NULL(top);
+    ASSERT_STR_EQ(top, "a/+/b/#");
 }
 
 TEST(mqtt, encode_connect) {
