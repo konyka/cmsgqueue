@@ -4257,6 +4257,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — config validate route_count and route port</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_config_validate</span></td><td>✅</td><td>Programmatic <code>route_count &gt; 8</code> walked past <code>routes[8]</code> into adjacent <code>route_count</code>/<code>tls_*</code> and fed garbage to <code>inet_pton</code>. Also accept any route port (htons truncate). Now require <code>0..8</code> and per-route port in <code>1..65535</code>.</td></tr>
+</table>
+</div>
+
 
 
 

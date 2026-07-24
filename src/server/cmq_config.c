@@ -290,9 +290,15 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->cluster_name &&
         strnlen(config->cluster_name, CMQ_CLUSTER_NAME_MAX) >= CMQ_CLUSTER_NAME_MAX)
         return CMQ_ERR_INVALID_ARG;
+    /* routes[8] — reject oversize so validate cannot walk past the array
+       into route_count/tls_* (programmatic configs bypass load's i<8 gate). */
+    if (config->route_count < 0 || config->route_count > 8)
+        return CMQ_ERR_INVALID_ARG;
     /* Inbound route identity is by peer IP only — duplicate IPs collide on rN. */
     for (int i = 0; i < config->route_count; i++) {
         if (!config->routes[i].addr) return CMQ_ERR_INVALID_ARG;
+        if (config->routes[i].port <= 0 || config->routes[i].port > 65535)
+            return CMQ_ERR_INVALID_ARG;
         struct in_addr a;
         if (inet_pton(AF_INET, config->routes[i].addr, &a) != 1)
             return CMQ_ERR_INVALID_ARG;
