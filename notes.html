@@ -4364,6 +4364,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — WS upgrade requires Host</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">handle_ws_upgrade</span></td><td>✅</td><td>Without Origin, missing/empty <code>Host</code> still got 101 (RFC 6455 §4.2.1). Always require non-empty Host; Origin match remains optional for native clients.</td></tr>
+</table>
+</div>
+
 
 
 

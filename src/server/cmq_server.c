@@ -4893,16 +4893,17 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
         return -1;
     }
 
-    /* CSWSH: if Origin is present it must match Host. Native clients may omit Origin. */
+    /* RFC 6455 §4.2.1 — Host required (non-empty). Native clients may omit
+       Origin; if Origin is present it must match Host (CSWSH). */
     char origin_raw[256] = {0}, host_raw[256] = {0};
     char origin_host[256] = {0}, host_host[256] = {0};
+    if (http_header_value(req, "Host", host_raw, sizeof(host_raw)) != 0 ||
+        http_host_from_value(host_raw, host_host, sizeof(host_host)) != 0) {
+        free(req);
+        return -1;
+    }
     if (http_header_value(req, "Origin", origin_raw, sizeof(origin_raw)) == 0) {
-        if (http_header_value(req, "Host", host_raw, sizeof(host_raw)) != 0) {
-            free(req);
-            return -1;
-        }
         if (http_host_from_value(origin_raw, origin_host, sizeof(origin_host)) != 0 ||
-            http_host_from_value(host_raw, host_host, sizeof(host_host)) != 0 ||
             strcmp(origin_host, host_host) != 0) {
             free(req);
             return -1;
