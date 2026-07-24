@@ -312,10 +312,21 @@ int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br) {
     return 0;
 }
 
-const char *cmq_mqtt_client_id(cmq_mqtt_bridge_t *br) {
-    if (!br || atomic_load_explicit(&br->dying, memory_order_acquire))
-        return NULL;
-    return br->client_id;
+int cmq_mqtt_client_id(cmq_mqtt_bridge_t *br, char *out, size_t out_len) {
+    if (!br || !out || out_len == 0) return -1;
+    if (mqtt_begin_op(br) != 0) return -1;
+    cmq_mutex_lock(&br->lock);
+    size_t n = strnlen(br->client_id, CMQ_MQTT_CLIENT_ID);
+    if (n + 1 > out_len) {
+        cmq_mutex_unlock(&br->lock);
+        mqtt_end_op(br);
+        return -1;
+    }
+    memcpy(out, br->client_id, n);
+    out[n] = '\0';
+    cmq_mutex_unlock(&br->lock);
+    mqtt_end_op(br);
+    return 0;
 }
 
 static cmq_mqtt_bridge_info_t mqtt_bridge_info_impl(cmq_mqtt_bridge_t *br) {

@@ -35,7 +35,8 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port);
 int cmq_mqtt_bridge_disconnect(cmq_mqtt_bridge_t *br);
 int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br);
 
-const char *cmq_mqtt_client_id(cmq_mqtt_bridge_t *br);
+/* Copy client_id under begin_op (no interior pointer). 0 = ok, -1 = fail. */
+int cmq_mqtt_client_id(cmq_mqtt_bridge_t *br, char *out, size_t out_len);
 cmq_mqtt_bridge_info_t cmq_mqtt_bridge_info(cmq_mqtt_bridge_t *br);
 
 int cmq_mqtt_add_mapping(cmq_mqtt_bridge_t *br, const char *cmq_subject,

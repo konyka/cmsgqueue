@@ -311,7 +311,9 @@ TEST(tls, session_lifecycle) {
 TEST(mqtt, bridge_create_destroy) {
     cmq_mqtt_bridge_t *br = cmq_mqtt_bridge_create("test-client");
     ASSERT_NOT_NULL(br);
-    ASSERT_STR_EQ(cmq_mqtt_client_id(br), "test-client");
+    char id[CMQ_MQTT_CLIENT_ID];
+    ASSERT_EQ(cmq_mqtt_client_id(br, id, sizeof(id)), 0);
+    ASSERT_STR_EQ(id, "test-client");
     ASSERT_EQ(cmq_mqtt_bridge_is_connected(br), 0);
     cmq_mqtt_bridge_destroy(br);
 }
