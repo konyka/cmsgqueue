@@ -2665,7 +2665,9 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
    none did — includes "routes configured but all dead" (align with BATCH).
    Partial fan-out (route_sent > 0 with some EAGAIN) is not a total miss.
    Staged-only peers (held, not mark_connected) do not receive broadcast —
-   treat as miss so remote-only PUBLISH/BATCH is not silently dropped. */
+   treat as miss so remote-only PUBLISH/BATCH is not silently dropped.
+   Require route_sent==0 on the named&&!live branch — concurrent unmark
+   after a successful broadcast must not invent a total miss. */
 static int cmq_route_forward_missed(cmq_server_t *srv, int route_rc,
                                     size_t route_sent) {
     if (route_rc != 0 && route_sent == 0) return 1;
@@ -2674,7 +2676,7 @@ static int cmq_route_forward_missed(cmq_server_t *srv, int route_rc,
     size_t live = cmq_route_live_count(srv->routes);
     size_t held = cmq_route_held_count(srv->routes);
     size_t targets = cmq_route_target_count(srv->routes);
-    if (named > 0 && live == 0) return 1;
+    if (named > 0 && live == 0 && route_sent == 0) return 1;
     if (live == 0) {
         /* Connect-fail / cleared tombstones leave named=0 but peers were
            configured — do not silently succeed remote-only PUBLISH. */
