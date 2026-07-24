@@ -45,6 +45,7 @@ static cmq_sl_node_t *cmq_sl_node_create(const char *token, int is_pwc, int is_f
     if (!n) return NULL;
     if (token) {
         n->token = strdup(token);
+        if (!n->token) { free(n); return NULL; }
     }
     n->is_pwc = is_pwc;
     n->is_fwc = is_fwc;

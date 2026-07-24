@@ -4241,6 +4241,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — sublist node strdup OOM fail-closed</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_sl_node_create</span></td><td>✅</td><td><code>strdup(token)</code> failure used to return a node with <code>token==NULL</code>; insert then SUBACK'd success but match/remove could never find the literal — silent drop. Now free and return NULL so insert rolls back.</td></tr>
+</table>
+</div>
+
 
 
 
