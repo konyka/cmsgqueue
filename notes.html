@@ -4193,6 +4193,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — export &gt; not a global SUB gate</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">export_offered_to</span></td><td>✅</td><td>Skip bare <code>&gt;</code> export patterns when gating SUBSCRIBE — they match every subject and would lock all local subs (esp. dest <code>*</code>). Specific exports like <code>acme.&gt;</code> still block ghost subscribe; <code>may_deliver</code> still gates cross-account delivery.</td></tr>
+</table>
+</div>
+
 
 
 

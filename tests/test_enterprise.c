@@ -147,6 +147,11 @@ TEST(account, exports_imports) {
     ASSERT_EQ(cmq_account_can_import(mgr, "globex", "acme.data"), 0);
     ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.>"), 0);
 
+    /* Bare export ">" must not lock all local SUBSCRIBE on other accounts. */
+    ASSERT_EQ(cmq_account_add_export(mgr, "acme", ">", "*"), 0);
+    ASSERT_EQ(cmq_account_can_import(mgr, "globex", "globex.orders"), 1);
+    ASSERT_EQ(cmq_account_remove_export(mgr, "acme", ">"), 0);
+
     /* Import without export → can_import denies (align with may_deliver). */
     ASSERT_EQ(cmq_account_add_import(mgr, "globex", "acme.>", "acme"), 0);
     ASSERT_EQ(cmq_account_can_import(mgr, "globex", "acme.data"), 0);

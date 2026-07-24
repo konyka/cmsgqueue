@@ -589,13 +589,18 @@ static int acct_eq_or_star(const char *rule, const char *actual) {
     return strcmp(rule, "*") == 0 || strcmp(rule, actual) == 0;
 }
 
-/* True if some other account exports `subject` with dest targeting `account`. */
+/* True if some other account exports `subject` with dest targeting `account`.
+   Bare ">" matches every subject — skip it as a SUBSCRIBE gate (would lock
+   all local subs); may_deliver still enforces cross-account delivery. */
 static int export_offered_to(cmq_account_manager_t *mgr, const char *account,
                               const char *subject) {
     for (size_t i = 0; i < mgr->perms_count; i++) {
         if (strcmp(mgr->perms[i].account, account) == 0) continue;
         for (size_t j = 0; j < mgr->perms[i].export_count; j++) {
-            if (subject_match(mgr->perms[i].exports[j].subject, subject) &&
+            const char *pat = mgr->perms[i].exports[j].subject;
+            if (strcmp(pat, ">") == 0)
+                continue;
+            if (subject_match(pat, subject) &&
                 acct_eq_or_star(mgr->perms[i].exports[j].dest_account, account))
                 return 1;
         }
