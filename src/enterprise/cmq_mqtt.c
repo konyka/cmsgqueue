@@ -174,6 +174,7 @@ static int mqtt_read_connack(int fd) {
 int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (!br || !addr) return -1;
     if (strnlen(addr, sizeof(br->addr)) >= sizeof(br->addr)) return -1;
+    if (port <= 0 || port > 65535) return -1;
     if (mqtt_begin_op(br) != 0) return -1;
     cmq_mutex_lock(&br->lock);
     /* Sticky only for the same endpoint — addr/port change must reconnect. */

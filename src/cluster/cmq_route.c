@@ -501,6 +501,7 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
     if (!pool || !node_id || !addr) return -1;
     if (strnlen(node_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE) return -1;
     if (strnlen(addr, CMQ_NODE_ADDR_SIZE) >= CMQ_NODE_ADDR_SIZE) return -1;
+    if (port <= 0 || port > 65535) return -1;
 
     cmq_mutex_lock(&pool->lock);
     if (route_set_target(pool, node_id, addr, port) != 0) {

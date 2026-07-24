@@ -317,6 +317,7 @@ static int gw_add_remote_impl(cmq_gateway_t *gw, const char *cluster_name,
     if (strnlen(cluster_name, 64) >= 64 ||
         strnlen(addr, CMQ_NODE_ADDR_SIZE) >= CMQ_NODE_ADDR_SIZE)
         return -1;
+    if (port <= 0 || port > 65535) return -1;
     cmq_mutex_lock(&gw->lock);
 
     for (size_t i = 0; i < gw->cluster_count; i++) {

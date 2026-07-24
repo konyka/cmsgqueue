@@ -4281,6 +4281,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — dial APIs reject out-of-range ports</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf/route/gw/mqtt/cluster port</span></td><td>✅</td><td>Config route ports were bounded in c435221, but leaf create / route connect / gw add_remote / mqtt bridge connect / cluster add_node still accepted any int and <code>htons((uint16_t))</code>-truncated (e.g. 70000→4464). Now require <code>1..65535</code>.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -383,6 +383,9 @@ cmq_leaf_node_t *cmq_leaf_create(const char *hub_addr, int hub_port) {
     if (!hub_addr) return NULL;
     if (strnlen(hub_addr, CMQ_NODE_ADDR_SIZE) >= CMQ_NODE_ADDR_SIZE)
         return NULL;
+    /* htons((uint16_t)port) would silently truncate — fail closed. */
+    if (hub_port <= 0 || hub_port > 65535)
+        return NULL;
     cmq_leaf_node_t *l = calloc(1, sizeof(cmq_leaf_node_t));
     if (!l) return NULL;
     snprintf(l->hub_addr, sizeof(l->hub_addr), "%s", hub_addr);

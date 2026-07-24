@@ -89,6 +89,7 @@ static int cluster_add_node_impl(cmq_cluster_t *cluster, const char *id,
     if (!cluster || !cluster_id_ok(id) || !addr) return -1;
     if (strnlen(addr, CMQ_NODE_ADDR_SIZE) >= CMQ_NODE_ADDR_SIZE)
         return -1;
+    if (port <= 0 || port > 65535) return -1;
     cmq_mutex_lock(&cluster->lock);
 
     if (cluster->count >= CMQ_CLUSTER_MAX_NODES) {
