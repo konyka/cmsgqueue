@@ -629,7 +629,12 @@ static int import_matches_subject(const cmq_account_perms_t *p,
                                    const char *subject) {
     if (!p) return 0;
     for (size_t i = 0; i < p->import_count; i++) {
-        if (subject_match(p->imports[i].subject, subject))
+        const char *pat = p->imports[i].subject;
+        /* Align export_offered_to — catch-all imports must not claim every
+           local subject for the SUBSCRIBE pair gate. */
+        if (pattern_wildcard_only(pat))
+            continue;
+        if (subject_match(pat, subject))
             return 1;
     }
     return 0;

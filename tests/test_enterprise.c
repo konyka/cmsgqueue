@@ -154,6 +154,10 @@ TEST(account, exports_imports) {
     ASSERT_EQ(cmq_account_add_export(mgr, "acme", "*.>", "*"), 0);
     ASSERT_EQ(cmq_account_can_import(mgr, "globex", "globex.orders"), 1);
     ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "*.>"), 0);
+    /* Catch-all import must not claim every local subject either. */
+    ASSERT_EQ(cmq_account_add_import(mgr, "globex", ">", "*"), 0);
+    ASSERT_EQ(cmq_account_can_import(mgr, "globex", "globex.orders"), 1);
+    ASSERT_EQ(cmq_account_remove_import(mgr, "globex", ">"), 0);
 
     /* Import without export → can_import denies (align with may_deliver). */
     ASSERT_EQ(cmq_account_add_import(mgr, "globex", "acme.>", "acme"), 0);
