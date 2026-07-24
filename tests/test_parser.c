@@ -183,8 +183,12 @@ TEST(parser, queued_bytes_budget) {
 
     ASSERT(cmq_parser_feed(p, frame, sizeof(frame)) >= 0);
     ASSERT(cmq_parser_feed(p, frame, sizeof(frame)) >= 0);
-    /* Third 64-byte frame would exceed 2×64 budget. */
-    ASSERT_EQ(cmq_parser_feed(p, frame, sizeof(frame)), -1);
+    /* Third 64-byte frame exceeds 2×64 budget — backpressure, keep queue. */
+    ASSERT_EQ(cmq_parser_feed(p, frame, sizeof(frame)), 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 0);
+    ASSERT(cmq_parser_frame(p) != NULL);
+    ASSERT_EQ(cmq_parser_next(p), 1);
+    ASSERT_EQ(cmq_parser_drain_inbuf(p), 1);
     cmq_parser_destroy(p);
 }
 
@@ -320,6 +324,25 @@ TEST(parser, good_then_bad_magic) {
     const cmq_frame_t *f = cmq_parser_frame(p);
     ASSERT(f != NULL);
     ASSERT_EQ(f->hdr.op, CMQ_OP_PING);
+    cmq_parser_destroy(p);
+}
+
+/* Cross-feed: queued frame must survive a later bad prefix (drain-then-die). */
+TEST(parser, good_feed_then_bad_feed) {
+    cmq_parser_t *p = cmq_parser_create();
+    uint8_t good[16];
+    size_t n = cmq_frame_encode(good, sizeof(good), CMQ_OP_PING, 0, NULL, 0);
+    ASSERT(n > 0);
+    ASSERT_EQ(cmq_parser_feed(p, good, n), 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 0);
+    uint8_t bad[4] = { 0xDE, 0xAD, 0x01, 0x00 };
+    ASSERT_EQ(cmq_parser_feed(p, bad, sizeof(bad)), 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 1);
+    const cmq_frame_t *f = cmq_parser_frame(p);
+    ASSERT(f != NULL);
+    ASSERT_EQ(f->hdr.op, CMQ_OP_PING);
+    ASSERT_EQ(cmq_parser_next(p), 0);
+    ASSERT_EQ(cmq_parser_feed(p, bad, sizeof(bad)), -1);
     cmq_parser_destroy(p);
 }
 

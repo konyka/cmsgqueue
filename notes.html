@@ -4025,6 +4025,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — parser early-reject drain-then-die</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_parser early-reject</span></td><td>✅</td><td>Bad ≥3-byte prefix sets <code>pending_error</code> and returns 1 when a queue already holds frames (align mid-stream/trailing); <code>feed</code> short-circuits once fatal so callers following <code>rc&lt;0⇒teardown</code> do not drop undrained frames.</td></tr>
+</table>
+</div>
+
 
 
 

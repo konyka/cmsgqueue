@@ -155,16 +155,23 @@ static int ensure_inbuf(cmq_parser_t *p, size_t need) {
     return 0;
 }
 
+/* 1 if caller must drain queued frames (this call or prior) before teardown. */
+static int parser_have_frames(const cmq_parser_t *p, int produced) {
+    return (produced || p->head) ? 1 : -1;
+}
+
 /* Parse complete frames from inbuf into the queue. No append. */
 static int parser_parse_inbuf(cmq_parser_t *p) {
     int produced = 0;
-    /* Early reject on unconsumed prefix (even before a full header). */
+    /* Early reject on unconsumed prefix (even before a full header).
+       Align mid-stream/trailing: pending_error + drain-then-die. */
     if (p->inbuf_len - p->inbuf_off >= 3) {
         const uint8_t *peek = p->inbuf + p->inbuf_off;
-        if (peek[0] != CMQ_PROTO_MAGIC_0 || peek[1] != CMQ_PROTO_MAGIC_1)
-            return -1;
-        if (peek[2] != CMQ_PROTO_VERSION)
-            return -1;
+        if (peek[0] != CMQ_PROTO_MAGIC_0 || peek[1] != CMQ_PROTO_MAGIC_1 ||
+            peek[2] != CMQ_PROTO_VERSION) {
+            p->pending_error = 1;
+            return parser_have_frames(p, produced);
+        }
     }
 
     while (p->inbuf_len - p->inbuf_off >= CMQ_HEADER_LEN) {
@@ -173,11 +180,11 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
            are corrupt / oversize / OOM (caller drains then tears down). */
         if (hb[0] != CMQ_PROTO_MAGIC_0 || hb[1] != CMQ_PROTO_MAGIC_1) {
             p->pending_error = 1;
-            return produced ? 1 : -1;
+            return parser_have_frames(p, produced);
         }
         if (hb[2] != CMQ_PROTO_VERSION) {
             p->pending_error = 1;
-            return produced ? 1 : -1;
+            return parser_have_frames(p, produced);
         }
 
         uint32_t payload_len = (uint32_t)hb[5] | ((uint32_t)hb[6] << 8) |
@@ -185,7 +192,7 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
 
         if (payload_len > p->max_payload) {
             p->pending_error = 1;
-            return produced ? 1 : -1;
+            return parser_have_frames(p, produced);
         }
 
         size_t total = CMQ_HEADER_LEN + (size_t)payload_len;
@@ -205,7 +212,7 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
             frame.payload = (uint8_t *)malloc(payload_len);
             if (!frame.payload) {
                 p->pending_error = 1;
-                return produced ? 1 : -1;
+                return parser_have_frames(p, produced);
             }
             memcpy(frame.payload, hb + CMQ_HEADER_LEN, payload_len);
         } else {
@@ -216,7 +223,7 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
             if (frame.payload) free(frame.payload);
             /* Keep already-queued frames for the caller to drain.
                pending_error set only on push OOM (not queue-full). */
-            return produced ? 1 : -1;
+            return parser_have_frames(p, produced);
         }
 
         p->inbuf_off += total;
@@ -229,7 +236,7 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
         if (peek[0] != CMQ_PROTO_MAGIC_0 || peek[1] != CMQ_PROTO_MAGIC_1 ||
             peek[2] != CMQ_PROTO_VERSION) {
             p->pending_error = 1;
-            return produced ? 1 : -1;
+            return parser_have_frames(p, produced);
         }
     }
 
@@ -252,6 +259,9 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
     }
     if (!p->inbuf || p->inbuf_cap == 0)
         return -1;
+    /* Fatal already latched — do not append; drain queue then tear down. */
+    if (p->pending_error)
+        return p->head ? 1 : -1;
 
     /* Compact before append if remaining + new won't fit without sliding. */
     size_t used = p->inbuf_len - p->inbuf_off;
