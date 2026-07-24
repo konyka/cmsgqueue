@@ -589,6 +589,64 @@ static int acct_eq_or_star(const char *rule, const char *actual) {
     return strcmp(rule, "*") == 0 || strcmp(rule, actual) == 0;
 }
 
+/* True if some other account exports `subject` with dest targeting `account`. */
+static int export_offered_to(cmq_account_manager_t *mgr, const char *account,
+                              const char *subject) {
+    for (size_t i = 0; i < mgr->perms_count; i++) {
+        if (strcmp(mgr->perms[i].account, account) == 0) continue;
+        for (size_t j = 0; j < mgr->perms[i].export_count; j++) {
+            if (subject_match(mgr->perms[i].exports[j].subject, subject) &&
+                acct_eq_or_star(mgr->perms[i].exports[j].dest_account, account))
+                return 1;
+        }
+    }
+    return 0;
+}
+
+static int import_matches_subject(const cmq_account_perms_t *p,
+                                   const char *subject) {
+    if (!p) return 0;
+    for (size_t i = 0; i < p->import_count; i++) {
+        if (subject_match(p->imports[i].subject, subject))
+            return 1;
+    }
+    return 0;
+}
+
+/* Matching import + export for subject → account (may_deliver cross path). */
+static int import_export_pair_ok(cmq_account_manager_t *mgr,
+                                  cmq_account_perms_t *p, const char *account,
+                                  const char *subject) {
+    if (!p) return 0;
+    for (size_t i = 0; i < p->import_count; i++) {
+        if (!subject_match(p->imports[i].subject, subject))
+            continue;
+        const char *src = p->imports[i].source_account;
+        if (strcmp(src, "*") == 0) {
+            for (size_t ai = 0; ai < mgr->perms_count; ai++) {
+                if (strcmp(mgr->perms[ai].account, account) == 0)
+                    continue;
+                for (size_t j = 0; j < mgr->perms[ai].export_count; j++) {
+                    if (subject_match(mgr->perms[ai].exports[j].subject,
+                                      subject) &&
+                        acct_eq_or_star(mgr->perms[ai].exports[j].dest_account,
+                                        account))
+                        return 1;
+                }
+            }
+        } else {
+            cmq_account_perms_t *sp = find_perms(mgr, src);
+            if (!sp) continue;
+            for (size_t j = 0; j < sp->export_count; j++) {
+                if (subject_match(sp->exports[j].subject, subject) &&
+                    acct_eq_or_star(sp->exports[j].dest_account, account))
+                    return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static int account_can_import_impl(cmq_account_manager_t *mgr, const char *account,
                             const char *subject) {
     if (!mgr || !account || !subject) return 0;
@@ -598,56 +656,13 @@ static int account_can_import_impl(cmq_account_manager_t *mgr, const char *accou
         return 0;
     }
     cmq_account_perms_t *p = find_perms(mgr, account);
+    /* Cross-account subjects need import+export. Local subjects (neither
+       offered by a foreign export nor claimed by an import) stay allowed —
+       imports are not a global SUBSCRIBE whitelist. */
     int ok = 1;
-    if (p && p->import_count > 0) {
-        /* Import allow-list must also have a matching export (may_deliver). */
-        ok = 0;
-        for (size_t i = 0; i < p->import_count && !ok; i++) {
-            if (!subject_match(p->imports[i].subject, subject))
-                continue;
-            const char *src = p->imports[i].source_account;
-            if (strcmp(src, "*") == 0) {
-                for (size_t ai = 0; ai < mgr->perms_count && !ok; ai++) {
-                    if (strcmp(mgr->perms[ai].account, account) == 0)
-                        continue;
-                    for (size_t j = 0; j < mgr->perms[ai].export_count; j++) {
-                        if (subject_match(mgr->perms[ai].exports[j].subject,
-                                          subject) &&
-                            acct_eq_or_star(
-                                mgr->perms[ai].exports[j].dest_account,
-                                account)) {
-                            ok = 1;
-                            break;
-                        }
-                    }
-                }
-            } else {
-                cmq_account_perms_t *sp = find_perms(mgr, src);
-                if (!sp) continue;
-                for (size_t j = 0; j < sp->export_count; j++) {
-                    if (subject_match(sp->exports[j].subject, subject) &&
-                        acct_eq_or_star(sp->exports[j].dest_account,
-                                        account)) {
-                        ok = 1;
-                        break;
-                    }
-                }
-            }
-        }
-    } else {
-        /* No imports: allow unless another account exports this subject to us. */
-        for (size_t i = 0; i < mgr->perms_count; i++) {
-            if (strcmp(mgr->perms[i].account, account) == 0) continue;
-            for (size_t j = 0; j < mgr->perms[i].export_count; j++) {
-                if (subject_match(mgr->perms[i].exports[j].subject, subject) &&
-                    acct_eq_or_star(mgr->perms[i].exports[j].dest_account, account)) {
-                    ok = 0;
-                    goto out;
-                }
-            }
-        }
-    }
-out:
+    if (export_offered_to(mgr, account, subject) ||
+        import_matches_subject(p, subject))
+        ok = import_export_pair_ok(mgr, p, account, subject);
     cmq_mutex_unlock(&mgr->lock);
     return ok;
 }

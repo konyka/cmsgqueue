@@ -121,7 +121,9 @@ TEST(account, exports_imports) {
     ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.data"), 1);
     ASSERT_EQ(cmq_account_can_export(mgr, "acme", "other.data"), 0);
     ASSERT_EQ(cmq_account_can_import(mgr, "globex", "acme.data"), 1);
-    ASSERT_EQ(cmq_account_can_import(mgr, "globex", "other.data"), 0);
+    /* Local / non-exported subjects stay allowed when imports exist. */
+    ASSERT_EQ(cmq_account_can_import(mgr, "globex", "globex.orders"), 1);
+    ASSERT_EQ(cmq_account_can_import(mgr, "globex", "other.data"), 1);
 
     ASSERT_EQ(cmq_account_remove_export(mgr, "acme", "acme.>"), 0);
     ASSERT_EQ(cmq_account_export_count(mgr, "acme"), (size_t)0);
