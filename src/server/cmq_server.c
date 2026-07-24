@@ -3690,6 +3690,20 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         c->state = CMQ_CLIENT_CLOSING;
         return;
     }
+    /* '>' / '*.*' match _INBOX but cannot receive it (deliver_tgt_accepts).
+       Compact to exact holders so remote-only inbox still cluster-forwards. */
+    if (strncmp(subject, "_INBOX.", 7) == 0 && tgts && ntgt > 0) {
+        size_t w = 0;
+        for (size_t i = 0; i < ntgt; i++) {
+            if (strcmp(tgts[i].subject, subject) == 0)
+                tgts[w++] = tgts[i];
+        }
+        ntgt = w;
+        if (ntgt == 0) {
+            free(tgts);
+            tgts = NULL;
+        }
+    }
     /* Only forward RESPONSE when no local inbox — avoid broadcasting
        private _INBOX payloads to every cluster peer. */
     if (!c->is_route && ntgt == 0) {
@@ -3714,7 +3728,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
                 c->state = CMQ_CLIENT_CLOSING;
                 return;
             }
-            /* Local targets were ghost/CLOSING. Cluster-forward only for
+            /* Local exact targets were ghost/CLOSING. Cluster-forward only for
                non-_INBOX — private inbox replies must not fan out to all peers
                (ntgt==0 path above still forwards when inbox is remote-only). */
             if (!c->is_route && strncmp(subject, "_INBOX.", 7) != 0) {
