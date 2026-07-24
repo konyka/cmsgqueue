@@ -4321,6 +4321,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — route flush ev_mod fail marks CLOSING</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_flush_write route drain</span></td><td>✅</td><td>After draining a route <code>write_buf</code> under <code>io_lock</code>, <code>ev_mod(READ)</code> failure only shutdown+detach — left state <code>CONNECTED</code>. If restore failed and <code>watcher_clear</code> removed interest, the peer stayed a CONNECTED zombie that QG RR could still pick. Now set <code>CLOSING</code> like the empty-buffer path.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -4627,9 +4627,12 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
         c->write_pos = 0;
         client_clear_write_progress(c);
         if (cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c) != 0) {
+            /* Align empty-buf path: CLOSING so QG RR / fan-out skip this peer
+               if watcher_clear left the fd with no READ/WRITE interest. */
             cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
             route_io_idx = -1;
             (void)shutdown(c->fd, SHUT_RDWR);
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             if (c->server->routes && c->fd >= 0)
                 route_detach_under_io_lock(c->server, c->fd);
             return;
