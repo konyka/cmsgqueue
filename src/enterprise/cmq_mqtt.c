@@ -483,6 +483,8 @@ const char *cmq_mqtt_topic_to_subject(const char *mqtt_topic, char *buf, size_t 
         buf[i] = c;
     }
     buf[i] = '\0';
+    /* Fail closed — never return a silently truncated subject. */
+    if (mqtt_topic[i] != '\0') return NULL;
     return buf;
 }
 
@@ -497,6 +499,7 @@ const char *cmq_mqtt_subject_to_topic(const char *subject, char *buf, size_t len
         buf[i] = c;
     }
     buf[i] = '\0';
+    if (subject[i] != '\0') return NULL;
     return buf;
 }
 

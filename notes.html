@@ -4225,6 +4225,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — MQTT topic/subject conversion fail-closed on truncate</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">topic_to_subject / subject_to_topic</span></td><td>✅</td><td>Previously returned success after writing <code>len-1</code> chars even when input remained — silent truncation yielded wrong mappings. Now return <code>NULL</code> if the input did not fit.</td></tr>
+</table>
+</div>
+
 
 
 

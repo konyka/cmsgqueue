@@ -379,6 +379,11 @@ TEST(mqtt, topic_conversion) {
     top = cmq_mqtt_subject_to_topic("a.*.b.>", buf, sizeof(buf));
     ASSERT_NOT_NULL(top);
     ASSERT_STR_EQ(top, "a/+/b/#");
+
+    /* Undersized buf must fail closed — no silent truncation. */
+    char tiny[8];
+    ASSERT_NULL(cmq_mqtt_topic_to_subject("sensor/temperature/room1", tiny, sizeof(tiny)));
+    ASSERT_NULL(cmq_mqtt_subject_to_topic("sensor.temperature.room1", tiny, sizeof(tiny)));
 }
 
 TEST(mqtt, encode_connect) {
