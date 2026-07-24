@@ -34,3 +34,8 @@ cmq_coro_ctx_switch:
     ret
 
     .size cmq_coro_ctx_switch, . - cmq_coro_ctx_switch
+
+/* Declare non-executable stack for GNU ld (align x86_64). */
+#if defined(__ELF__)
+    .section .note.GNU-stack,"",@progbits
+#endif
