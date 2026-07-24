@@ -3920,6 +3920,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — CONNECT rechecks account before CONNACK 0</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">CONNECT CONNACK</span></td><td>✅</td><td>Recheck <code>client_account_live</code> after INFO/attach drain (and before non-route CONNACK 0) so soft-delete during the post-inc window cannot handshake-succeed; route path also refuses <code>mark_connected</code> if account died after CONNACK 0.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -4326,7 +4326,9 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                raw socket under io_lock; marking before CONNACK is on the wire
                can inject PUBLISH into cmq_peer_handshake and fail the dialer. */
             if (client_drain_write_sync(c) != 0 ||
-                c->state != CMQ_CLIENT_CONNECTED) {
+                c->state != CMQ_CLIENT_CONNECTED ||
+                !client_account_live(srv, c)) {
+                /* Soft-delete during attach/INFO drain must not CONNACK 0. */
                 cmq_route_detach_fd(srv->routes, c->fd);
                 c->is_route = 0;
                 cmq_send_connack(c, 1);
@@ -4336,14 +4338,17 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             }
             cmq_send_connack(c, 0);
             if (client_drain_write_sync(c) != 0 ||
-                c->state != CMQ_CLIENT_CONNECTED) {
+                c->state != CMQ_CLIENT_CONNECTED ||
+                !client_account_live(srv, c)) {
+                /* CONNACK 0 may already be on wire — fail-closed with EOF. */
                 cmq_route_detach_fd(srv->routes, c->fd);
                 c->is_route = 0;
                 c->state = CMQ_CLIENT_CLOSING;
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
-            if (cmq_route_mark_connected(srv->routes, c->fd) != 0) {
+            if (!client_account_live(srv, c) ||
+                cmq_route_mark_connected(srv->routes, c->fd) != 0) {
                 /* CONNACK 0 already on wire — fail-closed with EOF. */
                 cmq_route_detach_fd(srv->routes, c->fd);
                 c->is_route = 0;
@@ -4352,6 +4357,13 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 break;
             }
             break; /* CONNACK 0 already drained */
+        }
+        /* Soft-delete after inc/CONNECTED (INFO window) must not CONNACK 0. */
+        if (!client_account_live(srv, c)) {
+            cmq_send_connack(c, 1);
+            c->state = CMQ_CLIENT_CLOSING;
+            (void)shutdown(c->fd, SHUT_RDWR);
+            break;
         }
         cmq_send_connack(c, 0);
         break;
