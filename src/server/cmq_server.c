@@ -5668,14 +5668,29 @@ fail_adopted:
     return -1;
 }
 
+/* Tear down only if expect_fd is still the owned egress for nid — bind
+   failure must not kill a replaced/inbound peer installed during the window. */
+static void route_disconnect_if_owned_fd(cmq_server_t *srv, const char *nid,
+                                          int expect_fd) {
+    if (!srv || !srv->routes || !nid || expect_fd < 0) return;
+    cmq_route_conn_t cur;
+    if (cmq_route_get_conn(srv->routes, nid, &cur) == 0 &&
+        cur.fd == expect_fd && cur.fd_owned)
+        cmq_route_disconnect(srv->routes, nid);
+}
+
 static int route_connect_and_bind(cmq_server_t *srv, const char *nid,
                                    const char *addr, int port) {
     if (cmq_route_connect(srv->routes, nid, addr, port,
                           srv->config.auth_username,
                           srv->config.auth_password) != 0)
         return -1;
+    cmq_route_conn_t snap;
+    if (cmq_route_get_conn(srv->routes, nid, &snap) != 0 || snap.fd < 0)
+        return -1;
+    int expect_fd = snap.fd;
     if (route_bind_egress_reader(srv, nid) != 0) {
-        cmq_route_disconnect(srv->routes, nid);
+        route_disconnect_if_owned_fd(srv, nid, expect_fd);
         return -1;
     }
     return 0;
@@ -5704,8 +5719,11 @@ static void *route_reconnect_thread(void *arg) {
                       strncmp(snap.remote_addr, addr, sizeof(snap.remote_addr)) == 0)) &&
                     cmq_route_peer_live(srv->routes, nid)) {
                     /* Sticky live but reader never bound (prior bind fail). */
-                    if (snap.fd_owned && route_bind_egress_reader(srv, nid) != 0)
-                        cmq_route_disconnect(srv->routes, nid);
+                    if (snap.fd_owned) {
+                        int expect_fd = snap.fd;
+                        if (route_bind_egress_reader(srv, nid) != 0)
+                            route_disconnect_if_owned_fd(srv, nid, expect_fd);
+                    }
                     continue;
                 }
                 if (cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
