@@ -460,7 +460,9 @@ cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
 
 void cmq_route_pool_set_dial_gate(cmq_route_pool_t *pool, cmq_atomic_int *gate) {
     if (!pool) return;
+    if (route_begin_op(pool) != 0) return;
     pool->dial_gate = gate;
+    route_end_op(pool);
 }
 
 /* 1 if server drain (or similar) forbids installing a freshly dialed peer. */

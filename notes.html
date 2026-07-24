@@ -3977,6 +3977,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — route set_dial_gate holds begin_op vs destroy</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_route_pool_set_dial_gate</span></td><td>✅</td><td>Wrap with <code>route_begin_op</code> so destroy cannot <code>free</code> the pool under a concurrent gate pointer write.</td></tr>
+</table>
+</div>
+
 
 
 
