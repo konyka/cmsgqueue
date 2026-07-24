@@ -1881,7 +1881,6 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
         if (used[i]) continue;
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result->entries[i];
         if (!ref || !ref->client) continue;
-        /* Do not read client_state(client) here (cross-thread race); send paths filter. */
 
         if (ref->queue_group[0] == '\0') {
             /* Same epoch filter as QG: skip soft-deleted holders early. */
@@ -1892,8 +1891,9 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
         }
 
         /* Collect live members of this (account, subject, queue_group).
-           Skip epoch-dead holders so RR does not pick a member that send
-           paths will drop (one pick, no QG retry). */
+           Skip epoch-dead and CLOSING so RR does not pick a member that
+           send paths will drop (one pick, no QG retry → silent loss).
+           client_state is atomic ACQUIRE — safe under sublist rdlock. */
         size_t mn = 0;
         for (size_t j = i; j < result->count; j++) {
             if (used[j]) continue;
@@ -1906,6 +1906,8 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
                 continue;
             used[j] = 1;
             if (!client_account_live(srv, rj->client))
+                continue;
+            if (client_state(rj->client) != CMQ_CLIENT_CONNECTED)
                 continue;
             memb[mn++] = j;
         }

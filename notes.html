@@ -4313,6 +4313,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — QG RR skips CLOSING members</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">snapshot_deliver_targets QG</span></td><td>✅</td><td>Queue-group RR already skipped epoch-dead but still nominated <code>CLOSING</code> members; one pick with no retry meant send paths dropped the message silently. Now require <code>CMQ_CLIENT_CONNECTED</code> (atomic state) before entering the RR pool.</td></tr>
+</table>
+</div>
+
 
 
 
