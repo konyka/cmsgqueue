@@ -1472,6 +1472,33 @@ void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd) {
     route_end_op(pool);
 }
 
+static int route_adopt_fd_impl(cmq_route_pool_t *pool, int fd) {
+    if (!pool || fd < 0) return -1;
+    cmq_mutex_lock(&pool->lock);
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        int efd = -1, owned = 0;
+        route_slot_snap(pool, i, NULL, &efd, &owned, NULL);
+        if (efd != fd) continue;
+        cmq_mutex_lock(&pool->io_locks[i]);
+        int ok = (pool->conns[i].fd == fd);
+        if (ok)
+            pool->conns[i].fd_owned = 0;
+        cmq_mutex_unlock(&pool->io_locks[i]);
+        cmq_mutex_unlock(&pool->lock);
+        return ok ? 0 : -1;
+    }
+    cmq_mutex_unlock(&pool->lock);
+    return -1;
+}
+
+int cmq_route_adopt_fd(cmq_route_pool_t *pool, int fd) {
+    if (!pool || fd < 0) return -1;
+    if (route_begin_op(pool) != 0) return -1;
+    int rc = route_adopt_fd_impl(pool, fd);
+    route_end_op(pool);
+    return rc;
+}
+
 int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return -1;
     if (route_begin_op(pool) != 0) return -1;

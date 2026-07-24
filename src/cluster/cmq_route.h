@@ -58,6 +58,9 @@ int cmq_route_mark_connected(cmq_route_pool_t *pool, int fd);
 void cmq_route_unmark_connected_fd(cmq_route_pool_t *pool, int fd);
 /* Drop pool reference to fd without closing (client still owns the socket). */
 void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd);
+/* Transfer close-ownership of an egress fd to the server client (fd_owned=0).
+   No-op success if already borrowed. -1 if fd not in pool. */
+int cmq_route_adopt_fd(cmq_route_pool_t *pool, int fd);
 int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id);
 
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject,

@@ -4121,6 +4121,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — outbound route egress READ bind</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route_bind_egress_reader</span></td><td>✅</td><td>After <code>cmq_route_connect</code>, adopt the owned egress fd into a CONNECTED <code>is_route</code> client with <code>ev_add(READ)</code>. Without this, peer broadcasts pile up unread on the dialer and local subscribers never see cluster traffic (inbound accept path already had a reader).</td></tr>
+</table>
+</div>
+
 
 
 

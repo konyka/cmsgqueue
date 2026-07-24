@@ -5452,6 +5452,178 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     }
 }
 
+/* Bind a CONNECTED is_route reader on an owned egress fd so peer broadcasts
+   are delivered locally (outbound dial is write-only until adopted). */
+static int route_bind_egress_reader(cmq_server_t *srv, const char *nid) {
+    if (!srv || !srv->routes || !nid) return -1;
+    cmq_route_conn_t snap;
+    if (cmq_route_get_conn(srv->routes, nid, &snap) != 0 || snap.fd < 0)
+        return -1;
+    if (!snap.fd_owned)
+        return 0; /* already adopted by a reader client */
+    int fd = snap.fd;
+
+    if (srv->config.max_clients > 0) {
+        uint32_t max = (uint32_t)srv->config.max_clients;
+        uint32_t cur = cmq_atomic_load_u32(&srv->active_clients, CMQ_ATOMIC_SEQ_CST);
+        int admitted = 0;
+        for (;;) {
+            if (cur >= max)
+                break;
+            if (cmq_atomic_cas_u32(&srv->active_clients, &cur, cur + 1,
+                                    CMQ_ATOMIC_SEQ_CST)) {
+                admitted = 1;
+                break;
+            }
+        }
+        if (!admitted)
+            return -1;
+    } else {
+        cmq_atomic_fetch_add_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+    }
+
+    uint32_t cid = 0;
+    for (int id_try = 0; id_try < 16; id_try++) {
+        uint32_t cand = cmq_atomic_fetch_add_u32(&srv->next_client_id, 1,
+                                                  CMQ_ATOMIC_SEQ_CST);
+        if (cand != 0 && cand != CMQ_IDMAP_TOMB) {
+            cid = cand;
+            break;
+        }
+    }
+    if (cid == 0) {
+        cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+        return -1;
+    }
+
+    cmq_ev_loop_t *loop = srv->ev_loop;
+    int worker_id = -1;
+    cmq_worker_t *w = NULL;
+    if (srv->workers && srv->num_workers > 0) {
+        uint32_t wi = cmq_atomic_fetch_add_u32(&srv->next_worker, 1,
+                                                CMQ_ATOMIC_RELAXED);
+        worker_id = (int)(wi % (uint32_t)srv->num_workers);
+        w = &srv->workers[worker_id];
+        loop = w->ev_loop;
+    }
+
+    cmq_client_t *client = cmq_client_create(fd, cid, loop, srv);
+    if (!client) {
+        cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+        return -1;
+    }
+    client->worker_id = worker_id;
+    client->is_route = 1;
+
+    const char *aname = "$default";
+    if (srv->config.auth_username && srv->config.auth_username[0])
+        aname = srv->config.auth_username;
+    size_t al = strnlen(aname, CMQ_ACCOUNT_NAME_SIZE);
+    if (al == 0 || al >= CMQ_ACCOUNT_NAME_SIZE ||
+        cmq_account_ensure(srv->accounts, aname) != 0) {
+        client->fd = -1; /* pool still owns — do not close */
+        cmq_client_destroy(client);
+        cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+        return -1;
+    }
+    memcpy(client->account_name, aname, al);
+    client->account_name[al] = '\0';
+
+    uint32_t aep = 0;
+    cmq_account_t *acc = cmq_account_get(srv->accounts, client->account_name, &aep);
+    if (!acc ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != aep ||
+        cmq_account_inc_connections(acc, aep) != 0) {
+        if (acc) cmq_account_release(srv->accounts, acc);
+        client->fd = -1;
+        cmq_client_destroy(client);
+        cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+        return -1;
+    }
+    client->account_epoch = aep;
+    cmq_account_release(srv->accounts, acc);
+
+    if (cmq_route_adopt_fd(srv->routes, fd) != 0) {
+        cmq_account_t *a = cmq_account_get(srv->accounts, client->account_name, NULL);
+        if (a) {
+            cmq_account_dec_connections(a, aep);
+            cmq_account_release(srv->accounts, a);
+        }
+        client->fd = -1;
+        cmq_client_destroy(client);
+        cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+        return -1;
+    }
+    /* Client owns fd from here — failures must destroy/close + detach. */
+    client_set_state(client, CMQ_CLIENT_CONNECTED);
+    client_touch_activity(client);
+    client->session_accounted = 1;
+    cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
+
+    if (w) {
+        cmq_mutex_lock(&w->clients_lock);
+        if (w->clients_count >= w->clients_cap &&
+            clients_array_grow(&w->clients, &w->clients_cap) != 0) {
+            cmq_mutex_unlock(&w->clients_lock);
+            goto fail_adopted;
+        }
+        w->clients[w->clients_count++] = client;
+        if (cmq_idmap_put(w->idmap, client->id, client) != 0) {
+            w->clients_count--;
+            cmq_mutex_unlock(&w->clients_lock);
+            goto fail_adopted;
+        }
+        if (cmq_ev_add(w->ev_loop, fd, CMQ_EV_READ, client_read_cb, client) != 0) {
+            w->clients_count--;
+            cmq_idmap_del(w->idmap, client->id);
+            cmq_mutex_unlock(&w->clients_lock);
+            goto fail_adopted;
+        }
+        cmq_mutex_unlock(&w->clients_lock);
+    } else {
+        cmq_mutex_lock(&srv->clients_lock);
+        if (srv->clients_count >= srv->clients_cap &&
+            clients_array_grow(&srv->clients, &srv->clients_cap) != 0) {
+            cmq_mutex_unlock(&srv->clients_lock);
+            goto fail_adopted;
+        }
+        srv->clients[srv->clients_count++] = client;
+        if (cmq_idmap_put(srv->idmap, client->id, client) != 0) {
+            srv->clients_count--;
+            cmq_mutex_unlock(&srv->clients_lock);
+            goto fail_adopted;
+        }
+        if (cmq_ev_add(srv->ev_loop, fd, CMQ_EV_READ, client_read_cb,
+                       client) != 0) {
+            srv->clients_count--;
+            cmq_idmap_del(srv->idmap, client->id);
+            cmq_mutex_unlock(&srv->clients_lock);
+            goto fail_adopted;
+        }
+        cmq_mutex_unlock(&srv->clients_lock);
+    }
+    return 0;
+
+fail_adopted:
+    route_detach_under_io_lock(srv, fd);
+    client_teardown(client); /* closes fd; active/account dec via session */
+    return -1;
+}
+
+static int route_connect_and_bind(cmq_server_t *srv, const char *nid,
+                                   const char *addr, int port) {
+    if (cmq_route_connect(srv->routes, nid, addr, port,
+                          srv->config.auth_username,
+                          srv->config.auth_password) != 0)
+        return -1;
+    if (route_bind_egress_reader(srv, nid) != 0) {
+        cmq_route_disconnect(srv->routes, nid);
+        return -1;
+    }
+    return 0;
+}
+
 static void *route_reconnect_thread(void *arg) {
     cmq_server_t *srv = arg;
     while (cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE)) {
@@ -5473,13 +5645,15 @@ static void *route_reconnect_thread(void *arg) {
                     (snap.remote_addr[0] == '\0' ||
                      (snap.remote_port == port &&
                       strncmp(snap.remote_addr, addr, sizeof(snap.remote_addr)) == 0)) &&
-                    cmq_route_peer_live(srv->routes, nid))
+                    cmq_route_peer_live(srv->routes, nid)) {
+                    /* Sticky live but reader never bound (prior bind fail). */
+                    if (snap.fd_owned && route_bind_egress_reader(srv, nid) != 0)
+                        cmq_route_disconnect(srv->routes, nid);
                     continue;
+                }
                 if (cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
                     break;
-                if (cmq_route_connect(srv->routes, nid, addr, port,
-                                      srv->config.auth_username,
-                                      srv->config.auth_password) == 0) {
+                if (route_connect_and_bind(srv, nid, addr, port) == 0) {
                     cmq_log_info(srv->log, "Route reconnected to %s:%d",
                                  addr, port);
                 }
@@ -6101,11 +6275,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             /* Unique per peer — shared "node-<port>" skipped all but first. */
             char nid[CMQ_NODE_ID_SIZE];
             snprintf(nid, sizeof(nid), "r%d", i);
-            if (cmq_route_connect(srv->routes, nid,
-                                  srv->config.routes[i].addr,
-                                  srv->config.routes[i].port,
-                                  srv->config.auth_username,
-                                  srv->config.auth_password) == 0) {
+            if (route_connect_and_bind(srv, nid,
+                                       srv->config.routes[i].addr,
+                                       srv->config.routes[i].port) == 0) {
                 cmq_log_info(srv->log, "Route connected to %s:%d",
                              srv->config.routes[i].addr,
                              srv->config.routes[i].port);
