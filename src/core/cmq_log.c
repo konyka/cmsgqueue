@@ -68,8 +68,11 @@ static void cmq_log_file_appender(const char *msg, size_t len, void *ctx) {
 
 static void cmq_log_stdout_appender(const char *msg, size_t len, void *ctx) {
     (void)ctx;
+    /* Align file appender — multi-worker write races on stdout FILE*. */
+    flockfile(stdout);
     fwrite(msg, 1, len, stdout);
     fflush(stdout);
+    funlockfile(stdout);
 }
 
 static void cmq_format_time(char *out, size_t out_size) {
@@ -253,6 +256,10 @@ void cmq_log_flush(cmq_log_t *log) {
                 fflush(f);
                 funlockfile(f);
             }
+        } else if (log->appenders[i].fn == cmq_log_stdout_appender) {
+            flockfile(stdout);
+            fflush(stdout);
+            funlockfile(stdout);
         }
     }
     pthread_mutex_unlock(&log->lock);

@@ -4392,6 +4392,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — log stdout flockfile</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_log_stdout_appender</span></td><td>✅</td><td>Sibling of file flockfile: multi-worker <code>fwrite</code>/<code>fflush</code> on shared <code>stdout</code> was unsynchronized. Wrap with <code>flockfile</code>; <code>cmq_log_flush</code> also flushes stdout appenders.</td></tr>
+</table>
+</div>
+
 
 
 
