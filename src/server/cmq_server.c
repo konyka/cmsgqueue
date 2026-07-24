@@ -335,7 +335,6 @@ static void client_finish_closing(cmq_client_t *c);
 static void acceptor_post_tick(void *data);
 static void worker_purge_send_for_id(cmq_worker_t *w, uint32_t target_id,
                                       uint32_t target_gen);
-static int client_has_sub(const cmq_client_t *c, uint32_t sub_id);
 static void send_info_frame(cmq_server_t *srv, cmq_client_t *c);
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len);
 static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t len);
@@ -351,10 +350,36 @@ static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
                               const uint8_t *headers, size_t headers_len);
 static void deliver_ctx_free(void *arg);
 
-static int client_has_sub(const cmq_client_t *c, uint32_t sub_id) {
-    if (!c || sub_id == 0) return 0;
+/* NATS-style pattern vs concrete subject (* = one token, > = rest, final). */
+static int sub_pattern_match(const char *pattern, const char *subject) {
+    if (!pattern || !subject) return 0;
+    if (strcmp(pattern, ">") == 0) return 1;
+    if (strcmp(pattern, subject) == 0) return 1;
+    const char *p = pattern, *s = subject;
+    while (*p && *s) {
+        const char *pe = p, *se = s;
+        while (*pe && *pe != '.') pe++;
+        while (*se && *se != '.') se++;
+        size_t plen = (size_t)(pe - p), slen = (size_t)(se - s);
+        if (plen == 1 && p[0] == '>')
+            return (*pe == '\0');
+        int is_star = (plen == 1 && p[0] == '*');
+        if (!is_star && (plen != slen || memcmp(p, s, plen) != 0))
+            return 0;
+        p = *pe ? pe + 1 : pe;
+        s = *se ? se + 1 : se;
+    }
+    if (p[0] == '>' && p[1] == '\0') return 1;
+    return *p == '\0' && *s == '\0';
+}
+
+/* sub_id still bound and its pattern covers subject (REPLACE / sid reuse). */
+static int client_sub_covers(const cmq_client_t *c, uint32_t sub_id,
+                             const char *subject) {
+    if (!c || sub_id == 0 || !subject) return 0;
     for (const cmq_sub_entry_t *e = c->subs; e; e = e->next) {
-        if (e->sub_id == sub_id) return 1;
+        if (e->sub_id == sub_id)
+            return sub_pattern_match(e->subject, subject);
     }
     return 0;
 }
@@ -479,6 +504,16 @@ static int message_frame_subject(const uint8_t *buf, size_t len,
     return 0;
 }
 
+/* require_sub_id==0 always ok; else frame subject must still match that sub. */
+static int client_require_sub_ok(const cmq_client_t *c, uint32_t require_sub_id,
+                                  const uint8_t *frame, size_t flen) {
+    if (require_sub_id == 0) return 1;
+    char subj[CMQ_MAX_SUBJECT];
+    if (message_frame_subject(frame, flen, subj, sizeof(subj)) != 0)
+        return 0;
+    return client_sub_covers(c, require_sub_id, subj);
+}
+
 /* Deliver one SEND mailbox message (caller frees msg after). */
 static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
     cmq_mutex_lock(&w->clients_lock);
@@ -496,8 +531,8 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
             if (w->server)
                 cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
-        } else if (msg->require_sub_id == 0 ||
-                   client_has_sub(target, msg->require_sub_id)) {
+        } else if (client_require_sub_ok(target, msg->require_sub_id,
+                                          msg->buf, msg->len)) {
             do_send = 1;
         } else if (w->server) {
             cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
@@ -1594,7 +1629,7 @@ static int cmq_client_send_checked(cmq_client_t *c, const uint8_t *data, size_t 
                                 data, len, require_sub_id, 0, NULL, 0, 0,
                                 NULL, 0, NULL, 0);
     }
-    if (require_sub_id != 0 && !client_has_sub(c, require_sub_id))
+    if (!client_require_sub_ok(c, require_sub_id, data, len))
         return -1;
     return cmq_client_send_local(c, data, len);
 }
@@ -1908,7 +1943,7 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         int dead_acct = 0;
         if (c && c->conn_gen == conn_gen && client_state(c) == CMQ_CLIENT_CONNECTED &&
             client_account_live(srv, c) &&
-            (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
+            client_require_sub_ok(c, require_sub_id, frame, flen)) {
             do_send = 1;
         } else if (c && c->conn_gen == conn_gen &&
                    client_state(c) == CMQ_CLIENT_CONNECTED &&
@@ -1950,7 +1985,7 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
     int dead_fd = -1;
     if (c && c->conn_gen == conn_gen && client_state(c) == CMQ_CLIENT_CONNECTED &&
         client_account_live(srv, c) &&
-        (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
+        client_require_sub_ok(c, require_sub_id, frame, flen)) {
         /* May run off acceptor thread (worker deliver to acceptor-owned) —
            hold clients_lock across send so finish_closing cannot race. */
         if (deliver_acl_ok(srv, pub_account, c->account_name, frame, flen) &&
@@ -2097,7 +2132,7 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
         int do_send = 0;
         if (c && c->conn_gen == conn_gen && client_state(c) == CMQ_CLIENT_CONNECTED &&
             client_account_live(srv, c) &&
-            (require_sub_id == 0 || client_has_sub(c, require_sub_id)))
+            client_require_sub_ok(c, require_sub_id, frame, flen))
             do_send = 1;
         cmq_mutex_unlock(&w->clients_lock);
         if (!do_send || !c) return 0;
@@ -2126,7 +2161,7 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
     int nudge_fd = -1;
     if (c && c->conn_gen == conn_gen && client_state(c) == CMQ_CLIENT_CONNECTED &&
         client_account_live(srv, c) &&
-        (require_sub_id == 0 || client_has_sub(c, require_sub_id)) &&
+        client_require_sub_ok(c, require_sub_id, frame, flen) &&
         deliver_acl_ok(srv, pub_account, c->account_name, frame, flen)) {
         if (cmq_client_send_local(c, frame, flen) == 0)
             ok = client_drain_write_sync(c) == 0 ? 1 : -1;
@@ -3326,7 +3361,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                 cmq_account_dec_subscriptions(pre_acc, c->account_epoch);
             if (pre_acc) cmq_account_release(srv->accounts, pre_acc);
             /* Trie before unlink c->subs — mirror UNSUB / avoid PUBLISH match
-               then silent-drop on client_has_sub. */
+               then silent-drop on client_require_sub_ok. */
             cmq_rwlock_wrlock(&srv->sublist_lock);
             if (entry->ref) {
                 cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
