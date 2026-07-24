@@ -650,7 +650,9 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
     free(msg);
 }
 
-/* Pop next SEND (skip TEARDOWN left in queue). Used to break AB REQUEST waits. */
+/* Pop next SEND (skip TEARDOWN left in queue). Used to break AB REQUEST waits.
+   Do not leapfrog a SEND past an earlier TEARDOWN for the same id+gen — that
+   would deliver after keepalive already sentenced the conn (and refresh KA). */
 static cmq_worker_msg_t *worker_pop_send(cmq_worker_t *w) {
     cmq_mutex_lock(&w->msg_lock);
     cmq_worker_msg_t **pp = &w->msg_head;
@@ -658,6 +660,20 @@ static cmq_worker_msg_t *worker_pop_send(cmq_worker_t *w) {
     while (*pp) {
         cmq_worker_msg_t *m = *pp;
         if (m->kind == CMQ_WORKER_MSG_TEARDOWN) {
+            prev = m;
+            pp = &m->next;
+            continue;
+        }
+        int teardown_ahead = 0;
+        for (cmq_worker_msg_t *t = w->msg_head; t && t != m; t = t->next) {
+            if (t->kind == CMQ_WORKER_MSG_TEARDOWN &&
+                t->target_id == m->target_id &&
+                t->target_gen == m->target_gen) {
+                teardown_ahead = 1;
+                break;
+            }
+        }
+        if (teardown_ahead) {
             prev = m;
             pp = &m->next;
             continue;
@@ -4720,7 +4736,9 @@ static int http_header_value(const char *req, const char *name,
         const char *line = p;
         while (*p && *p != '\r' && *p != '\n') p++;
         size_t llen = (size_t)(p - line);
-        if (llen > nlen + 1) {
+        /* >= so bare "Origin:" / "Host:" are present (empty value), not omitted.
+           Omitted Origin skips CSWSH; empty Origin must still fail closed. */
+        if (llen >= nlen + 1) {
             int match = 1;
             for (size_t i = 0; i < nlen; i++) {
                 char a = line[i], b = name[i];

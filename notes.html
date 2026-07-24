@@ -4355,6 +4355,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — REQUEST SEND vs TEARDOWN · empty Origin CSWSH</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">worker_pop_send</span></td><td>✅</td><td>Cross-worker REQUEST drain leapt over ahead <code>TEARDOWN</code> for the same id+gen and still delivered SEND (refreshing activity after KA sentenced the conn). Skip such SEND until teardown runs.</td></tr>
+<tr><td><span class="component-name">http_header_value</span></td><td>✅</td><td>Bare <code>Origin:</code> (no value) was treated as omitted and skipped CSWSH. Require <code>llen &gt;= nlen+1</code> so empty Origin enters the fail-closed host check.</td></tr>
+</table>
+</div>
+
 
 
 
