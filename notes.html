@@ -4233,6 +4233,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — peer handshake reject overlong auth</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_peer_handshake</span></td><td>✅</td><td>Overlong <code>auth_user</code>/<code>auth_pass</code> used to be silently truncated to 255 bytes before CONNECT — could auth with a peer configured to the truncated prefix. Now fail closed (<code>n &gt; 255</code> → <code>-1</code>), matching config/leaf/gw.</td></tr>
+</table>
+</div>
+
 
 
 

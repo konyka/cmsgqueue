@@ -65,13 +65,16 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
                         uint16_t flags) {
     uint8_t payload[520];
     uint16_t ulen = 0, pwen = 0;
+    /* Align CONNECT/config/leaf/gw: wire caps at 255 — never silently truncate. */
     if (auth_user) {
         size_t n = strlen(auth_user);
-        ulen = (uint16_t)(n > 255 ? 255 : n);
+        if (n > 255) return -1;
+        ulen = (uint16_t)n;
     }
     if (auth_pass) {
         size_t n = strlen(auth_pass);
-        pwen = (uint16_t)(n > 255 ? 255 : n);
+        if (n > 255) return -1;
+        pwen = (uint16_t)n;
     }
     payload[0] = (uint8_t)(ulen >> 8);
     payload[1] = (uint8_t)ulen;
