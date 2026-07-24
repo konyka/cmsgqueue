@@ -199,10 +199,18 @@ TEST(account, may_deliver_cross_account) {
     cmq_account_remove_import(mgr, "globex", "acme.>");
     ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "globex", "acme.data"), 0);
 
-    /* Soft-deleted accounts cannot deliver or ACL-check. */
+    /* Soft-delete must purge sibling reverse ACL or can_import traps SUBSCRIBE. */
+    ASSERT_EQ(cmq_account_add_import(mgr, "globex", "shared.>", "acme"), 0);
+    ASSERT_EQ(cmq_account_add_export(mgr, "globex", "offered.>", "acme"), 0);
     ASSERT_EQ(cmq_account_delete(mgr, "acme"), 0);
     ASSERT_EQ(cmq_account_may_deliver(mgr, "acme", "globex", "acme.data"), 0);
     ASSERT_EQ(cmq_account_can_export(mgr, "acme", "acme.data"), 0);
+    ASSERT_EQ(cmq_account_can_import(mgr, "globex", "shared.orders"), 1);
+    ASSERT_EQ(cmq_account_import_count(mgr, "globex"), (size_t)0);
+    ASSERT_EQ(cmq_account_export_count(mgr, "globex"), (size_t)0);
+    /* Reactivate: stale sibling export offer must not lock local SUBSCRIBE. */
+    ASSERT_EQ(cmq_account_create(mgr, "acme"), 0);
+    ASSERT_EQ(cmq_account_can_import(mgr, "acme", "offered.x"), 1);
 
     /* Reactivate bumps epoch so callers can detect stale sessions. */
     cmq_account_t *before = NULL;

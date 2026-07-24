@@ -4347,6 +4347,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — soft-delete purges sibling ACL refs</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">account_delete / slot reclaim</span></td><td>✅</td><td>Soft-delete cleared only the victim's perms row; sibling imports/exports naming that account survived and made <code>can_import</code> require a dead pair — permanent SUBACK failure while <code>may_deliver</code> same-account still allowed. Now purge reverse refs (<code>*</code> kept); same on full-table slot reclaim.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -40,6 +40,8 @@ static void mgr_end_op(cmq_account_manager_t *mgr) {
 }
 
 static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char *name);
+static void purge_peer_acl_refs_unlocked(cmq_account_manager_t *mgr,
+                                          const char *peer);
 
 static void account_bump_epoch(cmq_account_t *a) {
     uint32_t e = __atomic_load_n(&a->epoch, __ATOMIC_RELAXED) + 1;
@@ -133,6 +135,7 @@ static int account_create_impl(cmq_account_manager_t *mgr, const char *name) {
             return -1;
         }
         clear_account_perms_unlocked(mgr, slot->name);
+        purge_peer_acl_refs_unlocked(mgr, slot->name);
         account_bump_epoch(slot);
         strncpy(slot->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
         slot->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
@@ -178,6 +181,7 @@ static int account_ensure_impl(cmq_account_manager_t *mgr, const char *name) {
             return -1;
         }
         clear_account_perms_unlocked(mgr, slot->name);
+        purge_peer_acl_refs_unlocked(mgr, slot->name);
         account_bump_epoch(slot);
         strncpy(slot->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
         slot->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
@@ -209,6 +213,7 @@ static int account_delete_impl(cmq_account_manager_t *mgr, const char *name) {
             account_clear_counters(&mgr->accounts[i]);
             __atomic_store_n(&mgr->accounts[i].active, 0, __ATOMIC_RELEASE);
             clear_account_perms_unlocked(mgr, name);
+            purge_peer_acl_refs_unlocked(mgr, name);
             cmq_mutex_unlock(&mgr->lock);
             return 0;
         }
@@ -368,6 +373,37 @@ static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char 
                     (mgr->perms_count - i - 1) * sizeof(cmq_account_perms_t));
             mgr->perms_count--;
             break;
+        }
+    }
+}
+
+/* Drop sibling import/export rows that name `peer` as source/dest (* kept).
+   Soft-delete must not leave reverse ACL that traps can_import after the
+   peer's own perms row is gone (SUBSCRIBE permanently SUBACK 1). */
+static void purge_peer_acl_refs_unlocked(cmq_account_manager_t *mgr,
+                                          const char *peer) {
+    if (!peer || peer[0] == '\0' || strcmp(peer, "*") == 0) return;
+    for (size_t i = 0; i < mgr->perms_count; i++) {
+        if (strcmp(mgr->perms[i].account, peer) == 0)
+            continue;
+        cmq_account_perms_t *p = &mgr->perms[i];
+        for (size_t j = 0; j < p->export_count; ) {
+            if (strcmp(p->exports[j].dest_account, peer) == 0) {
+                memmove(&p->exports[j], &p->exports[j + 1],
+                        (p->export_count - j - 1) * sizeof(cmq_account_export_t));
+                p->export_count--;
+            } else {
+                j++;
+            }
+        }
+        for (size_t j = 0; j < p->import_count; ) {
+            if (strcmp(p->imports[j].source_account, peer) == 0) {
+                memmove(&p->imports[j], &p->imports[j + 1],
+                        (p->import_count - j - 1) * sizeof(cmq_account_import_t));
+                p->import_count--;
+            } else {
+                j++;
+            }
         }
     }
 }
