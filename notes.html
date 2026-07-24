@@ -4137,6 +4137,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — peer handshake reject trailing after CONNACK</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_peer_handshake</span></td><td>✅</td><td>Fail-closed when the CONNACK read buffer holds trailing bytes. Returning success discarded already-read post-CONNACK frames (e.g. early broadcast) and desynced gateway/leaf/route parsers.</td></tr>
+</table>
+</div>
+
 
 
 

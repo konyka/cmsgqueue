@@ -118,7 +118,11 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
 
             if (op == (uint8_t)CMQ_OP_CONNACK) {
                 if (plen_f < 1) return -1;
-                return rbuf[sizeof(cmq_frame_hdr_t)] == 0 ? 0 : -1;
+                if (rbuf[sizeof(cmq_frame_hdr_t)] != 0) return -1;
+                /* Same read may already hold post-CONNACK frames (peer marked
+                   connected and broadcast). Dropping them desyncs the stream. */
+                if (rlen > need) return -1;
+                return 0;
             }
             if (op != (uint8_t)CMQ_OP_INFO)
                 return -1;
