@@ -325,6 +325,13 @@ void cmq_account_inc_msgs_in(cmq_account_t *acc, uint32_t epoch, uint64_t bytes)
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
     uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
     uint64_t prev_m = __atomic_fetch_add(&acc->messages_in, 1, __ATOMIC_RELAXED);
+    /* Clear between msgs/bytes must not land bytes on the new generation. */
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) {
+        account_undo_stale_inc(&acc->messages_in, 1, prev_m, g0, acc);
+        return;
+    }
     uint64_t prev_b = __atomic_fetch_add(&acc->bytes_in, bytes, __ATOMIC_RELAXED);
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
         !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
@@ -339,6 +346,12 @@ void cmq_account_inc_msgs_out(cmq_account_t *acc, uint32_t epoch, uint64_t bytes
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
     uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
     uint64_t prev_m = __atomic_fetch_add(&acc->messages_out, 1, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) {
+        account_undo_stale_inc(&acc->messages_out, 1, prev_m, g0, acc);
+        return;
+    }
     uint64_t prev_b = __atomic_fetch_add(&acc->bytes_out, bytes, __ATOMIC_RELAXED);
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
         !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||

@@ -3936,6 +3936,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — msgs/bytes inc not split across clear</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">inc_msgs_in/out</span></td><td>✅</td><td>Recheck <code>clear_gen</code> between messages and bytes RMW; if clear raced, undo messages only and skip bytes so the new generation cannot be polluted.</td></tr>
+</table>
+</div>
+
 
 
 
