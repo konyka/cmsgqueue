@@ -40,6 +40,7 @@ struct cmq_mqtt_bridge {
     size_t mapping_count;
     cmq_mutex_t lock;
     uint32_t cancel_gen; /* bumped on disconnect — aborts in-flight install */
+    int dialing; /* 1 while unlocked TCP+MQTT CONNECT in progress */
     atomic_int in_flight; /* connect/is_connected unlocked dial/probe */
     atomic_int dying;
 };
@@ -199,6 +200,14 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
              !mqtt_fd_alive(efd)))
             mqtt_disconnect_unlocked(br);
     }
+    /* Serialize CONNECT — concurrent dials with the same client_id can
+       kick each other off the broker before install. */
+    if (br->dialing) {
+        cmq_mutex_unlock(&br->lock);
+        mqtt_end_op(br);
+        return -1;
+    }
+    br->dialing = 1;
     int keepalive_ms = br->keepalive_ms;
     int clean_session = br->clean_session;
     char client_id[CMQ_MQTT_CLIENT_ID];
@@ -208,6 +217,9 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
+        cmq_mutex_lock(&br->lock);
+        br->dialing = 0;
+        cmq_mutex_unlock(&br->lock);
         mqtt_end_op(br);
         return -1;
     }
@@ -217,6 +229,9 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     sa.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, addr, &sa.sin_addr) != 1) {
         close(fd);
+        cmq_mutex_lock(&br->lock);
+        br->dialing = 0;
+        cmq_mutex_unlock(&br->lock);
         mqtt_end_op(br);
         return -1;
     }
@@ -224,6 +239,9 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
                              CMQ_MQTT_CONNECT_MS) != 0) {
         close(fd);
+        cmq_mutex_lock(&br->lock);
+        br->dialing = 0;
+        cmq_mutex_unlock(&br->lock);
         mqtt_end_op(br);
         return -1;
     }
@@ -237,11 +255,15 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (clen < 0 || mqtt_write_all(fd, cbuf, (size_t)clen) != 0 ||
         mqtt_read_connack(fd) != 0) {
         close(fd);
+        cmq_mutex_lock(&br->lock);
+        br->dialing = 0;
+        cmq_mutex_unlock(&br->lock);
         mqtt_end_op(br);
         return -1;
     }
 
     cmq_mutex_lock(&br->lock);
+    br->dialing = 0;
     /* disconnect during unlocked dial — do not resurrect the bridge. */
     if (br->cancel_gen != gen) {
         cmq_mutex_unlock(&br->lock);

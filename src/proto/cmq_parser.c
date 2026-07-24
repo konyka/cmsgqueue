@@ -30,6 +30,12 @@ struct cmq_parser {
 
     size_t max_payload;             /* per-connection payload cap */
     int pending_error;              /* fatal after partial queue — drain then die */
+
+    /* Unread feed bytes while inbuf is hard-full under queue-full backpressure.
+       Bounded by hard cap — not a second DoS window. */
+    uint8_t *hold;
+    size_t hold_len;
+    size_t hold_cap;
 };
 
 #define CMQ_MAX_PAYLOAD (16 * 1024 * 1024) /* 16 MB application body ceiling */
@@ -84,6 +90,9 @@ cmq_parser_t *cmq_parser_create(void) {
     p->queued_bytes = 0;
     p->max_payload = CMQ_MAX_PAYLOAD;
     p->pending_error = 0;
+    p->hold = NULL;
+    p->hold_len = 0;
+    p->hold_cap = 0;
     return p;
 }
 
@@ -111,6 +120,7 @@ void cmq_parser_destroy(cmq_parser_t *p) {
     p->queued = 0;
     p->queued_bytes = 0;
     if (p->inbuf) free(p->inbuf);
+    free(p->hold);
     free(p);
 }
 
@@ -128,6 +138,10 @@ void cmq_parser_reset(cmq_parser_t *p) {
     p->queued = 0;
     p->queued_bytes = 0;
     p->pending_error = 0;
+    free(p->hold);
+    p->hold = NULL;
+    p->hold_len = 0;
+    p->hold_cap = 0;
     /* reset inbuf */
     if (p->inbuf) {
         free(p->inbuf);
@@ -139,6 +153,30 @@ void cmq_parser_reset(cmq_parser_t *p) {
     }
     p->inbuf_len = 0;
     p->inbuf_off = 0;
+}
+
+static int parser_hold_append(cmq_parser_t *p, const uint8_t *data, size_t len,
+                               size_t hard) {
+    if (!data || len == 0) return 0;
+    if (p->hold_len > hard || len > hard - p->hold_len)
+        return -1;
+    size_t need = p->hold_len + len;
+    if (need > p->hold_cap) {
+        size_t ncap = p->hold_cap ? p->hold_cap : 256;
+        while (ncap < need) {
+            if (ncap > SIZE_MAX / 2) return -1;
+            ncap <<= 1;
+        }
+        if (ncap > hard) ncap = hard;
+        if (need > ncap) return -1;
+        uint8_t *nb = (uint8_t *)realloc(p->hold, ncap);
+        if (!nb) return -1;
+        p->hold = nb;
+        p->hold_cap = ncap;
+    }
+    memcpy(p->hold + p->hold_len, data, len);
+    p->hold_len += len;
+    return 0;
 }
 
 static int ensure_inbuf(cmq_parser_t *p, size_t need) {
@@ -268,10 +306,36 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
        the same read also carries pipelined bytes (all-or-nothing used to
        rc=-1 teardown and drop the completing frame). */
     size_t hard = CMQ_HEADER_LEN + p->max_payload;
-    size_t off = 0;
     int any = 0;
-    /* If we stop with off < len, the unread tail is dropped — latch fatal
-       so dispatch drains then tears down (avoid TCP stream desync). */
+
+    /* Flush prior hold before accepting new bytes (post queue-full drain). */
+    if (p->hold_len > 0) {
+        uint8_t *h = p->hold;
+        size_t n = p->hold_len;
+        p->hold = NULL;
+        p->hold_len = 0;
+        p->hold_cap = 0;
+        int hr = cmq_parser_feed(p, h, n);
+        free(h);
+        if (p->pending_error)
+            return p->head ? 1 : -1;
+        if (hr < 0)
+            return -1;
+        if (hr > 0)
+            any = 1;
+        if (p->hold_len > 0) {
+            /* Still hard-full — park new bytes behind the held tail. */
+            if (parser_hold_append(p, data, len, hard) != 0) {
+                p->pending_error = 1;
+                return (p->head || any) ? 1 : -1;
+            }
+            return 1;
+        }
+    }
+
+    size_t off = 0;
+    /* Fatal stops drop unread feed — latch so dispatch drains then tears down.
+       Queue-full at hard parks unread bytes in hold instead (non-fatal). */
 #define CMQ_FEED_STOP() do { \
         if (off < len) p->pending_error = 1; \
         return (p->head || any) ? 1 : -1; \
@@ -299,8 +363,15 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
             }
             room = hard - used;
             if (room == 0) {
-                /* Stuck at cap — cannot absorb data[off..]; fail closed. */
-                CMQ_FEED_STOP();
+                /* Hard-full after parse: queue-full backpressure parks the
+                   unread tail; true fatal already set pending_error above. */
+                if (off < len) {
+                    if (parser_hold_append(p, data + off, len - off, hard) != 0) {
+                        p->pending_error = 1;
+                        return (p->head || any) ? 1 : -1;
+                    }
+                }
+                return (p->head || any || p->hold_len) ? 1 : -1;
             }
         }
 
@@ -337,7 +408,23 @@ int cmq_parser_drain_inbuf(cmq_parser_t *p) {
         return -1;
     if (p->pending_error)
         return p->head ? 1 : -1;
-    return parser_parse_inbuf(p);
+    int rc = parser_parse_inbuf(p);
+    if (rc < 0)
+        return -1;
+    if (p->hold_len > 0 && !p->pending_error) {
+        uint8_t *h = p->hold;
+        size_t n = p->hold_len;
+        p->hold = NULL;
+        p->hold_len = 0;
+        p->hold_cap = 0;
+        int fr = cmq_parser_feed(p, h, n);
+        free(h);
+        if (fr < 0)
+            return -1;
+        if (fr > 0)
+            rc = 1;
+    }
+    return rc;
 }
 
 int cmq_parser_pending_error(const cmq_parser_t *p) {

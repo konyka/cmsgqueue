@@ -4372,6 +4372,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — parser hold on queue-full · MQTT dialing lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_parser_feed hold</span></td><td>✅</td><td>Hard-full under queue-full latched <code>pending_error</code> for unread feed tail (disconnect). Park unread bytes in a hard-bounded hold; <code>drain_inbuf</code>/next feed flushes after the queue drains.</td></tr>
+<tr><td><span class="component-name">cmq_mqtt_bridge_connect</span></td><td>✅</td><td>Concurrent connect could both complete MQTT CONNECT with the same <code>client_id</code> and kick the winner. Exclusive <code>dialing</code> flag serializes the unlocked handshake.</td></tr>
+</table>
+</div>
+
 
 
 
