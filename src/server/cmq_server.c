@@ -62,10 +62,18 @@ static void client_mark_write_progress(cmq_client_t *c) {
 static void client_clear_write_progress(cmq_client_t *c) {
     __atomic_store_n(&c->last_write_progress_ms, (uint64_t)0, __ATOMIC_RELAXED);
 }
+/* Keepalive (acceptor) observes state across threads — atomics (align activity). */
+static cmq_client_state_t client_state(const cmq_client_t *c) {
+    return __atomic_load_n(&c->state, __ATOMIC_ACQUIRE);
+}
+static void client_set_state(cmq_client_t *c, cmq_client_state_t s) {
+    __atomic_store_n(&c->state, s, __ATOMIC_RELEASE);
+}
+
 static int client_write_stalled(const cmq_client_t *c, uint64_t now,
                                 uint64_t write_timeout_ms) {
     if (!c || write_timeout_ms == 0) return 0;
-    if (c->state != CMQ_CLIENT_CONNECTED && c->state != CMQ_CLIENT_CLOSING)
+    if (client_state(c) != CMQ_CLIENT_CONNECTED && client_state(c) != CMQ_CLIENT_CLOSING)
         return 0;
     uint64_t prog = __atomic_load_n(&c->last_write_progress_ms, __ATOMIC_RELAXED);
     return prog != 0 && (now - prog) > write_timeout_ms;
@@ -480,10 +488,10 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
     int finish_dead = 0;
     int do_send = 0;
     if (target && target->conn_gen == msg->target_gen &&
-        target->state != CMQ_CLIENT_CLOSED &&
-        target->state != CMQ_CLIENT_CLOSING) {
+        client_state(target) != CMQ_CLIENT_CLOSED &&
+        client_state(target) != CMQ_CLIENT_CLOSING) {
         if (!client_account_live(w->server, target)) {
-            target->state = CMQ_CLIENT_CLOSING;
+            client_set_state(target, CMQ_CLIENT_CLOSING);
             finish_dead = 1;
             if (w->server)
                 cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
@@ -505,9 +513,9 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
         if (!client_account_live(w->server, target)) {
             cmq_mutex_lock(&w->clients_lock);
             if (target->conn_gen == msg->target_gen &&
-                target->state != CMQ_CLIENT_CLOSED &&
-                target->state != CMQ_CLIENT_CLOSING)
-                target->state = CMQ_CLIENT_CLOSING;
+                client_state(target) != CMQ_CLIENT_CLOSED &&
+                client_state(target) != CMQ_CLIENT_CLOSING)
+                client_set_state(target, CMQ_CLIENT_CLOSING);
             cmq_mutex_unlock(&w->clients_lock);
             finish_dead = 1;
             if (w->server)
@@ -541,8 +549,8 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
                                               CMQ_ATOMIC_RELAXED);
                 /* send_direct FORCE_CLOSE (OOM / buf limit) leaves CLOSING
                    without WRITE/EOF — finish now (align account-dead). */
-                if (target->state == CMQ_CLIENT_CLOSING ||
-                    target->state == CMQ_CLIENT_CLOSED)
+                if (client_state(target) == CMQ_CLIENT_CLOSING ||
+                    client_state(target) == CMQ_CLIENT_CLOSED)
                     finish_dead = 1;
             } else {
                 /* Bytes may be in write_buf / partial TCP — mark before drain
@@ -557,8 +565,8 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
                         cmq_atomic_fetch_add_u64(
                             &w->server->stat_messages_dropped, 1,
                             CMQ_ATOMIC_RELAXED);
-                    if (target->state == CMQ_CLIENT_CLOSING ||
-                        target->state == CMQ_CLIENT_CLOSED)
+                    if (client_state(target) == CMQ_CLIENT_CLOSING ||
+                        client_state(target) == CMQ_CLIENT_CLOSED)
                         finish_dead = 1;
                 } else {
                     sync_ok = 1;
@@ -658,9 +666,9 @@ static void worker_drain_teardowns(cmq_worker_t *w, int max_n) {
         cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
         cmq_mutex_unlock(&w->clients_lock);
         if (target && target->conn_gen == msg->target_gen) {
-            if (target->state != CMQ_CLIENT_CLOSED &&
-                target->state != CMQ_CLIENT_CLOSING)
-                target->state = CMQ_CLIENT_CLOSING;
+            if (client_state(target) != CMQ_CLIENT_CLOSED &&
+                client_state(target) != CMQ_CLIENT_CLOSING)
+                client_set_state(target, CMQ_CLIENT_CLOSING);
             client_finish_closing(target);
         }
         free(msg);
@@ -705,9 +713,9 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                 cmq_client_t *target = cmq_idmap_get(w->idmap, msg->target_id);
                 cmq_mutex_unlock(&w->clients_lock);
                 if (target && target->conn_gen == msg->target_gen) {
-                    if (target->state != CMQ_CLIENT_CLOSED &&
-                        target->state != CMQ_CLIENT_CLOSING)
-                        target->state = CMQ_CLIENT_CLOSING;
+                    if (client_state(target) != CMQ_CLIENT_CLOSED &&
+                        client_state(target) != CMQ_CLIENT_CLOSING)
+                        client_set_state(target, CMQ_CLIENT_CLOSING);
                     client_finish_closing(target);
                 }
                 free(msg);
@@ -1102,7 +1110,7 @@ static cmq_client_t *cmq_client_create(int fd, uint32_t id,
     } else {
         c->conn_gen = 1;
     }
-    c->state = CMQ_CLIENT_INIT;
+    client_set_state(c, CMQ_CLIENT_INIT);
     c->parser = cmq_parser_create();
     if (!c->parser) { free(c); return NULL; }
     if (server && server->config.max_payload_size > 0) {
@@ -1164,11 +1172,11 @@ static void route_detach_under_io_lock(cmq_server_t *srv, int fd) {
    drop event interest, and destroy. Safe to call once; subsequent calls no-op
    because state becomes CLOSED and fd is cleared. */
 static void client_teardown(cmq_client_t *c) {
-    if (!c || c->state == CMQ_CLIENT_CLOSED) return;
+    if (!c || client_state(c) == CMQ_CLIENT_CLOSED) return;
     cmq_server_t *srv = c->server;
     int accounted = c->session_accounted;
     c->session_accounted = 0;
-    c->state = CMQ_CLIENT_CLOSED;
+    client_set_state(c, CMQ_CLIENT_CLOSED);
 
     if (c->is_route && srv && c->fd >= 0)
         route_detach_under_io_lock(srv, c->fd);
@@ -1284,9 +1292,9 @@ static int ensure_write_cap(cmq_client_t *c, size_t need) {
 /* Mark CLOSING without teardown — callers may hold clients_lock.
    Must NOT hold route io_lock (unmark takes pool→io). */
 static void client_force_closing(cmq_client_t *c) {
-    if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
+    if (!c || client_state(c) == CMQ_CLIENT_CLOSED || client_state(c) == CMQ_CLIENT_CLOSING)
         return;
-    c->state = CMQ_CLIENT_CLOSING;
+    client_set_state(c, CMQ_CLIENT_CLOSING);
     if (c->ev_loop && c->fd >= 0) {
         if (cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ | CMQ_EV_WRITE,
                        client_read_cb, c) != 0) {
@@ -1304,7 +1312,7 @@ static void client_force_closing(cmq_client_t *c) {
 /* 1 if route still in pool (or not a live route). 0 → CLOSING started.
    Must NOT hold route io_lock. Closes ghost ingress after broadcast drop. */
 static int client_route_pool_held(cmq_client_t *c) {
-    if (!c || !c->is_route || c->state != CMQ_CLIENT_CONNECTED)
+    if (!c || !c->is_route || client_state(c) != CMQ_CLIENT_CONNECTED)
         return 1;
     cmq_server_t *srv = c->server;
     if (!srv || !srv->routes || c->fd < 0)
@@ -1321,7 +1329,7 @@ static int client_route_pool_held(cmq_client_t *c) {
 }
 
 static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t len) {
-    if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
+    if (!c || client_state(c) == CMQ_CLIENT_CLOSED || client_state(c) == CMQ_CLIENT_CLOSING)
         return -1;
 
     int route_io_idx = -1;
@@ -1329,7 +1337,7 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
         route_io_idx = cmq_route_io_lock_fd(c->server->routes, c->fd);
         /* Fail-closed: never write a route fd unlocked (broadcast may hold it). */
         if (route_io_idx < 0) {
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             if (c->fd >= 0)
                 (void)shutdown(c->fd, SHUT_RDWR);
             /* Unlock never held — detach so pool cannot sticky-live the peer. */
@@ -1339,7 +1347,7 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
     }
 
     /* Under route io_lock — only set CLOSING; post-unlock detach covers pool. */
-    #define CMQ_SEND_FORCE_CLOSE() do { c->state = CMQ_CLIENT_CLOSING; } while (0)
+    #define CMQ_SEND_FORCE_CLOSE() do { client_set_state(c, CMQ_CLIENT_CLOSING); } while (0)
 
     int rc = -1;
     if (c->write_buf && c->write_pos < c->write_len) {
@@ -1387,7 +1395,7 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
             c->write_len = 0;
             c->write_pos = 0;
             client_clear_write_progress(c);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             if (c->fd >= 0)
                 (void)shutdown(c->fd, SHUT_RDWR);
             rc = -1;
@@ -1432,7 +1440,7 @@ static int cmq_client_send_direct(cmq_client_t *c, const uint8_t *data, size_t l
         c->write_len = 0;
         c->write_pos = 0;
         client_clear_write_progress(c);
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         if (c->fd >= 0)
             (void)shutdown(c->fd, SHUT_RDWR);
         rc = -1;
@@ -1444,7 +1452,7 @@ out:
     if (route_io_idx >= 0 && c->server && c->server->routes)
         cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
     /* After io unlock: align broadcast hard-fail — drop pool slot promptly. */
-    if (rc != 0 && c->is_route && c->state == CMQ_CLIENT_CLOSING &&
+    if (rc != 0 && c->is_route && client_state(c) == CMQ_CLIENT_CLOSING &&
         c->server && c->server->routes && c->fd >= 0)
         route_detach_under_io_lock(c->server, c->fd);
     return rc;
@@ -1453,7 +1461,7 @@ out:
 /* Owning-thread send of a raw CMQ frame. Wraps WebSocket binary if needed.
    Cross-thread callers must use cmq_client_send() / worker_push_msg() instead. */
 static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t len) {
-    if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
+    if (!c || client_state(c) == CMQ_CLIENT_CLOSED || client_state(c) == CMQ_CLIENT_CLOSING)
         return -1;
     int rc;
     if (!c->is_websocket) {
@@ -1489,7 +1497,7 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
         free(wsbuf);
     }
     /* Outbound keepalive refresh only for CONNECTED (INIT must stay frozen). */
-    if (rc == 0 && c->state == CMQ_CLIENT_CONNECTED)
+    if (rc == 0 && client_state(c) == CMQ_CLIENT_CONNECTED)
         client_touch_activity(c);
     return rc;
 }
@@ -1505,7 +1513,7 @@ static int client_drain_write_sync(cmq_client_t *c) {
         route_io_idx = cmq_route_io_lock_fd(c->server->routes, c->fd);
         if (route_io_idx < 0) {
             /* Pool lost the fd — align send_direct io_lock fail. */
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             (void)shutdown(c->fd, SHUT_RDWR);
             route_detach_under_io_lock(c->server, c->fd);
             return -1;
@@ -1576,7 +1584,7 @@ out:
 
 static int cmq_client_send_checked(cmq_client_t *c, const uint8_t *data, size_t len,
                                     uint32_t require_sub_id) {
-    if (!c || c->state == CMQ_CLIENT_CLOSED || c->state == CMQ_CLIENT_CLOSING)
+    if (!c || client_state(c) == CMQ_CLIENT_CLOSED || client_state(c) == CMQ_CLIENT_CLOSING)
         return -1;
     cmq_server_t *srv = c->server;
     int cross = srv->workers && c->worker_id >= 0 && c->worker_id != cmq_current_worker_id;
@@ -1816,7 +1824,7 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
         if (used[i]) continue;
         cmq_sub_ref_t *ref = (cmq_sub_ref_t *)result->entries[i];
         if (!ref || !ref->client) continue;
-        /* Do not read client->state here (cross-thread race); send paths filter. */
+        /* Do not read client_state(client) here (cross-thread race); send paths filter. */
 
         if (ref->queue_group[0] == '\0') {
             /* Same epoch filter as QG: skip soft-deleted holders early. */
@@ -1898,14 +1906,14 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         cmq_client_t *c = cmq_idmap_get(w->idmap, client_id);
         int do_send = 0;
         int dead_acct = 0;
-        if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
+        if (c && c->conn_gen == conn_gen && client_state(c) == CMQ_CLIENT_CONNECTED &&
             client_account_live(srv, c) &&
             (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
             do_send = 1;
         } else if (c && c->conn_gen == conn_gen &&
-                   c->state == CMQ_CLIENT_CONNECTED &&
+                   client_state(c) == CMQ_CLIENT_CONNECTED &&
                    !client_account_live(srv, c)) {
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             dead_acct = 1;
         }
         cmq_mutex_unlock(&w->clients_lock);
@@ -1915,8 +1923,8 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         if (do_send && c) {
             if (!client_account_live(srv, c)) {
                 cmq_mutex_lock(&w->clients_lock);
-                if (c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED)
-                    c->state = CMQ_CLIENT_CLOSING;
+                if (c->conn_gen == conn_gen && client_state(c) == CMQ_CLIENT_CONNECTED)
+                    client_set_state(c, CMQ_CLIENT_CLOSING);
                 cmq_mutex_unlock(&w->clients_lock);
                 dead_acct = 1;
             } else if (!deliver_acl_ok(srv, pub_account, c->account_name,
@@ -1924,8 +1932,8 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
                 /* ACL revoked mid-flight — drop. */
             } else if (cmq_client_send_local(c, frame, flen) == 0) {
                 ok = 1;
-            } else if (c->state == CMQ_CLIENT_CLOSING ||
-                       c->state == CMQ_CLIENT_CLOSED) {
+            } else if (client_state(c) == CMQ_CLIENT_CLOSING ||
+                       client_state(c) == CMQ_CLIENT_CLOSED) {
                 /* FORCE_CLOSE from send_direct — reclaim promptly. */
                 worker_teardown_or_shutdown(w, client_id, conn_gen);
             }
@@ -1940,7 +1948,7 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
     int ok = 0;
     int dead_acct = 0;
     int dead_fd = -1;
-    if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
+    if (c && c->conn_gen == conn_gen && client_state(c) == CMQ_CLIENT_CONNECTED &&
         client_account_live(srv, c) &&
         (require_sub_id == 0 || client_has_sub(c, require_sub_id))) {
         /* May run off acceptor thread (worker deliver to acceptor-owned) —
@@ -1948,17 +1956,17 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
         if (deliver_acl_ok(srv, pub_account, c->account_name, frame, flen) &&
             cmq_client_send_local(c, frame, flen) == 0)
             ok = 1;
-        else if (c->state == CMQ_CLIENT_CLOSING ||
-                 c->state == CMQ_CLIENT_CLOSED) {
+        else if (client_state(c) == CMQ_CLIENT_CLOSING ||
+                 client_state(c) == CMQ_CLIENT_CLOSED) {
             /* FORCE_CLOSE: nudge EOF so owning loop finishes (not on this thr). */
             dead_acct = 1;
             dead_fd = c->fd;
         }
     } else if (c && c->conn_gen == conn_gen &&
-               c->state == CMQ_CLIENT_CONNECTED &&
+               client_state(c) == CMQ_CLIENT_CONNECTED &&
                !client_account_live(srv, c)) {
         /* Acceptor-owned: mark CLOSING; owning loop tears down after EOF. */
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         dead_acct = 1;
         dead_fd = c->fd;
     }
@@ -2087,7 +2095,7 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
         cmq_mutex_lock(&w->clients_lock);
         cmq_client_t *c = cmq_idmap_get(w->idmap, client_id);
         int do_send = 0;
-        if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
+        if (c && c->conn_gen == conn_gen && client_state(c) == CMQ_CLIENT_CONNECTED &&
             client_account_live(srv, c) &&
             (require_sub_id == 0 || client_has_sub(c, require_sub_id)))
             do_send = 1;
@@ -2098,16 +2106,16 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
             return 0;
         if (cmq_client_send_local(c, frame, flen) != 0) {
             /* Align client_send_by_id: FORCE_CLOSE leaves CLOSING w/o WRITE. */
-            if (c->state == CMQ_CLIENT_CLOSING ||
-                c->state == CMQ_CLIENT_CLOSED)
+            if (client_state(c) == CMQ_CLIENT_CLOSING ||
+                client_state(c) == CMQ_CLIENT_CLOSED)
                 worker_teardown_or_shutdown(w, client_id, conn_gen);
             return 0;
         }
         /* Drain fail after buffer: ambiguous (epoll may still flush). */
         int drained = client_drain_write_sync(c);
         if (drained != 0 &&
-            (c->state == CMQ_CLIENT_CLOSING ||
-             c->state == CMQ_CLIENT_CLOSED))
+            (client_state(c) == CMQ_CLIENT_CLOSING ||
+             client_state(c) == CMQ_CLIENT_CLOSED))
             worker_teardown_or_shutdown(w, client_id, conn_gen);
         return drained == 0 ? 1 : -1;
     }
@@ -2116,13 +2124,13 @@ static int client_send_by_id_drain(cmq_server_t *srv, int worker_id,
     cmq_client_t *c = cmq_idmap_get(srv->idmap, client_id);
     int ok = 0;
     int nudge_fd = -1;
-    if (c && c->conn_gen == conn_gen && c->state == CMQ_CLIENT_CONNECTED &&
+    if (c && c->conn_gen == conn_gen && client_state(c) == CMQ_CLIENT_CONNECTED &&
         client_account_live(srv, c) &&
         (require_sub_id == 0 || client_has_sub(c, require_sub_id)) &&
         deliver_acl_ok(srv, pub_account, c->account_name, frame, flen)) {
         if (cmq_client_send_local(c, frame, flen) == 0)
             ok = client_drain_write_sync(c) == 0 ? 1 : -1;
-        if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED)
+        if (client_state(c) == CMQ_CLIENT_CLOSING || client_state(c) == CMQ_CLIENT_CLOSED)
             nudge_fd = c->fd;
     }
     cmq_mutex_unlock(&srv->clients_lock);
@@ -2446,14 +2454,14 @@ done:
             cmq_mutex_lock(&pw->clients_lock);
             cmq_client_t *pub = cmq_idmap_get(pw->idmap, ctx->publisher_id);
             pub_live = (pub && pub->conn_gen == ctx->publisher_gen &&
-                        pub->state == CMQ_CLIENT_CONNECTED &&
+                        client_state(pub) == CMQ_CLIENT_CONNECTED &&
                         client_account_live(srv, pub));
             cmq_mutex_unlock(&pw->clients_lock);
         } else {
             cmq_mutex_lock(&srv->clients_lock);
             cmq_client_t *pub = cmq_idmap_get(srv->idmap, ctx->publisher_id);
             pub_live = (pub && pub->conn_gen == ctx->publisher_gen &&
-                        pub->state == CMQ_CLIENT_CONNECTED &&
+                        client_state(pub) == CMQ_CLIENT_CONNECTED &&
                         client_account_live(srv, pub));
             cmq_mutex_unlock(&srv->clients_lock);
         }
@@ -2693,7 +2701,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     (void)c;
     if (!client_account_live(srv, c)) {
         cmq_send_error(c, "account inactive");
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
     if (!frame->payload || frame->payload_len < 2) {
@@ -2810,7 +2818,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         /* Soft-delete may race after the entry check — revalidate. */
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
         /* Remote-only: forward after local match succeeded (no OOM ghost). */
@@ -2820,7 +2828,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                               frame->payload_len, &route_sent);
             if (route_rc == -2) {
                 cmq_send_error(c, "account inactive");
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 return;
             }
         }
@@ -2842,14 +2850,14 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     if (!client_account_live(srv, c)) {
         free(tgts);
         cmq_send_error(c, "account inactive");
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
     if (!tgts || ntgt == 0) {
         free(tgts);
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
         if (!c->is_route) {
@@ -2858,7 +2866,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                               frame->payload_len, &route_sent);
             if (route_rc == -2) {
                 cmq_send_error(c, "account inactive");
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 return;
             }
         }
@@ -2871,7 +2879,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     if (!client_account_live(srv, c)) {
         free(tgts);
         cmq_send_error(c, "account inactive");
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
 
@@ -2883,7 +2891,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         if (route_rc == -2) {
             free(tgts);
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
     }
@@ -2892,7 +2900,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     if (!client_account_live(srv, c)) {
         free(tgts);
         cmq_send_error(c, "account inactive");
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
 
@@ -3186,7 +3194,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
             cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
             cmq_send_suback(c, sub_id, 1);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
         pre_credited = 1;
@@ -3200,7 +3208,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
             cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
             cmq_send_suback(c, sub_id, 1);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
     }
@@ -3335,7 +3343,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                                           CMQ_ATOMIC_RELAXED);
             free(entry);
             cmq_send_suback(c, sub_id, 1);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
         if (pre_acc) cmq_account_release(srv->accounts, pre_acc);
@@ -3363,7 +3371,7 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         }
         free(entry);
         cmq_send_suback(c, sub_id, 1);
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
     cmq_send_suback(c, sub_id, 0);
@@ -3527,7 +3535,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     if (!client_account_live(srv, c)) {
         free(tgts);
         cmq_send_error(c, "account inactive");
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
     /* Only forward REQUEST when no local responders — otherwise peers
@@ -3539,7 +3547,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         if (route_rc == -2) {
             free(tgts);
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
     }
@@ -3554,7 +3562,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         /* Soft-delete may race during long cross-worker waits. */
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
         if (n > 0) {
@@ -3572,7 +3580,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                               frame->payload_len, &route_sent);
             if (route_rc == -2) {
                 cmq_send_error(c, "account inactive");
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 return;
             }
             if (route_sent > 0) {
@@ -3592,7 +3600,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         free(tgts);
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
         if (!c->is_route && route_sent > 0) {
@@ -3687,7 +3695,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     if (!client_account_live(srv, c)) {
         free(tgts);
         cmq_send_error(c, "account inactive");
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
     /* '>' / '*.*' match _INBOX but cannot receive it (deliver_tgt_accepts).
@@ -3713,7 +3721,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         if (route_rc == -2) {
             free(tgts);
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
     }
@@ -3725,7 +3733,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
             if (!client_account_live(srv, c)) {
                 free(tgts);
                 cmq_send_error(c, "account inactive");
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 return;
             }
             /* Local exact targets were ghost/CLOSING. Cluster-forward only for
@@ -3740,7 +3748,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
                 if (route_rc == -2) {
                     free(tgts);
                     cmq_send_error(c, "account inactive");
-                    c->state = CMQ_CLIENT_CLOSING;
+                    client_set_state(c, CMQ_CLIENT_CLOSING);
                     return;
                 }
                 if (route_sent == 0) {
@@ -4018,7 +4026,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
         free(prep);
         cmq_send_error(c, "account inactive");
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
 
@@ -4032,7 +4040,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
             free(prep);
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
         uint16_t subject_len = prep[msg].subject_len;
@@ -4072,7 +4080,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                     for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
                     free(prep);
                     cmq_send_error(c, "account inactive");
-                    c->state = CMQ_CLIENT_CLOSING;
+                    client_set_state(c, CMQ_CLIENT_CLOSING);
                     return;
                 }
                 if (route_sent > 0)
@@ -4102,7 +4110,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
         free(prep);
         cmq_send_error(c, "account inactive");
-        c->state = CMQ_CLIENT_CLOSING;
+        client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
     for (uint16_t msg = 0; msg < count; msg++) {
@@ -4110,7 +4118,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
             free(prep);
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
         const uint8_t *msg_payload = prep[msg].msg_payload;
@@ -4157,7 +4165,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                           const cmq_frame_t *frame) {
     /* Only CONNECT/DISCONNECT before authentication — PING alone must not
        refresh INIT keepalive (slot-exhaustion DoS). */
-    if (c->state != CMQ_CLIENT_CONNECTED &&
+    if (client_state(c) != CMQ_CLIENT_CONNECTED &&
         frame->hdr.op != CMQ_OP_CONNECT &&
         frame->hdr.op != CMQ_OP_DISCONNECT) {
         cmq_send_error(c, "not connected");
@@ -4171,11 +4179,11 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
     switch (frame->hdr.op) {
     case CMQ_OP_CONNECT:
         /* Only virgin INIT sockets may CONNECT — CLOSING must not resurrect. */
-        if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) {
+        if (client_state(c) == CMQ_CLIENT_CLOSING || client_state(c) == CMQ_CLIENT_CLOSED) {
             cmq_send_connack(c, 1);
             break;
         }
-        if (c->state == CMQ_CLIENT_CONNECTED) {
+        if (client_state(c) == CMQ_CLIENT_CONNECTED) {
             cmq_send_connack(c, 1);
             break;
         }
@@ -4220,7 +4228,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 bad |= !ct_memeq(passwd, passwd, sizeof(passwd));
             if (bad) {
                 cmq_send_connack(c, malformed ? 1 : 2);
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
             free(c->username);
@@ -4232,7 +4240,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 c->username = strdup("");
             if (!c->username) {
                 cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
         }
@@ -4246,7 +4254,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             route_ri = peer_route_index(srv, c->fd);
             if (!srv->routes || route_ri < 0) {
                 cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
             want_route = 1;
@@ -4257,14 +4265,14 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             size_t ul = strnlen(c->username, CMQ_ACCOUNT_NAME_SIZE);
             if (ul == 0 || ul >= CMQ_ACCOUNT_NAME_SIZE) {
                 cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
             memcpy(c->account_name, c->username, ul);
             c->account_name[ul] = '\0';
             if (cmq_account_ensure(srv->accounts, c->account_name) != 0) {
                 cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
         } else {
@@ -4273,7 +4281,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             /* Soft-delete must deny anonymous CONNECT until admin create(). */
             if (cmq_account_ensure(srv->accounts, "$default") != 0) {
                 cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
         }
@@ -4285,7 +4293,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             __atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != aep) {
             if (acc) cmq_account_release(srv->accounts, acc);
             cmq_send_connack(c, 1);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             break;
         }
         c->account_epoch = aep;
@@ -4294,7 +4302,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             cmq_account_release(srv->accounts, acc);
             c->account_epoch = 0;
             cmq_send_connack(c, 1);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             break;
         }
         if (!client_account_live(srv, c)) {
@@ -4302,7 +4310,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             cmq_account_release(srv->accounts, acc);
             c->account_epoch = 0;
             cmq_send_connack(c, 1);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             break;
         }
         cmq_account_release(srv->accounts, acc);
@@ -4311,7 +4319,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         {
             cmq_mutex_t *clk = client_clients_lock(srv, c);
             cmq_mutex_lock(clk);
-            c->state = CMQ_CLIENT_CONNECTED;
+            client_set_state(c, CMQ_CLIENT_CONNECTED);
             client_touch_activity(c);
             cmq_mutex_unlock(clk);
         }
@@ -4327,7 +4335,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                    Align drain/mark fail: nudge EOF so teardown can reclaim
                    connection credit / slots promptly. */
                 cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
@@ -4340,24 +4348,24 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                raw socket under io_lock; marking before CONNACK is on the wire
                can inject PUBLISH into cmq_peer_handshake and fail the dialer. */
             if (client_drain_write_sync(c) != 0 ||
-                c->state != CMQ_CLIENT_CONNECTED ||
+                client_state(c) != CMQ_CLIENT_CONNECTED ||
                 !client_account_live(srv, c)) {
                 /* Soft-delete during attach/INFO drain must not CONNACK 0. */
                 cmq_route_detach_fd(srv->routes, c->fd);
                 c->is_route = 0;
                 cmq_send_connack(c, 1);
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
             cmq_send_connack(c, 0);
             if (client_drain_write_sync(c) != 0 ||
-                c->state != CMQ_CLIENT_CONNECTED ||
+                client_state(c) != CMQ_CLIENT_CONNECTED ||
                 !client_account_live(srv, c)) {
                 /* CONNACK 0 may already be on wire — fail-closed with EOF. */
                 cmq_route_detach_fd(srv->routes, c->fd);
                 c->is_route = 0;
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
@@ -4366,7 +4374,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 /* CONNACK 0 already on wire — fail-closed with EOF. */
                 cmq_route_detach_fd(srv->routes, c->fd);
                 c->is_route = 0;
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
@@ -4375,7 +4383,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         /* Soft-delete after inc/CONNECTED (INFO window) must not CONNACK 0. */
         if (!client_account_live(srv, c)) {
             cmq_send_connack(c, 1);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             (void)shutdown(c->fd, SHUT_RDWR);
             break;
         }
@@ -4384,7 +4392,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
     case CMQ_OP_PING:
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             break;
         }
         cmq_send_pong(c);
@@ -4397,7 +4405,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
     case CMQ_OP_BATCH:
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             break;
         }
         if (frame->hdr.op == CMQ_OP_PUBLISH)
@@ -4420,7 +4428,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
     case CMQ_OP_STATS:
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             break;
         }
         handle_stats(srv, c);
@@ -4440,7 +4448,7 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
             c->write_len = 0;
             c->write_pos = 0;
             client_clear_write_progress(c);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             if (c->fd >= 0)
                 (void)shutdown(c->fd, SHUT_RDWR);
             /* Align send_direct io_lock fail — detach before sticky-live. */
@@ -4463,7 +4471,7 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
                 route_io_idx = -1;
             }
             (void)shutdown(c->fd, SHUT_RDWR);
-            c->state = CMQ_CLIENT_CLOSING;
+            client_set_state(c, CMQ_CLIENT_CLOSING);
             if (c->is_route && c->server && c->server->routes && c->fd >= 0)
                 route_detach_under_io_lock(c->server, c->fd);
             return;
@@ -4650,7 +4658,7 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
     if (consumed) *consumed = 0;
     /* Upgrade only on fresh sockets — CONNECTED CMQ sessions must not lose
        write_buf / switch parsers mid-flight. */
-    if (!c || c->state != CMQ_CLIENT_INIT) return -1;
+    if (!c || client_state(c) != CMQ_CLIENT_INIT) return -1;
     if (len < 4) return 1; /* need more data */
 
     size_t hdr_end = 0;
@@ -4768,13 +4776,13 @@ static void client_closing_discard_inbound(cmq_client_t *c) {
 }
 
 static void client_finish_closing(cmq_client_t *c) {
-    if (!c || c->state != CMQ_CLIENT_CLOSING) return;
+    if (!c || client_state(c) != CMQ_CLIENT_CLOSING) return;
     /* Acceptor-owned: serialize with worker REQUEST drain (holds clients_lock). */
     cmq_server_t *srv = c->server;
     int acc = (c->worker_id < 0 && srv != NULL);
     if (acc)
         cmq_mutex_lock(&srv->clients_lock);
-    if (c->state != CMQ_CLIENT_CLOSING) {
+    if (client_state(c) != CMQ_CLIENT_CLOSING) {
         if (acc)
             cmq_mutex_unlock(&srv->clients_lock);
         return;
@@ -4826,7 +4834,7 @@ static int client_dispatch_parser(cmq_server_t *srv, cmq_client_t *c, int rc) {
                 }
                 handle_frame(srv, c, frame);
             }
-            if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) {
+            if (client_state(c) == CMQ_CLIENT_CLOSING || client_state(c) == CMQ_CLIENT_CLOSED) {
                 client_finish_closing(c);
                 return -1;
             }
@@ -4856,18 +4864,18 @@ static void client_read_cb(int fd, int events, void *data) {
     }
 
     if (events & CMQ_EV_WRITE) {
-        if (c->state == CMQ_CLIENT_CLOSING) {
+        if (client_state(c) == CMQ_CLIENT_CLOSING) {
             client_finish_closing(c);
             return;
         }
         client_flush_write(c);
-        if (c->state == CMQ_CLIENT_CLOSING || c->state == CMQ_CLIENT_CLOSED) {
+        if (client_state(c) == CMQ_CLIENT_CLOSING || client_state(c) == CMQ_CLIENT_CLOSED) {
             client_finish_closing(c);
             return;
         }
     }
 
-    if (c->state == CMQ_CLIENT_CLOSING) {
+    if (client_state(c) == CMQ_CLIENT_CLOSING) {
         if (events & CMQ_EV_READ)
             client_closing_discard_inbound(c);
         client_finish_closing(c);
@@ -4898,14 +4906,14 @@ static void client_read_cb(int fd, int events, void *data) {
     /* INIT: do not refresh on TCP traffic — PING/junk must not hold slots.
        WS: only complete frames / control refresh (see below) — FIN=0 spam
        must not bypass idle keepalive. */
-    if (c->state == CMQ_CLIENT_CONNECTED && !c->is_websocket)
+    if (client_state(c) == CMQ_CLIENT_CONNECTED && !c->is_websocket)
         client_touch_activity(c);
 
     /* HTTP upgrade may arrive fragmented or pipelined with the first WS frame.
        Accumulate into ws_recv_buf until headers complete, then keep any trailing
        bytes for the WS frame parser below. Only INIT (pre-CONNECT). */
     if (!c->is_websocket && !c->ws_upgrade_done &&
-        c->state == CMQ_CLIENT_INIT &&
+        client_state(c) == CMQ_CLIENT_INIT &&
         (c->ws_recv_len > 0 || (n > 0 && c->read_buf[0] == 'G'))) {
         if ((size_t)n > SIZE_MAX - c->ws_recv_len) { client_teardown(c); return; }
         size_t need = c->ws_recv_len + (size_t)n;
@@ -5006,7 +5014,7 @@ static void client_read_cb(int fd, int events, void *data) {
             if (ws_frame.opcode == CMQ_WS_OPCODE_CLOSE) {
                 /* Align DISCONNECT/keepalive — flush write_buf before teardown
                    so in-flight SUBACK/RESPONSE are not silently dropped. */
-                c->state = CMQ_CLIENT_CLOSING;
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 client_finish_closing(c);
                 return;
             }
@@ -5019,9 +5027,9 @@ static void client_read_cb(int fd, int events, void *data) {
                 }
                 /* Soft-deleted / epoch-dead accounts must not refresh keepalive
                    via WS ping (align with CMQ_OP_PING). */
-                if (c->state == CMQ_CLIENT_CONNECTED &&
+                if (client_state(c) == CMQ_CLIENT_CONNECTED &&
                     !client_account_live(srv, c)) {
-                    c->state = CMQ_CLIENT_CLOSING;
+                    client_set_state(c, CMQ_CLIENT_CLOSING);
                     client_finish_closing(c);
                     return;
                 }
@@ -5046,26 +5054,26 @@ static void client_read_cb(int fd, int events, void *data) {
                     cmq_client_send_direct(c, pong, (size_t)plen);
                 /* send_direct may FORCE_CLOSE (buf full / OOM / ev_mod) —
                    align WS CLOSE: finish now, do not parse more frames. */
-                if (c->state == CMQ_CLIENT_CLOSING ||
-                    c->state == CMQ_CLIENT_CLOSED) {
+                if (client_state(c) == CMQ_CLIENT_CLOSING ||
+                    client_state(c) == CMQ_CLIENT_CLOSED) {
                     client_finish_closing(c);
                     return;
                 }
                 /* Only CONNECTED may refresh keepalive — WS ping must not
                    hold INIT slots forever (same rule as CMQ PING). */
-                if (c->state == CMQ_CLIENT_CONNECTED)
+                if (client_state(c) == CMQ_CLIENT_CONNECTED)
                     client_touch_activity(c);
                 offset += (size_t)parsed;
                 continue;
             }
             if (ws_frame.opcode == CMQ_WS_OPCODE_PONG) {
-                if (c->state == CMQ_CLIENT_CONNECTED &&
+                if (client_state(c) == CMQ_CLIENT_CONNECTED &&
                     !client_account_live(srv, c)) {
-                    c->state = CMQ_CLIENT_CLOSING;
+                    client_set_state(c, CMQ_CLIENT_CLOSING);
                     client_finish_closing(c);
                     return;
                 }
-                if (c->state == CMQ_CLIENT_CONNECTED)
+                if (client_state(c) == CMQ_CLIENT_CONNECTED)
                     client_touch_activity(c);
                 offset += (size_t)parsed;
                 continue;
@@ -5136,7 +5144,7 @@ static void client_read_cb(int fd, int events, void *data) {
                 /* Align TCP INIT + WS PING: never refresh on INIT fragments
                    (FIN=0 spam must not hold slots). CONNECT success touches
                    activity in handle_frame; CONNECTED only on FIN=1. */
-                if (ws_frame.fin && c->state == CMQ_CLIENT_CONNECTED)
+                if (ws_frame.fin && client_state(c) == CMQ_CLIENT_CONNECTED)
                     client_touch_activity(c);
 
                 if (ws_frame.fin) {
@@ -5190,11 +5198,11 @@ static void keepalive_scan_clients(cmq_server_t *srv, cmq_client_t **clients,
                 break;
             }
         }
-        if (!present || c->state == CMQ_CLIENT_CLOSED) {
+        if (!present || client_state(c) == CMQ_CLIENT_CLOSED) {
             cmq_mutex_unlock(&srv->clients_lock);
             continue;
         }
-        if (c->state == CMQ_CLIENT_CONNECTED &&
+        if (client_state(c) == CMQ_CLIENT_CONNECTED &&
             !client_account_live(srv, c)) {
             client_force_closing(c);
             cmq_mutex_unlock(&srv->clients_lock);
@@ -5202,7 +5210,7 @@ static void keepalive_scan_clients(cmq_server_t *srv, cmq_client_t **clients,
             continue;
         }
         int stalled = client_write_stalled(c, now, write_timeout_ms);
-        if (c->state == CMQ_CLIENT_CLOSING) {
+        if (client_state(c) == CMQ_CLIENT_CLOSING) {
             int closing_idle = (now - client_activity_ms(c)) > timeout_ms;
             if (stalled && c->fd >= 0)
                 (void)shutdown(c->fd, SHUT_RDWR);
@@ -5211,14 +5219,14 @@ static void keepalive_scan_clients(cmq_server_t *srv, cmq_client_t **clients,
                 client_finish_closing(c);
             continue;
         }
-        int idle = (c->state == CMQ_CLIENT_CONNECTED ||
-                    c->state == CMQ_CLIENT_INIT) &&
+        int idle = (client_state(c) == CMQ_CLIENT_CONNECTED ||
+                    client_state(c) == CMQ_CLIENT_INIT) &&
                    (now - client_activity_ms(c)) > timeout_ms;
         if (!idle && !stalled) {
             cmq_mutex_unlock(&srv->clients_lock);
             continue;
         }
-        if (c->state == CMQ_CLIENT_CONNECTED) {
+        if (client_state(c) == CMQ_CLIENT_CONNECTED) {
             uint8_t disc[16];
             size_t disc_len = cmq_frame_encode(disc, sizeof(disc),
                                                 CMQ_OP_DISCONNECT, 0, NULL, 0);
@@ -5264,20 +5272,20 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
             /* OOM: stack-snapshot doomed clients so finish_closing still runs. */
             for (int i = 0; i < n; i++) {
                 cmq_client_t *c = srv->clients[i];
-                if (!c || c->state == CMQ_CLIENT_CLOSED)
+                if (!c || client_state(c) == CMQ_CLIENT_CLOSED)
                     continue;
                 int stalled = client_write_stalled(c, now, write_timeout_ms);
                 int doom = 0;
-                if (c->state == CMQ_CLIENT_CONNECTED &&
+                if (client_state(c) == CMQ_CLIENT_CONNECTED &&
                     !client_account_live(srv, c))
                     doom = 1;
-                else if (c->state == CMQ_CLIENT_CLOSING) {
+                else if (client_state(c) == CMQ_CLIENT_CLOSING) {
                     int closing_idle =
                         (now - client_activity_ms(c)) > timeout_ms;
                     doom = stalled || closing_idle;
                 } else {
-                    int idle = (c->state == CMQ_CLIENT_CONNECTED ||
-                                c->state == CMQ_CLIENT_INIT) &&
+                    int idle = (client_state(c) == CMQ_CLIENT_CONNECTED ||
+                                client_state(c) == CMQ_CLIENT_INIT) &&
                                (now - client_activity_ms(c)) > timeout_ms;
                     doom = idle || stalled;
                 }
@@ -5325,19 +5333,19 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                 }
                 for (int i = 0; i < wn; i++) {
                     cmq_client_t *c = w->clients[i];
-                    if (!c || c->state == CMQ_CLIENT_CLOSED)
+                    if (!c || client_state(c) == CMQ_CLIENT_CLOSED)
                         continue;
                     int stalled = client_write_stalled(c, now, write_timeout_ms);
                     int doom = 0;
-                    if (c->state == CMQ_CLIENT_CONNECTED &&
+                    if (client_state(c) == CMQ_CLIENT_CONNECTED &&
                         !client_account_live(srv, c)) {
                         doom = 1; /* soft-deleted — reclaim without idle wait */
-                    } else if (c->state == CMQ_CLIENT_CLOSING) {
+                    } else if (client_state(c) == CMQ_CLIENT_CLOSING) {
                         int closing_idle = (now - client_activity_ms(c)) > timeout_ms;
                         doom = stalled || closing_idle;
                     } else {
-                        int idle = (c->state == CMQ_CLIENT_CONNECTED ||
-                                    c->state == CMQ_CLIENT_INIT) &&
+                        int idle = (client_state(c) == CMQ_CLIENT_CONNECTED ||
+                                    client_state(c) == CMQ_CLIENT_INIT) &&
                                    (now - client_activity_ms(c)) > timeout_ms;
                         doom = idle || stalled;
                     }
@@ -6125,14 +6133,14 @@ static void acceptor_process_drain(cmq_server_t *srv) {
             int n = 0;
             for (int i = 0; i < nacc; i++) {
                 cmq_client_t *c = srv->clients[i];
-                if (!c || c->state == CMQ_CLIENT_CLOSED)
+                if (!c || client_state(c) == CMQ_CLIENT_CLOSED)
                     continue;
                 /* DISCONNECT while still CONNECTED — send_local rejects CLOSING. */
-                if (c->state == CMQ_CLIENT_CONNECTED && disc_len > 0)
+                if (client_state(c) == CMQ_CLIENT_CONNECTED && disc_len > 0)
                     (void)cmq_client_send_local(c, disc, disc_len);
-                if (c->state == CMQ_CLIENT_CONNECTED ||
-                    c->state == CMQ_CLIENT_INIT)
-                    c->state = CMQ_CLIENT_CLOSING;
+                if (client_state(c) == CMQ_CLIENT_CONNECTED ||
+                    client_state(c) == CMQ_CLIENT_INIT)
+                    client_set_state(c, CMQ_CLIENT_CLOSING);
                 /* Pre-existing CLOSING: finish below. */
                 acc_snap[n++] = c;
             }
@@ -6142,12 +6150,12 @@ static void acceptor_process_drain(cmq_server_t *srv) {
             for (int i = 0; i < nacc; i++) {
                 cmq_client_t *c = srv->clients[i];
                 if (c && c->fd >= 0 &&
-                    (c->state == CMQ_CLIENT_CONNECTED ||
-                     c->state == CMQ_CLIENT_INIT ||
-                     c->state == CMQ_CLIENT_CLOSING)) {
-                    if (c->state != CMQ_CLIENT_CLOSING &&
-                        c->state != CMQ_CLIENT_CLOSED)
-                        c->state = CMQ_CLIENT_CLOSING;
+                    (client_state(c) == CMQ_CLIENT_CONNECTED ||
+                     client_state(c) == CMQ_CLIENT_INIT ||
+                     client_state(c) == CMQ_CLIENT_CLOSING)) {
+                    if (client_state(c) != CMQ_CLIENT_CLOSING &&
+                        client_state(c) != CMQ_CLIENT_CLOSED)
+                        client_set_state(c, CMQ_CLIENT_CLOSING);
                     (void)shutdown(c->fd, SHUT_RDWR);
                 }
             }
@@ -6158,7 +6166,7 @@ static void acceptor_process_drain(cmq_server_t *srv) {
     if (acc_snap) {
         for (int i = 0; i < nacc; i++) {
             cmq_client_t *c = acc_snap[i];
-            if (c && c->state == CMQ_CLIENT_CLOSING)
+            if (c && client_state(c) == CMQ_CLIENT_CLOSING)
                 client_finish_closing(c);
         }
         free(acc_snap);
@@ -6204,15 +6212,15 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
                 if (keys) {
                     for (int j = 0; j < wn; j++) {
                         cmq_client_t *c = w->clients[j];
-                        if (!c || c->state == CMQ_CLIENT_CLOSED)
+                        if (!c || client_state(c) == CMQ_CLIENT_CLOSED)
                             continue;
-                        if (c->state == CMQ_CLIENT_CONNECTED ||
-                            c->state == CMQ_CLIENT_INIT ||
-                            c->state == CMQ_CLIENT_CLOSING) {
+                        if (client_state(c) == CMQ_CLIENT_CONNECTED ||
+                            client_state(c) == CMQ_CLIENT_INIT ||
+                            client_state(c) == CMQ_CLIENT_CLOSING) {
                             keys[nids].id = c->id;
                             keys[nids].gen = c->conn_gen;
                             keys[nids].send_disc =
-                                (c->state == CMQ_CLIENT_CONNECTED) ? 1 : 0;
+                                (client_state(c) == CMQ_CLIENT_CONNECTED) ? 1 : 0;
                             nids++;
                         }
                     }
@@ -6220,9 +6228,9 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
                     for (int j = 0; j < wn; j++) {
                         cmq_client_t *c = w->clients[j];
                         if (c && c->fd >= 0 &&
-                            (c->state == CMQ_CLIENT_CONNECTED ||
-                             c->state == CMQ_CLIENT_INIT ||
-                             c->state == CMQ_CLIENT_CLOSING))
+                            (client_state(c) == CMQ_CLIENT_CONNECTED ||
+                             client_state(c) == CMQ_CLIENT_INIT ||
+                             client_state(c) == CMQ_CLIENT_CLOSING))
                             shutdown(c->fd, SHUT_RDWR);
                     }
                 }

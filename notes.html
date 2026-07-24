@@ -4017,6 +4017,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — client.state atomic vs keepalive</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_client.state</span></td><td>✅</td><td>Acceptor keepalive reads <code>state</code> under <code>clients_lock</code> while workers write CLOSING unlocked (TEARDOWN/<code>send_direct</code>); all accesses go through acquire/release atomics (align <code>last_activity_ms</code>).</td></tr>
+</table>
+</div>
+
 
 
 
