@@ -118,6 +118,7 @@ typedef struct cmq_worker_msg {
     uint32_t payload_bytes;         /* body bytes for account bytes_out */
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
     char pub_account[CMQ_ACCOUNT_NAME_SIZE]; /* non-empty: recheck may_deliver */
+    uint32_t pub_account_epoch;     /* publisher CONNECT epoch for may_deliver */
     int *sync_result;               /* NULL=async; else 0 pending, 1 ok, -1 fail */
     uint8_t sync_heap;              /* 1: sync_result is cmq_req_sync_t (refcount) */
     uint8_t *buf;

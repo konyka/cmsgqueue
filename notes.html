@@ -4305,6 +4305,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — mailbox SEND carries publisher account epoch</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">worker_msg pub_account_epoch</span></td><td>✅</td><td>Queued SEND only stored <code>pub_account</code> name — after soft-delete→reactivate, drain-time <code>may_deliver</code> could still accept E1 publishes against E2. Now carry <code>pub_account_epoch</code>, gate with <code>pub_account_epoch_live</code> in mailbox/sync/REQUEST/ACL paths.</td></tr>
+</table>
+</div>
+
 
 
 
