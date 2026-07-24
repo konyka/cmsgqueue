@@ -5992,8 +5992,19 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.tls_cert, src.tls_cert);
     OWN(srv->config.tls_key, src.tls_key);
 #undef OWN
-    for (int i = 0; i < src.route_count && i < 8; i++) {
-        if (!src.routes[i].addr) continue;
+    /* Fail closed before copy — truncating/skipping would hide invalid
+       programmatic configs from cmq_config_validate. */
+    if (src.route_count < 0 || src.route_count > 8) {
+        cmq_config_free(&srv->config);
+        free(srv);
+        return CMQ_ERR_INVALID_ARG;
+    }
+    for (int i = 0; i < src.route_count; i++) {
+        if (!src.routes[i].addr) {
+            cmq_config_free(&srv->config);
+            free(srv);
+            return CMQ_ERR_INVALID_ARG;
+        }
         char *a = strdup(src.routes[i].addr);
         if (!a) {
             cmq_config_free(&srv->config);

@@ -4265,6 +4265,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — server_create fail-closed on route copy</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_server_create</span></td><td>✅</td><td>Copied routes with <code>i &lt; 8</code> truncate and skipped NULL <code>addr</code> before validate — so <code>route_count&gt;8</code> / hole configs still started with a silently shortened mesh. Now reject oversize and NULL addr before strdup.</td></tr>
+</table>
+</div>
+
 
 
 
