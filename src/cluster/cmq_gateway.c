@@ -681,30 +681,32 @@ static int gw_disconnect_impl(cmq_gateway_t *gw, const char *cluster_name) {
     ssize_t ci = gw_find_cluster(gw, cluster_name);
     if (ci >= 0)
         gw->cluster_cancel_gen[ci]++;
+    int closed = 0;
+    /* Close every matching slot — multi-conn / retry residue must not
+       keep forwarding after disconnect. */
     for (size_t i = 0; i < gw->conn_count; i++) {
         cmq_mutex_lock(&gw->io_locks[i]);
         int match = (strcmp(gw->conns[i].remote_cluster, cluster_name) == 0);
         cmq_mutex_unlock(&gw->io_locks[i]);
         if (match) {
             gw_slot_close_fd(gw, i);
-            while (gw->conn_count > 0) {
-                size_t last = gw->conn_count - 1;
-                cmq_mutex_lock(&gw->io_locks[last]);
-                int empty = (gw->conns[last].remote_cluster[0] == '\0' &&
-                             !gw->conns[last].connected &&
-                             gw->conns[last].fd < 0);
-                cmq_mutex_unlock(&gw->io_locks[last]);
-                if (!empty)
-                    break;
-                gw->conn_count--;
-            }
-            cmq_mutex_unlock(&gw->lock);
-            return 0;
+            closed = 1;
         }
+    }
+    while (gw->conn_count > 0) {
+        size_t last = gw->conn_count - 1;
+        cmq_mutex_lock(&gw->io_locks[last]);
+        int empty = (gw->conns[last].remote_cluster[0] == '\0' &&
+                     !gw->conns[last].connected &&
+                     gw->conns[last].fd < 0);
+        cmq_mutex_unlock(&gw->io_locks[last]);
+        if (!empty)
+            break;
+        gw->conn_count--;
     }
     cmq_mutex_unlock(&gw->lock);
     /* Known cluster with no live slot: cancel still succeeded. */
-    return ci >= 0 ? 0 : -1;
+    return (closed || ci >= 0) ? 0 : -1;
 }
 
 size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,

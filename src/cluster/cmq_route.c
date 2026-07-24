@@ -1159,27 +1159,29 @@ static int route_disconnect_impl(cmq_route_pool_t *pool, const char *node_id) {
        (align leaf_remove; cancels[] exists for non-target handshake paths). */
     route_bump_cancel(pool, node_id);
     int known = (route_find_target(pool, node_id) >= 0);
+    int closed = 0;
+    /* Close every matching slot — dual inbound+outbound (or retry residue)
+       must not leave a live peer after disconnect. */
     for (size_t i = 0; i < pool->conn_count; i++) {
         char rid[CMQ_NODE_ID_SIZE];
         route_slot_snap(pool, i, NULL, NULL, NULL, rid);
         if (strcmp(rid, node_id) == 0) {
             /* Tombstone in place — never memmove (io_locks are index-stable). */
             route_slot_close(pool, i);
-            while (pool->conn_count > 0) {
-                size_t last = pool->conn_count - 1;
-                char lrid[CMQ_NODE_ID_SIZE];
-                int connected = 0, efd = -1;
-                route_slot_snap(pool, last, &connected, &efd, NULL, lrid);
-                if (lrid[0] != '\0' || connected || efd >= 0)
-                    break;
-                pool->conn_count--;
-            }
-            cmq_mutex_unlock(&pool->lock);
-            return 0;
+            closed = 1;
         }
     }
+    while (pool->conn_count > 0) {
+        size_t last = pool->conn_count - 1;
+        char lrid[CMQ_NODE_ID_SIZE];
+        int connected = 0, efd = -1;
+        route_slot_snap(pool, last, &connected, &efd, NULL, lrid);
+        if (lrid[0] != '\0' || connected || efd >= 0)
+            break;
+        pool->conn_count--;
+    }
     cmq_mutex_unlock(&pool->lock);
-    return known ? 0 : -1;
+    return (closed || known) ? 0 : -1;
 }
 
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__((unused)),

@@ -4217,6 +4217,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — disconnect closes all matching slots</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/gw disconnect</span></td><td>✅</td><td><code>route_disconnect_impl</code> / <code>gw_disconnect_impl</code> used to close only the first matching slot then return — dual inbound+outbound or retry residue kept a live peer after disconnect. Now tombstone every match, then shrink trailing empties once.</td></tr>
+</table>
+</div>
+
 
 
 
