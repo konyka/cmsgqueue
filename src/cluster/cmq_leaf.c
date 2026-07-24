@@ -842,17 +842,21 @@ static int leaf_unsubscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
 
 size_t cmq_leaf_sub_count(cmq_leaf_node_t *leaf) {
     if (!leaf) return 0;
+    if (leaf_begin_op(leaf) != 0) return 0;
     cmq_mutex_lock(&leaf->lock);
     size_t c = leaf->sub_count;
     cmq_mutex_unlock(&leaf->lock);
+    leaf_end_op(leaf);
     return c;
 }
 
 size_t cmq_leaf_accept_count(cmq_leaf_node_t *leaf) {
     if (!leaf) return 0;
+    if (leaf_begin_op(leaf) != 0) return 0;
     cmq_mutex_lock(&leaf->lock);
     size_t c = leaf->leaf_count;
     cmq_mutex_unlock(&leaf->lock);
+    leaf_end_op(leaf);
     return c;
 }
 
