@@ -3993,6 +3993,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — timer_del wait only skips on run-thread reentry</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ev_timer_del</span></td><td>✅</td><td>Skip wait only when <code>in_timer_cb</code> on the <code>cmq_ev_run</code> thread; cross-thread del always waits for <code>!firing</code> before userdata may be freed.</td></tr>
+</table>
+</div>
+
 
 
 

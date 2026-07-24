@@ -62,11 +62,33 @@ struct cmq_ev_loop {
     atomic_int in_flight; /* run/add/mod/del/timer vs destroy */
     atomic_int dying;
     atomic_int in_timer_cb; /* run thread inside timer callback (reentrant del) */
+    atomic_int run_owned;   /* 1 while cmq_ev_run owns the loop */
+    cmq_thread_t run_tid;   /* valid when run_owned — foil cross-thread del */
 };
+
+static void ev_run_enter(cmq_ev_loop_t *loop) {
+    loop->run_tid = cmq_thread_self();
+    atomic_store_explicit(&loop->run_owned, 1, memory_order_release);
+}
+
+static void ev_run_leave(cmq_ev_loop_t *loop) {
+    atomic_store_explicit(&loop->run_owned, 0, memory_order_release);
+}
+
+/* True only for reentrant del from the run thread's timer callback.
+   Global in_timer_cb alone must not skip wait for other threads. */
+static int ev_timer_del_reentrant(cmq_ev_loop_t *loop) {
+    if (!atomic_load_explicit(&loop->in_timer_cb, memory_order_acquire))
+        return 0;
+    if (!atomic_load_explicit(&loop->run_owned, memory_order_acquire))
+        return 0;
+    return pthread_equal(cmq_thread_self(), loop->run_tid);
+}
 
 /* Fire due timers. One-shot disarms under lock before unlock+cb so concurrent
    timer_del cannot return success while the callback still runs. Repeat timers
-   use firing/cancelled; cross-thread del waits until firing clears. */
+   use firing/cancelled; cross-thread del waits until firing clears (reentrant
+   del only when on the run thread inside the timer callback). */
 static void cmq_ev_timers_dispatch(cmq_ev_loop_t *loop, uint64_t now) {
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         cmq_ev_cb_t cb = NULL;
@@ -179,6 +201,7 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
     cmq_atomic_store_int(&loop->running, 0, CMQ_ATOMIC_RELAXED);
     atomic_init(&loop->in_flight, 0);
     atomic_init(&loop->dying, 0);
+    atomic_init(&loop->run_owned, 0);
     atomic_init(&loop->in_timer_cb, 0);
     loop->next_timer_id = 1;
 
@@ -485,6 +508,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
     if (!loop) return -1;
     if (ev_begin_op(loop) != 0) return -1;
     cmq_atomic_store_int(&loop->running, 1, CMQ_ATOMIC_RELEASE);
+    ev_run_enter(loop);
 
     struct epoll_event events[CMQ_EV_MAX_EVENTS];
 
@@ -506,6 +530,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         int nfds = epoll_wait(loop->backend_fd, events, CMQ_EV_MAX_EVENTS, wait_ms);
         if (nfds < 0) {
             if (errno == EINTR) continue;
+            ev_run_leave(loop);
             ev_end_op(loop);
             return -1;
         }
@@ -534,6 +559,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         if (timeout_ms >= 0) break;
     }
+    ev_run_leave(loop);
     ev_end_op(loop);
     return 0;
 }
@@ -647,6 +673,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
     if (!loop) return -1;
     if (ev_begin_op(loop) != 0) return -1;
     cmq_atomic_store_int(&loop->running, 1, CMQ_ATOMIC_RELEASE);
+    ev_run_enter(loop);
 
     struct kevent events[CMQ_EV_MAX_EVENTS];
 
@@ -676,6 +703,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         int nfds = kevent(loop->backend_fd, NULL, 0, events, CMQ_EV_MAX_EVENTS, tsp);
         if (nfds < 0) {
             if (errno == EINTR) continue;
+            ev_run_leave(loop);
             ev_end_op(loop);
             return -1;
         }
@@ -703,6 +731,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         if (timeout_ms >= 0) break;
     }
+    ev_run_leave(loop);
     ev_end_op(loop);
     return 0;
 }
@@ -795,7 +824,7 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
             t->active = 0;
             t->repeat = 0;
             cmq_mutex_unlock(&loop->timers_lock);
-            if (!atomic_load_explicit(&loop->in_timer_cb, memory_order_acquire)) {
+            if (!ev_timer_del_reentrant(loop)) {
                 for (;;) {
                     cmq_mutex_lock(&loop->timers_lock);
                     int done = !t->firing || t->timer_id != timer_id;
@@ -814,7 +843,7 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
                     nanosleep(&ts, NULL);
                 }
             }
-            /* Reentrant del from timer cb — dispatch clears after return. */
+            /* Reentrant del from run-thread timer cb — dispatch clears after. */
             ev_end_op(loop);
             return 0;
         }
