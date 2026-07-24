@@ -72,7 +72,8 @@ TEST(cluster, list_nodes) {
     cmq_cluster_add_node(c, "n3", "10.0.0.3", 7654);
 
     cmq_node_info_t nodes[4];
-    cmq_cluster_list_nodes(c, nodes, 4);
+    size_t n = cmq_cluster_list_nodes(c, nodes, 4);
+    ASSERT_EQ(n, (size_t)2);
     ASSERT(strcmp(nodes[0].id, "n2") == 0 || strcmp(nodes[0].id, "n3") == 0);
 
     cmq_cluster_destroy(c);

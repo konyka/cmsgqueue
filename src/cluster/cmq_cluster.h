@@ -46,7 +46,7 @@ void cmq_cluster_heartbeat(cmq_cluster_t *cluster, const char *id);
 
 size_t cmq_cluster_node_count(cmq_cluster_t *cluster);
 size_t cmq_cluster_active_count(cmq_cluster_t *cluster);
-void cmq_cluster_list_nodes(cmq_cluster_t *cluster, cmq_node_info_t *out, size_t max);
+size_t cmq_cluster_list_nodes(cmq_cluster_t *cluster, cmq_node_info_t *out, size_t max);
 
 int64_t cmq_cluster_ms_since_heartbeat(cmq_cluster_t *cluster, const char *id);
 

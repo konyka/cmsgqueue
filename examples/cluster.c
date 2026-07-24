@@ -23,8 +23,8 @@ static void demo_cluster(void) {
     printf("Active nodes: %zu\n", cmq_cluster_active_count(cluster));
 
     cmq_node_info_t nodes[8];
-    cmq_cluster_list_nodes(cluster, nodes, 8);
-    for (size_t i = 0; i < cmq_cluster_node_count(cluster); i++) {
+    size_t n = cmq_cluster_list_nodes(cluster, nodes, 8);
+    for (size_t i = 0; i < n; i++) {
         printf("  %s @ %s:%d state=%d\n", nodes[i].id, nodes[i].addr, nodes[i].port, nodes[i].state);
     }
 

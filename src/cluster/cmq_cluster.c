@@ -199,13 +199,14 @@ static size_t cluster_active_count_impl(cmq_cluster_t *cluster) {
     return active;
 }
 
-static void cluster_list_nodes_impl(cmq_cluster_t *cluster, cmq_node_info_t *out,
+static size_t cluster_list_nodes_impl(cmq_cluster_t *cluster, cmq_node_info_t *out,
                              size_t max) {
-    if (!cluster || !out) return;
+    if (!cluster || !out) return 0;
     cmq_mutex_lock(&cluster->lock);
     size_t n = cluster->count < max ? cluster->count : max;
     memcpy(out, cluster->nodes, n * sizeof(cmq_node_info_t));
     cmq_mutex_unlock(&cluster->lock);
+    return n;
 }
 
 static int64_t cluster_ms_since_heartbeat_impl(cmq_cluster_t *cluster, const char *id) {
@@ -280,12 +281,13 @@ size_t cmq_cluster_active_count(cmq_cluster_t *cluster) {
     return c;
 }
 
-void cmq_cluster_list_nodes(cmq_cluster_t *cluster, cmq_node_info_t *out,
+size_t cmq_cluster_list_nodes(cmq_cluster_t *cluster, cmq_node_info_t *out,
                              size_t max) {
-    if (!cluster || !out) return;
-    if (cluster_begin_op(cluster) != 0) return;
-    cluster_list_nodes_impl(cluster, out, max);
+    if (!cluster || !out) return 0;
+    if (cluster_begin_op(cluster) != 0) return 0;
+    size_t n = cluster_list_nodes_impl(cluster, out, max);
     cluster_end_op(cluster);
+    return n;
 }
 
 int64_t cmq_cluster_ms_since_heartbeat(cmq_cluster_t *cluster, const char *id) {

@@ -4105,7 +4105,13 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
-
+<div class="phase">
+  <h2>Phase — cluster list_nodes returns copy count</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_cluster_list_nodes</span></td><td>✅</td><td>Return the number of nodes copied under the same lock; callers must not pair with a separate <code>node_count()</code> (TOCTOU under concurrent add/remove left stale/uninit slots in the out buffer).</td></tr>
+</table>
+</div>
 
 
 
