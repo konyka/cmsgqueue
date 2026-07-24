@@ -30,6 +30,9 @@ int cmq_leaf_hub_port(cmq_leaf_node_t *leaf);
 int cmq_leaf_connect(cmq_leaf_node_t *leaf);
 int cmq_leaf_disconnect(cmq_leaf_node_t *leaf);
 int cmq_leaf_is_connected(cmq_leaf_node_t *leaf);
+/* Interest-only hub pump: discard inbound frames and refresh keepalive.
+   Call periodically while connected (is_connected also pumps). 1=up, 0=down. */
+int cmq_leaf_poll(cmq_leaf_node_t *leaf);
 
 int cmq_leaf_subscribe(cmq_leaf_node_t *leaf, const char *subject);
 int cmq_leaf_unsubscribe(cmq_leaf_node_t *leaf, const char *subject);

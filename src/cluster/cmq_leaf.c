@@ -21,6 +21,8 @@
 #define CMQ_LEAF_MAX_SUBS 1024
 #define CMQ_LEAF_WRITE_MS 50
 #define CMQ_LEAF_CONNECT_MS 2000
+#define CMQ_LEAF_PING_MS 20000
+#define CMQ_LEAF_DRAIN_PARTIAL_MS 200
 
 /* Per-leaf_id cancel tokens for accept's unlocked handshake — keep off
    leaves[] so remove of a not-yet-installed id still cancels in-flight. */
@@ -55,9 +57,16 @@ struct cmq_leaf_node {
 
     cmq_mutex_t lock;
     cmq_mutex_t hub_io_lock; /* serialize hub writes vs disconnect close */
+    uint64_t last_hub_ping_ms; /* monotonic; rate-limit keepalive PING */
     atomic_int in_flight; /* public ops vs destroy (unlocked I/O windows) */
     atomic_int dying;
 };
+
+static uint64_t leaf_now_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)(ts.tv_nsec / 1000000L);
+}
 
 
 static int leaf_begin_op(cmq_leaf_node_t *leaf) {
@@ -277,6 +286,97 @@ static int read_suback(int fd, uint32_t expect_id) {
         rlen += (size_t)n;
     }
     return -1;
+}
+
+/* Drain ready hub frames (interest-only). Completes any partial frame before
+   return so the stream stays aligned for later SUBACK waits. ERROR/DISCONNECT
+   or I/O failure → -1. Caller holds hub_io_lock. */
+static int leaf_hub_drain(int fd) {
+    uint8_t rbuf[4096];
+    size_t rlen = 0;
+    for (;;) {
+        while (rlen >= CMQ_PROTO_HDR_SIZE) {
+            if (rbuf[0] != CMQ_PROTO_MAGIC_0 || rbuf[1] != CMQ_PROTO_MAGIC_1)
+                return -1;
+            if (rbuf[2] != CMQ_PROTO_VERSION)
+                return -1;
+            uint8_t op = rbuf[4];
+            uint32_t plen = (uint32_t)rbuf[5] | ((uint32_t)rbuf[6] << 8) |
+                            ((uint32_t)rbuf[7] << 16) | ((uint32_t)rbuf[8] << 24);
+            uint64_t need64 = (uint64_t)CMQ_PROTO_HDR_SIZE + (uint64_t)plen;
+            if (need64 > sizeof(rbuf)) {
+                if (need64 > (uint64_t)SIZE_MAX) return -1;
+                size_t need = (size_t)need64;
+                size_t have = rlen;
+                rlen = 0;
+                if (have > need) return -1;
+                int waited = 0;
+                if (leaf_discard_bytes(fd, need - have, &waited) != 0)
+                    return -1;
+                if (op == (uint8_t)CMQ_OP_ERROR ||
+                    op == (uint8_t)CMQ_OP_DISCONNECT)
+                    return -1;
+                continue;
+            }
+            size_t need = (size_t)need64;
+            if (rlen < need) break;
+            if (op == (uint8_t)CMQ_OP_ERROR || op == (uint8_t)CMQ_OP_DISCONNECT)
+                return -1;
+            memmove(rbuf, rbuf + need, rlen - need);
+            rlen -= need;
+        }
+
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        int timeout = rlen > 0 ? CMQ_LEAF_DRAIN_PARTIAL_MS : 0;
+        int pr = poll(&pfd, 1, timeout);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (pr == 0) {
+            if (rlen > 0) return -1; /* incomplete frame stalled */
+            return 0;
+        }
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))
+            return -1;
+        if (!(pfd.revents & POLLIN)) {
+            if (rlen > 0) return -1;
+            return 0;
+        }
+        if (rlen >= sizeof(rbuf)) return -1;
+        ssize_t n = read(fd, rbuf + rlen, sizeof(rbuf) - rlen);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (rlen > 0) continue;
+                return 0;
+            }
+            return -1;
+        }
+        if (n == 0) return -1;
+        rlen += (size_t)n;
+    }
+}
+
+/* Drain RX and rate-limited PING. On failure drops hub. Caller holds hub_io. */
+static int leaf_hub_service(cmq_leaf_node_t *leaf, int fd) {
+    if (leaf_hub_drain(fd) != 0) {
+        leaf_hub_drop(leaf, fd);
+        return -1;
+    }
+    uint64_t now = leaf_now_ms();
+    if (leaf->last_hub_ping_ms != 0 &&
+        now >= leaf->last_hub_ping_ms &&
+        now - leaf->last_hub_ping_ms < CMQ_LEAF_PING_MS)
+        return 0;
+    uint8_t frame[16];
+    size_t flen = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_PING, 0, NULL, 0);
+    if (flen == 0 || write_all(fd, frame, flen) != 0) {
+        leaf_hub_drop(leaf, fd);
+        return -1;
+    }
+    leaf->last_hub_ping_ms = now ? now : 1;
+    return 0;
 }
 
 cmq_leaf_node_t *cmq_leaf_create(const char *hub_addr, int hub_port) {
@@ -662,6 +762,10 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     if (ok)
         leaf->connected = 1;
     cmq_mutex_unlock(&leaf->lock);
+    if (ok) {
+        uint64_t now = leaf_now_ms();
+        leaf->last_hub_ping_ms = now ? now : 1; /* hub_io held */
+    }
     cmq_mutex_unlock(&leaf->hub_io_lock);
     for (size_t j = 0; j < n; j++) free(subjects[j]);
     free(subjects);
@@ -694,15 +798,31 @@ static int leaf_is_connected_impl(cmq_leaf_node_t *leaf) {
         return 0;
     }
     /* Probe under lock so a death between unlock and relock cannot sticky-live. */
-    if (leaf_fd_alive(fd) && leaf->connected && leaf->hub_fd == fd) {
-        cmq_mutex_unlock(&leaf->lock);
-        return 1;
-    }
+    int alive = leaf_fd_alive(fd) && leaf->connected && leaf->hub_fd == fd;
     cmq_mutex_unlock(&leaf->lock);
+    if (!alive) {
+        cmq_mutex_lock(&leaf->hub_io_lock);
+        leaf_hub_drop_if_dead(leaf, fd);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        return 0;
+    }
+    /* Pump under hub_io so idle interest-only links stay past hub keepalive
+       and do not backpressure MESSAGE into write-timeout teardown. */
     cmq_mutex_lock(&leaf->hub_io_lock);
-    leaf_hub_drop_if_dead(leaf, fd);
+    cmq_mutex_lock(&leaf->lock);
+    int same = leaf->connected && leaf->hub_fd == fd;
+    cmq_mutex_unlock(&leaf->lock);
+    if (!same) {
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        return 0;
+    }
+    int rc = leaf_hub_service(leaf, fd);
     cmq_mutex_unlock(&leaf->hub_io_lock);
-    return 0;
+    return rc == 0 ? 1 : 0;
+}
+
+static int leaf_poll_impl(cmq_leaf_node_t *leaf) {
+    return leaf_is_connected_impl(leaf);
 }
 
 static int leaf_subscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
@@ -757,6 +877,26 @@ static int leaf_subscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
         return 0;
     }
 
+    if (leaf_hub_drain(hub_fd) != 0) {
+        leaf_hub_drop(leaf, hub_fd);
+        cmq_mutex_lock(&leaf->lock);
+        for (size_t i = 0; i < leaf->sub_count; i++) {
+            if (leaf->sub_ids[i] == sub_id && leaf->subs[i] &&
+                strcmp(leaf->subs[i], subject) == 0) {
+                free(leaf->subs[i]);
+                memmove(&leaf->subs[i], &leaf->subs[i + 1],
+                        (leaf->sub_count - i - 1) * sizeof(char *));
+                memmove(&leaf->sub_ids[i], &leaf->sub_ids[i + 1],
+                        (leaf->sub_count - i - 1) * sizeof(uint32_t));
+                leaf->sub_count--;
+                break;
+            }
+        }
+        cmq_mutex_unlock(&leaf->lock);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        return -1;
+    }
+
     uint8_t payload[8 + 256];
     size_t po = 0;
     payload[po++] = (uint8_t)(sub_id >> 24);
@@ -805,6 +945,10 @@ static int leaf_subscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
         cmq_mutex_unlock(&leaf->hub_io_lock);
         return -1;
     }
+    {
+        uint64_t now = leaf_now_ms();
+        leaf->last_hub_ping_ms = now ? now : 1;
+    }
     cmq_mutex_unlock(&leaf->hub_io_lock);
     return 0;
 }
@@ -847,6 +991,20 @@ static int leaf_unsubscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
         }
         cmq_mutex_unlock(&leaf->lock);
 
+        if (leaf_hub_drain(hub_fd) != 0) {
+            cmq_mutex_lock(&leaf->lock);
+            if (leaf->pending_unsub_count >= CMQ_LEAF_MAX_SUBS) {
+                memmove(leaf->pending_unsub, leaf->pending_unsub + 1,
+                        (CMQ_LEAF_MAX_SUBS - 1) * sizeof(uint32_t));
+                leaf->pending_unsub_count = CMQ_LEAF_MAX_SUBS - 1;
+            }
+            leaf->pending_unsub[leaf->pending_unsub_count++] = sub_id;
+            cmq_mutex_unlock(&leaf->lock);
+            leaf_hub_drop(leaf, hub_fd);
+            cmq_mutex_unlock(&leaf->hub_io_lock);
+            return -1;
+        }
+
         uint8_t payload[4] = {
             (uint8_t)(sub_id >> 24), (uint8_t)(sub_id >> 16),
             (uint8_t)(sub_id >> 8), (uint8_t)sub_id
@@ -869,6 +1027,10 @@ static int leaf_unsubscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
             leaf_hub_drop(leaf, hub_fd);
             cmq_mutex_unlock(&leaf->hub_io_lock);
             return -1;
+        }
+        {
+            uint64_t now = leaf_now_ms();
+            leaf->last_hub_ping_ms = now ? now : 1;
         }
         cmq_mutex_unlock(&leaf->hub_io_lock);
         return 0;
@@ -1132,6 +1294,14 @@ int cmq_leaf_is_connected(cmq_leaf_node_t *leaf) {
     if (!leaf) return 0;
     if (leaf_begin_op(leaf) != 0) return 0;
     int rc = leaf_is_connected_impl(leaf);
+    leaf_end_op(leaf);
+    return rc;
+}
+
+int cmq_leaf_poll(cmq_leaf_node_t *leaf) {
+    if (!leaf) return 0;
+    if (leaf_begin_op(leaf) != 0) return 0;
+    int rc = leaf_poll_impl(leaf);
     leaf_end_op(leaf);
     return rc;
 }

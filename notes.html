@@ -4113,6 +4113,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — leaf hub drain + keepalive PING</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_leaf_poll / is_connected</span></td><td>✅</td><td>Interest-only leaf must drain hub MESSAGE/INFO/PONG and send rate-limited <code>PING</code> after SUB — otherwise hub keepalive / write-timeout drops the link while local <code>sub_count</code> still looks subscribed. <code>poll</code> and <code>is_connected</code> pump under <code>hub_io_lock</code>; SUB/UNSUB drain before hub writes.</td></tr>
+</table>
+</div>
+
 
 
 

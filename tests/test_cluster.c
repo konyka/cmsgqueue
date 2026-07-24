@@ -275,6 +275,7 @@ TEST(leaf, create_destroy) {
     ASSERT_STR_EQ(cmq_leaf_hub_addr(l), "10.0.0.1");
     ASSERT_EQ(cmq_leaf_hub_port(l), 7654);
     ASSERT_EQ(cmq_leaf_is_connected(l), 0);
+    ASSERT_EQ(cmq_leaf_poll(l), 0);
     cmq_leaf_destroy(l);
 }
 
