@@ -3960,6 +3960,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — sublist begin_op vs destroy</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_sublist</span></td><td>✅</td><td><code>dying</code>/<code>in_flight</code> on insert/remove/match/count/free_data; destroy drains before <code>rwlock_destroy</code>/<code>free</code> (align leaf/mqtt).</td></tr>
+</table>
+</div>
+
 
 
 

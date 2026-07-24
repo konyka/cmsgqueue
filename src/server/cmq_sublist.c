@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
+#include <time.h>
 
 typedef struct cmq_sl_node {
     struct cmq_sl_node *children;
@@ -19,7 +21,24 @@ struct cmq_sublist {
     cmq_sl_node_t root;
     cmq_rwlock_t lock;
     size_t count;
+    atomic_int in_flight; /* public ops vs destroy */
+    atomic_int dying;
 };
+
+static int sublist_begin_op(cmq_sublist_t *sl) {
+    if (atomic_load_explicit(&sl->dying, memory_order_acquire))
+        return -1;
+    atomic_fetch_add_explicit(&sl->in_flight, 1, memory_order_acq_rel);
+    if (atomic_load_explicit(&sl->dying, memory_order_acquire)) {
+        atomic_fetch_sub_explicit(&sl->in_flight, 1, memory_order_acq_rel);
+        return -1;
+    }
+    return 0;
+}
+
+static void sublist_end_op(cmq_sublist_t *sl) {
+    atomic_fetch_sub_explicit(&sl->in_flight, 1, memory_order_acq_rel);
+}
 
 static cmq_sl_node_t *cmq_sl_node_create(const char *token, int is_pwc, int is_fwc) {
     cmq_sl_node_t *n = calloc(1, sizeof(cmq_sl_node_t));
@@ -182,6 +201,8 @@ static int node_remove_sub(cmq_sl_node_t *node, void *data) {
 cmq_sublist_t *cmq_sublist_create(void) {
     cmq_sublist_t *sl = calloc(1, sizeof(cmq_sublist_t));
     if (!sl) return NULL;
+    atomic_init(&sl->in_flight, 0);
+    atomic_init(&sl->dying, 0);
     cmq_rwlock_init(&sl->lock);
     return sl;
 }
@@ -200,13 +221,20 @@ static void node_free_data(cmq_sl_node_t *node) {
 
 void cmq_sublist_free_data(cmq_sublist_t *sl) {
     if (!sl) return;
+    if (sublist_begin_op(sl) != 0) return;
     cmq_rwlock_wrlock(&sl->lock);
     node_free_data(&sl->root);
     cmq_rwlock_unlock(&sl->lock);
+    sublist_end_op(sl);
 }
 
 void cmq_sublist_destroy(cmq_sublist_t *sl) {
     if (!sl) return;
+    atomic_store_explicit(&sl->dying, 1, memory_order_release);
+    while (atomic_load_explicit(&sl->in_flight, memory_order_acquire) > 0) {
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
+    }
     cmq_rwlock_wrlock(&sl->lock);
     cmq_sl_node_t *child = sl->root.children;
     sl->root.children = NULL;
@@ -227,6 +255,7 @@ int cmq_sublist_insert(cmq_sublist_t *sl, const char *subject, void *data) {
     char tokens[64][256];
     int ntokens;
     if (tokenize(subject, tokens, &ntokens) != 0) return -1;
+    if (sublist_begin_op(sl) != 0) return -1;
 
     cmq_rwlock_wrlock(&sl->lock);
 
@@ -244,6 +273,7 @@ int cmq_sublist_insert(cmq_sublist_t *sl, const char *subject, void *data) {
             if (!child) {
                 rollback_created(created, created_parent, ncreated);
                 cmq_rwlock_unlock(&sl->lock);
+                sublist_end_op(sl);
                 return -1;
             }
             if (ncreated < 64) {
@@ -262,6 +292,7 @@ int cmq_sublist_insert(cmq_sublist_t *sl, const char *subject, void *data) {
         rollback_created(created, created_parent, ncreated);
     }
     cmq_rwlock_unlock(&sl->lock);
+    sublist_end_op(sl);
     return rc;
 }
 
@@ -271,6 +302,7 @@ int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject, void *data) {
     char tokens[64][256];
     int ntokens;
     if (tokenize(subject, tokens, &ntokens) != 0) return -1;
+    if (sublist_begin_op(sl) != 0) return -1;
 
     cmq_rwlock_wrlock(&sl->lock);
 
@@ -283,6 +315,7 @@ int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject, void *data) {
         cmq_sl_node_t *child = find_child(current, tokens[i], is_pwc, is_fwc);
         if (!child) {
             cmq_rwlock_unlock(&sl->lock);
+            sublist_end_op(sl);
             return -1;
         }
         if (nparents < 64)
@@ -304,6 +337,7 @@ int cmq_sublist_remove(cmq_sublist_t *sl, const char *subject, void *data) {
         }
     }
     cmq_rwlock_unlock(&sl->lock);
+    sublist_end_op(sl);
     return rc;
 }
 
@@ -369,10 +403,12 @@ int cmq_sublist_match(cmq_sublist_t *sl, const char *subject, cmq_sublist_result
     char tokens[64][256];
     int ntokens;
     if (tokenize(subject, tokens, &ntokens) != 0) return -1;
+    if (sublist_begin_op(sl) != 0) return -1;
 
     cmq_rwlock_rdlock(&sl->lock);
     int rc = match_recursive(&sl->root, tokens, ntokens, 0, result);
     cmq_rwlock_unlock(&sl->lock);
+    sublist_end_op(sl);
     if (rc != 0) {
         cmq_sublist_result_free(result);
         memset(result, 0, sizeof(*result));
@@ -391,8 +427,10 @@ void cmq_sublist_result_free(cmq_sublist_result_t *result) {
 
 size_t cmq_sublist_count(cmq_sublist_t *sl) {
     if (!sl) return 0;
+    if (sublist_begin_op(sl) != 0) return 0;
     cmq_rwlock_rdlock(&sl->lock);
     size_t c = sl->count;
     cmq_rwlock_unlock(&sl->lock);
+    sublist_end_op(sl);
     return c;
 }
