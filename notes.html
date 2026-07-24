@@ -4145,6 +4145,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — MQTT CONNACK exact 4-byte read</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">mqtt_read_connack</span></td><td>✅</td><td>Read exactly 4 bytes and require <code>decode_connack</code> <code>len == 4</code>. Oversized reads discarded pipelined post-CONNACK MQTT frames and desynced the bridge stream.</td></tr>
+</table>
+</div>
+
 
 
 

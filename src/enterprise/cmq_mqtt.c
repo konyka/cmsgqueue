@@ -143,9 +143,11 @@ static int mqtt_write_all(int fd, const uint8_t *data, size_t len) {
 }
 
 static int mqtt_read_connack(int fd) {
-    uint8_t buf[8];
+    uint8_t buf[4];
     size_t got = 0;
     int waited = 0;
+    /* Read exactly 4 bytes — larger reads would consume pipelined frames and
+       desync the stream (align cmq_peer_handshake trailing CONNACK). */
     while (got < 4 && waited < 3000) {
         struct pollfd pfd = { .fd = fd, .events = POLLIN };
         int pr = poll(&pfd, 1, 100);
@@ -157,7 +159,7 @@ static int mqtt_read_connack(int fd) {
             waited += 100;
             continue;
         }
-        ssize_t n = read(fd, buf + got, sizeof(buf) - got);
+        ssize_t n = read(fd, buf + got, 4 - got);
         if (n < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -165,7 +167,7 @@ static int mqtt_read_connack(int fd) {
         if (n == 0) return -1;
         got += (size_t)n;
     }
-    if (got < 4) return -1;
+    if (got != 4) return -1;
     return cmq_mqtt_decode_connack(buf, got);
 }
 
@@ -610,7 +612,8 @@ int cmq_mqtt_encode_pingreq(uint8_t *buf, size_t len) {
 }
 
 int cmq_mqtt_decode_connack(const uint8_t *buf, size_t len) {
-    if (!buf || len < 4) return -1;
+    /* Exact 4-byte CONNACK — longer buffers imply already-consumed trailing. */
+    if (!buf || len != 4) return -1;
     if ((buf[0] & 0xF0) != CMQ_MQTT_CONNACK) return -1;
     /* MQTT 3.1.1 CONNACK: fixed header + remaining length 2. */
     if (buf[1] != 0x02) return -1;

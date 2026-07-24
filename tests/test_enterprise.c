@@ -373,6 +373,9 @@ TEST(mqtt, decode_connack) {
     ASSERT_EQ(cmq_mqtt_decode_connack(bad_rl, sizeof(bad_rl)), -1);
     uint8_t refused[] = {0x20, 0x02, 0x00, 0x05};
     ASSERT_EQ(cmq_mqtt_decode_connack(refused, sizeof(refused)), 5);
+    /* Trailing pipelined bytes must not decode as success. */
+    uint8_t trail[] = {0x20, 0x02, 0x00, 0x00, 0x30};
+    ASSERT_EQ(cmq_mqtt_decode_connack(trail, sizeof(trail)), -1);
 }
 
 TEST(mqtt, encode_publish) {
