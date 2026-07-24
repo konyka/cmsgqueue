@@ -4129,6 +4129,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — route flush drains under io_lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_flush_write_unlocked</span></td><td>✅</td><td>For <code>is_route</code>, drain <code>write_buf</code> fully under <code>io_lock</code> (poll on EAGAIN, ~200ms bound). Partial write then unlock let <code>cmq_route_broadcast</code> <code>write_full</code> interleave mid-frame and desync the peer parser.</td></tr>
+</table>
+</div>
+
 
 
 

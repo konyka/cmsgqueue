@@ -4514,6 +4514,75 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
         goto out;
     }
 
+    /* Route fds: drain write_buf fully under io_lock. A partial write then
+       unlock lets cmq_route_broadcast write_full interleave mid-frame. */
+    if (route_io_idx >= 0) {
+        int stall_rounds = 0;
+        while (c->write_pos < c->write_len) {
+            size_t rem = c->write_len - c->write_pos;
+            ssize_t n = client_sock_write(c, c->write_buf + c->write_pos, rem);
+            if (n > 0) {
+                c->write_pos += (size_t)n;
+                client_mark_write_progress(c);
+                cmq_atomic_fetch_add_u64(&c->server->stat_bytes_out, (uint64_t)n,
+                                          CMQ_ATOMIC_RELAXED);
+                stall_rounds = 0;
+                continue;
+            }
+            if (n < 0 && errno == EINTR)
+                continue;
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                struct pollfd pfd = { .fd = c->fd, .events = POLLOUT };
+                int pr;
+                do {
+                    pr = poll(&pfd, 1, 50);
+                } while (pr < 0 && errno == EINTR);
+                if (pr > 0) {
+                    stall_rounds = 0;
+                    continue;
+                }
+                if (pr == 0 && ++stall_rounds < 4)
+                    continue; /* ~200ms — align route write_full */
+                /* Stall with possible prefix already on wire — fail-closed. */
+                c->write_len = 0;
+                c->write_pos = 0;
+                client_clear_write_progress(c);
+                cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+                route_io_idx = -1;
+                client_force_closing(c);
+                if (c->fd >= 0)
+                    (void)shutdown(c->fd, SHUT_RDWR);
+                if (c->server->routes && c->fd >= 0)
+                    route_detach_under_io_lock(c->server, c->fd);
+                return;
+            }
+            /* Hard write failure. */
+            c->write_len = 0;
+            c->write_pos = 0;
+            client_clear_write_progress(c);
+            cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+            route_io_idx = -1;
+            client_force_closing(c);
+            if (c->fd >= 0)
+                (void)shutdown(c->fd, SHUT_RDWR);
+            if (c->server->routes && c->fd >= 0)
+                route_detach_under_io_lock(c->server, c->fd);
+            return;
+        }
+        c->write_len = 0;
+        c->write_pos = 0;
+        client_clear_write_progress(c);
+        if (cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c) != 0) {
+            cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
+            route_io_idx = -1;
+            (void)shutdown(c->fd, SHUT_RDWR);
+            if (c->server->routes && c->fd >= 0)
+                route_detach_under_io_lock(c->server, c->fd);
+            return;
+        }
+        goto out;
+    }
+
     size_t remaining = c->write_len - c->write_pos;
     ssize_t n = client_sock_write(c, c->write_buf + c->write_pos, remaining);
     if (n > 0) {
@@ -4526,13 +4595,8 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
             c->write_pos = 0;
             client_clear_write_progress(c);
             if (cmq_ev_mod(c->ev_loop, c->fd, CMQ_EV_READ, client_read_cb, c) != 0) {
-                if (route_io_idx >= 0 && c->server && c->server->routes) {
-                    cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
-                    route_io_idx = -1;
-                }
                 (void)shutdown(c->fd, SHUT_RDWR);
-                if (c->is_route && c->server && c->server->routes && c->fd >= 0)
-                    route_detach_under_io_lock(c->server, c->fd);
+                client_set_state(c, CMQ_CLIENT_CLOSING);
                 return;
             }
         }
@@ -4543,16 +4607,9 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
         c->write_len = 0;
         c->write_pos = 0;
         client_clear_write_progress(c);
-        if (route_io_idx >= 0 && c->server && c->server->routes) {
-            cmq_route_io_unlock_idx(c->server->routes, route_io_idx);
-            route_io_idx = -1;
-        }
         client_force_closing(c);
         if (c->fd >= 0)
             (void)shutdown(c->fd, SHUT_RDWR);
-        /* Detach after io unlock — pool must not keep borrowed fd live. */
-        if (c->is_route && c->server && c->server->routes && c->fd >= 0)
-            route_detach_under_io_lock(c->server, c->fd);
         return;
     }
 out:
