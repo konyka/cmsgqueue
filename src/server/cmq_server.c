@@ -1972,8 +1972,9 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
     return ok;
 }
 
-/* Queue to worker mailbox; same-worker prefers send_local first (honest
-   REQUEST PUBACK / msgs_out). Cross-worker briefly yields and retries so a
+/* Queue to worker mailbox; same-worker send_local only (no self-queue —
+   sync fail is CLOSING/ACL/missing-sub; mailbox would drop later while
+   callers treat return 2 as success). Cross-worker yields/retries so a
    full queue can drain without silent drop.
    Returns 1 if send_local completed, 2 if only queued (msgs_out deferred), 0 fail. */
 static int deliver_via_worker(cmq_server_t *srv, int worker_id,
@@ -1988,16 +1989,13 @@ static int deliver_via_worker(cmq_server_t *srv, int worker_id,
     if (cmq_current_worker_id == worker_id) {
         int r = client_send_by_id(srv, worker_id, client_id, conn_gen, sub_id,
                                    frame, flen, pub_account);
-        if (r) return 1;
+        return r ? 1 : 0;
     }
     for (int attempt = 0; attempt < 4; attempt++) {
         if (worker_push_msg(w, client_id, conn_gen, frame, flen, sub_id,
                              1, account_name, account_epoch, payload_bytes,
                              NULL, 0, pub_account, 0) == 0)
             return 2;
-        if (cmq_current_worker_id == worker_id)
-            return client_send_by_id(srv, worker_id, client_id, conn_gen, sub_id,
-                                     frame, flen, pub_account);
         if (attempt + 1 >= 4)
             break;
         if (coro_ok)

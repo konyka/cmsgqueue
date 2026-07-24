@@ -3944,6 +3944,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — same-worker deliver does not self-queue after sync fail</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">deliver_via_worker</span></td><td>✅</td><td>On owning worker, <code>client_send_by_id</code> failure returns 0 (no mailbox push); avoids treating later-dropped self-queue as delivery success.</td></tr>
+</table>
+</div>
+
 
 
 
