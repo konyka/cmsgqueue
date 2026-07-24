@@ -75,6 +75,40 @@ static void leaf_end_op(cmq_leaf_node_t *leaf) {
     atomic_fetch_sub_explicit(&leaf->in_flight, 1, memory_order_acq_rel);
 }
 
+/* Caller holds leaf->lock. Skip 0 and ids still live or pending UNSUB. */
+static int leaf_sub_id_in_use(const cmq_leaf_node_t *leaf, uint32_t id) {
+    if (id == 0) return 1;
+    for (size_t i = 0; i < leaf->sub_count; i++) {
+        if (leaf->sub_ids[i] == id)
+            return 1;
+    }
+    for (size_t i = 0; i < leaf->pending_unsub_count; i++) {
+        if (leaf->pending_unsub[i] == id)
+            return 1;
+    }
+    return 0;
+}
+
+/* Caller holds leaf->lock. sub_count < MAX ⇒ a free id exists. */
+static int leaf_mint_sub_id(cmq_leaf_node_t *leaf, uint32_t *out) {
+    uint32_t start = leaf->next_sub_id ? leaf->next_sub_id : 1;
+    uint32_t id = start;
+    for (;;) {
+        if (!leaf_sub_id_in_use(leaf, id)) {
+            leaf->next_sub_id = id + 1;
+            if (leaf->next_sub_id == 0)
+                leaf->next_sub_id = 1;
+            *out = id;
+            return 0;
+        }
+        id++;
+        if (id == 0)
+            id = 1;
+        if (id == start)
+            return -1;
+    }
+}
+
 static void set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
@@ -703,11 +737,13 @@ static int leaf_subscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
             return 0;
         }
     }
-    if (leaf->next_sub_id == 0)
-        leaf->next_sub_id = 1;
-    uint32_t sub_id = leaf->next_sub_id++;
-    if (leaf->next_sub_id == 0)
-        leaf->next_sub_id = 1;
+    uint32_t sub_id = 0;
+    if (leaf_mint_sub_id(leaf, &sub_id) != 0) {
+        cmq_mutex_unlock(&leaf->lock);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        free(copy);
+        return -1;
+    }
     size_t idx = leaf->sub_count;
     leaf->subs[idx] = copy;
     leaf->sub_ids[idx] = sub_id;

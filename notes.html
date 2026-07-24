@@ -4057,6 +4057,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — leaf sub_id skip live/pending on wrap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_leaf mint sub_id</span></td><td>✅</td><td><code>next_sub_id</code> wrap must not reuse ids still in <code>sub_ids[]</code> or <code>pending_unsub[]</code> (hub UNSUB/MESSAGE would cross subjects); only skipping 0 was insufficient.</td></tr>
+</table>
+</div>
+
 
 
 
