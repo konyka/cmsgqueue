@@ -5685,7 +5685,7 @@ static int route_bind_egress_reader(cmq_server_t *srv, const char *nid) {
     client->account_epoch = aep;
     cmq_account_release(srv->accounts, acc);
 
-    if (cmq_route_adopt_fd(srv->routes, fd) != 0) {
+    if (cmq_route_adopt_fd(srv->routes, fd, nid) != 0) {
         cmq_account_t *a = cmq_account_get(srv->accounts, client->account_name, NULL);
         if (a) {
             cmq_account_dec_connections(a, aep);

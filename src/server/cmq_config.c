@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_config.h"
 #include "cmq_cluster.h"
+#include "cmq_account.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -258,9 +259,11 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->auth_username && config->auth_username[0] &&
         (!config->auth_password || !config->auth_password[0]))
         return CMQ_ERR_INVALID_ARG;
-    /* CONNECT compares into 256-byte pads — longer creds would truncate. */
+    /* Username becomes account name — must fit CMQ_ACCOUNT_NAME_SIZE.
+       Password still compared in 256-byte CONNECT pads. */
     if (config->auth_username &&
-        strnlen(config->auth_username, 256) >= 256)
+        strnlen(config->auth_username, CMQ_ACCOUNT_NAME_SIZE) >=
+            CMQ_ACCOUNT_NAME_SIZE)
         return CMQ_ERR_INVALID_ARG;
     if (config->auth_password &&
         strnlen(config->auth_password, 256) >= 256)

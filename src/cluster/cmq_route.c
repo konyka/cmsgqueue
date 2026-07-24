@@ -1482,18 +1482,20 @@ void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd) {
     route_end_op(pool);
 }
 
-static int route_adopt_fd_impl(cmq_route_pool_t *pool, int fd) {
-    if (!pool || fd < 0) return -1;
+static int route_adopt_fd_impl(cmq_route_pool_t *pool, int fd,
+                                const char *remote_id) {
+    if (!pool || fd < 0 || !remote_id || remote_id[0] == '\0') return -1;
     cmq_mutex_lock(&pool->lock);
     for (size_t i = 0; i < pool->conn_count; i++) {
         int efd = -1, owned = 0;
-        route_slot_snap(pool, i, NULL, &efd, &owned, NULL);
-        if (efd != fd) continue;
+        char rid[CMQ_NODE_ID_SIZE];
+        route_slot_snap(pool, i, NULL, &efd, &owned, rid);
+        if (efd != fd || strcmp(rid, remote_id) != 0) continue;
         cmq_mutex_lock(&pool->io_locks[i]);
         /* CAS-style: only the first binder may claim an owned egress.
-           Already-borrowed or replaced fd must fail (no double reader /
-           recycled-fd misbind). */
-        int ok = (pool->conns[i].fd == fd && pool->conns[i].fd_owned);
+           Already-borrowed, replaced, or wrong-peer fd must fail. */
+        int ok = (pool->conns[i].fd == fd && pool->conns[i].fd_owned &&
+                  strcmp(pool->conns[i].remote_id, remote_id) == 0);
         if (ok)
             pool->conns[i].fd_owned = 0;
         cmq_mutex_unlock(&pool->io_locks[i]);
@@ -1504,10 +1506,10 @@ static int route_adopt_fd_impl(cmq_route_pool_t *pool, int fd) {
     return -1;
 }
 
-int cmq_route_adopt_fd(cmq_route_pool_t *pool, int fd) {
-    if (!pool || fd < 0) return -1;
+int cmq_route_adopt_fd(cmq_route_pool_t *pool, int fd, const char *remote_id) {
+    if (!pool || fd < 0 || !remote_id) return -1;
     if (route_begin_op(pool) != 0) return -1;
-    int rc = route_adopt_fd_impl(pool, fd);
+    int rc = route_adopt_fd_impl(pool, fd, remote_id);
     route_end_op(pool);
     return rc;
 }

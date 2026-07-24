@@ -4381,6 +4381,17 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — adopt_fd remote_id · log add_file/flush · auth name cap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_route_adopt_fd</span></td><td>✅</td><td>Adopt matched only by fd; after close/recycle another peer's socket could be claimed for the wrong <code>nid</code>. Now requires matching <code>remote_id</code>.</td></tr>
+<tr><td><span class="component-name">cmq_log_add_file</span></td><td>✅</td><td><code>fopen</code> ran without <code>in_flight</code>, so destroy could <code>free(log)</code> mid-open. Hold begin_op across open+register.</td></tr>
+<tr><td><span class="component-name">cmq_log file I/O</span></td><td>✅</td><td>Appender <code>fwrite</code> (unlocked) raced <code>fflush</code> under lock on the same <code>FILE*</code>. Use <code>flockfile</code> on both paths.</td></tr>
+<tr><td><span class="component-name">auth_username validate</span></td><td>✅</td><td>Config allowed 255-char usernames but account names cap at 64 — auth could succeed then CONNACK/account_ensure fail. Reject at validate with <code>CMQ_ACCOUNT_NAME_SIZE</code>.</td></tr>
+</table>
+</div>
+
 
 
 

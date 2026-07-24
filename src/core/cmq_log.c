@@ -59,7 +59,10 @@ static const char* level_to_string(cmq_log_level_t level) {
 static void cmq_log_file_appender(const char *msg, size_t len, void *ctx) {
     FILE *f = (FILE *)ctx;
     if (f) {
+        /* Serialize vs cmq_log_flush fflush on the same FILE*. */
+        flockfile(f);
         fwrite(msg, 1, len, f);
+        funlockfile(f);
     }
 }
 
@@ -161,10 +164,25 @@ int cmq_log_add_appender(cmq_log_t *log, cmq_log_appender_fn fn, void *ctx) {
 
 void cmq_log_add_file(cmq_log_t *log, const char *path) {
     if (!log || !path) return;
+    /* Hold in_flight across fopen — destroy must not free(log) mid-open. */
+    if (log_begin_op(log) != 0) return;
     FILE *f = fopen(path, "a");
-    if (!f) return;
-    if (cmq_log_add_appender(log, cmq_log_file_appender, f) != 0)
+    if (!f) {
+        log_end_op(log);
+        return;
+    }
+    int rc = -1;
+    pthread_mutex_lock(&log->lock);
+    if (log->appender_count < CMQ_LOG_MAX_APPENDERS) {
+        log->appenders[log->appender_count].fn = cmq_log_file_appender;
+        log->appenders[log->appender_count].ctx = f;
+        log->appender_count++;
+        rc = 0;
+    }
+    pthread_mutex_unlock(&log->lock);
+    if (rc != 0)
         fclose(f);
+    log_end_op(log);
 }
 
 void cmq_log_add_stdout(cmq_log_t *log) {
@@ -230,7 +248,11 @@ void cmq_log_flush(cmq_log_t *log) {
     for (size_t i = 0; i < count; ++i) {
         if (log->appenders[i].fn == cmq_log_file_appender) {
             FILE *f = (FILE *)log->appenders[i].ctx;
-            if (f) fflush(f);
+            if (f) {
+                flockfile(f);
+                fflush(f);
+                funlockfile(f);
+            }
         }
     }
     pthread_mutex_unlock(&log->lock);

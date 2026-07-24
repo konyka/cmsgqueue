@@ -59,8 +59,9 @@ void cmq_route_unmark_connected_fd(cmq_route_pool_t *pool, int fd);
 /* Drop pool reference to fd without closing (client still owns the socket). */
 void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd);
 /* Claim close-ownership of an egress fd for the server client (fd_owned 1→0).
+   Requires matching remote_id so a recycled fd cannot bind the wrong peer.
    Fails if not currently owned (already adopted / replaced). -1 if miss. */
-int cmq_route_adopt_fd(cmq_route_pool_t *pool, int fd);
+int cmq_route_adopt_fd(cmq_route_pool_t *pool, int fd, const char *remote_id);
 int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id);
 
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject,
