@@ -2414,6 +2414,32 @@ typedef struct {
     int suppress_fail_error;        /* 1 if cluster already accepted the msg */
 } cmq_deliver_ctx_t;
 
+/* Soft-delete→reactivate bumps epoch; may_deliver is name-only — gate on
+   the publisher client still matching its CONNECT epoch. */
+static int deliver_ctx_publisher_live(cmq_server_t *srv,
+                                       const cmq_deliver_ctx_t *ctx) {
+    if (!ctx || ctx->publisher_id == 0) return 1;
+    int pub_live = 0;
+    if (ctx->publisher_worker_id >= 0 && srv->workers &&
+        ctx->publisher_worker_id < srv->num_workers) {
+        cmq_worker_t *pw = &srv->workers[ctx->publisher_worker_id];
+        cmq_mutex_lock(&pw->clients_lock);
+        cmq_client_t *pub = cmq_idmap_get(pw->idmap, ctx->publisher_id);
+        pub_live = (pub && pub->conn_gen == ctx->publisher_gen &&
+                    client_state(pub) == CMQ_CLIENT_CONNECTED &&
+                    client_account_live(srv, pub));
+        cmq_mutex_unlock(&pw->clients_lock);
+    } else {
+        cmq_mutex_lock(&srv->clients_lock);
+        cmq_client_t *pub = cmq_idmap_get(srv->idmap, ctx->publisher_id);
+        pub_live = (pub && pub->conn_gen == ctx->publisher_gen &&
+                    client_state(pub) == CMQ_CLIENT_CONNECTED &&
+                    client_account_live(srv, pub));
+        cmq_mutex_unlock(&srv->clients_lock);
+    }
+    return pub_live;
+}
+
 static void deliver_coro_func(void *arg) {
     cmq_deliver_ctx_t *ctx = (cmq_deliver_ctx_t *)arg;
     cmq_server_t *srv = ctx->srv;
@@ -2427,6 +2453,9 @@ static void deliver_coro_func(void *arg) {
     }
 
     for (size_t i = ctx->idx; i < ctx->target_count; i++) {
+        /* After yield, same-name reactivate must not revive a stale publisher. */
+        if (!deliver_ctx_publisher_live(srv, ctx))
+            goto done;
         cmq_deliver_tgt_t *t = &ctx->targets[i];
         if (!deliver_tgt_accepts_subject(t, ctx->subject))
             continue;
@@ -2482,24 +2511,7 @@ done:
     if (!ctx->delivered_any && ctx->publisher_id != 0 &&
         !ctx->suppress_fail_error) {
         /* Soft-delete during coro fan-out — do not ERROR a dead account. */
-        int pub_live = 0;
-        if (ctx->publisher_worker_id >= 0 && srv->workers &&
-            ctx->publisher_worker_id < srv->num_workers) {
-            cmq_worker_t *pw = &srv->workers[ctx->publisher_worker_id];
-            cmq_mutex_lock(&pw->clients_lock);
-            cmq_client_t *pub = cmq_idmap_get(pw->idmap, ctx->publisher_id);
-            pub_live = (pub && pub->conn_gen == ctx->publisher_gen &&
-                        client_state(pub) == CMQ_CLIENT_CONNECTED &&
-                        client_account_live(srv, pub));
-            cmq_mutex_unlock(&pw->clients_lock);
-        } else {
-            cmq_mutex_lock(&srv->clients_lock);
-            cmq_client_t *pub = cmq_idmap_get(srv->idmap, ctx->publisher_id);
-            pub_live = (pub && pub->conn_gen == ctx->publisher_gen &&
-                        client_state(pub) == CMQ_CLIENT_CONNECTED &&
-                        client_account_live(srv, pub));
-            cmq_mutex_unlock(&srv->clients_lock);
-        }
+        int pub_live = deliver_ctx_publisher_live(srv, ctx);
         if (pub_live) {
             static const char emsg[] = "delivery failed";
             uint8_t ebuf[256];

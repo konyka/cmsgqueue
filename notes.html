@@ -4297,6 +4297,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — deliver coro gates stale publisher after reactivate</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">deliver_coro_func</span></td><td>✅</td><td><code>may_deliver</code> is account-name-only; after soft-delete→same-name reactivate, a coro that yielded mid-fan-out could keep delivering for a stale CONNECT epoch. Now re-check publisher id/gen + <code>client_account_live</code> each target (and reuse that helper for the fail ERROR path).</td></tr>
+</table>
+</div>
+
 
 
 
