@@ -4049,6 +4049,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — parser chunked feed drop-tail pending_error</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_parser_feed stop</span></td><td>✅</td><td>If chunked feed stops with <code>off&lt;len</code> (stuck cap / realloc OOM / fatal), latch <code>pending_error</code> so undrained frames are delivered then the connection tears down — no silent TCP desync.</td></tr>
+</table>
+</div>
+
 
 
 

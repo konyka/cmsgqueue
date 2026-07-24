@@ -270,6 +270,12 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
     size_t hard = CMQ_HEADER_LEN + p->max_payload;
     size_t off = 0;
     int any = 0;
+    /* If we stop with off < len, the unread tail is dropped — latch fatal
+       so dispatch drains then tears down (avoid TCP stream desync). */
+#define CMQ_FEED_STOP() do { \
+        if (off < len) p->pending_error = 1; \
+        return (p->head || any) ? 1 : -1; \
+    } while (0)
     while (off < len) {
         if (p->pending_error)
             return p->head || any ? 1 : -1;
@@ -277,24 +283,24 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
         size_t used = p->inbuf_len - p->inbuf_off;
         if (used > hard) {
             p->pending_error = 1;
-            return p->head || any ? 1 : -1;
+            CMQ_FEED_STOP();
         }
         size_t room = hard - used;
         if (room == 0) {
             int rc = parser_parse_inbuf(p);
             if (rc < 0)
-                return p->head || any ? 1 : -1;
+                CMQ_FEED_STOP();
             if (rc > 0)
                 any = 1;
             used = p->inbuf_len - p->inbuf_off;
             if (used > hard) {
                 p->pending_error = 1;
-                return p->head || any ? 1 : -1;
+                CMQ_FEED_STOP();
             }
             room = hard - used;
             if (room == 0) {
-                /* Stuck at cap (queue-full / incomplete) — keep queued. */
-                return p->head || any ? 1 : -1;
+                /* Stuck at cap — cannot absorb data[off..]; fail closed. */
+                CMQ_FEED_STOP();
             }
         }
 
@@ -310,7 +316,7 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
         }
         if (p->inbuf_len + chunk > p->inbuf_cap) {
             if (ensure_inbuf(p, p->inbuf_len + chunk) != 0)
-                return p->head || any ? 1 : -1;
+                CMQ_FEED_STOP();
         }
         memcpy(p->inbuf + p->inbuf_len, data + off, chunk);
         p->inbuf_len += chunk;
@@ -318,10 +324,11 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
 
         int rc = parser_parse_inbuf(p);
         if (rc < 0)
-            return p->head || any ? 1 : -1;
+            CMQ_FEED_STOP();
         if (rc > 0)
             any = 1;
     }
+#undef CMQ_FEED_STOP
     return any ? 1 : 0;
 }
 

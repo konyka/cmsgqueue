@@ -420,6 +420,7 @@ TEST(parser, hard_cap_keeps_queued) {
     ASSERT_EQ(cmq_parser_feed(p, frame, sizeof(frame)), 1);
     uint8_t extra = 0xAB;
     ASSERT_EQ(cmq_parser_feed(p, &extra, 1), 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 1); /* dropped tail → desync */
     ASSERT(cmq_parser_frame(p) != NULL);
     ASSERT_EQ(cmq_parser_frame(p)->hdr.op, CMQ_OP_PUBLISH);
     cmq_parser_destroy(p);
