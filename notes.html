@@ -4041,6 +4041,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — parser chunked feed across hard-cap</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_parser_feed chunk</span></td><td>✅</td><td>Append at most <code>hard-used</code> then parse in a loop so a near-full frame can complete when the same read also carries pipelined bytes (all-or-nothing reject used to <code>rc=-1</code> teardown).</td></tr>
+</table>
+</div>
+
 
 
 

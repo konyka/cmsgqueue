@@ -346,7 +346,7 @@ TEST(parser, good_feed_then_bad_feed) {
     cmq_parser_destroy(p);
 }
 
-/* Incomplete stream must not grow past header + max_payload. */
+/* Near-full incomplete frame + pipelined bytes: chunked feed must complete. */
 TEST(parser, inbuf_hard_cap) {
     cmq_parser_t *p = cmq_parser_create();
     cmq_parser_set_max_payload(p, 64);
@@ -361,9 +361,40 @@ TEST(parser, inbuf_hard_cap) {
     uint8_t body[40];
     memset(body, 0xAB, sizeof(body));
     ASSERT(cmq_parser_feed(p, hdr, sizeof(hdr)) >= 0);
-    ASSERT(cmq_parser_feed(p, body, sizeof(body)) >= 0); /* 9+40 < 9+64 */
-    /* Another 40 would make used+len = 89 > hard 73. */
-    ASSERT_EQ(cmq_parser_feed(p, body, sizeof(body)), -1);
+    ASSERT(cmq_parser_feed(p, body, sizeof(body)) >= 0); /* 9+40; room=24 */
+    /* 40 > room: absorb 24 (complete), then remainder — not all-or-nothing -1. */
+    ASSERT_EQ(cmq_parser_feed(p, body, sizeof(body)), 1);
+    ASSERT(cmq_parser_frame(p) != NULL);
+    ASSERT_EQ(cmq_parser_frame(p)->hdr.op, CMQ_OP_PUBLISH);
+    cmq_parser_destroy(p);
+}
+
+/* Completing bytes + next-frame header in one feed must not tear down. */
+TEST(parser, near_full_pipeline) {
+    cmq_parser_t *p = cmq_parser_create();
+    cmq_parser_set_max_payload(p, 64);
+    uint8_t hdr[9];
+    memset(hdr, 0, sizeof(hdr));
+    hdr[0] = CMQ_PROTO_MAGIC_0;
+    hdr[1] = CMQ_PROTO_MAGIC_1;
+    hdr[2] = CMQ_PROTO_VERSION;
+    hdr[4] = CMQ_OP_PUBLISH;
+    hdr[5] = 64;
+    uint8_t partial[44];
+    memset(partial, 'P', sizeof(partial));
+    ASSERT(cmq_parser_feed(p, hdr, sizeof(hdr)) >= 0);
+    ASSERT(cmq_parser_feed(p, partial, sizeof(partial)) >= 0); /* used=53, room=20 */
+    uint8_t pipe[20 + 16];
+    memset(pipe, 'P', 20);
+    size_t pn = cmq_frame_encode(pipe + 20, sizeof(pipe) - 20, CMQ_OP_PING, 0,
+                                  NULL, 0);
+    ASSERT(pn > 0);
+    ASSERT_EQ(cmq_parser_feed(p, pipe, 20 + pn), 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 0);
+    ASSERT(cmq_parser_frame(p) != NULL);
+    ASSERT_EQ(cmq_parser_frame(p)->hdr.op, CMQ_OP_PUBLISH);
+    ASSERT_EQ(cmq_parser_next(p), 1);
+    ASSERT_EQ(cmq_parser_frame(p)->hdr.op, CMQ_OP_PING);
     cmq_parser_destroy(p);
 }
 
