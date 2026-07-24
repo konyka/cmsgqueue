@@ -4329,6 +4329,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — SUB ghost_drop · kqueue ev_mod · MQTT map update</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">SUB replace ghost_drop</span></td><td>✅</td><td>When new insert and old restore both fail, code stripped the local sub and left the client <code>CONNECTED</code> — silent MESSAGE loss vs client expectation. Now <code>client_force_closing</code> + <code>SHUT_RDWR</code> after SUBACK failure.</td></tr>
+<tr><td><span class="component-name">kqueue cmq_ev_mod</span></td><td>✅</td><td>After DELETE, restore ADD failure ignored the return — table could keep a cb with no kernel filters. Align epoll: best-effort DELETE leftovers + <code>watcher_clear</code>.</td></tr>
+<tr><td><span class="component-name">mqtt_add_mapping</span></td><td>✅</td><td>Full-table check ran before lookup, so updates of existing topics failed at capacity. Cap applies to inserts only.</td></tr>
+</table>
+</div>
+
 
 
 

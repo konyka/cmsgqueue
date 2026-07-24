@@ -635,7 +635,21 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
         if (old_events != 0) {
             uint32_t rgen =
                 watcher_publish(loop, fd, old_events, old_cb, old_data);
-            (void)kqueue_add_filters(loop->backend_fd, fd, old_events, rgen);
+            if (kqueue_add_filters(loop->backend_fd, fd, old_events, rgen) != 0) {
+                /* Align epoll: restore failed after DELETE — clear table so
+                   callers see -1 as "no interest" and tear down. */
+                struct kevent del[2];
+                int dn = 0;
+                if (old_events & CMQ_EV_READ)
+                    EV_SET(&del[dn++], (uintptr_t)fd, EVFILT_READ,
+                           EV_DELETE, 0, 0, NULL);
+                if (old_events & CMQ_EV_WRITE)
+                    EV_SET(&del[dn++], (uintptr_t)fd, EVFILT_WRITE,
+                           EV_DELETE, 0, 0, NULL);
+                if (dn > 0)
+                    (void)kevent(loop->backend_fd, del, dn, NULL, 0, NULL);
+                watcher_clear(loop, fd);
+            }
         } else {
             watcher_clear(loop, fd);
         }

@@ -357,10 +357,6 @@ static int mqtt_add_mapping_impl(cmq_mqtt_bridge_t *br, const char *cmq_subject,
     if (strnlen(mqtt_topic, CMQ_MQTT_TOPIC_MAX) >= CMQ_MQTT_TOPIC_MAX)
         return -1;
     cmq_mutex_lock(&br->lock);
-    if (br->mapping_count >= CMQ_MQTT_MAX_MAPPINGS) {
-        cmq_mutex_unlock(&br->lock);
-        return -1;
-    }
     for (size_t i = 0; i < br->mapping_count; i++) {
         if (strcmp(br->mappings[i].mqtt_topic, mqtt_topic) == 0) {
             strncpy(br->mappings[i].cmq_subject, cmq_subject,
@@ -370,6 +366,11 @@ static int mqtt_add_mapping_impl(cmq_mqtt_bridge_t *br, const char *cmq_subject,
             cmq_mutex_unlock(&br->lock);
             return 0;
         }
+    }
+    /* Cap applies to inserts only — updates of existing topics stay allowed. */
+    if (br->mapping_count >= CMQ_MQTT_MAX_MAPPINGS) {
+        cmq_mutex_unlock(&br->lock);
+        return -1;
     }
     cmq_mqtt_mapping_t *m = &br->mappings[br->mapping_count++];
     strncpy(m->cmq_subject, cmq_subject, CMQ_MQTT_TOPIC_MAX - 1);

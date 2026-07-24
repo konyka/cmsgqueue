@@ -3380,6 +3380,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         free(ref);
         free(entry);
         if (ghost_drop && old) {
+            /* Both new insert and old restore failed — local entry would
+               claim interest the trie no longer has (silent MESSAGE loss).
+               Tear the connection like other replace/quota OOM paths. */
             cmq_sub_entry_t **q = &c->subs;
             while (*q) {
                 if (*q == old) {
@@ -3400,6 +3403,11 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                 cmq_account_dec_subscriptions(a, c->account_epoch);
                 cmq_account_release(srv->accounts, a);
             }
+            cmq_send_suback(c, sub_id, 1);
+            client_force_closing(c);
+            if (c->fd >= 0)
+                (void)shutdown(c->fd, SHUT_RDWR);
+            return;
         }
         cmq_send_suback(c, sub_id, 1);
         return;
