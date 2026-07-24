@@ -4289,6 +4289,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — MQTT CONNECT keepalive uint16 bound</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_mqtt_encode_connect</span></td><td>✅</td><td>Keep Alive was written as low 16 bits with no range check — <code>65536</code> became wire <code>0</code> (disable keepalive). Now reject <code>keepalive</code> outside <code>0..65535</code>.</td></tr>
+</table>
+</div>
+
 
 
 

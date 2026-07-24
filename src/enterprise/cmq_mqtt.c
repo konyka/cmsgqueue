@@ -527,6 +527,8 @@ static int encode_remaining_length(uint8_t *buf, size_t offset, size_t len_size,
 int cmq_mqtt_encode_connect(uint8_t *buf, size_t len, const char *client_id,
                              int keepalive, int clean_session) {
     if (!buf || len < 20 || !client_id) return -1;
+    /* Wire Keep Alive is uint16 — never silently truncate (65536 → 0 disables KA). */
+    if (keepalive < 0 || keepalive > 65535) return -1;
     size_t id_len = strlen(client_id);
     if (id_len > 0xFFFFu || id_len > SIZE_MAX - 10) return -1;
     size_t var_len = 10 + id_len;
