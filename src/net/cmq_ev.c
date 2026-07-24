@@ -132,8 +132,6 @@ static void ev_end_op(cmq_ev_loop_t *loop) {
     atomic_fetch_sub_explicit(&loop->in_flight, 1, memory_order_acq_rel);
 }
 
-void cmq_ev_stop(cmq_ev_loop_t *loop);
-
 static uint64_t cmq_ev_now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -256,10 +254,39 @@ fail_loop:
 #endif
 }
 
+/* Write wakeup byte/eventfd. Caller must hold in_flight or be destroy
+   after dying=1 (no concurrent close until in_flight drains). */
+static void ev_wakeup_raw(cmq_ev_loop_t *loop) {
+    if (!loop || loop->wakeup_wfd < 0) return;
+#if CMQ_OS_LINUX
+    uint64_t val = 1;
+    for (;;) {
+        ssize_t n = write(loop->wakeup_wfd, &val, sizeof(val));
+        if (n == (ssize_t)sizeof(val)) return;
+        if (n < 0 && errno == EINTR) continue;
+        /* Saturated eventfd is already readable — treat as woken. */
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+        return;
+    }
+#else
+    char c = 1;
+    for (;;) {
+        ssize_t n = write(loop->wakeup_wfd, &c, 1);
+        if (n == 1) return;
+        if (n < 0 && errno == EINTR) continue;
+        /* Pipe full → pending bytes already wake the reader. */
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+        return;
+    }
+#endif
+}
+
 void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
     if (!loop) return;
     atomic_store_explicit(&loop->dying, 1, memory_order_release);
-    cmq_ev_stop(loop);
+    /* Cannot use public stop/wakeup (begin_op fails once dying). */
+    cmq_atomic_store_int(&loop->running, 0, CMQ_ATOMIC_RELEASE);
+    ev_wakeup_raw(loop);
     while (atomic_load_explicit(&loop->in_flight, memory_order_acquire) > 0) {
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
@@ -807,33 +834,17 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
 
 void cmq_ev_stop(cmq_ev_loop_t *loop) {
     if (!loop) return;
+    if (ev_begin_op(loop) != 0) return;
     cmq_atomic_store_int(&loop->running, 0, CMQ_ATOMIC_RELEASE);
-    cmq_ev_wakeup(loop);
+    ev_wakeup_raw(loop);
+    ev_end_op(loop);
 }
 
 void cmq_ev_wakeup(cmq_ev_loop_t *loop) {
-    if (!loop || loop->wakeup_wfd < 0) return;
-#if CMQ_OS_LINUX
-    uint64_t val = 1;
-    for (;;) {
-        ssize_t n = write(loop->wakeup_wfd, &val, sizeof(val));
-        if (n == (ssize_t)sizeof(val)) return;
-        if (n < 0 && errno == EINTR) continue;
-        /* Saturated eventfd is already readable — treat as woken. */
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
-        return;
-    }
-#else
-    char c = 1;
-    for (;;) {
-        ssize_t n = write(loop->wakeup_wfd, &c, 1);
-        if (n == 1) return;
-        if (n < 0 && errno == EINTR) continue;
-        /* Pipe full → pending bytes already wake the reader. */
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
-        return;
-    }
-#endif
+    if (!loop) return;
+    if (ev_begin_op(loop) != 0) return;
+    ev_wakeup_raw(loop);
+    ev_end_op(loop);
 }
 
 int cmq_ev_fd(cmq_ev_loop_t *loop) {
