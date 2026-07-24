@@ -4073,6 +4073,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — watcher_clear keeps gen across fd reuse</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">watcher_clear gen</span></td><td>✅</td><td>Do not reset <code>gen</code> to 0 on clear; next publish must be <code>old+1</code> so a still-queued epoll/kqueue event from the prior fd registration cannot snapshot-match the recycled fd's new client.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -344,7 +344,9 @@ static void watcher_clear(cmq_ev_loop_t *loop, int fd) {
     loop->watchers[fd].events = 0;
     loop->watchers[fd].cb = NULL;
     loop->watchers[fd].data = NULL;
-    loop->watchers[fd].gen = 0;
+    /* Keep gen: zeroing makes the next publish reuse gen=1 and a queued
+       epoll/kqueue event from the prior registration can match the new
+       client on the recycled fd (HUP/ERR → teardown). */
     cmq_mutex_unlock(&loop->watchers_lock);
 }
 
