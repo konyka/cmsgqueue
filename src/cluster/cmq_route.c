@@ -1484,7 +1484,10 @@ static int route_adopt_fd_impl(cmq_route_pool_t *pool, int fd) {
         route_slot_snap(pool, i, NULL, &efd, &owned, NULL);
         if (efd != fd) continue;
         cmq_mutex_lock(&pool->io_locks[i]);
-        int ok = (pool->conns[i].fd == fd);
+        /* CAS-style: only the first binder may claim an owned egress.
+           Already-borrowed or replaced fd must fail (no double reader /
+           recycled-fd misbind). */
+        int ok = (pool->conns[i].fd == fd && pool->conns[i].fd_owned);
         if (ok)
             pool->conns[i].fd_owned = 0;
         cmq_mutex_unlock(&pool->io_locks[i]);

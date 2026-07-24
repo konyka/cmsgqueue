@@ -4169,6 +4169,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — route adopt_fd owned-only claim</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_route_adopt_fd</span></td><td>✅</td><td>Require <code>fd_owned==1</code> under io_lock when clearing ownership. Previous fd-match-only adopt let concurrent bind create two READ clients on one egress, or claim a recycled fd after disconnect.</td></tr>
+</table>
+</div>
+
 
 
 
