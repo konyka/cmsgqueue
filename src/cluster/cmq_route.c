@@ -1138,13 +1138,14 @@ static void route_detach_fd_impl(cmq_route_pool_t *pool, int fd) {
 static int route_disconnect_impl(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return -1;
     cmq_mutex_lock(&pool->lock);
-    /* Bump cancel so in-flight connect/add_conn cannot reinstall. */
+    /* Always bump — cancel in-flight add_conn even if slot/target absent
+       (align leaf_remove; cancels[] exists for non-target handshake paths). */
+    route_bump_cancel(pool, node_id);
     int known = (route_find_target(pool, node_id) >= 0);
     for (size_t i = 0; i < pool->conn_count; i++) {
         char rid[CMQ_NODE_ID_SIZE];
         route_slot_snap(pool, i, NULL, NULL, NULL, rid);
         if (strcmp(rid, node_id) == 0) {
-            route_bump_cancel(pool, node_id);
             /* Tombstone in place — never memmove (io_locks are index-stable). */
             route_slot_close(pool, i);
             while (pool->conn_count > 0) {
@@ -1160,13 +1161,8 @@ static int route_disconnect_impl(cmq_route_pool_t *pool, const char *node_id) {
             return 0;
         }
     }
-    if (known) {
-        route_bump_cancel(pool, node_id);
-        cmq_mutex_unlock(&pool->lock);
-        return 0;
-    }
     cmq_mutex_unlock(&pool->lock);
-    return -1;
+    return known ? 0 : -1;
 }
 
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__((unused)),

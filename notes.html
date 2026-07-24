@@ -3904,6 +3904,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — route disconnect always bumps cancel</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_route_disconnect</span></td><td>✅</td><td>Always bump <code>cancels[]</code> (align <code>leaf_remove</code>); in-flight non-target <code>add_conn</code> cannot reinstall after disconnect returns <code>-1</code>.</td></tr>
+</table>
+</div>
+
 
 
 
