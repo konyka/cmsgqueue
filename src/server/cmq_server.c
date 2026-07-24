@@ -6118,6 +6118,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
 
     srv->listen_fd = -1;
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
+    cmq_atomic_store_int(&srv->run_active, 0, CMQ_ATOMIC_SEQ_CST);
 
     cmq_mutex_init(&srv->clients_lock);
     cmq_rwlock_init(&srv->sublist_lock);
@@ -6456,6 +6457,8 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     }
 
     cmq_atomic_store_int(&srv->running, 1, CMQ_ATOMIC_SEQ_CST);
+    /* Destroy must wait until post-ev_run joins finish before free(workers). */
+    cmq_atomic_store_int(&srv->run_active, 1, CMQ_ATOMIC_SEQ_CST);
     cmq_log_info(srv->log, "CMQ server listening on %s:%d",
                  srv->config.host, srv->config.port);
 
@@ -6509,6 +6512,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         srv->listen_fd = -1;
     }
 
+    cmq_atomic_store_int(&srv->run_active, 0, CMQ_ATOMIC_RELEASE);
     return CMQ_OK;
 }
 
@@ -6715,13 +6719,24 @@ void cmq_server_destroy(cmq_server_t *srv) {
        in-flight route_connect cannot install egress after handshake. */
     cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
-    if (srv->ev_loop) cmq_ev_stop(srv->ev_loop);
+    if (srv->ev_loop) {
+        cmq_ev_stop(srv->ev_loop);
+        cmq_ev_wakeup(srv->ev_loop);
+    }
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
             cmq_ev_stop(srv->workers[i].ev_loop);
             if (srv->workers[i].wakeup_wfd >= 0)
                 (void)wakeup_fd_signal(srv->workers[i].wakeup_wfd);
         }
+    }
+    /* Wait for cmq_server_run to leave keepalive + finish joins before
+       free(workers) — otherwise acceptor timer UAF on worker mutexes. */
+    while (cmq_atomic_load_int(&srv->run_active, CMQ_ATOMIC_ACQUIRE)) {
+        if (srv->ev_loop)
+            cmq_ev_wakeup(srv->ev_loop);
+        struct timespec ts = {0, 1000000L};
+        nanosleep(&ts, NULL);
     }
     if (__atomic_exchange_n(&srv->route_reconn_started, 0, __ATOMIC_ACQ_REL))
         cmq_thread_join(srv->route_reconn_thr);
@@ -6734,13 +6749,6 @@ void cmq_server_destroy(cmq_server_t *srv) {
         }
     }
 
-    if (srv->workers) {
-        for (int i = 0; i < srv->num_workers; i++) {
-            cmq_worker_destroy(&srv->workers[i]);
-        }
-        free(srv->workers);
-    }
-
     if (srv->clients) {
         while (srv->clients_count > 0)
             client_teardown(srv->clients[0]);
@@ -6750,17 +6758,48 @@ void cmq_server_destroy(cmq_server_t *srv) {
     cmq_idmap_destroy(srv->idmap);
     srv->idmap = NULL;
 
-    if (srv->listen_fd >= 0) close(srv->listen_fd);
-    if (srv->ev_loop) cmq_ev_loop_destroy(srv->ev_loop);
+    if (srv->listen_fd >= 0) {
+        close(srv->listen_fd);
+        srv->listen_fd = -1;
+    }
+    /* Destroy acceptor loop before workers so no timer can touch them. */
+    if (srv->ev_loop) {
+        cmq_ev_loop_destroy(srv->ev_loop);
+        srv->ev_loop = NULL;
+    }
+    if (srv->workers) {
+        for (int i = 0; i < srv->num_workers; i++) {
+            cmq_worker_destroy(&srv->workers[i]);
+        }
+        free(srv->workers);
+        srv->workers = NULL;
+        srv->num_workers = 0;
+    }
     if (srv->sublist) {
         cmq_sublist_free_data(srv->sublist);
         cmq_sublist_destroy(srv->sublist);
+        srv->sublist = NULL;
     }
-    if (srv->log) cmq_log_destroy(srv->log);
-    if (srv->accounts) cmq_account_manager_destroy(srv->accounts);
-    if (srv->routes) cmq_route_pool_destroy(srv->routes);
-    if (srv->cluster) cmq_cluster_destroy(srv->cluster);
-    if (srv->tls_config) cmq_tls_config_destroy(srv->tls_config);
+    if (srv->log) {
+        cmq_log_destroy(srv->log);
+        srv->log = NULL;
+    }
+    if (srv->accounts) {
+        cmq_account_manager_destroy(srv->accounts);
+        srv->accounts = NULL;
+    }
+    if (srv->routes) {
+        cmq_route_pool_destroy(srv->routes);
+        srv->routes = NULL;
+    }
+    if (srv->cluster) {
+        cmq_cluster_destroy(srv->cluster);
+        srv->cluster = NULL;
+    }
+    if (srv->tls_config) {
+        cmq_tls_config_destroy(srv->tls_config);
+        srv->tls_config = NULL;
+    }
     cmq_mutex_destroy(&srv->clients_lock);
     cmq_rwlock_destroy(&srv->sublist_lock);
     cmq_config_free(&srv->config);

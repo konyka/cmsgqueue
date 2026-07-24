@@ -4400,6 +4400,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — destroy run_active · TLS handshake gate</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_server_destroy</span></td><td>✅</td><td>Concurrent destroy could <code>free(workers)</code> while acceptor keepalive still locked worker mutexes. Wait on <code>run_active</code> (cleared after run's joins); destroy acceptor loop before workers; null pointers.</td></tr>
+<tr><td><span class="component-name">cmq_tls session I/O</span></td><td>✅</td><td>Session create requires <code>cmq_tls_configured</code>; <code>read</code>/<code>write</code> refuse <code>!handshake_done</code> (no pre-handshake plaintext bypass).</td></tr>
+</table>
+</div>
+
 
 
 

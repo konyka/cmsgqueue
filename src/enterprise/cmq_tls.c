@@ -96,7 +96,7 @@ int cmq_tls_backend_secure(void) {
 }
 
 cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
-    if (!cfg || fd < 0) return NULL;
+    if (!cfg || fd < 0 || !cmq_tls_configured(cfg)) return NULL;
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));
     if (!s) return NULL;
     s->cfg = cfg;
@@ -107,7 +107,7 @@ cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
 }
 
 cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
-    if (!cfg || fd < 0) return NULL;
+    if (!cfg || fd < 0 || !cmq_tls_configured(cfg)) return NULL;
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));
     if (!s) return NULL;
     s->cfg = cfg;
@@ -131,12 +131,16 @@ int cmq_tls_handshake(cmq_tls_session_t *session) {
 }
 
 ssize_t cmq_tls_read(cmq_tls_session_t *session, uint8_t *buf, size_t len) {
-    if (!session || !buf || len == 0) return -1;
+    if (!session || !buf || len == 0 || session->fd < 0 ||
+        !session->handshake_done)
+        return -1;
     return read(session->fd, buf, len);
 }
 
 ssize_t cmq_tls_write(cmq_tls_session_t *session, const uint8_t *buf, size_t len) {
-    if (!session || !buf || len == 0) return -1;
+    if (!session || !buf || len == 0 || session->fd < 0 ||
+        !session->handshake_done)
+        return -1;
     return write(session->fd, buf, len);
 }
 
