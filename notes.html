@@ -3912,6 +3912,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — cancel table full fails closed via epoch</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/leaf cancel_epoch</span></td><td>✅</td><td>When <code>cancels[]</code> is full, bump gens + <code>cancel_epoch</code> so snap=<code>0</code> untracked dials/accepts observe cancel (bump-all alone was a no-op for them).</td></tr>
+</table>
+</div>
+
 
 
 

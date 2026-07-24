@@ -211,6 +211,7 @@ struct cmq_route_pool {
     size_t target_count;
     cmq_route_cancel_t cancels[CMQ_ROUTE_MAX_CONNS];
     size_t cancel_count;
+    uint32_t cancel_epoch; /* bumps when cancels[] full — foil snap=0 dials */
     cmq_route_interest_t interests[256];
     size_t interest_count;
     cmq_mutex_t lock;
@@ -343,9 +344,10 @@ static void route_bump_cancel(cmq_route_pool_t *pool, const char *node_id) {
         return;
     }
     if (pool->cancel_count >= CMQ_ROUTE_MAX_CONNS) {
-        /* Table full — bump all gens so every in-flight dial fails closed. */
+        /* Table full — bump gens + epoch so snap=0 (untracked) dials fail closed. */
         for (size_t j = 0; j < pool->cancel_count; j++)
             pool->cancels[j].gen++;
+        pool->cancel_epoch++;
         return;
     }
     cmq_route_cancel_t *c = &pool->cancels[pool->cancel_count++];
@@ -353,13 +355,20 @@ static void route_bump_cancel(cmq_route_pool_t *pool, const char *node_id) {
     c->gen = 1;
 }
 
-static uint32_t route_cancel_snap(cmq_route_pool_t *pool, const char *node_id) {
+/* Caller holds pool->lock. */
+static void route_cancel_snap(cmq_route_pool_t *pool, const char *node_id,
+                               uint32_t *gen_out, uint32_t *epoch_out) {
     ssize_t i = route_find_cancel(pool, node_id);
-    return i >= 0 ? pool->cancels[i].gen : 0;
+    if (gen_out)
+        *gen_out = i >= 0 ? pool->cancels[i].gen : 0;
+    if (epoch_out)
+        *epoch_out = pool->cancel_epoch;
 }
 
 static int route_cancel_changed(cmq_route_pool_t *pool, const char *node_id,
-                                 uint32_t gen) {
+                                 uint32_t gen, uint32_t epoch) {
+    if (pool->cancel_epoch != epoch)
+        return 1;
     ssize_t i = route_find_cancel(pool, node_id);
     if (i < 0)
         return gen != 0; /* entry removed — treat as cancelled if we had a snap */
@@ -568,7 +577,8 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
             return -1;
         }
     }
-    uint32_t cgen = route_cancel_snap(pool, node_id);
+    uint32_t cgen = 0, cepoch = 0;
+    route_cancel_snap(pool, node_id, &cgen, &cepoch);
     cmq_mutex_unlock(&pool->lock);
 
     /* Connect + handshake outside the pool lock so broadcast can proceed. */
@@ -600,7 +610,7 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
 
     cmq_mutex_lock(&pool->lock);
     /* disconnect / endpoint change / drain during unlocked dial. */
-    if (route_cancel_changed(pool, node_id, cgen) ||
+    if (route_cancel_changed(pool, node_id, cgen, cepoch) ||
         !route_endpoint_current(pool, node_id, addr, port) ||
         route_dial_gated(pool)) {
         cmq_mutex_unlock(&pool->lock);
@@ -773,7 +783,8 @@ static int route_add_conn_impl(cmq_route_pool_t *pool, const char *node_id, int 
             return -1;
         }
     }
-    uint32_t cgen = route_cancel_snap(pool, node_id);
+    uint32_t cgen = 0, cepoch = 0;
+    route_cancel_snap(pool, node_id, &cgen, &cepoch);
     cmq_mutex_unlock(&pool->lock);
 
     if (fd >= 0) {
@@ -790,7 +801,7 @@ static int route_add_conn_impl(cmq_route_pool_t *pool, const char *node_id, int 
 
     cmq_mutex_lock(&pool->lock);
     /* Align connect: disconnect during unlocked handshake must not install. */
-    if (route_cancel_changed(pool, node_id, cgen) || route_dial_gated(pool)) {
+    if (route_cancel_changed(pool, node_id, cgen, cepoch) || route_dial_gated(pool)) {
         cmq_mutex_unlock(&pool->lock);
         if (fd >= 0) close(fd);
         return -1;

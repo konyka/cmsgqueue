@@ -51,6 +51,7 @@ struct cmq_leaf_node {
     size_t leaf_count;
     cmq_leaf_cancel_t cancels[CMQ_LEAF_MAX_CONNECTIONS];
     size_t cancel_count;
+    uint32_t cancel_epoch; /* bumps when cancels[] full — foil snap=0 accepts */
 
     cmq_mutex_t lock;
     cmq_mutex_t hub_io_lock; /* serialize hub writes vs disconnect close */
@@ -922,8 +923,10 @@ static void leaf_bump_cancel(cmq_leaf_node_t *leaf, const char *leaf_id) {
         return;
     }
     if (leaf->cancel_count >= CMQ_LEAF_MAX_CONNECTIONS) {
+        /* Table full — bump gens + epoch so snap=0 accepts fail closed. */
         for (size_t j = 0; j < leaf->cancel_count; j++)
             leaf->cancels[j].gen++;
+        leaf->cancel_epoch++;
         return;
     }
     cmq_leaf_cancel_t *c = &leaf->cancels[leaf->cancel_count++];
@@ -931,13 +934,20 @@ static void leaf_bump_cancel(cmq_leaf_node_t *leaf, const char *leaf_id) {
     c->gen = 1;
 }
 
-static uint32_t leaf_cancel_snap(cmq_leaf_node_t *leaf, const char *leaf_id) {
+/* Caller holds leaf->lock. */
+static void leaf_cancel_snap(cmq_leaf_node_t *leaf, const char *leaf_id,
+                              uint32_t *gen_out, uint32_t *epoch_out) {
     ssize_t i = leaf_find_cancel(leaf, leaf_id);
-    return i >= 0 ? leaf->cancels[i].gen : 0;
+    if (gen_out)
+        *gen_out = i >= 0 ? leaf->cancels[i].gen : 0;
+    if (epoch_out)
+        *epoch_out = leaf->cancel_epoch;
 }
 
 static int leaf_cancel_changed(cmq_leaf_node_t *leaf, const char *leaf_id,
-                                uint32_t gen) {
+                                uint32_t gen, uint32_t epoch) {
+    if (leaf->cancel_epoch != epoch)
+        return 1;
     ssize_t i = leaf_find_cancel(leaf, leaf_id);
     if (i < 0)
         return gen != 0;
@@ -957,7 +967,8 @@ static int leaf_accept_impl(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) 
         if (fd >= 0) close(fd);
         return -1;
     }
-    uint32_t cgen = leaf_cancel_snap(leaf, leaf_id);
+    uint32_t cgen = 0, cepoch = 0;
+    leaf_cancel_snap(leaf, leaf_id, &cgen, &cepoch);
     cmq_mutex_unlock(&leaf->lock);
 
     /* fd < 0: placeholder slot (tests). Live fd: cluster handshake first. */
@@ -971,7 +982,7 @@ static int leaf_accept_impl(cmq_leaf_node_t *leaf, int fd, const char *leaf_id) 
 
     cmq_mutex_lock(&leaf->lock);
     /* Align route_add_conn: remove during unlocked handshake must not install. */
-    if (leaf_cancel_changed(leaf, leaf_id, cgen)) {
+    if (leaf_cancel_changed(leaf, leaf_id, cgen, cepoch)) {
         cmq_mutex_unlock(&leaf->lock);
         if (fd >= 0) close(fd);
         return -1;
