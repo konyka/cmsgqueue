@@ -4339,6 +4339,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — RESPONSE _INBOX ghost cluster fallback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">handle_response</span></td><td>✅</td><td>Local exact <code>_INBOX</code> match that failed as ghost/CLOSING skipped cluster forward (unlike <code>ntgt==0</code> / REQUEST). Cross-node RR could drop the reply. Now forward on local miss for inbox too.</td></tr>
+</table>
+</div>
+
 
 
 
