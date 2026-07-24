@@ -4201,6 +4201,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — skip wildcard-only exports for SUB gate</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">pattern_wildcard_only</span></td><td>✅</td><td>Also skip <code>*.&gt;</code> / <code>*.*.&gt;</code> / <code>*</code> in <code>export_offered_to</code> — e6ffe66 only skipped bare <code>&gt;</code>, but <code>*.&gt;</code> still matched every subject and locked foreign local SUBSCRIBE.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -589,16 +589,33 @@ static int acct_eq_or_star(const char *rule, const char *actual) {
     return strcmp(rule, "*") == 0 || strcmp(rule, actual) == 0;
 }
 
-/* True if some other account exports `subject` with dest targeting `account`.
-   Bare ">" matches every subject — skip it as a SUBSCRIBE gate (would lock
-   all local subs); may_deliver still enforces cross-account delivery. */
+/* Patterns with only * / > tokens (">", "*.>", "*.*.>", "*") are too open
+   for SUBSCRIBE gating — they lock broad/local subjects. Literals like
+   acme.> still block ghost subscribe; may_deliver still gates delivery. */
+static int pattern_wildcard_only(const char *pat) {
+    if (!pat || !*pat) return 0;
+    const char *p = pat;
+    while (*p) {
+        const char *pe = p;
+        while (*pe && *pe != '.') pe++;
+        size_t plen = (size_t)(pe - p);
+        if (!(plen == 1 && (p[0] == '*' || p[0] == '>')))
+            return 0;
+        if (p[0] == '>' && *pe != '\0')
+            return 0;
+        p = *pe ? pe + 1 : pe;
+    }
+    return 1;
+}
+
+/* True if some other account exports `subject` with dest targeting `account`. */
 static int export_offered_to(cmq_account_manager_t *mgr, const char *account,
                               const char *subject) {
     for (size_t i = 0; i < mgr->perms_count; i++) {
         if (strcmp(mgr->perms[i].account, account) == 0) continue;
         for (size_t j = 0; j < mgr->perms[i].export_count; j++) {
             const char *pat = mgr->perms[i].exports[j].subject;
-            if (strcmp(pat, ">") == 0)
+            if (pattern_wildcard_only(pat))
                 continue;
             if (subject_match(pat, subject) &&
                 acct_eq_or_star(mgr->perms[i].exports[j].dest_account, account))
