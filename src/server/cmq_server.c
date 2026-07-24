@@ -6232,6 +6232,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         srv->num_workers = nthreads;
         srv->workers = calloc((size_t)nthreads, sizeof(cmq_worker_t));
         if (!srv->workers) {
+            srv->num_workers = 0;
+            cmq_ev_loop_destroy(srv->ev_loop);
+            srv->ev_loop = NULL;
             close(srv->listen_fd);
             srv->listen_fd = -1;
             return CMQ_ERR_NO_MEMORY;
@@ -6249,6 +6252,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 }
                 free(srv->workers);
                 srv->workers = NULL;
+                srv->num_workers = 0;
+                cmq_ev_loop_destroy(srv->ev_loop);
+                srv->ev_loop = NULL;
                 close(srv->listen_fd);
                 srv->listen_fd = -1;
                 return CMQ_ERR_NO_MEMORY;
@@ -6263,6 +6269,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 }
                 free(srv->workers);
                 srv->workers = NULL;
+                srv->num_workers = 0;
+                cmq_ev_loop_destroy(srv->ev_loop);
+                srv->ev_loop = NULL;
                 close(srv->listen_fd);
                 srv->listen_fd = -1;
                 return CMQ_ERR_NO_MEMORY;
@@ -6277,6 +6286,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 }
                 free(srv->workers);
                 srv->workers = NULL;
+                srv->num_workers = 0;
+                cmq_ev_loop_destroy(srv->ev_loop);
+                srv->ev_loop = NULL;
                 close(srv->listen_fd);
                 srv->listen_fd = -1;
                 return CMQ_ERR_IO;
@@ -6298,6 +6310,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 }
                 free(srv->workers);
                 srv->workers = NULL;
+                srv->num_workers = 0;
+                cmq_ev_loop_destroy(srv->ev_loop);
+                srv->ev_loop = NULL;
                 close(srv->listen_fd);
                 srv->listen_fd = -1;
                 return CMQ_ERR_NO_MEMORY;
@@ -6324,6 +6339,9 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
                 }
                 free(srv->workers);
                 srv->workers = NULL;
+                srv->num_workers = 0;
+                cmq_ev_loop_destroy(srv->ev_loop);
+                srv->ev_loop = NULL;
                 close(srv->listen_fd);
                 srv->listen_fd = -1;
                 return CMQ_ERR_NO_MEMORY;

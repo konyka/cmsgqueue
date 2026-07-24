@@ -4273,6 +4273,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — server_run worker OOM clears acceptor loop</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_server_run</span></td><td>✅</td><td>Worker calloc/ev_loop/wakeup/idmap/coro OOM paths closed listen_fd but left acceptor <code>ev_loop</code> (and often <code>num_workers</code>) — re-entry gate then permanently returned <code>INVALID_ARG</code>. Align with thread_create failure: destroy acceptor loop, zero <code>num_workers</code>.</td></tr>
+</table>
+</div>
+
 
 
 
