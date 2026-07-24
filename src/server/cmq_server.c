@@ -6018,8 +6018,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         return CMQ_ERR_NO_MEMORY;
     }
 
+    /* 0=TRACE is valid (cmq.h). Only out-of-range falls back to INFO. */
     int log_level = srv->config.log_level;
-    if (log_level == 0) log_level = 2;
+    if (log_level < 0 || log_level > 5) log_level = 2;
     srv->log = cmq_log_create((cmq_log_level_t)log_level);
     if (srv->config.log_to_stdout) {
         cmq_log_add_stdout(srv->log);

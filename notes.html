@@ -4153,6 +4153,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — log_level TRACE and named levels</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">log_level parse</span></td><td>✅</td><td>Stop remapping <code>0→INFO</code> (blocked TRACE). Parse <code>trace|debug|info|warn|error|fatal</code> and digits 0–5; omitted key defaults to INFO. <code>atoi("info")</code> previously silently became TRACE then INFO.</td></tr>
+</table>
+</div>
+
 
 
 

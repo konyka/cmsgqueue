@@ -84,6 +84,33 @@ TEST(config, load_logging) {
     cmq_config_free(&config);
 }
 
+TEST(config, log_level_names_and_trace) {
+    const char *path = write_test_config("log_level = debug\n");
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_EQ(config.log_level, 1);
+    cmq_config_free(&config);
+
+    path = write_test_config("log_level = TRACE\n");
+    memset(&config, 0, sizeof(config));
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_EQ(config.log_level, 0);
+    cmq_config_free(&config);
+
+    path = write_test_config("log_level = 0\n");
+    memset(&config, 0, sizeof(config));
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_EQ(config.log_level, 0);
+    cmq_config_free(&config);
+
+    path = write_test_config("host = 127.0.0.1\n");
+    memset(&config, 0, sizeof(config));
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_EQ(config.log_level, 2); /* omitted → INFO */
+    cmq_config_free(&config);
+}
+
 TEST(config, load_file_not_found) {
     cmq_config_t config;
     memset(&config, 0, sizeof(config));

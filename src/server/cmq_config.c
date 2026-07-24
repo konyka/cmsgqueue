@@ -47,6 +47,37 @@ static int cfg_set_str(const char **dst, const char *value) {
     return 0;
 }
 
+static int cfg_eq_ci(const char *a, const char *b) {
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
+            return 0;
+        a++;
+        b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+/* Names (README) or 0..5 — atoi("info") is 0 and must not mean TRACE. */
+static int parse_log_level(const char *value, int *out) {
+    if (!value || !out) return -1;
+    if (cfg_eq_ci(value, "trace")) { *out = 0; return 0; }
+    if (cfg_eq_ci(value, "debug")) { *out = 1; return 0; }
+    if (cfg_eq_ci(value, "info"))  { *out = 2; return 0; }
+    if (cfg_eq_ci(value, "warn") || cfg_eq_ci(value, "warning")) {
+        *out = 3;
+        return 0;
+    }
+    if (cfg_eq_ci(value, "error")) { *out = 4; return 0; }
+    if (cfg_eq_ci(value, "fatal")) { *out = 5; return 0; }
+    char *end = NULL;
+    long v = strtol(value, &end, 10);
+    if (!end || end == value || *end != '\0' || v < 0 || v > 5)
+        return -1;
+    *out = (int)v;
+    return 0;
+}
+
 static int parse_key_value(const char *key, const char *value, cmq_config_t *config) {
     if (strcmp(key, "host") == 0) {
         return cfg_set_str(&config->host, value);
@@ -67,7 +98,7 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "log_file") == 0) {
         return cfg_set_str(&config->log_file, value);
     } else if (strcmp(key, "log_level") == 0) {
-        config->log_level = atoi(value);
+        return parse_log_level(value, &config->log_level);
     } else if (strcmp(key, "log_to_stdout") == 0) {
         config->log_to_stdout = atoi(value);
     } else if (strcmp(key, "log_to_file") == 0) {
@@ -142,6 +173,8 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
        be zeroed or previously load/free'd — same contract as error paths). */
     cmq_config_free(config);
     memset(config, 0, sizeof(*config));
+    /* Omitted log_level key → INFO (0 is TRACE when explicitly set). */
+    config->log_level = 2;
 
     FILE *fp = fopen(path, "r");
     if (!fp) return CMQ_ERR_IO;
