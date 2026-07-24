@@ -4089,6 +4089,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — aarch64 coro initial stack frame</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_coro_create</span></td><td>✅</td><td>Initial context size/LR slot must match arch <code>ctx_switch</code> (x86_64: 56B/slot6; aarch64: 96B/slot11). Wrong layout made first resume on ARM64 load FP/LR past the frame and <code>ret</code> to garbage.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -1,10 +1,20 @@
 #define _GNU_SOURCE
 #include "cmq_coro.h"
+#include "cmq_platform.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 
 static void cmq_coro_trampoline(void);
+
+/* Must match cmq_coro_ctx_*.S restore frame (bytes / uintptr slots). */
+#if CMQ_ARCH_AARCH64
+enum { CMQ_CORO_INIT_FRAME = 96, CMQ_CORO_INIT_WORDS = 12, CMQ_CORO_LR_WORD = 11 };
+#elif CMQ_ARCH_X86_64
+enum { CMQ_CORO_INIT_FRAME = 56, CMQ_CORO_INIT_WORDS = 7, CMQ_CORO_LR_WORD = 6 };
+#else
+#error "cmq_coro: unsupported architecture"
+#endif
 
 static __thread cmq_coro_t *cmq_current_coro = NULL;
 
@@ -39,22 +49,25 @@ cmq_coro_t *cmq_coro_create(cmq_coro_func_t func, void *arg, size_t stack_size) 
     coro->stack_base = stack_base;
 
     uintptr_t base = (uintptr_t)stack_base;
-    if (stack_size > UINTPTR_MAX - base || stack_size < 64) {
+    if (stack_size > UINTPTR_MAX - base ||
+        stack_size < (size_t)CMQ_CORO_INIT_FRAME + 16u) {
         free(stack_base);
         free(coro);
         return NULL;
     }
     uintptr_t end = base + stack_size;
-    uintptr_t *sp = (uintptr_t *)(end - 56);
+    uintptr_t *sp = (uintptr_t *)(end - (size_t)CMQ_CORO_INIT_FRAME);
     sp = (uintptr_t *)((uintptr_t)sp & ~(uintptr_t)0xF);
-    if ((uintptr_t)sp < base || (uintptr_t)(sp + 7) > end) {
+    if ((uintptr_t)sp < base ||
+        (uintptr_t)(sp + CMQ_CORO_INIT_WORDS) > end) {
         free(stack_base);
         free(coro);
         return NULL;
     }
 
-    for (int i = 0; i < 6; ++i) sp[i] = 0;
-    sp[6] = (uintptr_t)cmq_coro_trampoline;
+    for (int i = 0; i < CMQ_CORO_INIT_WORDS; ++i)
+        sp[i] = 0;
+    sp[CMQ_CORO_LR_WORD] = (uintptr_t)cmq_coro_trampoline;
 
     coro->ctx_sp = sp;
     coro->caller_sp = NULL;
