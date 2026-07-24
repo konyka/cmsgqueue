@@ -4249,6 +4249,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — ev timer wait stays unsigned</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ev_run wait_ms</span></td><td>✅</td><td>Computing timer remainder via <code>(int64_t)expire_ms - (int64_t)now</code> turned saturated <code>UINT64_MAX</code> / far-future expires into a negative diff → <code>wait_ms=0</code> busy-spin while unsigned dispatch never fired. Now compute remainder in <code>uint64_t</code> then clamp to <code>INT_MAX</code> (epoll + kqueue).</td></tr>
+</table>
+</div>
+
 
 
 

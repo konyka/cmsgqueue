@@ -524,10 +524,12 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
             cmq_ev_timer_t *t = &loop->timers[i];
             if (!t->active) continue;
-            int64_t diff = (int64_t)(t->expire_ms) - (int64_t)now;
-            if (diff <= 0) diff = 0;
-            if (diff > INT_MAX) diff = INT_MAX;
-            if (diff < wait_ms || wait_ms < 0) wait_ms = (int)diff;
+            /* Stay in uint64_t — cast to int64_t turns UINT64_MAX / far
+               expire into negative → wait_ms=0 busy-spin while dispatch
+               never fires (unsigned expire_ms > now). */
+            uint64_t rem = (t->expire_ms > now) ? (t->expire_ms - now) : 0;
+            if (rem > (uint64_t)INT_MAX) rem = (uint64_t)INT_MAX;
+            if ((int)rem < wait_ms || wait_ms < 0) wait_ms = (int)rem;
         }
         cmq_mutex_unlock(&loop->timers_lock);
 
@@ -689,10 +691,12 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
             cmq_ev_timer_t *t = &loop->timers[i];
             if (!t->active) continue;
-            int64_t diff = (int64_t)(t->expire_ms) - (int64_t)now;
-            if (diff <= 0) diff = 0;
-            if (diff > INT_MAX) diff = INT_MAX;
-            if (diff < wait_ms || wait_ms < 0) wait_ms = (int)diff;
+            /* Stay in uint64_t — cast to int64_t turns UINT64_MAX / far
+               expire into negative → wait_ms=0 busy-spin while dispatch
+               never fires (unsigned expire_ms > now). */
+            uint64_t rem = (t->expire_ms > now) ? (t->expire_ms - now) : 0;
+            if (rem > (uint64_t)INT_MAX) rem = (uint64_t)INT_MAX;
+            if ((int)rem < wait_ms || wait_ms < 0) wait_ms = (int)rem;
         }
         cmq_mutex_unlock(&loop->timers_lock);
 
