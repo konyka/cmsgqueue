@@ -125,6 +125,7 @@ static void cmq_ev_timers_dispatch(cmq_ev_loop_t *loop, uint64_t now) {
             t->cb = NULL;
             t->data = NULL;
             t->cancelled = 0;
+            t->timer_id = 0; /* free id for wrap; del must not hit tombstones */
         } else if (t->active) {
             if (t->interval_ms > UINT64_MAX - now)
                 t->expire_ms = UINT64_MAX;
@@ -134,6 +135,7 @@ static void cmq_ev_timers_dispatch(cmq_ev_loop_t *loop, uint64_t now) {
             t->repeat = 0;
             t->cb = NULL;
             t->data = NULL;
+            t->timer_id = 0;
         }
         cmq_mutex_unlock(&loop->timers_lock);
     }
@@ -763,8 +765,8 @@ int cmq_ev_timer_add(cmq_ev_loop_t *loop, uint64_t delay_ms, uint64_t interval_m
                 int cand = loop->next_timer_id++;
                 int clash = 0;
                 for (int j = 0; j < CMQ_EV_MAX_TIMERS; j++) {
-                    if ((loop->timers[j].active || loop->timers[j].firing) &&
-                        loop->timers[j].timer_id == cand) {
+                    /* Any non-zero residue blocks reuse (active/firing/tombstone). */
+                    if (loop->timers[j].timer_id == cand) {
                         clash = 1;
                         break;
                     }
@@ -815,11 +817,9 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
             ev_end_op(loop);
             return -1;
         }
-        if (!t->active) {
-            cmq_mutex_unlock(&loop->timers_lock);
-            ev_end_op(loop);
-            return -1;
-        }
+        /* Inactive tombstone after wrap — keep scanning for a live slot. */
+        if (!t->active && !t->firing)
+            continue;
         if (t->firing) {
             /* Repeat timer: suppress reschedule; wait so userdata is unused. */
             t->cancelled = 1;
@@ -835,6 +835,7 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
                             t->cb = NULL;
                             t->data = NULL;
                             t->cancelled = 0;
+                            t->timer_id = 0;
                         }
                         cmq_mutex_unlock(&loop->timers_lock);
                         ev_end_op(loop);
@@ -854,6 +855,7 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
         t->cb = NULL;
         t->data = NULL;
         t->cancelled = 0;
+        t->timer_id = 0;
         cmq_mutex_unlock(&loop->timers_lock);
         ev_end_op(loop);
         return 0;

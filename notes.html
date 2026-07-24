@@ -4081,6 +4081,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — timer_id clear on retire vs wrap ABA</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ev_timer_del wrap</span></td><td>✅</td><td>Retire paths zero <code>timer_id</code>; del skips inactive tombstones instead of <code>return -1</code>; mint clash treats any non-zero id as occupied so wrap cannot leave an undeliverable live timer behind a stale slot.</td></tr>
+</table>
+</div>
+
 
 
 
