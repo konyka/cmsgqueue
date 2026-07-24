@@ -265,10 +265,12 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
 
     /* Compact before append if remaining + new won't fit without sliding. */
     size_t used = p->inbuf_len - p->inbuf_off;
-    /* Hard cap: one max frame + header. Stops incomplete-frame memory DoS. */
+    /* Hard cap: one max frame + header. Stops incomplete-frame memory DoS.
+       If frames are already queued, return 1 (no append) so callers that
+       treat rc<0 as teardown still drain first (align pending_error). */
     size_t hard = CMQ_HEADER_LEN + p->max_payload;
     if (used > hard || len > hard - used)
-        return -1;
+        return p->head ? 1 : -1;
     if (p->inbuf_off > 0 && p->inbuf_off + used + len > p->inbuf_cap) {
         if (used > 0)
             memmove(p->inbuf, p->inbuf + p->inbuf_off, used);
@@ -276,9 +278,8 @@ int cmq_parser_feed(cmq_parser_t *p, const uint8_t *data, size_t len) {
         p->inbuf_off = 0;
     }
     if (p->inbuf_len + len > p->inbuf_cap) {
-        if (ensure_inbuf(p, p->inbuf_len + len) != 0) {
-            return -1;
-        }
+        if (ensure_inbuf(p, p->inbuf_len + len) != 0)
+            return p->head ? 1 : -1;
     }
     memcpy(p->inbuf + p->inbuf_len, data, len);
     p->inbuf_len += len;

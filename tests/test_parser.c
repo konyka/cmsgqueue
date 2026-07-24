@@ -367,4 +367,31 @@ TEST(parser, inbuf_hard_cap) {
     cmq_parser_destroy(p);
 }
 
+/* Hard-cap reject must not drop already-queued frames (rc<0⇒teardown). */
+TEST(parser, hard_cap_keeps_queued) {
+    cmq_parser_t *p = cmq_parser_create();
+    cmq_parser_set_max_payload(p, 64);
+    uint8_t body[64];
+    memset(body, 'H', sizeof(body));
+    uint8_t frame[sizeof(cmq_frame_hdr_t) + 64];
+    cmq_frame_hdr_t h;
+    h.magic[0] = CMQ_PROTO_MAGIC_0;
+    h.magic[1] = CMQ_PROTO_MAGIC_1;
+    h.version = CMQ_PROTO_VERSION;
+    h.flags = 0;
+    h.op = CMQ_OP_PUBLISH;
+    h.length = 64;
+    memcpy(frame, &h, sizeof(h));
+    memcpy(frame + sizeof(h), body, 64);
+    /* Two frames fill the 2× budget; third sticks in inbuf (used == hard). */
+    ASSERT(cmq_parser_feed(p, frame, sizeof(frame)) >= 0);
+    ASSERT(cmq_parser_feed(p, frame, sizeof(frame)) >= 0);
+    ASSERT_EQ(cmq_parser_feed(p, frame, sizeof(frame)), 1);
+    uint8_t extra = 0xAB;
+    ASSERT_EQ(cmq_parser_feed(p, &extra, 1), 1);
+    ASSERT(cmq_parser_frame(p) != NULL);
+    ASSERT_EQ(cmq_parser_frame(p)->hdr.op, CMQ_OP_PUBLISH);
+    cmq_parser_destroy(p);
+}
+
 TEST_MAIN()

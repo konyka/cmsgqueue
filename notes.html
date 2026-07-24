@@ -4033,6 +4033,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — parser hard-cap keeps queued frames</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_parser_feed hard-cap</span></td><td>✅</td><td>When <code>used+len</code> exceeds inbuf hard-cap (or realloc OOM), return 1 without append if <code>head</code> is non-empty — same drain-then-die contract as <code>pending_error</code>.</td></tr>
+</table>
+</div>
+
 
 
 
