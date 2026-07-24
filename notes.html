@@ -3928,6 +3928,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — account dec never restores across clear_gen</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">dec_connections/subscriptions</span></td><td>✅</td><td>Drop post-CAS <code>fetch_add(+1)</code> restore; clear+reactivate can land that +1 on the new generation (prefer rare leak, align <code>account_undo_stale_inc</code>).</td></tr>
+</table>
+</div>
+
 
 
 
