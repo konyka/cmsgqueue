@@ -329,9 +329,11 @@ const char *cmq_leaf_hub_addr(cmq_leaf_node_t *leaf) {
 }
 
 int cmq_leaf_hub_port(cmq_leaf_node_t *leaf) {
-    if (!leaf || atomic_load_explicit(&leaf->dying, memory_order_acquire))
-        return 0;
-    return leaf->hub_port;
+    if (!leaf) return 0;
+    if (leaf_begin_op(leaf) != 0) return 0;
+    int port = leaf->hub_port;
+    leaf_end_op(leaf);
+    return port;
 }
 
 static int leaf_connect_impl(cmq_leaf_node_t *leaf) {

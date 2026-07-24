@@ -3957,6 +3957,7 @@ All 15 test suites passing, 0 warnings.
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">cmq_leaf_sub/accept_count</span></td><td>✅</td><td>Wrap with <code>leaf_begin_op</code>/<code>end_op</code> so destroy cannot <code>mutex_destroy</code>/<code>free</code> under a concurrent count lock (align other leaf APIs).</td></tr>
+<tr><td><span class="component-name">cmq_leaf_hub_port</span></td><td>✅</td><td>Same <code>begin_op</code> gate (by-value read); <code>hub_addr</code> still returns an interior pointer by API and stays deferred.</td></tr>
 </table>
 </div>
 
