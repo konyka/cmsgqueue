@@ -63,6 +63,10 @@ void cmq_route_detach_fd(cmq_route_pool_t *pool, int fd);
    Fails if not currently owned (already adopted / replaced). -1 if miss. */
 int cmq_route_adopt_fd(cmq_route_pool_t *pool, int fd, const char *remote_id);
 int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id);
+/* Close nid only if it still holds owned expect_fd (bind-fail cleanup).
+   No-op if replaced/inbound; bumps cancel only when a slot was closed. */
+int cmq_route_disconnect_if_owned_fd(cmq_route_pool_t *pool, const char *node_id,
+                                      int expect_fd);
 
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject,
                        const uint8_t *data, size_t len,

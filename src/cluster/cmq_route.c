@@ -1188,6 +1188,43 @@ static int route_disconnect_impl(cmq_route_pool_t *pool, const char *node_id) {
     return (closed || known) ? 0 : -1;
 }
 
+/* Bind-fail cleanup: drop only the remembered owned egress under pool→io.
+   Snap-then-disconnect(nid) races fd recycle into the same nid. */
+static int route_disconnect_if_owned_fd_impl(cmq_route_pool_t *pool,
+                                             const char *node_id,
+                                             int expect_fd) {
+    if (!pool || !node_id || expect_fd < 0) return -1;
+    cmq_mutex_lock(&pool->lock);
+    int closed = 0;
+    for (size_t i = 0; i < pool->conn_count; i++) {
+        cmq_mutex_lock(&pool->io_locks[i]);
+        int match = (strcmp(pool->conns[i].remote_id, node_id) == 0 &&
+                     pool->conns[i].fd == expect_fd &&
+                     pool->conns[i].fd_owned);
+        if (match) {
+            conn_drop_fd(&pool->conns[i]);
+            memset(&pool->conns[i], 0, sizeof(pool->conns[i]));
+            closed = 1;
+        }
+        cmq_mutex_unlock(&pool->io_locks[i]);
+        if (closed) break;
+    }
+    if (closed) {
+        route_bump_cancel(pool, node_id);
+        while (pool->conn_count > 0) {
+            size_t last = pool->conn_count - 1;
+            char lrid[CMQ_NODE_ID_SIZE];
+            int connected = 0, efd = -1;
+            route_slot_snap(pool, last, &connected, &efd, NULL, lrid);
+            if (lrid[0] != '\0' || connected || efd >= 0)
+                break;
+            pool->conn_count--;
+        }
+    }
+    cmq_mutex_unlock(&pool->lock);
+    return closed ? 0 : -1;
+}
+
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject __attribute__((unused)),
                        const uint8_t *data, size_t len,
                        const char *exclude_id) {
@@ -1528,6 +1565,15 @@ int cmq_route_disconnect(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return -1;
     if (route_begin_op(pool) != 0) return -1;
     int rc = route_disconnect_impl(pool, node_id);
+    route_end_op(pool);
+    return rc;
+}
+
+int cmq_route_disconnect_if_owned_fd(cmq_route_pool_t *pool, const char *node_id,
+                                      int expect_fd) {
+    if (!pool || !node_id || expect_fd < 0) return -1;
+    if (route_begin_op(pool) != 0) return -1;
+    int rc = route_disconnect_if_owned_fd_impl(pool, node_id, expect_fd);
     route_end_op(pool);
     return rc;
 }

@@ -5753,14 +5753,11 @@ fail_adopted:
 }
 
 /* Tear down only if expect_fd is still the owned egress for nid — bind
-   failure must not kill a replaced/inbound peer installed during the window. */
+   failure must not kill a replaced/inbound peer (pool→io match, not snap). */
 static void route_disconnect_if_owned_fd(cmq_server_t *srv, const char *nid,
                                           int expect_fd) {
     if (!srv || !srv->routes || !nid || expect_fd < 0) return;
-    cmq_route_conn_t cur;
-    if (cmq_route_get_conn(srv->routes, nid, &cur) == 0 &&
-        cur.fd == expect_fd && cur.fd_owned)
-        cmq_route_disconnect(srv->routes, nid);
+    (void)cmq_route_disconnect_if_owned_fd(srv->routes, nid, expect_fd);
 }
 
 static int route_connect_and_bind(cmq_server_t *srv, const char *nid,

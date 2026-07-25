@@ -4425,6 +4425,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — route disconnect_if_owned_fd</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_route_disconnect_if_owned_fd</span></td><td>✅</td><td>Bind-fail cleanup used unlocked <code>get_conn</code> snap then <code>disconnect(nid)</code>. Fd recycle into the same nid still matched the snap and killed the replacement. New API matches owned <code>expect_fd</code> under <code>pool→io</code>; bumps cancel only when closed.</td></tr>
+</table>
+</div>
+
 
 
 
