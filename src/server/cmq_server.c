@@ -349,6 +349,7 @@ static void client_read_cb(int fd, int events, void *data);
 static void cmq_client_destroy(cmq_client_t *c);
 static void client_teardown(cmq_client_t *c);
 static void client_finish_closing(cmq_client_t *c);
+static void client_flush_write_unlocked(cmq_client_t *c);
 static void acceptor_post_tick(void *data);
 static void worker_purge_send_for_id(cmq_worker_t *w, uint32_t target_id,
                                       uint32_t target_gen);
@@ -743,6 +744,26 @@ static void worker_drain_teardowns(cmq_worker_t *w, int max_n) {
         }
         free(msg);
     }
+}
+
+/* Sync REQUEST blocks this worker's ev_run — drain mailbox and flush pending
+   write_buf so acceptor write-stall cannot TEARDOWN sibling clients. */
+static void worker_service_while_blocked(cmq_worker_t *w) {
+    if (!w) return;
+    worker_drain_teardowns(w, 8);
+    worker_drain_sends(w, CMQ_WORKER_WAKE_BATCH);
+    enum { CMQ_FLUSH_SNAP = 32 };
+    cmq_client_t *pend[CMQ_FLUSH_SNAP];
+    int np = 0;
+    cmq_mutex_lock(&w->clients_lock);
+    for (int i = 0; i < w->clients_count && np < CMQ_FLUSH_SNAP; i++) {
+        cmq_client_t *c = w->clients[i];
+        if (c && c->write_buf && c->write_pos < c->write_len)
+            pend[np++] = c;
+    }
+    cmq_mutex_unlock(&w->clients_lock);
+    for (int i = 0; i < np; i++)
+        client_flush_write_unlocked(pend[i]);
 }
 
 static void worker_wakeup_cb(int fd, int events, void *data) {
@@ -2251,10 +2272,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                              pub_epoch, 1) != 0) {
             free(sync);
             if (attempt + 1 >= 4) break;
-            if (self) {
-                worker_drain_teardowns(self, 8);
-                worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
-            }
+            if (self)
+                worker_service_while_blocked(self);
             if (publisher) client_touch_activity(publisher);
             struct timespec ts = {0, 50000L};
             nanosleep(&ts, NULL);
@@ -2265,10 +2284,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
             int v = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
             if (req_sync_terminal(v))
                 return req_sync_finish(sync, v);
-            if (self) {
-                worker_drain_teardowns(self, 8);
-                worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
-            }
+            if (self)
+                worker_service_while_blocked(self);
             if (publisher) client_touch_activity(publisher);
             if (waited >= 100000) {
                 /* ~5s soft deadline: cancel only while still queued. */
@@ -2303,10 +2320,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     int v2 = __atomic_load_n(&sync->result, __ATOMIC_ACQUIRE);
                     if (req_sync_terminal(v2))
                         return req_sync_finish(sync, v2);
-                    if (self) {
-                        worker_drain_teardowns(self, 8);
-                        worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
-                    }
+                    if (self)
+                        worker_service_while_blocked(self);
                     if (publisher) client_touch_activity(publisher);
                     if (extra == 40000) {
                         cmq_mutex_lock(&w->clients_lock);
@@ -2334,10 +2349,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                         continue;
                     }
                     /* Claimed (2) — wait for worker to resolve. */
-                    if (self) {
-                        worker_drain_teardowns(self, 8);
-                        worker_drain_sends(self, CMQ_WORKER_WAKE_BATCH);
-                    }
+                    if (self)
+                        worker_service_while_blocked(self);
                     if (publisher) client_touch_activity(publisher);
                     struct timespec ts2 = {0, 50000L};
                     nanosleep(&ts2, NULL);

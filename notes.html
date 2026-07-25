@@ -4466,6 +4466,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — REQUEST wait flushes sibling writes</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">worker_service_while_blocked</span></td><td>✅</td><td>Cross-worker sync REQUEST parked the owning worker outside <code>ev_run</code> for seconds while only draining mailbox/touching the publisher. Sibling <code>write_buf</code> progress froze and acceptor write-stall TEARDOWN killed healthy peers. Wait loop now also flushes pending writes on that worker.</td></tr>
+</table>
+</div>
+
 
 
 
