@@ -2007,6 +2007,17 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
     return tgts;
 }
 
+/* Credit ingress after match/snapshot succeed — not on OOM / early reject. */
+static void credit_msgs_in(cmq_server_t *srv, cmq_client_t *c, size_t msg_len) {
+    if (!srv || !c) return;
+    cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
+    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
+    if (acc) {
+        cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)msg_len);
+        cmq_account_release(srv->accounts, acc);
+    }
+}
+
 /* pub_account non-empty: recheck may_deliver (same as mailbox SEND). */
 static int deliver_acl_ok(cmq_server_t *srv, const char *pub_account,
                            uint32_t pub_epoch, const char *sub_account,
@@ -2956,14 +2967,6 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
-
-    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
-    if (acc) {
-        cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)msg_len);
-        cmq_account_release(srv->accounts, acc);
-    }
-
     size_t route_sent = 0;
     int route_rc = 0;
 
@@ -2984,6 +2987,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
+        credit_msgs_in(srv, c, msg_len);
         /* Remote-only: forward after local match succeeded (no OOM ghost). */
         if (!c->is_route) {
             route_rc = route_forward_if_live(srv, c, CMQ_OP_PUBLISH,
@@ -3016,6 +3020,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
+    credit_msgs_in(srv, c, msg_len);
     if (!tgts || ntgt == 0) {
         free(tgts);
         if (!client_account_live(srv, c)) {
@@ -3675,14 +3680,6 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
-
-    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
-    if (acc) {
-        cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)msg_len);
-        cmq_account_release(srv->accounts, acc);
-    }
-
     size_t route_sent = 0;
     int route_rc = 0;
 
@@ -3709,6 +3706,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
+    credit_msgs_in(srv, c, msg_len);
     /* Only forward REQUEST when no local responders — otherwise peers
        also answer the same _INBOX and the client sees duplicate replies. */
     if (!c->is_route && ntgt == 0) {
@@ -3838,13 +3836,6 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
-    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
-    if (acc) {
-        cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)msg_len);
-        cmq_account_release(srv->accounts, acc);
-    }
-
     size_t route_sent = 0;
     int route_rc = 0;
 
@@ -3870,6 +3861,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
+    credit_msgs_in(srv, c, msg_len);
     /* '>' / '*.*' match _INBOX but cannot receive it (deliver_tgt_accepts).
        Compact to exact holders so remote-only inbox still cluster-forwards. */
     if (strncmp(subject, "_INBOX.", 7) == 0 && tgts && ntgt > 0) {

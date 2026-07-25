@@ -4523,6 +4523,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — stream_name copy · msgs_in after match</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_stream_name</span></td><td>✅</td><td>Interior pointer without <code>begin_op</code> raced destroy (same class as cluster/leaf). Copy-out under begin_op+lock.</td></tr>
+<tr><td><span class="component-name">PUBLISH/REQ/RESP msgs_in</span></td><td>✅</td><td>Credited before <code>sublist_match</code>/snapshot — OOM and account-inactive paths inflated stats. Credit via <code>credit_msgs_in</code> only after match+snapshot (and live) succeed; aligns closer with BATCH.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -75,10 +75,21 @@ void cmq_stream_destroy(cmq_stream_t *stream) {
     free(stream);
 }
 
-const char *cmq_stream_name(cmq_stream_t *stream) {
-    if (!stream || atomic_load_explicit(&stream->dying, memory_order_acquire))
-        return NULL;
-    return stream->name;
+int cmq_stream_name(cmq_stream_t *stream, char *out, size_t out_len) {
+    if (!stream || !out || out_len == 0) return -1;
+    if (stream_begin_op(stream) != 0) return -1;
+    cmq_mutex_lock(&stream->lock);
+    size_t n = strnlen(stream->name, sizeof(stream->name));
+    if (n + 1 > out_len) {
+        cmq_mutex_unlock(&stream->lock);
+        stream_end_op(stream);
+        return -1;
+    }
+    memcpy(out, stream->name, n);
+    out[n] = '\0';
+    cmq_mutex_unlock(&stream->lock);
+    stream_end_op(stream);
+    return 0;
 }
 
 static uint64_t stream_append_impl(cmq_stream_t *stream, const uint8_t *data, size_t len) {

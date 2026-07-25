@@ -21,7 +21,8 @@ typedef struct {
 cmq_stream_t *cmq_stream_create(const char *name, size_t max_msgs, size_t max_bytes);
 void cmq_stream_destroy(cmq_stream_t *stream);
 
-const char *cmq_stream_name(cmq_stream_t *stream);
+/* Copy-out under begin_op — never return an interior pointer (destroy UAF). */
+int cmq_stream_name(cmq_stream_t *stream, char *out, size_t out_len);
 uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len);
 int cmq_stream_read(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out);
 void cmq_stream_msg_release(cmq_stream_msg_t *msg);

@@ -96,7 +96,9 @@ TEST(store, empty_get) {
 TEST(stream, create_destroy) {
     cmq_stream_t *st = cmq_stream_create("events", 100, 0);
     ASSERT_NOT_NULL(st);
-    ASSERT_STR_EQ(cmq_stream_name(st), "events");
+    char sname[128];
+    ASSERT_EQ(cmq_stream_name(st, sname, sizeof(sname)), 0);
+    ASSERT_STR_EQ(sname, "events");
     cmq_stream_destroy(st);
 }
 
