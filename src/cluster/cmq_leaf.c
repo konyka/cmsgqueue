@@ -459,10 +459,21 @@ static int leaf_handshake(cmq_leaf_node_t *leaf, int fd) {
     return cmq_peer_handshake(fd, user[0] ? user : NULL, pass[0] ? pass : NULL, 0);
 }
 
-const char *cmq_leaf_hub_addr(cmq_leaf_node_t *leaf) {
-    if (!leaf || atomic_load_explicit(&leaf->dying, memory_order_acquire))
-        return NULL;
-    return leaf->hub_addr;
+int cmq_leaf_hub_addr(cmq_leaf_node_t *leaf, char *out, size_t out_len) {
+    if (!leaf || !out || out_len == 0) return -1;
+    if (leaf_begin_op(leaf) != 0) return -1;
+    cmq_mutex_lock(&leaf->lock);
+    size_t n = strnlen(leaf->hub_addr, sizeof(leaf->hub_addr));
+    if (n + 1 > out_len) {
+        cmq_mutex_unlock(&leaf->lock);
+        leaf_end_op(leaf);
+        return -1;
+    }
+    memcpy(out, leaf->hub_addr, n);
+    out[n] = '\0';
+    cmq_mutex_unlock(&leaf->lock);
+    leaf_end_op(leaf);
+    return 0;
 }
 
 int cmq_leaf_hub_port(cmq_leaf_node_t *leaf) {

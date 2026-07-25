@@ -3780,7 +3780,8 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
         } else if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent)) {
             cmq_send_error(c, "route failed");
-        } else if (!c->is_route) {
+        } else {
+            /* Local client or route ingress — never silent (mesh R/R hang). */
             cmq_send_error(c, "no responders");
         }
     }
@@ -3940,6 +3941,9 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
             else
                 cmq_send_error(c, "no subscribers");
         }
+    } else {
+        /* Route ingress with no local inbox — fail-closed (no cluster re-forward). */
+        cmq_send_error(c, "no subscribers");
     }
     free(tgts);
 }

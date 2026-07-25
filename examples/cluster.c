@@ -72,8 +72,11 @@ static void demo_gateway(void) {
 static void demo_leaf(void) {
     printf("=== Leaf Node Demo ===\n");
     cmq_leaf_node_t *leaf = cmq_leaf_create("10.0.0.1", 7654);
+    char hub[CMQ_NODE_ADDR_SIZE];
+    if (cmq_leaf_hub_addr(leaf, hub, sizeof(hub)) != 0)
+        hub[0] = '\0';
     printf("Leaf hub: %s:%d, connected=%d\n",
-           cmq_leaf_hub_addr(leaf), cmq_leaf_hub_port(leaf),
+           hub, cmq_leaf_hub_port(leaf),
            cmq_leaf_is_connected(leaf));
 
     cmq_leaf_subscribe(leaf, "sensors.temperature");

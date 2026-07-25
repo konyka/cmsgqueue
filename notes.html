@@ -3957,7 +3957,7 @@ All 15 test suites passing, 0 warnings.
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">cmq_leaf_sub/accept_count</span></td><td>✅</td><td>Wrap with <code>leaf_begin_op</code>/<code>end_op</code> so destroy cannot <code>mutex_destroy</code>/<code>free</code> under a concurrent count lock (align other leaf APIs).</td></tr>
-<tr><td><span class="component-name">cmq_leaf_hub_port</span></td><td>✅</td><td>Same <code>begin_op</code> gate (by-value read); <code>hub_addr</code> still returns an interior pointer by API and stays deferred.</td></tr>
+<tr><td><span class="component-name">cmq_leaf_hub_port</span></td><td>✅</td><td>Same <code>begin_op</code> gate (by-value read); <code>hub_addr</code> later switched to copy-out (see route ERROR · leaf hub_addr phase).</td></tr>
 </table>
 </div>
 
@@ -4501,6 +4501,16 @@ All 15 test suites passing, 0 warnings.
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">REQUEST wait self-TEARDOWN</span></td><td>✅</td><td>Blocked REQUEST drained sibling TEARDOWNs including the publisher → <code>client_destroy</code> while wait still touched bare <code>publisher*</code> (UAF). Leave publisher id+gen TEARDOWN queued until wait returns.</td></tr>
 <tr><td><span class="component-name">non-QG CLOSING skip</span></td><td>✅</td><td>Plain sub snapshot only filtered epoch-dead; CLOSING holders still entered targets and failed all send paths (false <code>delivery failed</code>). Align with QG: require CONNECTED.</td></tr>
+</table>
+</div>
+
+<div class="phase">
+  <h2>Phase — route REQUEST/RESPONSE ERROR · leaf hub_addr copy</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route REQUEST ntgt=0</span></td><td>✅</td><td>Route ingress with no local responders skipped ERROR (local clients got <code>no responders</code>). Mesh R/R hung. Fail-closed ERROR for route peers too.</td></tr>
+<tr><td><span class="component-name">route RESPONSE ntgt=0</span></td><td>✅</td><td>Same silence on route-ingress RESPONSE with no local inbox — send <code>no subscribers</code>.</td></tr>
+<tr><td><span class="component-name">cmq_leaf_hub_addr</span></td><td>✅</td><td>Returned interior pointer without <code>begin_op</code> (destroy UAF). Copy-out API like <code>cmq_mqtt_client_id</code>.</td></tr>
 </table>
 </div>
 

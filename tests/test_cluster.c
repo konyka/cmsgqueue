@@ -272,7 +272,9 @@ TEST(gateway, add_remote) {
 TEST(leaf, create_destroy) {
     cmq_leaf_node_t *l = cmq_leaf_create("10.0.0.1", 7654);
     ASSERT_NOT_NULL(l);
-    ASSERT_STR_EQ(cmq_leaf_hub_addr(l), "10.0.0.1");
+    char hub[CMQ_NODE_ADDR_SIZE];
+    ASSERT_EQ(cmq_leaf_hub_addr(l, hub, sizeof(hub)), 0);
+    ASSERT_STR_EQ(hub, "10.0.0.1");
     ASSERT_EQ(cmq_leaf_hub_port(l), 7654);
     ASSERT_EQ(cmq_leaf_is_connected(l), 0);
     ASSERT_EQ(cmq_leaf_poll(l), 0);
