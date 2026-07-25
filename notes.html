@@ -4593,6 +4593,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — acceptor KA OOM stack_extra</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">acceptor KA &gt;64</span></td><td>✅</td><td>Snap-malloc fail path only scanned 64 doomed acceptor clients; overflow only <code>shutdown</code> — ghost subs/accounts until EOF. Align worker: <code>stack_extra[64]</code> + <code>keepalive_scan_clients</code>/<code>finish_closing</code>.</td></tr>
+</table>
+</div>
+
+
 
 
 

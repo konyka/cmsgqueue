@@ -5509,9 +5509,11 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     cmq_mutex_lock(&srv->clients_lock);
     int n = srv->clients_count;
     cmq_client_t **snap = NULL;
-    enum { CMQ_KA_ACC_STACK = 64 };
+    enum { CMQ_KA_ACC_STACK = 64, CMQ_KA_ACC_EXTRA = 64 };
     cmq_client_t *stack_snap[CMQ_KA_ACC_STACK];
+    cmq_client_t *acc_extra[CMQ_KA_ACC_EXTRA];
     int stack_n = 0;
+    int nacc_extra = 0;
     if (n > 0) {
         snap = malloc((size_t)n * sizeof(cmq_client_t *));
         if (snap) {
@@ -5541,7 +5543,12 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                     continue;
                 if (stack_n < CMQ_KA_ACC_STACK)
                     stack_snap[stack_n++] = c;
-                else if (c->fd >= 0)
+                else if (nacc_extra < CMQ_KA_ACC_EXTRA) {
+                    /* Align worker stack_extra — scan after unlock, not SHUT only. */
+                    acc_extra[nacc_extra++] = c;
+                    if (c->fd >= 0)
+                        (void)shutdown(c->fd, SHUT_RDWR);
+                } else if (c->fd >= 0)
                     (void)shutdown(c->fd, SHUT_RDWR);
             }
         }
@@ -5550,9 +5557,13 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
     if (snap) {
         keepalive_scan_clients(srv, snap, n, now, timeout_ms, write_timeout_ms);
         free(snap);
-    } else if (stack_n > 0) {
-        keepalive_scan_clients(srv, stack_snap, stack_n, now, timeout_ms,
-                               write_timeout_ms);
+    } else {
+        if (stack_n > 0)
+            keepalive_scan_clients(srv, stack_snap, stack_n, now, timeout_ms,
+                                   write_timeout_ms);
+        if (nacc_extra > 0)
+            keepalive_scan_clients(srv, acc_extra, nacc_extra, now, timeout_ms,
+                                   write_timeout_ms);
     }
 
     if (srv->workers) {
