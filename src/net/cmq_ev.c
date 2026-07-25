@@ -433,6 +433,32 @@ static int epoll_to_cmq_events(int ep) {
     return events;
 }
 
+/* After arming epoll with gen: confirm table still owns that publish.
+   Concurrent del clears cb (silent drop); concurrent add may need repair. */
+static int epoll_confirm_armed(cmq_ev_loop_t *loop, int fd, uint32_t gen) {
+    cmq_mutex_lock(&loop->watchers_lock);
+    /* fd>=0 marks a live publish (cb may be NULL in tests / edge paths).
+       Concurrent del clears fd to -1 — that is the silent-drop race. */
+    int ours = (loop->watchers[fd].gen == gen && loop->watchers[fd].fd == fd);
+    uint32_t cur_gen = loop->watchers[fd].gen;
+    int cur_events = loop->watchers[fd].events;
+    int cur_live = (loop->watchers[fd].fd == fd);
+    cmq_mutex_unlock(&loop->watchers_lock);
+    if (ours) return 0;
+    if (cur_live && cur_gen != gen) {
+        struct epoll_event fix;
+        memset(&fix, 0, sizeof(fix));
+        fix.events = (uint32_t)cmq_to_epoll_events(cur_events);
+        fix.data.u64 = ev_pack_fd_gen(fd, cur_gen);
+        if (epoll_ctl(loop->backend_fd, EPOLL_CTL_MOD, fd, &fix) != 0 &&
+            errno == ENOENT)
+            (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &fix);
+    } else {
+        (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
+    }
+    return -1;
+}
+
 int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *data) {
     if (!loop || fd < 0) return -1;
     if (ev_begin_op(loop) != 0) return -1;
@@ -498,10 +524,13 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
         /* fd may have been dropped from the set; re-ADD once. */
         if (errno != ENOENT ||
             epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
-            /* Align kqueue: restore prior interest+cb when possible. MOD fail
-               usually leaves the old epoll entry — do not clear into a silent
-               dispatch hole (or mismatched new cb over old filters). */
-            if (was_present && old_events != 0) {
+            /* Restore only if our publish still owns the slot — concurrent
+               del must not resurrect old_cb after clear. */
+            cmq_mutex_lock(&loop->watchers_lock);
+            int ours =
+                (loop->watchers[fd].gen == gen && loop->watchers[fd].fd == fd);
+            cmq_mutex_unlock(&loop->watchers_lock);
+            if (ours && was_present && old_events != 0) {
                 uint32_t rgen =
                     watcher_publish(loop, fd, old_events, old_cb, old_data);
                 struct epoll_event old_ev;
@@ -512,16 +541,25 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
                     (errno == ENOENT &&
                      epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd,
                                &old_ev) == 0)) {
+                    (void)epoll_confirm_armed(loop, fd, rgen);
                     ev_end_op(loop);
                     return -1;
                 }
             }
-            /* Restore failed — drop leftover interest then clear table. */
+            /* Drop leftover interest; clear only if we still own gen. */
             (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
-            watcher_clear(loop, fd);
+            cmq_mutex_lock(&loop->watchers_lock);
+            int still_ours = (loop->watchers[fd].gen == gen);
+            cmq_mutex_unlock(&loop->watchers_lock);
+            if (still_ours)
+                watcher_clear(loop, fd);
             ev_end_op(loop);
             return -1;
         }
+    }
+    if (epoll_confirm_armed(loop, fd, gen) != 0) {
+        ev_end_op(loop);
+        return -1;
     }
     ev_end_op(loop);
     return 0;
@@ -640,6 +678,33 @@ static int kqueue_add_filters(int kq, int fd, int events, uint32_t gen) {
     return kevent(kq, ev, n, NULL, 0, NULL) == 0 ? 0 : -1;
 }
 
+static void kqueue_del_filters(int kq, int fd, int events) {
+    struct kevent ev[2];
+    int n = 0;
+    if (events & CMQ_EV_READ)
+        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+    if (events & CMQ_EV_WRITE)
+        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    if (n > 0)
+        (void)kevent(kq, ev, n, NULL, 0, NULL);
+}
+
+/* After arming kqueue with gen: confirm table still owns that publish. */
+static int kqueue_confirm_armed(cmq_ev_loop_t *loop, int fd, uint32_t gen,
+                                 int armed_events) {
+    cmq_mutex_lock(&loop->watchers_lock);
+    int ours = (loop->watchers[fd].gen == gen && loop->watchers[fd].fd == fd);
+    uint32_t cur_gen = loop->watchers[fd].gen;
+    int cur_events = loop->watchers[fd].events;
+    int cur_live = (loop->watchers[fd].fd == fd);
+    cmq_mutex_unlock(&loop->watchers_lock);
+    if (ours) return 0;
+    kqueue_del_filters(loop->backend_fd, fd, armed_events);
+    if (cur_live && cur_gen != gen)
+        (void)kqueue_add_filters(loop->backend_fd, fd, cur_events, cur_gen);
+    return -1;
+}
+
 int cmq_ev_add(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *data) {
     if (!loop || fd < 0) return -1;
     if (ev_begin_op(loop) != 0) return -1;
@@ -667,40 +732,39 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
 
     uint32_t gen = watcher_publish(loop, fd, events, cb, data);
 
-    struct kevent ev[2];
-    int n = 0;
-
-    if (old_events & CMQ_EV_READ)
-        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-    if (old_events & CMQ_EV_WRITE)
-        EV_SET(&ev[n++], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-
-    if (n > 0) kevent(loop->backend_fd, ev, n, NULL, 0, NULL);
+    kqueue_del_filters(loop->backend_fd, fd, old_events);
 
     if (kqueue_add_filters(loop->backend_fd, fd, events, gen) != 0) {
-        /* Restore previous filters + cb/data — do not leave fd unwatched
-           with a mismatched new callback (wrong client on next dispatch). */
-        if (old_events != 0) {
+        cmq_mutex_lock(&loop->watchers_lock);
+        int ours =
+            (loop->watchers[fd].gen == gen && loop->watchers[fd].fd == fd);
+        cmq_mutex_unlock(&loop->watchers_lock);
+        if (ours && old_events != 0) {
             uint32_t rgen =
                 watcher_publish(loop, fd, old_events, old_cb, old_data);
             if (kqueue_add_filters(loop->backend_fd, fd, old_events, rgen) != 0) {
-                /* Align epoll: restore failed after DELETE — clear table so
-                   callers see -1 as "no interest" and tear down. */
-                struct kevent del[2];
-                int dn = 0;
-                if (old_events & CMQ_EV_READ)
-                    EV_SET(&del[dn++], (uintptr_t)fd, EVFILT_READ,
-                           EV_DELETE, 0, 0, NULL);
-                if (old_events & CMQ_EV_WRITE)
-                    EV_SET(&del[dn++], (uintptr_t)fd, EVFILT_WRITE,
-                           EV_DELETE, 0, 0, NULL);
-                if (dn > 0)
-                    (void)kevent(loop->backend_fd, del, dn, NULL, 0, NULL);
-                watcher_clear(loop, fd);
+                kqueue_del_filters(loop->backend_fd, fd, old_events);
+                cmq_mutex_lock(&loop->watchers_lock);
+                int still = (loop->watchers[fd].gen == rgen);
+                cmq_mutex_unlock(&loop->watchers_lock);
+                if (still)
+                    watcher_clear(loop, fd);
+            } else if (kqueue_confirm_armed(loop, fd, rgen, old_events) != 0) {
+                ev_end_op(loop);
+                return -1;
             }
         } else {
-            watcher_clear(loop, fd);
+            kqueue_del_filters(loop->backend_fd, fd, events);
+            cmq_mutex_lock(&loop->watchers_lock);
+            int still = (loop->watchers[fd].gen == gen);
+            cmq_mutex_unlock(&loop->watchers_lock);
+            if (still)
+                watcher_clear(loop, fd);
         }
+        ev_end_op(loop);
+        return -1;
+    }
+    if (kqueue_confirm_armed(loop, fd, gen, events) != 0) {
         ev_end_op(loop);
         return -1;
     }

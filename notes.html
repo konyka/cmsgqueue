@@ -4467,6 +4467,14 @@ All 15 test suites passing, 0 warnings.
 </div>
 
 <div class="phase">
+  <h2>Phase — ev_mod confirm after arm</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ev_mod</span></td><td>✅</td><td>Publish-then-epoll/kevent raced <code>del</code> (clear-before-DEL): kernel interest could remain with <code>cb==NULL</code> while mod returned 0 (silent drops). Failure restore could resurrect <code>old_cb</code> after clear. Confirm gen+cb after arm; repair or DEL; restore only if publish still owned.</td></tr>
+</table>
+</div>
+
+<div class="phase">
   <h2>Phase — REQUEST wait flushes sibling writes</h2>
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
