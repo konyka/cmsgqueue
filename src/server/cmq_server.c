@@ -2989,7 +2989,6 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
-        credit_msgs_in(srv, c, msg_len);
         /* Remote-only: forward after local match succeeded (no OOM ghost). */
         if (!c->is_route) {
             route_rc = route_forward_if_live(srv, c, CMQ_OP_PUBLISH,
@@ -3000,9 +2999,13 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 return;
             }
+            if (cmq_route_forward_missed(srv, route_rc, route_sent)) {
+                cmq_send_error(c, "route failed");
+                return;
+            }
         }
-        if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent))
-            cmq_send_error(c, "route failed");
+        /* Align BATCH — credit only after remote-only ingress succeeds. */
+        credit_msgs_in(srv, c, msg_len);
         return;
     }
 
@@ -3022,7 +3025,6 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
-    credit_msgs_in(srv, c, msg_len);
     if (!tgts || ntgt == 0) {
         free(tgts);
         if (!client_account_live(srv, c)) {
@@ -3039,9 +3041,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 return;
             }
+            if (cmq_route_forward_missed(srv, route_rc, route_sent)) {
+                cmq_send_error(c, "route failed");
+                return;
+            }
         }
-        if (!c->is_route && cmq_route_forward_missed(srv, route_rc, route_sent))
-            cmq_send_error(c, "route failed");
+        credit_msgs_in(srv, c, msg_len);
         return;
     }
 
@@ -3052,6 +3057,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
+    credit_msgs_in(srv, c, msg_len);
 
     /* Cluster forward only after local snapshot succeeded. */
     if (!c->is_route) {
@@ -3708,7 +3714,6 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
-    credit_msgs_in(srv, c, msg_len);
     /* Only forward REQUEST when no local responders — otherwise peers
        also answer the same _INBOX and the client sees duplicate replies. */
     if (!c->is_route && ntgt == 0) {
@@ -3737,6 +3742,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             return;
         }
         if (n > 0) {
+            credit_msgs_in(srv, c, msg_len);
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
@@ -3755,6 +3761,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                 return;
             }
             if (route_sent > 0) {
+                credit_msgs_in(srv, c, msg_len);
                 uint8_t ack[4] = {0};
                 size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK,
                                                    0, NULL, 0);
@@ -3775,6 +3782,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             return;
         }
         if (!c->is_route && route_sent > 0) {
+            credit_msgs_in(srv, c, msg_len);
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
@@ -3863,7 +3871,6 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
-    credit_msgs_in(srv, c, msg_len);
     /* '>' / '*.*' match _INBOX but cannot receive it (deliver_tgt_accepts).
        Compact to exact holders so remote-only inbox still cluster-forwards. */
     if (strncmp(subject, "_INBOX.", 7) == 0 && tgts && ntgt > 0) {
@@ -3918,22 +3925,26 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
                     client_set_state(c, CMQ_CLIENT_CLOSING);
                     return;
                 }
-                if (route_sent == 0) {
-                    if (cmq_route_forward_missed(srv, route_rc, route_sent))
-                        cmq_send_error(c, "route failed");
-                    else
-                        cmq_send_error(c, "delivery failed");
+                if (route_sent > 0) {
+                    credit_msgs_in(srv, c, msg_len);
+                } else if (cmq_route_forward_missed(srv, route_rc, route_sent)) {
+                    cmq_send_error(c, "route failed");
+                } else {
+                    cmq_send_error(c, "delivery failed");
                 }
             } else {
                 cmq_send_error(c, "delivery failed");
             }
+        } else {
+            credit_msgs_in(srv, c, msg_len);
         }
     } else if (!c->is_route) {
-        if (route_sent == 0) {
-            if (cmq_route_forward_missed(srv, route_rc, route_sent))
-                cmq_send_error(c, "route failed");
-            else
-                cmq_send_error(c, "no subscribers");
+        if (route_sent > 0) {
+            credit_msgs_in(srv, c, msg_len);
+        } else if (cmq_route_forward_missed(srv, route_rc, route_sent)) {
+            cmq_send_error(c, "route failed");
+        } else {
+            cmq_send_error(c, "no subscribers");
         }
     } else {
         /* Route ingress with no local inbox — fail-closed (no cluster re-forward). */

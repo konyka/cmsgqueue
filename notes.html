@@ -4601,6 +4601,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — remote-only msgs_in after forward</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">PUBLISH/REQ/RESP remote msgs_in</span></td><td>✅</td><td>Remote-only paths credited <code>msgs_in</code> before <code>route_forward_if_live</code> — failed cluster forward still bumped stats. Align BATCH: credit after forward success / local deliver; miss and <code>route_rc==-2</code> skip credit.</td></tr>
+</table>
+</div>
+
+
 
 
 
