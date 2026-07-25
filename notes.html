@@ -4409,6 +4409,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — gateway redial place-fd fallback</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">gw_connect_remote place</span></td><td>✅</td><td>Wrong-endpoint / full-table reclaim redial only claimed the remembered slot; if stolen or <code>conn_count</code> truncated mid-dial, a successful handshake was closed. Fall back to scan+append via <code>gw_place_dialed_fd</code> (cold-path parity).</td></tr>
+</table>
+</div>
+
 
 
 
