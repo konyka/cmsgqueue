@@ -42,6 +42,8 @@ static void mgr_end_op(cmq_account_manager_t *mgr) {
 static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char *name);
 static void purge_peer_acl_refs_unlocked(cmq_account_manager_t *mgr,
                                           const char *peer);
+static void drop_empty_perms_unlocked(cmq_account_manager_t *mgr,
+                                       cmq_account_perms_t *p);
 
 static void account_bump_epoch(cmq_account_t *a) {
     uint32_t e = __atomic_load_n(&a->epoch, __ATOMIC_RELAXED) + 1;
@@ -383,9 +385,11 @@ static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char 
 static void purge_peer_acl_refs_unlocked(cmq_account_manager_t *mgr,
                                           const char *peer) {
     if (!peer || peer[0] == '\0' || strcmp(peer, "*") == 0) return;
-    for (size_t i = 0; i < mgr->perms_count; i++) {
-        if (strcmp(mgr->perms[i].account, peer) == 0)
+    for (size_t i = 0; i < mgr->perms_count; ) {
+        if (strcmp(mgr->perms[i].account, peer) == 0) {
+            i++;
             continue;
+        }
         cmq_account_perms_t *p = &mgr->perms[i];
         for (size_t j = 0; j < p->export_count; ) {
             if (strcmp(p->exports[j].dest_account, peer) == 0) {
@@ -405,6 +409,11 @@ static void purge_peer_acl_refs_unlocked(cmq_account_manager_t *mgr,
                 j++;
             }
         }
+        if (p->export_count == 0 && p->import_count == 0) {
+            drop_empty_perms_unlocked(mgr, p);
+            continue; /* re-examine slot i (now the next row) */
+        }
+        i++;
     }
 }
 
@@ -415,11 +424,36 @@ static cmq_account_perms_t *find_perms(cmq_account_manager_t *mgr, const char *a
     return NULL;
 }
 
+/* Caller holds mgr->lock. Drop perms row when both ACL tables are empty. */
+static void drop_empty_perms_unlocked(cmq_account_manager_t *mgr,
+                                       cmq_account_perms_t *p) {
+    if (!mgr || !p || p->export_count != 0 || p->import_count != 0)
+        return;
+    size_t idx = (size_t)(p - mgr->perms);
+    if (idx >= mgr->perms_count) return;
+    if (idx + 1 < mgr->perms_count)
+        memmove(&mgr->perms[idx], &mgr->perms[idx + 1],
+                (mgr->perms_count - idx - 1) * sizeof(cmq_account_perms_t));
+    mgr->perms_count--;
+    memset(&mgr->perms[mgr->perms_count], 0, sizeof(cmq_account_perms_t));
+}
+
 static cmq_account_perms_t *find_or_create_perms(cmq_account_manager_t *mgr,
                                                    const char *account) {
     cmq_account_perms_t *p = find_perms(mgr, account);
     if (p) return p;
-    if (mgr->perms_count >= CMQ_ACCOUNT_MAX) return NULL;
+    if (mgr->perms_count >= CMQ_ACCOUNT_MAX) {
+        /* Reclaim empty shells left by remove/purge before failing. */
+        for (size_t i = 0; i < mgr->perms_count; ) {
+            if (mgr->perms[i].export_count == 0 &&
+                mgr->perms[i].import_count == 0) {
+                drop_empty_perms_unlocked(mgr, &mgr->perms[i]);
+                continue;
+            }
+            i++;
+        }
+        if (mgr->perms_count >= CMQ_ACCOUNT_MAX) return NULL;
+    }
     p = &mgr->perms[mgr->perms_count++];
     memset(p, 0, sizeof(*p));
     size_t n = strlen(account); /* caller validated length */
@@ -522,6 +556,8 @@ static int account_remove_export_impl(cmq_account_manager_t *mgr, const char *ac
             i++;
         }
     }
+    if (removed)
+        drop_empty_perms_unlocked(mgr, p);
     cmq_mutex_unlock(&mgr->lock);
     return removed ? 0 : -1;
 }
@@ -587,6 +623,8 @@ static int account_remove_import_impl(cmq_account_manager_t *mgr, const char *ac
             i++;
         }
     }
+    if (removed)
+        drop_empty_perms_unlocked(mgr, p);
     cmq_mutex_unlock(&mgr->lock);
     return removed ? 0 : -1;
 }

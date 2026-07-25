@@ -291,11 +291,16 @@ TEST(tls, config_set_fields) {
     ASSERT_EQ(cmq_tls_set_verify(cfg, 1), 0);
     ASSERT_EQ(cmq_tls_set_server_name(cfg, "example.com"), 0);
 
-    ASSERT_STR_EQ(cmq_tls_cert_path(cfg), "/path/to/cert.pem");
-    ASSERT_STR_EQ(cmq_tls_key_path(cfg), "/path/to/key.pem");
-    ASSERT_STR_EQ(cmq_tls_ca_path(cfg), "/path/to/ca.pem");
+    char cert[512], key[512], ca[512], sni[256];
+    ASSERT_EQ(cmq_tls_cert_path(cfg, cert, sizeof(cert)), 0);
+    ASSERT_EQ(cmq_tls_key_path(cfg, key, sizeof(key)), 0);
+    ASSERT_EQ(cmq_tls_ca_path(cfg, ca, sizeof(ca)), 0);
+    ASSERT_EQ(cmq_tls_server_name(cfg, sni, sizeof(sni)), 0);
+    ASSERT_STR_EQ(cert, "/path/to/cert.pem");
+    ASSERT_STR_EQ(key, "/path/to/key.pem");
+    ASSERT_STR_EQ(ca, "/path/to/ca.pem");
     ASSERT_EQ(cmq_tls_verify_peer(cfg), 1);
-    ASSERT_STR_EQ(cmq_tls_server_name(cfg), "example.com");
+    ASSERT_STR_EQ(sni, "example.com");
     ASSERT_EQ(cmq_tls_configured(cfg), 1);
     ASSERT_EQ(cmq_tls_backend_secure(), 0);
 

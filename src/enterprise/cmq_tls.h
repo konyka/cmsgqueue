@@ -17,11 +17,12 @@ int cmq_tls_set_ca(cmq_tls_config_t *cfg, const char *ca_path);
 int cmq_tls_set_verify(cmq_tls_config_t *cfg, int verify_peer);
 int cmq_tls_set_server_name(cmq_tls_config_t *cfg, const char *name);
 
-const char *cmq_tls_cert_path(cmq_tls_config_t *cfg);
-const char *cmq_tls_key_path(cmq_tls_config_t *cfg);
-const char *cmq_tls_ca_path(cmq_tls_config_t *cfg);
+/* Copy-out under begin_op — never return an interior pointer (destroy UAF). */
+int cmq_tls_cert_path(cmq_tls_config_t *cfg, char *out, size_t out_len);
+int cmq_tls_key_path(cmq_tls_config_t *cfg, char *out, size_t out_len);
+int cmq_tls_ca_path(cmq_tls_config_t *cfg, char *out, size_t out_len);
 int cmq_tls_verify_peer(cmq_tls_config_t *cfg);
-const char *cmq_tls_server_name(cmq_tls_config_t *cfg);
+int cmq_tls_server_name(cmq_tls_config_t *cfg, char *out, size_t out_len);
 int cmq_tls_configured(cmq_tls_config_t *cfg);
 /* 1 if linked against a real crypto backend; 0 for the plaintext stub. */
 int cmq_tls_backend_secure(void);

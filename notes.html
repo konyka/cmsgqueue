@@ -4542,6 +4542,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — ACL empty perms reclaim · TLS path copy-out</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">empty perms row</span></td><td>✅</td><td>remove export/import left zero-rule shells in <code>perms[]</code>, exhausting 128 slots so later accounts could not add ACL. Drop empty rows; reclaim on create; purge also drops emptied shells.</td></tr>
+<tr><td><span class="component-name">cmq_tls_*_path</span></td><td>✅</td><td>Getters returned interior pointers with no <code>begin_op</code>/<code>dying</code> (destroy UAF). Copy-out + in_flight gate like cluster/leaf/stream.</td></tr>
+</table>
+</div>
+
 
 
 
