@@ -4495,6 +4495,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — REQUEST skip self-TEARDOWN · non-QG CLOSING</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">REQUEST wait self-TEARDOWN</span></td><td>✅</td><td>Blocked REQUEST drained sibling TEARDOWNs including the publisher → <code>client_destroy</code> while wait still touched bare <code>publisher*</code> (UAF). Leave publisher id+gen TEARDOWN queued until wait returns.</td></tr>
+<tr><td><span class="component-name">non-QG CLOSING skip</span></td><td>✅</td><td>Plain sub snapshot only filtered epoch-dead; CLOSING holders still entered targets and failed all send paths (false <code>delivery failed</code>). Align with QG: require CONNECTED.</td></tr>
+</table>
+</div>
+
 
 
 

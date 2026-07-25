@@ -704,8 +704,11 @@ static void worker_drain_sends(cmq_worker_t *w, int max_n) {
 }
 
 /* Process TEARDOWN while a cross-worker REQUEST wait holds the event thread
-   (worker_drain_sends skips TEARDOWN and would otherwise starve reclaim). */
-static void worker_drain_teardowns(cmq_worker_t *w, int max_n) {
+   (worker_drain_sends skips TEARDOWN and would otherwise starve reclaim).
+   skip_id+gen: leave that client's TEARDOWN queued — REQUEST wait still holds
+   a bare publisher* (finish_closing would UAF). */
+static void worker_drain_teardowns(cmq_worker_t *w, int max_n,
+                                   uint32_t skip_id, uint32_t skip_gen) {
     if (!w || max_n <= 0) return;
     for (int i = 0; i < max_n; i++) {
         cmq_mutex_lock(&w->msg_lock);
@@ -715,6 +718,12 @@ static void worker_drain_teardowns(cmq_worker_t *w, int max_n) {
         while (*pp) {
             cmq_worker_msg_t *m = *pp;
             if (m->kind != CMQ_WORKER_MSG_TEARDOWN) {
+                prev = m;
+                pp = &m->next;
+                continue;
+            }
+            if (skip_id != 0 && m->target_id == skip_id &&
+                m->target_gen == skip_gen) {
                 prev = m;
                 pp = &m->next;
                 continue;
@@ -780,10 +789,12 @@ static void worker_touch_pending_write_stalls(cmq_worker_t *w,
 }
 
 /* Sync REQUEST blocks this worker's ev_run — drain mailbox and flush pending
-   write_buf so acceptor write-stall cannot TEARDOWN sibling clients. */
-static void worker_service_while_blocked(cmq_worker_t *w) {
+   write_buf so acceptor write-stall cannot TEARDOWN sibling clients.
+   skip_teardown_*: do not destroy the blocked publisher (bare pointer live). */
+static void worker_service_while_blocked(cmq_worker_t *w, uint32_t skip_teardown_id,
+                                         uint32_t skip_teardown_gen) {
     if (!w) return;
-    worker_drain_teardowns(w, 8);
+    worker_drain_teardowns(w, 8, skip_teardown_id, skip_teardown_gen);
     worker_drain_sends(w, CMQ_WORKER_WAKE_BATCH);
     worker_flush_pending_writes(w, NULL);
 }
@@ -1953,8 +1964,10 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
         if (!ref || !ref->client) continue;
 
         if (ref->queue_group[0] == '\0') {
-            /* Same epoch filter as QG: skip soft-deleted holders early. */
+            /* Same epoch/state filter as QG: skip soft-deleted / CLOSING early. */
             if (!client_account_live(srv, ref->client))
+                continue;
+            if (client_state(ref->client) != CMQ_CLIENT_CONNECTED)
                 continue;
             cmq_fill_deliver_tgt(&tgts[n++], ref);
             continue;
@@ -2294,6 +2307,8 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
          cmq_current_worker_id < srv->num_workers)
             ? &srv->workers[cmq_current_worker_id]
             : NULL;
+    uint32_t skip_id = publisher ? publisher->id : 0;
+    uint32_t skip_gen = publisher ? publisher->conn_gen : 0;
     for (int attempt = 0; attempt < 4; attempt++) {
         cmq_req_sync_t *sync = calloc(1, sizeof(*sync));
         if (!sync) break;
@@ -2304,7 +2319,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
             free(sync);
             if (attempt + 1 >= 4) break;
             if (self)
-                worker_service_while_blocked(self);
+                worker_service_while_blocked(self, skip_id, skip_gen);
             if (publisher) client_touch_activity(publisher);
             struct timespec ts = {0, 50000L};
             nanosleep(&ts, NULL);
@@ -2316,7 +2331,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
             if (req_sync_terminal(v))
                 return req_sync_finish(sync, v);
             if (self)
-                worker_service_while_blocked(self);
+                worker_service_while_blocked(self, skip_id, skip_gen);
             if (publisher) client_touch_activity(publisher);
             if (waited >= 100000) {
                 /* ~5s soft deadline: cancel only while still queued. */
@@ -2352,7 +2367,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     if (req_sync_terminal(v2))
                         return req_sync_finish(sync, v2);
                     if (self)
-                        worker_service_while_blocked(self);
+                        worker_service_while_blocked(self, skip_id, skip_gen);
                     if (publisher) client_touch_activity(publisher);
                     if (extra == 40000) {
                         cmq_mutex_lock(&w->clients_lock);
@@ -2381,7 +2396,7 @@ static int deliver_request_via_worker(cmq_server_t *srv, int worker_id,
                     }
                     /* Claimed (2) — wait for worker to resolve. */
                     if (self)
-                        worker_service_while_blocked(self);
+                        worker_service_while_blocked(self, skip_id, skip_gen);
                     if (publisher) client_touch_activity(publisher);
                     struct timespec ts2 = {0, 50000L};
                     nanosleep(&ts2, NULL);
