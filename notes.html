@@ -4577,6 +4577,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — leaf hub dialing lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">leaf_connect hub_dialing</span></td><td>✅</td><td>Cold start (<code>hub_fd==-1</code>) had no mid-replay guard — concurrent <code>cmq_leaf_connect</code> overlapped ~2s TCP+handshake and raced SUB replay. <code>hub_dialing</code> before unlock; clear on fail/publish/disconnect (immediate reconnect; old dial fails on <code>hub_gen</code>).</td></tr>
+</table>
+</div>
+
+
 
 
 

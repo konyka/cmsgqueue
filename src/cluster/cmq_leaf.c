@@ -36,6 +36,7 @@ struct cmq_leaf_node {
     int hub_port;
     int hub_fd;
     uint32_t hub_gen; /* bumps on each hub_fd publish; foil recycled-fd races */
+    int hub_dialing; /* 1 while unlocked TCP+handshake in progress */
     int connected;
     char auth_user[256];
     char auth_pass[256];
@@ -82,6 +83,14 @@ static int leaf_begin_op(cmq_leaf_node_t *leaf) {
 
 static void leaf_end_op(cmq_leaf_node_t *leaf) {
     atomic_fetch_sub_explicit(&leaf->in_flight, 1, memory_order_acq_rel);
+}
+
+/* Clear hub_dialing under lock (unlocked-dial failure / disconnect paths). */
+static void leaf_hub_dial_end(cmq_leaf_node_t *leaf) {
+    if (!leaf) return;
+    cmq_mutex_lock(&leaf->lock);
+    leaf->hub_dialing = 0;
+    cmq_mutex_unlock(&leaf->lock);
 }
 
 /* Caller holds leaf->lock. Skip 0 and ids still live or pending UNSUB. */
@@ -520,6 +529,12 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         }
     }
 
+    /* Serialize unlocked TCP+handshake — cold start has no mid-replay guard. */
+    if (leaf->hub_dialing) {
+        cmq_mutex_unlock(&leaf->lock);
+        return -1;
+    }
+    leaf->hub_dialing = 1;
     char addr_copy[CMQ_NODE_ADDR_SIZE];
     strncpy(addr_copy, leaf->hub_addr, sizeof(addr_copy) - 1);
     addr_copy[sizeof(addr_copy) - 1] = '\0';
@@ -528,23 +543,29 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     cmq_mutex_unlock(&leaf->lock);
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        leaf_hub_dial_end(leaf);
+        return -1;
+    }
 
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;
     sa.sin_port = htons((uint16_t)port_copy);
     if (inet_pton(AF_INET, addr_copy, &sa.sin_addr) != 1) {
         close(fd);
+        leaf_hub_dial_end(leaf);
         return -1;
     }
 
     if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
                              CMQ_LEAF_CONNECT_MS) != 0) {
         close(fd);
+        leaf_hub_dial_end(leaf);
         return -1;
     }
     if (leaf_handshake(leaf, fd) != 0) {
         close(fd);
+        leaf_hub_dial_end(leaf);
         return -1;
     }
     set_nonblock(fd);
@@ -555,6 +576,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     if (leaf->connected && leaf->hub_fd >= 0) {
         int efd = leaf->hub_fd;
         if (leaf_fd_alive(efd) && leaf->connected && leaf->hub_fd == efd) {
+            leaf->hub_dialing = 0;
             cmq_mutex_unlock(&leaf->lock);
             cmq_mutex_unlock(&leaf->hub_io_lock);
             close(fd);
@@ -566,6 +588,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
         if (leaf->connected && leaf->hub_fd >= 0) {
             int nfd = leaf->hub_fd;
             if (leaf_fd_alive(nfd) && leaf->connected && leaf->hub_fd == nfd) {
+                leaf->hub_dialing = 0;
                 cmq_mutex_unlock(&leaf->lock);
                 cmq_mutex_unlock(&leaf->hub_io_lock);
                 close(fd);
@@ -578,6 +601,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     }
     /* disconnect / other connect during unlocked dial — do not resurrect. */
     if (leaf->hub_gen != dial_gen) {
+        leaf->hub_dialing = 0;
         cmq_mutex_unlock(&leaf->lock);
         cmq_mutex_unlock(&leaf->hub_io_lock);
         close(fd);
@@ -585,6 +609,7 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     }
     /* Another connect claimed the hub during our unlocked dial window. */
     if (leaf->hub_fd >= 0 && !leaf->connected) {
+        leaf->hub_dialing = 0;
         cmq_mutex_unlock(&leaf->lock);
         cmq_mutex_unlock(&leaf->hub_io_lock);
         close(fd);
@@ -597,6 +622,8 @@ static int leaf_connect_impl(cmq_leaf_node_t *leaf) {
     uint32_t snap_gen = leaf->hub_gen;
     /* connected=1 only after hub SUB replay — is_connected must not race. */
     leaf->connected = 0;
+    /* Mid-replay guard covers concurrency — release dialing for reconnect. */
+    leaf->hub_dialing = 0;
     /* Flush offline UNSUBs before replaying live interest.
        Keep pending_unsub until alloc succeeds so OOM cannot drop entries. */
     size_t pn = leaf->pending_unsub_count;
@@ -794,6 +821,8 @@ static int leaf_disconnect_impl(cmq_leaf_node_t *leaf) {
     if (leaf->hub_fd >= 0) close(leaf->hub_fd);
     leaf->hub_fd = -1;
     leaf->connected = 0;
+    /* Allow immediate reconnect; in-flight dial still fails on hub_gen. */
+    leaf->hub_dialing = 0;
     /* Bump so in-flight connect cannot publish after explicit disconnect. */
     leaf->hub_gen++;
     if (leaf->hub_gen == 0)
