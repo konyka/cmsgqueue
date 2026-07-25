@@ -4472,6 +4472,7 @@ All 15 test suites passing, 0 warnings.
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">worker_service_while_blocked</span></td><td>✅</td><td>Cross-worker sync REQUEST parked the owning worker outside <code>ev_run</code> for seconds while only draining mailbox/touching the publisher. Sibling <code>write_buf</code> progress froze and acceptor write-stall TEARDOWN killed healthy peers. Wait loop now also flushes pending writes on that worker.</td></tr>
 <tr><td><span class="component-name">client_drain_write_sync</span></td><td>✅</td><td>Mailbox <code>drain_sync</code> path could <code>poll</code> up to ~2s on the owning worker without servicing siblings (same stall false-positive). On EAGAIN, flush siblings (or touch stall clocks if holding route <code>io_lock</code>).</td></tr>
+<tr><td><span class="component-name">flush_write route poll</span></td><td>✅</td><td>Route <code>client_flush_write_unlocked</code> EAGAIN <code>poll</code> (~200ms×N across a flush batch) held <code>io_lock</code> without touching sibling stall clocks. Align with drain_sync: <code>worker_touch_pending_write_stalls</code> before poll.</td></tr>
 </table>
 </div>
 

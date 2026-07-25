@@ -4654,6 +4654,13 @@ static void client_flush_write_unlocked(cmq_client_t *c) {
             if (n < 0 && errno == EINTR)
                 continue;
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                /* Holding route io_lock — touch sibling stall clocks only
+                   (flush would take pool→io and AB-BA). Stacked route polls
+                   across worker_flush_pending_writes can exceed write_timeout. */
+                if (c->server && c->worker_id >= 0 && c->server->workers &&
+                    c->worker_id < c->server->num_workers)
+                    worker_touch_pending_write_stalls(
+                        &c->server->workers[c->worker_id], c);
                 struct pollfd pfd = { .fd = c->fd, .events = POLLOUT };
                 int pr;
                 do {
