@@ -4585,6 +4585,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — disconnect clears dialing</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/gw/mqtt dialing clear</span></td><td>✅</td><td>Dialing locks blocked <code>disconnect</code>/<code>set_target</code> → immediate <code>connect</code> until old dial ended (~2–5s). Clear dialing with cancel bump (route in <code>route_bump_cancel</code>; gw disconnect + addr change; mqtt disconnect). Old dial still fail-closed on gen.</td></tr>
+</table>
+</div>
+
+
 
 
 

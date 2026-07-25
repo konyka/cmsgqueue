@@ -442,6 +442,7 @@ static int gw_add_remote_impl(cmq_gateway_t *gw, const char *cluster_name,
             if (addr_changed) {
                 /* Invalidate live TCP + cancel in-flight dials to the old ep. */
                 gw->cluster_cancel_gen[i]++;
+                gw->cluster_dialing[i] = 0; /* immediate connect to new ep */
                 for (size_t j = 0; j < gw->conn_count; j++) {
                     cmq_mutex_lock(&gw->io_locks[j]);
                     int match =
@@ -618,8 +619,11 @@ static int gw_disconnect_impl(cmq_gateway_t *gw, const char *cluster_name) {
     cmq_mutex_lock(&gw->lock);
     /* Always bump cancel_gen so an in-flight dial cannot reinstall. */
     ssize_t ci = gw_find_cluster(gw, cluster_name);
-    if (ci >= 0)
+    if (ci >= 0) {
         gw->cluster_cancel_gen[ci]++;
+        /* Align leaf — allow immediate reconnect; old dial fails on gen. */
+        gw->cluster_dialing[ci] = 0;
+    }
     int closed = 0;
     /* Close every matching slot — multi-conn / retry residue must not
        keep forwarding after disconnect. */

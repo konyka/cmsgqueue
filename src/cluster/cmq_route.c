@@ -343,12 +343,25 @@ static ssize_t route_find_cancel(cmq_route_pool_t *pool, const char *node_id) {
     return -1;
 }
 
+/* Caller holds pool->lock. Allow immediate reconnect after cancel. */
+static void route_clear_target_dialing(cmq_route_pool_t *pool,
+                                       const char *node_id) {
+    for (size_t i = 0; i < pool->target_count; i++) {
+        if (strcmp(pool->targets[i].node_id, node_id) == 0) {
+            pool->targets[i].dialing = 0;
+            return;
+        }
+    }
+}
+
 /* Bump (or create) per-node cancel gen. Caller holds pool->lock. */
 static void route_bump_cancel(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return;
     ssize_t i = route_find_cancel(pool, node_id);
     if (i >= 0) {
         pool->cancels[i].gen++;
+        /* Old dial still fails install on gen; clear so connect can redial now. */
+        route_clear_target_dialing(pool, node_id);
         return;
     }
     if (pool->cancel_count >= CMQ_ROUTE_MAX_CONNS) {
@@ -356,11 +369,14 @@ static void route_bump_cancel(cmq_route_pool_t *pool, const char *node_id) {
         for (size_t j = 0; j < pool->cancel_count; j++)
             pool->cancels[j].gen++;
         pool->cancel_epoch++;
+        for (size_t j = 0; j < pool->target_count; j++)
+            pool->targets[j].dialing = 0;
         return;
     }
     cmq_route_cancel_t *c = &pool->cancels[pool->cancel_count++];
     snprintf(c->node_id, sizeof(c->node_id), "%s", node_id);
     c->gen = 1;
+    route_clear_target_dialing(pool, node_id);
 }
 
 /* Caller holds pool->lock. */

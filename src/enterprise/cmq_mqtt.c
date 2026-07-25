@@ -308,6 +308,8 @@ static int mqtt_bridge_disconnect_impl(cmq_mqtt_bridge_t *br) {
     if (!br) return -1;
     cmq_mutex_lock(&br->lock);
     br->cancel_gen++;
+    /* Align leaf — allow immediate reconnect; old dial fails on cancel_gen. */
+    br->dialing = 0;
     mqtt_disconnect_unlocked(br);
     cmq_mutex_unlock(&br->lock);
     return 0;
