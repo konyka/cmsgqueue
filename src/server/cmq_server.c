@@ -1612,8 +1612,10 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
         rc = cmq_client_send_direct(c, wsbuf, total);
         free(wsbuf);
     }
-    /* Outbound keepalive refresh only for CONNECTED (INIT must stay frozen). */
-    if (rc == 0 && client_state(c) == CMQ_CLIENT_CONNECTED)
+    /* Outbound keepalive refresh only for CONNECTED (INIT must stay frozen).
+       DISCONNECT must not refresh — CLOSING reclaim uses activity idle. */
+    if (rc == 0 && client_state(c) == CMQ_CLIENT_CONNECTED &&
+        !(len >= CMQ_PROTO_HDR_SIZE && data[4] == (uint8_t)CMQ_OP_DISCONNECT))
         client_touch_activity(c);
     return rc;
 }
@@ -2021,14 +2023,10 @@ static int client_send_by_id(cmq_server_t *srv, int worker_id, uint32_t client_i
                                  require_sub_id, 0, NULL, 0, 0, NULL, 0,
                                  pub_account, pub_epoch, 0) == 0)
                 return 1;
-            /* Queue full — nudge EOF; do not race write_buf/subs cross-thread. */
+            /* Queue full/OOM — TEARDOWN so subs leave the trie (not EOF-only). */
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
-            cmq_mutex_lock(&w->clients_lock);
-            cmq_client_t *c = cmq_idmap_get(w->idmap, client_id);
-            if (c && c->conn_gen == conn_gen && c->fd >= 0)
-                (void)shutdown(c->fd, SHUT_RDWR);
-            cmq_mutex_unlock(&w->clients_lock);
+            worker_teardown_or_shutdown(w, client_id, conn_gen);
             return 0;
         }
         cmq_mutex_lock(&w->clients_lock);
@@ -2143,6 +2141,8 @@ static int deliver_via_worker(cmq_server_t *srv, int worker_id,
             nanosleep(&ts, NULL);
         }
     }
+    /* Fail-closed: drop ghost CONNECTED subs that keep matching while mailbox is full. */
+    worker_teardown_or_shutdown(w, client_id, conn_gen);
     return 0;
 }
 

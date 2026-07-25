@@ -4477,6 +4477,15 @@ All 15 test suites passing, 0 warnings.
 </div>
 
 <div class="phase">
+  <h2>Phase — DISCONNECT activity · mailbox fail-closed</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">send_local DISCONNECT</span></td><td>✅</td><td>Outbound DISCONNECT refreshed <code>last_activity_ms</code> while still CONNECTED, delaying CLOSING idle reclaim after keepalive. Skip activity touch for DISCONNECT frames.</td></tr>
+<tr><td><span class="component-name">mailbox full teardown</span></td><td>✅</td><td><code>client_send_by_id</code> / <code>deliver_via_worker</code> on push fail only <code>shutdown</code>d — subs stayed in trie as CONNECTED ghosts. Fail-closed via <code>worker_teardown_or_shutdown</code>.</td></tr>
+</table>
+</div>
+
+<div class="phase">
   <h2>Phase — REQUEST wait flushes sibling writes</h2>
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
