@@ -313,28 +313,27 @@ static int mqtt_bridge_disconnect_impl(cmq_mqtt_bridge_t *br) {
     return 0;
 }
 
+/* Caller holds br->lock. Probe + clear sticky tombstone; 1 only if still live. */
+static int mqtt_connected_locked(cmq_mqtt_bridge_t *br) {
+    if (!br->connected || br->fd < 0) return 0;
+    int efd = br->fd;
+    /* Probe under lock — unlock-stale alive must not sticky-report connected. */
+    if (mqtt_fd_alive(efd) && br->connected && br->fd == efd)
+        return 1;
+    /* Dead sticky only — re-probe so fd recycle cannot kill a new peer. */
+    if (br->fd == efd && !mqtt_fd_alive(efd))
+        mqtt_disconnect_unlocked(br);
+    return 0;
+}
+
 int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br) {
     if (!br) return 0;
     if (mqtt_begin_op(br) != 0) return 0;
     cmq_mutex_lock(&br->lock);
-    if (!br->connected || br->fd < 0) {
-        cmq_mutex_unlock(&br->lock);
-        mqtt_end_op(br);
-        return 0;
-    }
-    int efd = br->fd;
-    /* Probe under lock — unlock-stale alive must not sticky-report connected. */
-    if (mqtt_fd_alive(efd) && br->connected && br->fd == efd) {
-        cmq_mutex_unlock(&br->lock);
-        mqtt_end_op(br);
-        return 1;
-    }
-    /* Dead sticky only — re-probe so fd recycle cannot kill a new peer. */
-    if (br->fd == efd && !mqtt_fd_alive(efd))
-        mqtt_disconnect_unlocked(br);
+    int live = mqtt_connected_locked(br);
     cmq_mutex_unlock(&br->lock);
     mqtt_end_op(br);
-    return 0;
+    return live;
 }
 
 int cmq_mqtt_client_id(cmq_mqtt_bridge_t *br, char *out, size_t out_len) {
@@ -363,7 +362,8 @@ static cmq_mqtt_bridge_info_t mqtt_bridge_info_impl(cmq_mqtt_bridge_t *br) {
     info.port = br->port;
     info.keepalive_ms = br->keepalive_ms;
     info.clean_session = br->clean_session;
-    info.connected = br->connected;
+    /* Align is_connected — do not report sticky connected after TCP death. */
+    info.connected = mqtt_connected_locked(br);
     info.messages_in = br->messages_in;
     info.messages_out = br->messages_out;
     cmq_mutex_unlock(&br->lock);

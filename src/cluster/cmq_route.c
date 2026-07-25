@@ -1405,12 +1405,33 @@ static int route_get_conn_impl(cmq_route_pool_t *pool, const char *node_id,
     /* Copy under io_lock so fd/connected match write-path death updates. */
     for (size_t i = 0; i < nslots; i++) {
         cmq_mutex_lock(&pool->io_locks[i]);
-        if (strcmp(pool->conns[i].remote_id, node_id) == 0) {
+        if (strcmp(pool->conns[i].remote_id, node_id) != 0) {
+            cmq_mutex_unlock(&pool->io_locks[i]);
+            continue;
+        }
+        int fd = pool->conns[i].fd;
+        int sticky = pool->conns[i].connected && fd >= 0;
+        int dead = sticky && !route_fd_alive(fd);
+        if (!dead) {
             *out = pool->conns[i];
             cmq_mutex_unlock(&pool->io_locks[i]);
             return 0;
         }
         cmq_mutex_unlock(&pool->io_locks[i]);
+        /* Align peer_live: reclaim sticky-dead under pool→io, then miss. */
+        cmq_mutex_lock(&pool->lock);
+        if (i < pool->conn_count) {
+            cmq_mutex_lock(&pool->io_locks[i]);
+            if (pool->conns[i].fd == fd &&
+                strcmp(pool->conns[i].remote_id, node_id) == 0 &&
+                !route_fd_alive(fd)) {
+                conn_drop_fd(&pool->conns[i]);
+                memset(&pool->conns[i], 0, sizeof(pool->conns[i]));
+            }
+            cmq_mutex_unlock(&pool->io_locks[i]);
+        }
+        cmq_mutex_unlock(&pool->lock);
+        return -1;
     }
     return -1;
 }
