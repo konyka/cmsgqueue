@@ -4433,6 +4433,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — WS recv cap includes framing</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">client_read_cb ws_recv</span></td><td>✅</td><td>Post-upgrade reassembly capped at bare CMQ <code>hard_cap</code>, but <code>ws_recv_buf</code> holds raw WS (hdr+mask ≤14) and appends before parse. Near-max frames (or one pipelined read) tore down. Cap is now <code>hard+14+CMQ_CLIENT_BUF_SIZE</code>; <code>ws_msg_buf</code> still enforces bare hard.</td></tr>
+</table>
+</div>
+
 
 
 

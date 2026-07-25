@@ -5143,16 +5143,24 @@ static void client_read_cb(int fd, int events, void *data) {
             size_t need = c->ws_recv_len + (size_t)n;
             if (need > c->ws_recv_cap) {
                 size_t hard = cmq_client_frame_hard_cap(srv);
+                /* Raw WS bytes include hdr+mask (≤14) atop CMQ wire; append
+                   runs before parse/compact, so one read may pipeline past a
+                   max frame. Cap = hard + 14 + CMQ_CLIENT_BUF_SIZE. */
+                size_t hard_ws = hard;
+                if (hard <= SIZE_MAX - 14u - (size_t)CMQ_CLIENT_BUF_SIZE)
+                    hard_ws = hard + 14u + (size_t)CMQ_CLIENT_BUF_SIZE;
+                else
+                    hard_ws = SIZE_MAX;
                 size_t ncap = c->ws_recv_cap ? c->ws_recv_cap : 4096;
                 if (c->ws_recv_cap) {
-                    if (c->ws_recv_cap > SIZE_MAX / 2) ncap = hard;
+                    if (c->ws_recv_cap > SIZE_MAX / 2) ncap = hard_ws;
                     else ncap = c->ws_recv_cap * 2;
                 }
                 while (ncap < need) {
-                    if (ncap > SIZE_MAX / 2) { ncap = hard; break; }
+                    if (ncap > SIZE_MAX / 2) { ncap = hard_ws; break; }
                     ncap *= 2;
                 }
-                if (ncap > hard) ncap = hard;
+                if (ncap > hard_ws) ncap = hard_ws;
                 if (need > ncap) { client_teardown(c); return; }
                 uint8_t *nb = realloc(c->ws_recv_buf, ncap);
                 if (!nb) { client_teardown(c); return; }
