@@ -4417,6 +4417,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — route live_count / peer_live fd-recycle</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route_live_count / peer_live</span></td><td>✅</td><td>After a dead probe under <code>io_lock</code>, reclaim matched only fd+rid under <code>pool→snap</code>. Broadcast can drop under io alone; reconnect may recycle the same fd# with the same rid — snap-only close killed the new peer. Re-probe <code>!alive</code> under <code>pool→io</code> before drop.</td></tr>
+</table>
+</div>
+
 
 
 

@@ -1320,13 +1320,19 @@ static size_t route_live_count_impl(cmq_route_pool_t *pool) {
             continue;
         }
         if (!reclaim) continue;
+        /* pool→io: re-probe before close — broadcast may have dropped the
+           dead fd under io_lock only; reconnect can recycle the same fd# into
+           this slot with the same rid. Snap-only match would kill the new peer. */
         cmq_mutex_lock(&pool->lock);
         if (i < pool->conn_count) {
-            char rid2[CMQ_NODE_ID_SIZE];
-            int efd2 = -1;
-            route_slot_snap(pool, i, NULL, &efd2, NULL, rid2);
-            if (efd2 == fd && strcmp(rid2, rid) == 0)
-                route_slot_close(pool, i);
+            cmq_mutex_lock(&pool->io_locks[i]);
+            if (pool->conns[i].fd == fd &&
+                strcmp(pool->conns[i].remote_id, rid) == 0 &&
+                !route_fd_alive(fd)) {
+                conn_drop_fd(&pool->conns[i]);
+                memset(&pool->conns[i], 0, sizeof(pool->conns[i]));
+            }
+            cmq_mutex_unlock(&pool->io_locks[i]);
         }
         cmq_mutex_unlock(&pool->lock);
     }
@@ -1398,13 +1404,17 @@ static int route_peer_live_impl(cmq_route_pool_t *pool, const char *node_id) {
         if (live)
             return 1;
         if (reclaim) {
+            /* Same fd-recycle TOCTOU as live_count — re-probe under pool→io. */
             cmq_mutex_lock(&pool->lock);
             if (i < pool->conn_count) {
-                char rid2[CMQ_NODE_ID_SIZE];
-                int efd2 = -1;
-                route_slot_snap(pool, i, NULL, &efd2, NULL, rid2);
-                if (strcmp(rid2, node_id) == 0 && efd2 == fd)
-                    route_slot_close(pool, i);
+                cmq_mutex_lock(&pool->io_locks[i]);
+                if (pool->conns[i].fd == fd &&
+                    strcmp(pool->conns[i].remote_id, node_id) == 0 &&
+                    !route_fd_alive(fd)) {
+                    conn_drop_fd(&pool->conns[i]);
+                    memset(&pool->conns[i], 0, sizeof(pool->conns[i]));
+                }
+                cmq_mutex_unlock(&pool->io_locks[i]);
             }
             cmq_mutex_unlock(&pool->lock);
         }
