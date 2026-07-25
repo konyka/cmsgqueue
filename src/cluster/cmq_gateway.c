@@ -23,6 +23,7 @@ struct cmq_gateway {
     size_t conn_count;
     cmq_gw_cluster_info_t clusters[CMQ_GW_MAX_CLUSTERS];
     uint32_t cluster_cancel_gen[CMQ_GW_MAX_CLUSTERS]; /* disconnect aborts dial */
+    uint8_t cluster_dialing[CMQ_GW_MAX_CLUSTERS]; /* unlocked TCP+handshake */
     size_t cluster_count;
     cmq_mutex_t lock;
     cmq_mutex_t io_locks[CMQ_GW_MAX_CONNECTIONS]; /* per-slot write serialization */
@@ -50,6 +51,24 @@ static int gw_cluster_cancel_changed(cmq_gateway_t *gw, const char *name,
     ssize_t i = gw_find_cluster(gw, name);
     if (i < 0) return 1;
     return gw->cluster_cancel_gen[i] != gen;
+}
+
+/* Caller holds gw->lock. Serialize unlocked dial (align route/MQTT). */
+static int gw_cluster_dial_begin(cmq_gateway_t *gw, const char *name) {
+    ssize_t i = gw_find_cluster(gw, name);
+    if (i < 0) return -1;
+    if (gw->cluster_dialing[i]) return -1;
+    gw->cluster_dialing[i] = 1;
+    return 0;
+}
+
+static void gw_cluster_dial_end(cmq_gateway_t *gw, const char *name) {
+    if (!gw || !name) return;
+    cmq_mutex_lock(&gw->lock);
+    ssize_t i = gw_find_cluster(gw, name);
+    if (i >= 0)
+        gw->cluster_dialing[i] = 0;
+    cmq_mutex_unlock(&gw->lock);
 }
 
 #define CMQ_GW_WRITE_MS 50
@@ -328,6 +347,78 @@ static int gw_handshake(cmq_gateway_t *gw, int fd) {
     return cmq_peer_handshake(fd, user[0] ? user : NULL, pass[0] ? pass : NULL, 0);
 }
 
+/* Unlocked TCP+handshake+install. Caller set dialing and unlocked.
+   slot >= 0: try claim_install first; always clear dialing before return. */
+static int gw_unlocked_dial_install(cmq_gateway_t *gw, const char *cluster_name,
+                                     const char *addr_copy, int port_copy,
+                                     uint32_t cgen, int slot) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        gw_cluster_dial_end(gw, cluster_name);
+        return -1;
+    }
+    struct sockaddr_in sa = {0};
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((uint16_t)port_copy);
+    if (inet_pton(AF_INET, addr_copy, &sa.sin_addr) != 1) {
+        close(fd);
+        gw_cluster_dial_end(gw, cluster_name);
+        return -1;
+    }
+    if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
+                             CMQ_GW_CONNECT_MS) != 0) {
+        close(fd);
+        gw_cluster_dial_end(gw, cluster_name);
+        return -1;
+    }
+    if (gw_handshake(gw, fd) != 0) {
+        close(fd);
+        gw_cluster_dial_end(gw, cluster_name);
+        return -1;
+    }
+    set_nonblock(fd);
+    cmq_mutex_lock(&gw->lock);
+    if (gw_cluster_cancel_changed(gw, cluster_name, cgen)) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        gw_cluster_dial_end(gw, cluster_name);
+        return -1;
+    }
+    if (gw_has_live_peer(gw, cluster_name)) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        gw_cluster_dial_end(gw, cluster_name);
+        return 0;
+    }
+    if (!gw_endpoint_current(gw, cluster_name, addr_copy, port_copy)) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        gw_cluster_dial_end(gw, cluster_name);
+        return -1;
+    }
+    int prc = -1;
+    if (slot >= 0 && (size_t)slot < gw->conn_count)
+        prc = gw_slot_claim_install(gw, (size_t)slot, cluster_name, addr_copy,
+                                     port_copy, fd);
+    if (prc != 0 && prc != 1)
+        prc = gw_place_dialed_fd(gw, cluster_name, addr_copy, port_copy, fd);
+    if (prc == 0) {
+        cmq_mutex_unlock(&gw->lock);
+        gw_cluster_dial_end(gw, cluster_name);
+        return 0;
+    }
+    if (prc == 1) {
+        cmq_mutex_unlock(&gw->lock);
+        close(fd);
+        gw_cluster_dial_end(gw, cluster_name);
+        return 0;
+    }
+    cmq_mutex_unlock(&gw->lock);
+    close(fd);
+    gw_cluster_dial_end(gw, cluster_name);
+    return -1;
+}
+
 static int gw_add_remote_impl(cmq_gateway_t *gw, const char *cluster_name,
                             const char *addr, int port) {
     if (!gw || !cluster_name || !addr) return -1;
@@ -438,63 +529,13 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
         int port_copy = port;
         size_t slot = i;
         uint32_t cgen = gw_cluster_cancel_snap(gw, cluster_name);
-        cmq_mutex_unlock(&gw->lock);
-
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) return -1;
-        struct sockaddr_in sa = {0};
-        sa.sin_family = AF_INET;
-        sa.sin_port = htons((uint16_t)port_copy);
-        if (inet_pton(AF_INET, addr_copy, &sa.sin_addr) != 1) {
-            close(fd);
-            return -1;
-        }
-        if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
-                                 CMQ_GW_CONNECT_MS) != 0) {
-            close(fd);
-            return -1;
-        }
-        if (gw_handshake(gw, fd) != 0) {
-            close(fd);
-            return -1;
-        }
-        set_nonblock(fd);
-        cmq_mutex_lock(&gw->lock);
-        if (gw_cluster_cancel_changed(gw, cluster_name, cgen)) {
+        if (gw_cluster_dial_begin(gw, cluster_name) != 0) {
             cmq_mutex_unlock(&gw->lock);
-            close(fd);
             return -1;
-        }
-        /* Another thread may have published a live peer meanwhile. */
-        if (gw_has_live_peer(gw, cluster_name)) {
-            cmq_mutex_unlock(&gw->lock);
-            close(fd);
-            return 0;
-        }
-        if (!gw_endpoint_current(gw, cluster_name, addr_copy, port_copy)) {
-            cmq_mutex_unlock(&gw->lock);
-            close(fd);
-            return -1;
-        }
-        /* Prefer closed slot; if stolen/truncated, scan+append like cold path. */
-        int prc = -1;
-        if (slot < gw->conn_count)
-            prc = gw_slot_claim_install(gw, slot, cluster_name, addr_copy,
-                                       port_copy, fd);
-        if (prc != 0 && prc != 1)
-            prc = gw_place_dialed_fd(gw, cluster_name, addr_copy, port_copy, fd);
-        if (prc == 0) {
-            cmq_mutex_unlock(&gw->lock);
-            return 0;
-        }
-        if (prc == 1) {
-            cmq_mutex_unlock(&gw->lock);
-            close(fd);
-            return 0;
         }
         cmq_mutex_unlock(&gw->lock);
-        close(fd);
-        return -1;
+        return gw_unlocked_dial_install(gw, cluster_name, addr_copy, port_copy,
+                                        cgen, (int)slot);
     }
 
     if (gw->conn_count >= CMQ_GW_MAX_CONNECTIONS) {
@@ -548,61 +589,13 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
         addr_copy[sizeof(addr_copy) - 1] = '\0';
         int port_copy = port;
         uint32_t cgen = gw_cluster_cancel_snap(gw, cluster_name);
-        cmq_mutex_unlock(&gw->lock);
-
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) return -1;
-        struct sockaddr_in sa = {0};
-        sa.sin_family = AF_INET;
-        sa.sin_port = htons((uint16_t)port_copy);
-        if (inet_pton(AF_INET, addr_copy, &sa.sin_addr) != 1) {
-            close(fd);
-            return -1;
-        }
-        if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
-                                 CMQ_GW_CONNECT_MS) != 0) {
-            close(fd);
-            return -1;
-        }
-        if (gw_handshake(gw, fd) != 0) {
-            close(fd);
-            return -1;
-        }
-        set_nonblock(fd);
-        cmq_mutex_lock(&gw->lock);
-        if (gw_cluster_cancel_changed(gw, cluster_name, cgen)) {
+        if (gw_cluster_dial_begin(gw, cluster_name) != 0) {
             cmq_mutex_unlock(&gw->lock);
-            close(fd);
             return -1;
-        }
-        if (gw_has_live_peer(gw, cluster_name)) {
-            cmq_mutex_unlock(&gw->lock);
-            close(fd);
-            return 0;
-        }
-        if (!gw_endpoint_current(gw, cluster_name, addr_copy, port_copy)) {
-            cmq_mutex_unlock(&gw->lock);
-            close(fd);
-            return -1;
-        }
-        int prc = -1;
-        if ((size_t)slot < gw->conn_count)
-            prc = gw_slot_claim_install(gw, (size_t)slot, cluster_name,
-                                       addr_copy, port_copy, fd);
-        if (prc != 0 && prc != 1)
-            prc = gw_place_dialed_fd(gw, cluster_name, addr_copy, port_copy, fd);
-        if (prc == 0) {
-            cmq_mutex_unlock(&gw->lock);
-            return 0;
-        }
-        if (prc == 1) {
-            cmq_mutex_unlock(&gw->lock);
-            close(fd);
-            return 0;
         }
         cmq_mutex_unlock(&gw->lock);
-        close(fd);
-        return -1;
+        return gw_unlocked_dial_install(gw, cluster_name, addr_copy, port_copy,
+                                        cgen, slot);
     }
 
     /* Copy addr/port then unlock for blocking connect+handshake. */
@@ -611,60 +604,13 @@ static int gw_connect_remote_impl(cmq_gateway_t *gw, const char *cluster_name) {
     addr_copy[sizeof(addr_copy) - 1] = '\0';
     int port_copy = port;
     uint32_t cgen = gw_cluster_cancel_snap(gw, cluster_name);
-    cmq_mutex_unlock(&gw->lock);
-
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-
-    struct sockaddr_in sa = {0};
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((uint16_t)port_copy);
-    if (inet_pton(AF_INET, addr_copy, &sa.sin_addr) != 1) {
-        close(fd);
-        return -1;
-    }
-
-    if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
-                             CMQ_GW_CONNECT_MS) != 0) {
-        close(fd);
-        return -1;
-    }
-    if (gw_handshake(gw, fd) != 0) {
-        close(fd);
-        return -1;
-    }
-    set_nonblock(fd);
-
-    cmq_mutex_lock(&gw->lock);
-    if (gw_cluster_cancel_changed(gw, cluster_name, cgen)) {
+    if (gw_cluster_dial_begin(gw, cluster_name) != 0) {
         cmq_mutex_unlock(&gw->lock);
-        close(fd);
         return -1;
-    }
-    /* Dedup after unlocked connect — avoid duplicate live peers. */
-    if (gw_has_live_peer(gw, cluster_name)) {
-        cmq_mutex_unlock(&gw->lock);
-        close(fd);
-        return 0;
-    }
-    if (!gw_endpoint_current(gw, cluster_name, addr_copy, port_copy)) {
-        cmq_mutex_unlock(&gw->lock);
-        close(fd);
-        return -1;
-    }
-    int prc = gw_place_dialed_fd(gw, cluster_name, addr_copy, port_copy, fd);
-    if (prc == 0) {
-        cmq_mutex_unlock(&gw->lock);
-        return 0;
-    }
-    if (prc == 1) {
-        cmq_mutex_unlock(&gw->lock);
-        close(fd);
-        return 0;
     }
     cmq_mutex_unlock(&gw->lock);
-    close(fd);
-    return -1;
+    return gw_unlocked_dial_install(gw, cluster_name, addr_copy, port_copy,
+                                    cgen, -1);
 }
 
 static int gw_disconnect_impl(cmq_gateway_t *gw, const char *cluster_name) {

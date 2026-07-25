@@ -4573,6 +4573,7 @@ All 15 test suites passing, 0 warnings.
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">route_connect dialing</span></td><td>✅</td><td>Unlocked TCP+handshake (~5s) with no mutex — <code>route_reconnect_thread</code> (~1s) overlapped dials; peer saw duplicate CONNECTs. Per-target <code>dialing</code> like MQTT; begin before unlock, end on all exits.</td></tr>
+<tr><td><span class="component-name">gateway connect dialing</span></td><td>✅</td><td>Same unlocked dial gap on three connect paths. Per-cluster <code>cluster_dialing</code> + shared <code>gw_unlocked_dial_install</code>.</td></tr>
 </table>
 </div>
 
