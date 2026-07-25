@@ -92,11 +92,6 @@ static int cluster_add_node_impl(cmq_cluster_t *cluster, const char *id,
     if (port <= 0 || port > 65535) return -1;
     cmq_mutex_lock(&cluster->lock);
 
-    if (cluster->count >= CMQ_CLUSTER_MAX_NODES) {
-        cmq_mutex_unlock(&cluster->lock);
-        return -1;
-    }
-
     for (size_t i = 0; i < cluster->count; i++) {
         if (strcmp(cluster->nodes[i].id, id) == 0) {
             /* snprintf clears leftover bytes when the new addr is shorter. */
@@ -107,6 +102,11 @@ static int cluster_add_node_impl(cmq_cluster_t *cluster, const char *id,
             cmq_mutex_unlock(&cluster->lock);
             return 0;
         }
+    }
+    /* Capacity applies only to inserts — full table must still upsert. */
+    if (cluster->count >= CMQ_CLUSTER_MAX_NODES) {
+        cmq_mutex_unlock(&cluster->lock);
+        return -1;
     }
 
     cmq_node_info_t *n = &cluster->nodes[cluster->count];

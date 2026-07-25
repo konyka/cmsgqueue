@@ -4441,6 +4441,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — cluster add_node upsert when full</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_cluster_add_node</span></td><td>✅</td><td>Capacity check ran before id lookup, so a full table (32) rejected updates to existing members' addr/port/heartbeat. Upsert first; reject only true inserts when full.</td></tr>
+</table>
+</div>
+
 
 
 
