@@ -4449,6 +4449,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — ev_run vs stop sticky state</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_ev_run / stop</span></td><td>✅</td><td><code>run</code> stored <code>running=1</code> unconditionally, wiping a prior <code>stop</code>. Worker <code>timeout_ms=-1</code> then hung in wait; thread-create rollback <code>stop+join</code> could deadlock. IDLE/RUN/STOP with CAS claim; stop is sticky until consumed.</td></tr>
+</table>
+</div>
+
 
 
 

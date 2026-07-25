@@ -46,6 +46,14 @@ static void ev_unpack_fd_gen(uint64_t u, int *fd, uint32_t *gen) {
     *gen = (uint32_t)(u >> 32);
 }
 
+/* running: IDLE↔RUN via CAS; STOP sticky until run claims or exits.
+   Plain running=0/1 lost a stop that raced before run set running=1. */
+enum {
+    CMQ_EV_RS_IDLE = 0,
+    CMQ_EV_RS_RUN  = 1,
+    CMQ_EV_RS_STOP = 2
+};
+
 struct cmq_ev_loop {
     int backend_fd;
     int wakeup_fd;   /* eventfd, or pipe read end */
@@ -65,6 +73,27 @@ struct cmq_ev_loop {
     atomic_int run_owned;   /* 1 while cmq_ev_run owns the loop */
     cmq_thread_t run_tid;   /* valid when run_owned — foil cross-thread del */
 };
+
+/* 0 = enter wait loop; -1 = pending stop (or nested run) — caller returns 0. */
+static int ev_run_claim(cmq_ev_loop_t *loop) {
+    for (;;) {
+        int st = cmq_atomic_load_int(&loop->running, CMQ_ATOMIC_ACQUIRE);
+        if (st == CMQ_EV_RS_STOP) {
+            cmq_atomic_store_int(&loop->running, CMQ_EV_RS_IDLE, CMQ_ATOMIC_RELEASE);
+            return -1;
+        }
+        if (st == CMQ_EV_RS_RUN)
+            return -1;
+        int expected = CMQ_EV_RS_IDLE;
+        if (cmq_atomic_cas_int(&loop->running, &expected, CMQ_EV_RS_RUN,
+                               CMQ_ATOMIC_ACQ_REL))
+            return 0;
+    }
+}
+
+static void ev_run_release(cmq_ev_loop_t *loop) {
+    cmq_atomic_store_int(&loop->running, CMQ_EV_RS_IDLE, CMQ_ATOMIC_RELEASE);
+}
 
 static void ev_run_enter(cmq_ev_loop_t *loop) {
     loop->run_tid = cmq_thread_self();
@@ -310,7 +339,7 @@ void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
     if (!loop) return;
     atomic_store_explicit(&loop->dying, 1, memory_order_release);
     /* Cannot use public stop/wakeup (begin_op fails once dying). */
-    cmq_atomic_store_int(&loop->running, 0, CMQ_ATOMIC_RELEASE);
+    cmq_atomic_store_int(&loop->running, CMQ_EV_RS_STOP, CMQ_ATOMIC_RELEASE);
     ev_wakeup_raw(loop);
     while (atomic_load_explicit(&loop->in_flight, memory_order_acquire) > 0) {
         struct timespec ts = {0, 1000000L};
@@ -511,12 +540,16 @@ int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
 int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
     if (!loop) return -1;
     if (ev_begin_op(loop) != 0) return -1;
-    cmq_atomic_store_int(&loop->running, 1, CMQ_ATOMIC_RELEASE);
+    if (ev_run_claim(loop) != 0) {
+        ev_end_op(loop);
+        return 0;
+    }
     ev_run_enter(loop);
 
     struct epoll_event events[CMQ_EV_MAX_EVENTS];
 
-    while (cmq_atomic_load_int(&loop->running, CMQ_ATOMIC_ACQUIRE)) {
+    while (cmq_atomic_load_int(&loop->running, CMQ_ATOMIC_ACQUIRE) ==
+           CMQ_EV_RS_RUN) {
         int wait_ms = timeout_ms;
 
         uint64_t now = cmq_ev_now_ms();
@@ -536,6 +569,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         int nfds = epoll_wait(loop->backend_fd, events, CMQ_EV_MAX_EVENTS, wait_ms);
         if (nfds < 0) {
             if (errno == EINTR) continue;
+            ev_run_release(loop);
             ev_run_leave(loop);
             ev_end_op(loop);
             return -1;
@@ -565,6 +599,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         if (timeout_ms >= 0) break;
     }
+    ev_run_release(loop);
     ev_run_leave(loop);
     ev_end_op(loop);
     return 0;
@@ -692,12 +727,16 @@ int cmq_ev_del(cmq_ev_loop_t *loop, int fd) {
 int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
     if (!loop) return -1;
     if (ev_begin_op(loop) != 0) return -1;
-    cmq_atomic_store_int(&loop->running, 1, CMQ_ATOMIC_RELEASE);
+    if (ev_run_claim(loop) != 0) {
+        ev_end_op(loop);
+        return 0;
+    }
     ev_run_enter(loop);
 
     struct kevent events[CMQ_EV_MAX_EVENTS];
 
-    while (cmq_atomic_load_int(&loop->running, CMQ_ATOMIC_ACQUIRE)) {
+    while (cmq_atomic_load_int(&loop->running, CMQ_ATOMIC_ACQUIRE) ==
+           CMQ_EV_RS_RUN) {
         int wait_ms = timeout_ms;
 
         uint64_t now = cmq_ev_now_ms();
@@ -725,6 +764,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
         int nfds = kevent(loop->backend_fd, NULL, 0, events, CMQ_EV_MAX_EVENTS, tsp);
         if (nfds < 0) {
             if (errno == EINTR) continue;
+            ev_run_release(loop);
             ev_run_leave(loop);
             ev_end_op(loop);
             return -1;
@@ -753,6 +793,7 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
 
         if (timeout_ms >= 0) break;
     }
+    ev_run_release(loop);
     ev_run_leave(loop);
     ev_end_op(loop);
     return 0;
@@ -886,7 +927,8 @@ int cmq_ev_timer_del(cmq_ev_loop_t *loop, int timer_id) {
 void cmq_ev_stop(cmq_ev_loop_t *loop) {
     if (!loop) return;
     if (ev_begin_op(loop) != 0) return;
-    cmq_atomic_store_int(&loop->running, 0, CMQ_ATOMIC_RELEASE);
+    /* STOP sticks until run claims/exits — never lose a pre-run stop. */
+    cmq_atomic_store_int(&loop->running, CMQ_EV_RS_STOP, CMQ_ATOMIC_RELEASE);
     ev_wakeup_raw(loop);
     ev_end_op(loop);
 }
