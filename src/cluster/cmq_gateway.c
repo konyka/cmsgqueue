@@ -743,7 +743,9 @@ size_t cmq_gateway_forward(cmq_gateway_t *gw, const char *target_cluster,
             fd = expect_fd;
         }
         if (fd < 0) {
+            /* Snapshotted peer vanished — count undelivered (align route). */
             cmq_mutex_unlock(&gw->io_locks[idx]);
+            deferred++;
             continue;
         }
         int wr = write_full(fd, data, len);
@@ -808,6 +810,7 @@ size_t cmq_gateway_broadcast(cmq_gateway_t *gw, const uint8_t *data, size_t len,
         }
         if (fd < 0) {
             cmq_mutex_unlock(&gw->io_locks[idx]);
+            deferred++;
             continue;
         }
         int wr = write_full(fd, data, len);

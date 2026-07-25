@@ -1279,7 +1279,10 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
             fd = expect_fd;
         }
         if (fd < 0) {
+            /* Snapshotted peer vanished — count undelivered so forward_op
+               returns -1 (else sent=0,eagain=0 looks like success). */
             cmq_mutex_unlock(&pool->io_locks[idx]);
+            deferred++;
             continue;
         }
         int wr = write_full(fd, data, len);

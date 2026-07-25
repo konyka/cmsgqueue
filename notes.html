@@ -4458,6 +4458,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — broadcast vanished-peer deferred</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route/gw broadcast validate</span></td><td>✅</td><td>After snapshot, identity fail under <code>io_lock</code> skipped the peer without incrementing <code>deferred</code>. <code>sent=0,eagain=0</code> looked like success; pure-inbound mesh then missed <code>forward_missed</code> and silently dropped remote-only PUBLISH. Count vanished peers as deferred (gateway forward/broadcast too).</td></tr>
+</table>
+</div>
+
 
 
 
