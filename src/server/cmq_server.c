@@ -746,24 +746,46 @@ static void worker_drain_teardowns(cmq_worker_t *w, int max_n) {
     }
 }
 
-/* Sync REQUEST blocks this worker's ev_run — drain mailbox and flush pending
-   write_buf so acceptor write-stall cannot TEARDOWN sibling clients. */
-static void worker_service_while_blocked(cmq_worker_t *w) {
+/* Flush pending write_buf on this worker (skip optional client). Caller must
+   not hold a route io_lock — flush may take pool→io on sibling routes. */
+static void worker_flush_pending_writes(cmq_worker_t *w, const cmq_client_t *skip) {
     if (!w) return;
-    worker_drain_teardowns(w, 8);
-    worker_drain_sends(w, CMQ_WORKER_WAKE_BATCH);
     enum { CMQ_FLUSH_SNAP = 32 };
     cmq_client_t *pend[CMQ_FLUSH_SNAP];
     int np = 0;
     cmq_mutex_lock(&w->clients_lock);
     for (int i = 0; i < w->clients_count && np < CMQ_FLUSH_SNAP; i++) {
         cmq_client_t *c = w->clients[i];
-        if (c && c->write_buf && c->write_pos < c->write_len)
+        if (!c || c == skip) continue;
+        if (c->write_buf && c->write_pos < c->write_len)
             pend[np++] = c;
     }
     cmq_mutex_unlock(&w->clients_lock);
     for (int i = 0; i < np; i++)
         client_flush_write_unlocked(pend[i]);
+}
+
+/* Refresh stall clocks only — safe while holding a route io_lock. */
+static void worker_touch_pending_write_stalls(cmq_worker_t *w,
+                                              const cmq_client_t *skip) {
+    if (!w) return;
+    cmq_mutex_lock(&w->clients_lock);
+    for (int i = 0; i < w->clients_count; i++) {
+        cmq_client_t *c = w->clients[i];
+        if (!c || c == skip) continue;
+        if (c->write_buf && c->write_pos < c->write_len)
+            client_mark_write_progress(c);
+    }
+    cmq_mutex_unlock(&w->clients_lock);
+}
+
+/* Sync REQUEST blocks this worker's ev_run — drain mailbox and flush pending
+   write_buf so acceptor write-stall cannot TEARDOWN sibling clients. */
+static void worker_service_while_blocked(cmq_worker_t *w) {
+    if (!w) return;
+    worker_drain_teardowns(w, 8);
+    worker_drain_sends(w, CMQ_WORKER_WAKE_BATCH);
+    worker_flush_pending_writes(w, NULL);
 }
 
 static void worker_wakeup_cb(int fd, int events, void *data) {
@@ -1639,6 +1661,15 @@ static int client_drain_write_sync(cmq_client_t *c) {
             continue;
         }
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            /* drain_sync parks owning ev_run — keep sibling write stalls alive. */
+            if (c->server && c->worker_id >= 0 && c->server->workers &&
+                c->worker_id < c->server->num_workers) {
+                cmq_worker_t *ow = &c->server->workers[c->worker_id];
+                if (route_io_idx < 0)
+                    worker_flush_pending_writes(ow, c);
+                else
+                    worker_touch_pending_write_stalls(ow, c);
+            }
             int wait_ms = (int)(CMQ_DRAIN_SYNC_MS - elapsed_ms);
             if (wait_ms > 200) wait_ms = 200;
             if (wait_ms < 1) goto out;
