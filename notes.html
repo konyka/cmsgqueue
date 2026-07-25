@@ -4532,6 +4532,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — full-table upsert (stream/ACL/leaf)</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">stream_add_consumer</span></td><td>✅</td><td>Capacity check before lookup rejected idempotent re-add when full (same class as mqtt/cluster). Cap applies to inserts only.</td></tr>
+<tr><td><span class="component-name">account export/import</span></td><td>✅</td><td>Same full-before-lookup bug on ACL reload/reconcile at 32 rules.</td></tr>
+<tr><td><span class="component-name">leaf_subscribe</span></td><td>✅</td><td>Same pattern at <code>CMQ_LEAF_MAX_SUBS</code> — dedup before capacity.</td></tr>
+</table>
+</div>
+
 
 
 

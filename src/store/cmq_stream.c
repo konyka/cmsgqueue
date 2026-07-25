@@ -220,15 +220,16 @@ static int stream_add_consumer_impl(cmq_stream_t *stream, const char *consumer_n
     size_t nlen = strnlen(consumer_name, CMQ_MAX_NAME);
     if (nlen == 0 || nlen >= CMQ_MAX_NAME) return -1;
     cmq_mutex_lock(&stream->lock);
-    if (stream->consumer_count >= CMQ_MAX_CONSUMERS) {
-        cmq_mutex_unlock(&stream->lock);
-        return -1;
-    }
+    /* Cap applies to inserts only — full table must still upsert. */
     for (size_t i = 0; i < stream->consumer_count; i++) {
         if (strcmp(stream->consumers[i].name, consumer_name) == 0) {
             cmq_mutex_unlock(&stream->lock);
             return 0;
         }
+    }
+    if (stream->consumer_count >= CMQ_MAX_CONSUMERS) {
+        cmq_mutex_unlock(&stream->lock);
+        return -1;
     }
     cmq_consumer_entry_t *c = &stream->consumers[stream->consumer_count++];
     snprintf(c->name, sizeof(c->name), "%s", consumer_name);

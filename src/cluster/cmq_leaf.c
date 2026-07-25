@@ -857,12 +857,7 @@ static int leaf_subscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
         free(copy);
         return -1;
     }
-    if (leaf->sub_count >= CMQ_LEAF_MAX_SUBS) {
-        cmq_mutex_unlock(&leaf->lock);
-        cmq_mutex_unlock(&leaf->hub_io_lock);
-        free(copy);
-        return -1;
-    }
+    /* Cap applies to inserts only — full table must still upsert. */
     for (size_t i = 0; i < leaf->sub_count; i++) {
         if (strcmp(leaf->subs[i], subject) == 0) {
             cmq_mutex_unlock(&leaf->lock);
@@ -870,6 +865,12 @@ static int leaf_subscribe_impl(cmq_leaf_node_t *leaf, const char *subject) {
             free(copy);
             return 0;
         }
+    }
+    if (leaf->sub_count >= CMQ_LEAF_MAX_SUBS) {
+        cmq_mutex_unlock(&leaf->lock);
+        cmq_mutex_unlock(&leaf->hub_io_lock);
+        free(copy);
+        return -1;
     }
     uint32_t sub_id = 0;
     if (leaf_mint_sub_id(leaf, &sub_id) != 0) {

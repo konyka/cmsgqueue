@@ -483,7 +483,7 @@ static int account_add_export_impl(cmq_account_manager_t *mgr, const char *accou
     }
     cmq_account_perms_t *p = find_or_create_perms(mgr, account);
     if (!p) { cmq_mutex_unlock(&mgr->lock); return -1; }
-    if (p->export_count >= CMQ_ACCOUNT_MAX_EXPORTS) { cmq_mutex_unlock(&mgr->lock); return -1; }
+    /* Cap applies to inserts only — full table must still upsert. */
     for (size_t i = 0; i < p->export_count; i++) {
         if (strcmp(p->exports[i].subject, subject) == 0 &&
             strcmp(p->exports[i].dest_account, dest_account) == 0) {
@@ -491,6 +491,7 @@ static int account_add_export_impl(cmq_account_manager_t *mgr, const char *accou
             return 0;
         }
     }
+    if (p->export_count >= CMQ_ACCOUNT_MAX_EXPORTS) { cmq_mutex_unlock(&mgr->lock); return -1; }
     cmq_account_export_t *e = &p->exports[p->export_count++];
     memset(e, 0, sizeof(*e));
     size_t slen = strlen(subject);
@@ -547,7 +548,7 @@ static int account_add_import_impl(cmq_account_manager_t *mgr, const char *accou
     }
     cmq_account_perms_t *p = find_or_create_perms(mgr, account);
     if (!p) { cmq_mutex_unlock(&mgr->lock); return -1; }
-    if (p->import_count >= CMQ_ACCOUNT_MAX_IMPORTS) { cmq_mutex_unlock(&mgr->lock); return -1; }
+    /* Cap applies to inserts only — full table must still upsert. */
     for (size_t i = 0; i < p->import_count; i++) {
         if (strcmp(p->imports[i].subject, subject) == 0 &&
             strcmp(p->imports[i].source_account, source_account) == 0) {
@@ -555,6 +556,7 @@ static int account_add_import_impl(cmq_account_manager_t *mgr, const char *accou
             return 0;
         }
     }
+    if (p->import_count >= CMQ_ACCOUNT_MAX_IMPORTS) { cmq_mutex_unlock(&mgr->lock); return -1; }
     cmq_account_import_t *imp = &p->imports[p->import_count++];
     memset(imp, 0, sizeof(*imp));
     size_t slen = strlen(subject);
