@@ -4454,6 +4454,7 @@ All 15 test suites passing, 0 warnings.
 <table>
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">cmq_ev_run / stop</span></td><td>✅</td><td><code>run</code> stored <code>running=1</code> unconditionally, wiping a prior <code>stop</code>. Worker <code>timeout_ms=-1</code> then hung in wait; thread-create rollback <code>stop+join</code> could deadlock. IDLE/RUN/STOP with CAS claim; stop is sticky until consumed.</td></tr>
+<tr><td><span class="component-name">ev_run_release</span></td><td>✅</td><td>Unconditional <code>store(IDLE)</code> on timed/error exit wiped a concurrent STOP so the next <code>run</code> could start. CAS <code>RUN→IDLE</code> (preserve STOP) or consume <code>STOP→IDLE</code> when the wait loop exited on stop.</td></tr>
 </table>
 </div>
 

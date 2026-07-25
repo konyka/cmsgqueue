@@ -91,8 +91,21 @@ static int ev_run_claim(cmq_ev_loop_t *loop) {
     }
 }
 
+/* Timed/error exit must CAS RUN→IDLE only — a racing STOP must stick.
+   Stop-driven exit consumes STOP→IDLE so the next claim can start. */
 static void ev_run_release(cmq_ev_loop_t *loop) {
-    cmq_atomic_store_int(&loop->running, CMQ_EV_RS_IDLE, CMQ_ATOMIC_RELEASE);
+    int st = cmq_atomic_load_int(&loop->running, CMQ_ATOMIC_ACQUIRE);
+    if (st == CMQ_EV_RS_STOP) {
+        int expected = CMQ_EV_RS_STOP;
+        (void)cmq_atomic_cas_int(&loop->running, &expected, CMQ_EV_RS_IDLE,
+                                 CMQ_ATOMIC_ACQ_REL);
+        return;
+    }
+    if (st == CMQ_EV_RS_RUN) {
+        int expected = CMQ_EV_RS_RUN;
+        (void)cmq_atomic_cas_int(&loop->running, &expected, CMQ_EV_RS_IDLE,
+                                 CMQ_ATOMIC_ACQ_REL);
+    }
 }
 
 static void ev_run_enter(cmq_ev_loop_t *loop) {
