@@ -394,13 +394,37 @@ static void watcher_clear(cmq_ev_loop_t *loop, int fd) {
     cmq_mutex_unlock(&loop->watchers_lock);
 }
 
-/* Clear only if gen still owns the slot — fail paths must not wipe a newer publish. */
+/* Clear only if gen still owns the slot — under one lock (no check-then-act). */
 static void watcher_clear_if_gen(cmq_ev_loop_t *loop, int fd, uint32_t gen) {
     cmq_mutex_lock(&loop->watchers_lock);
-    int still = (loop->watchers[fd].gen == gen);
+    if (loop->watchers[fd].gen == gen) {
+        loop->watchers[fd].fd = -1;
+        loop->watchers[fd].events = 0;
+        loop->watchers[fd].cb = NULL;
+        loop->watchers[fd].data = NULL;
+        /* Keep gen — same as watcher_clear. */
+    }
     cmq_mutex_unlock(&loop->watchers_lock);
-    if (still)
-        watcher_clear(loop, fd);
+}
+
+/* Restore publish only if expect_gen still owns fd. Returns new gen or 0. */
+static uint32_t watcher_publish_if_gen(cmq_ev_loop_t *loop, int fd,
+                                        uint32_t expect_gen, int events,
+                                        cmq_ev_cb_t cb, void *data) {
+    cmq_mutex_lock(&loop->watchers_lock);
+    if (loop->watchers[fd].gen != expect_gen || loop->watchers[fd].fd != fd) {
+        cmq_mutex_unlock(&loop->watchers_lock);
+        return 0;
+    }
+    uint32_t g = loop->watchers[fd].gen + 1;
+    if (g == 0) g = 1;
+    loop->watchers[fd].fd = fd;
+    loop->watchers[fd].events = events;
+    loop->watchers[fd].cb = cb;
+    loop->watchers[fd].data = data;
+    loop->watchers[fd].gen = g;
+    cmq_mutex_unlock(&loop->watchers_lock);
+    return g;
 }
 
 static int watcher_snapshot(cmq_ev_loop_t *loop, int fd, uint32_t expect_gen,
@@ -545,15 +569,12 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
         /* fd may have been dropped from the set; re-ADD once. */
         if (errno != ENOENT ||
             epoll_ctl(loop->backend_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
-            /* Restore only if our publish still owns the slot — concurrent
-               del must not resurrect old_cb after clear. */
-            cmq_mutex_lock(&loop->watchers_lock);
-            int ours =
-                (loop->watchers[fd].gen == gen && loop->watchers[fd].fd == fd);
-            cmq_mutex_unlock(&loop->watchers_lock);
-            if (ours && was_present && old_events != 0) {
-                uint32_t rgen =
-                    watcher_publish(loop, fd, old_events, old_cb, old_data);
+            /* Restore only if our publish still owns the slot (atomic). */
+            uint32_t rgen = 0;
+            if (was_present && old_events != 0)
+                rgen = watcher_publish_if_gen(loop, fd, gen, old_events,
+                                              old_cb, old_data);
+            if (rgen != 0) {
                 struct epoll_event old_ev;
                 memset(&old_ev, 0, sizeof(old_ev));
                 old_ev.events = (uint32_t)cmq_to_epoll_events(old_events);
@@ -566,14 +587,12 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
                     ev_end_op(loop);
                     return -1;
                 }
+                (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
+                watcher_clear_if_gen(loop, fd, rgen);
+            } else {
+                (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
+                watcher_clear_if_gen(loop, fd, gen);
             }
-            /* Drop leftover interest; clear only if we still own gen. */
-            (void)epoll_ctl(loop->backend_fd, EPOLL_CTL_DEL, fd, NULL);
-            cmq_mutex_lock(&loop->watchers_lock);
-            int still_ours = (loop->watchers[fd].gen == gen);
-            cmq_mutex_unlock(&loop->watchers_lock);
-            if (still_ours)
-                watcher_clear(loop, fd);
             ev_end_op(loop);
             return -1;
         }
@@ -760,31 +779,21 @@ int cmq_ev_mod(cmq_ev_loop_t *loop, int fd, int events, cmq_ev_cb_t cb, void *da
     kqueue_del_filters(loop->backend_fd, fd, old_events);
 
     if (kqueue_add_filters(loop->backend_fd, fd, events, gen) != 0) {
-        cmq_mutex_lock(&loop->watchers_lock);
-        int ours =
-            (loop->watchers[fd].gen == gen && loop->watchers[fd].fd == fd);
-        cmq_mutex_unlock(&loop->watchers_lock);
-        if (ours && old_events != 0) {
-            uint32_t rgen =
-                watcher_publish(loop, fd, old_events, old_cb, old_data);
+        uint32_t rgen = 0;
+        if (old_events != 0)
+            rgen = watcher_publish_if_gen(loop, fd, gen, old_events,
+                                          old_cb, old_data);
+        if (rgen != 0) {
             if (kqueue_add_filters(loop->backend_fd, fd, old_events, rgen) != 0) {
                 kqueue_del_filters(loop->backend_fd, fd, old_events);
-                cmq_mutex_lock(&loop->watchers_lock);
-                int still = (loop->watchers[fd].gen == rgen);
-                cmq_mutex_unlock(&loop->watchers_lock);
-                if (still)
-                    watcher_clear(loop, fd);
+                watcher_clear_if_gen(loop, fd, rgen);
             } else if (kqueue_confirm_armed(loop, fd, rgen, old_events) != 0) {
                 ev_end_op(loop);
                 return -1;
             }
         } else {
             kqueue_del_filters(loop->backend_fd, fd, events);
-            cmq_mutex_lock(&loop->watchers_lock);
-            int still = (loop->watchers[fd].gen == gen);
-            cmq_mutex_unlock(&loop->watchers_lock);
-            if (still)
-                watcher_clear(loop, fd);
+            watcher_clear_if_gen(loop, fd, gen);
         }
         ev_end_op(loop);
         return -1;

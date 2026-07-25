@@ -4472,6 +4472,7 @@ All 15 test suites passing, 0 warnings.
 <tr><th>Item</th><th>Status</th><th>Notes</th></tr>
 <tr><td><span class="component-name">cmq_ev_mod</span></td><td>✅</td><td>Publish-then-epoll/kevent raced <code>del</code> (clear-before-DEL): kernel interest could remain after watcher clear while mod returned 0 (silent drops). Failure restore could resurrect <code>old_cb</code> after clear. Confirm gen+fd after arm; repair or DEL; restore only if publish still owned.</td></tr>
 <tr><td><span class="component-name">cmq_ev_add</span></td><td>✅</td><td>Same publish-then-ctl gap as mod (no confirm; fail path unconditional clear). Align with <code>*_confirm_armed</code>; clear only if gen still owns the slot.</td></tr>
+<tr><td><span class="component-name">watcher_clear_if_gen</span></td><td>✅</td><td>Check-then-unlock-then-clear raced a newer publish and wiped it while kernel interest remained. Clear under one lock; mod restore uses <code>watcher_publish_if_gen</code>.</td></tr>
 </table>
 </div>
 
