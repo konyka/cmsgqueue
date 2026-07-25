@@ -4568,6 +4568,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — route dialing lock</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">route_connect dialing</span></td><td>✅</td><td>Unlocked TCP+handshake (~5s) with no mutex — <code>route_reconnect_thread</code> (~1s) overlapped dials; peer saw duplicate CONNECTs. Per-target <code>dialing</code> like MQTT; begin before unlock, end on all exits.</td></tr>
+</table>
+</div>
+
 
 
 

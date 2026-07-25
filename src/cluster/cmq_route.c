@@ -201,6 +201,7 @@ typedef struct {
     char node_id[CMQ_NODE_ID_SIZE];
     char addr[CMQ_NODE_ADDR_SIZE];
     int port;
+    int dialing; /* 1 while unlocked TCP+handshake in progress */
 } cmq_route_target_t;
 
 /* Per-node cancel token — independent of targets[] so add_conn/disconnect
@@ -426,7 +427,31 @@ static int route_set_target(cmq_route_pool_t *pool, const char *node_id,
     snprintf(t->node_id, sizeof(t->node_id), "%s", node_id);
     snprintf(t->addr, sizeof(t->addr), "%s", addr);
     t->port = port;
+    t->dialing = 0;
     return 0;
+}
+
+/* Caller holds pool->lock. Returns 0 and sets dialing, or -1 if already dialing. */
+static int route_target_dial_begin(cmq_route_pool_t *pool, const char *node_id) {
+    for (size_t i = 0; i < pool->target_count; i++) {
+        if (strcmp(pool->targets[i].node_id, node_id) != 0) continue;
+        if (pool->targets[i].dialing) return -1;
+        pool->targets[i].dialing = 1;
+        return 0;
+    }
+    return -1;
+}
+
+static void route_target_dial_end(cmq_route_pool_t *pool, const char *node_id) {
+    if (!pool || !node_id) return;
+    cmq_mutex_lock(&pool->lock);
+    for (size_t i = 0; i < pool->target_count; i++) {
+        if (strcmp(pool->targets[i].node_id, node_id) == 0) {
+            pool->targets[i].dialing = 0;
+            break;
+        }
+    }
+    cmq_mutex_unlock(&pool->lock);
 }
 
 /* Publish a peer into a slot. Caller holds pool->lock.
@@ -589,25 +614,36 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
     }
     uint32_t cgen = 0, cepoch = 0;
     route_cancel_snap(pool, node_id, &cgen, &cepoch);
+    /* Serialize unlocked dial — reconnect overlaps connect+handshake (~5s). */
+    if (route_target_dial_begin(pool, node_id) != 0) {
+        cmq_mutex_unlock(&pool->lock);
+        return -1;
+    }
     cmq_mutex_unlock(&pool->lock);
 
     /* Connect + handshake outside the pool lock so broadcast can proceed. */
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        route_target_dial_end(pool, node_id);
+        return -1;
+    }
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;
     sa.sin_port = htons((uint16_t)port);
     if (inet_pton(AF_INET, addr, &sa.sin_addr) != 1) {
         close(fd);
+        route_target_dial_end(pool, node_id);
         return -1;
     }
     if (cmq_connect_timeout(fd, (struct sockaddr *)&sa, sizeof(sa),
                              CMQ_ROUTE_CONNECT_MS) != 0) {
         close(fd);
+        route_target_dial_end(pool, node_id);
         return -1;
     }
     if (cmq_peer_handshake(fd, auth_user, auth_pass, CMQ_FLAG_ROUTE) != 0) {
         close(fd);
+        route_target_dial_end(pool, node_id);
         return -1;
     }
     set_nonblock(fd);
@@ -615,6 +651,7 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
     /* Drain may have started during unlocked dial — do not install egress. */
     if (route_dial_gated(pool)) {
         close(fd);
+        route_target_dial_end(pool, node_id);
         return -1;
     }
 
@@ -625,6 +662,7 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
         route_dial_gated(pool)) {
         cmq_mutex_unlock(&pool->lock);
         close(fd);
+        route_target_dial_end(pool, node_id);
         return -1;
     }
     for (size_t i = 0; i < pool->conn_count; i++) {
@@ -638,6 +676,7 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
             if (!route_endpoint_current(pool, node_id, addr, port)) {
                 cmq_mutex_unlock(&pool->lock);
                 close(fd);
+                route_target_dial_end(pool, node_id);
                 return -1;
             }
             if (idx < pool->conn_count) {
@@ -662,6 +701,7 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
                     if (live) {
                         cmq_mutex_unlock(&pool->lock);
                         close(fd);
+                        route_target_dial_end(pool, node_id);
                         return 0;
                     }
                     /* Dead / wrong-ep: reclaim from locked result only. */
@@ -676,6 +716,7 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
         route_slot_close(pool, i);
         route_slot_install(pool, i, node_id, fd, 1, 1, addr, port);
         cmq_mutex_unlock(&pool->lock);
+        route_target_dial_end(pool, node_id);
         return 0;
     }
     /* Reuse empty / fd<0 tombstone before growing (not staged fd>=0). */
@@ -690,6 +731,7 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
         route_slot_close(pool, i);
         route_slot_install(pool, i, node_id, fd, 1, 1, addr, port);
         cmq_mutex_unlock(&pool->lock);
+        route_target_dial_end(pool, node_id);
         return 0;
     }
     if (pool->conn_count >= CMQ_ROUTE_MAX_CONNS) {
@@ -704,6 +746,7 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
             if (!route_endpoint_current(pool, node_id, addr, port)) {
                 cmq_mutex_unlock(&pool->lock);
                 close(fd);
+                route_target_dial_end(pool, node_id);
                 return -1;
             }
             cmq_mutex_lock(&pool->io_locks[i]);
@@ -718,17 +761,20 @@ static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
                 route_slot_close(pool, i);
                 route_slot_install(pool, i, node_id, fd, 1, 1, addr, port);
                 cmq_mutex_unlock(&pool->lock);
+                route_target_dial_end(pool, node_id);
                 return 0;
             }
             i++;
         }
         cmq_mutex_unlock(&pool->lock);
         close(fd);
+        route_target_dial_end(pool, node_id);
         return -1;
     }
     size_t idx = pool->conn_count++;
     route_slot_install(pool, idx, node_id, fd, 1, 1, addr, port);
     cmq_mutex_unlock(&pool->lock);
+    route_target_dial_end(pool, node_id);
     return 0;
 }
 
