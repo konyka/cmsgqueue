@@ -2584,7 +2584,9 @@ static void deliver_coro_func(void *arg) {
         cmq_deliver_tgt_t *t = &ctx->targets[i];
         if (!deliver_tgt_accepts_subject(t, ctx->subject))
             continue;
-        if (!cmq_account_may_deliver(srv->accounts, ctx->pub_account,
+        /* Align deliver_targets_sync — skip stale publisher epoch (no drop). */
+        if (!pub_account_epoch_live(srv, ctx->pub_account, ctx->pub_epoch) ||
+            !cmq_account_may_deliver(srv->accounts, ctx->pub_account,
                                       t->account_name, ctx->subject))
             continue;
         cmq_patch_message_sub_id(ctx->frame, t->sub_id);
@@ -3057,7 +3059,6 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
-    credit_msgs_in(srv, c, msg_len);
 
     /* Cluster forward only after local snapshot succeeded. */
     if (!c->is_route) {
@@ -3087,7 +3088,11 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         uint8_t *coro_headers = NULL;
         if (!coro_payload) {
             free(tgts);
-            cmq_send_error(c, "delivery failed");
+            /* Align sync — cluster already has the message. */
+            if (route_sent > 0)
+                credit_msgs_in(srv, c, msg_len);
+            else
+                cmq_send_error(c, "delivery failed");
             return;
         }
         if (msg_len > 0) memcpy(coro_payload, msg_payload, msg_len);
@@ -3096,7 +3101,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             if (!coro_headers) {
                 free(coro_payload);
                 free(tgts);
-                cmq_send_error(c, "delivery failed");
+                if (route_sent > 0)
+                    credit_msgs_in(srv, c, msg_len);
+                else
+                    cmq_send_error(c, "delivery failed");
                 return;
             }
             memcpy(coro_headers, headers, headers_len);
@@ -3110,8 +3118,13 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                        route_sent > 0 ? 1 : 0) != 0) {
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
-            if (route_sent == 0)
+            if (route_sent > 0)
+                credit_msgs_in(srv, c, msg_len);
+            else
                 cmq_send_error(c, "delivery failed");
+        } else {
+            /* Async accepted or sync-fallback delivered — align BATCH. */
+            credit_msgs_in(srv, c, msg_len);
         }
         return;
     }
@@ -3122,8 +3135,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                   CMQ_ATOMIC_RELAXED);
         /* Cluster already has the message — do not ERROR the publisher. */
-        if (route_sent == 0)
+        if (route_sent > 0)
+            credit_msgs_in(srv, c, msg_len);
+        else
             cmq_send_error(c, "delivery failed");
+    } else {
+        credit_msgs_in(srv, c, msg_len);
     }
     free(tgts);
 }

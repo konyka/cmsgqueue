@@ -4609,6 +4609,16 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — local PUBLISH msgs_in after deliver</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">PUBLISH local msgs_in</span></td><td>✅</td><td>Local-target path credited before coro malloc/spawn or <code>deliver_targets_sync</code> — OOM/total fail with <code>route_sent==0</code> still bumped stats; <code>route_rc==-2</code> after credit leaked. Credit after deliver/spawn success or cluster-only success; coro OOM suppresses ERROR when clustered.</td></tr>
+<tr><td><span class="component-name">deliver_coro epoch</span></td><td>✅</td><td>Coro fan-out lacked <code>pub_account_epoch_live</code> (sync has it) — stale publisher epoch inflated <code>stat_messages_dropped</code>. Skip like sync.</td></tr>
+</table>
+</div>
+
+
 
 
 
