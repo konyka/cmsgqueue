@@ -5566,13 +5566,15 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
             cmq_worker_t *w = &srv->workers[wi];
             cmq_mutex_lock(&w->clients_lock);
             int wn = w->clients_count;
-            enum { CMQ_KA_STACK = 128, CMQ_KA_OVERFLOW = 64 };
+            enum { CMQ_KA_STACK = 128, CMQ_KA_OVERFLOW = 64, CMQ_KA_EXTRA = 64 };
             typedef struct { uint32_t id; uint32_t gen; } cmq_doom_t;
             cmq_doom_t stack_doomed[CMQ_KA_STACK];
             cmq_doom_t stack_overflow[CMQ_KA_OVERFLOW];
+            cmq_doom_t stack_extra[CMQ_KA_EXTRA];
             cmq_doom_t *doomed = NULL;
             int ndoomed = 0;
             int noverflow = 0;
+            int nextra = 0;
             int doomed_heap = 0;
             if (wn > 0) {
                 doomed = stack_doomed;
@@ -5617,12 +5619,16 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                         noverflow++;
                         if (c->fd >= 0)
                             shutdown(c->fd, SHUT_RDWR);
-                    } else {
-                        /* Beyond overflow slots: SHUT_RDWR only. Never push
-                           TEARDOWN under clients_lock (AB-BA with msg_lock).
-                           EOF / next keepalive tick completes reclaim. */
+                    } else if (nextra < CMQ_KA_EXTRA) {
+                        /* Beyond overflow: record id+gen; TEARDOWN after unlock
+                           (never push under clients_lock — AB-BA with msg_lock). */
+                        stack_extra[nextra].id = c->id;
+                        stack_extra[nextra].gen = c->conn_gen;
+                        nextra++;
                         if (c->fd >= 0)
                             shutdown(c->fd, SHUT_RDWR);
+                    } else if (c->fd >= 0) {
+                        shutdown(c->fd, SHUT_RDWR);
                     }
                 }
             }
@@ -5665,6 +5671,9 @@ static void keepalive_timer_cb(int timer_id, int events, void *data) {
                     cmq_mutex_unlock(&w->clients_lock);
                 }
             }
+            for (int i = 0; i < nextra; i++)
+                worker_teardown_or_shutdown(w, stack_extra[i].id,
+                                             stack_extra[i].gen);
             if (doomed_heap)
                 free(doomed);
         }

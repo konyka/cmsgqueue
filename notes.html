@@ -4514,6 +4514,15 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — cluster name/self_id copy · KA extra TEARDOWN</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">cmq_cluster_name/self_id</span></td><td>✅</td><td>Bare interior getters without <code>begin_op</code> raced <code>destroy</code> (same class as leaf hub_addr). Copy-out under begin_op+lock.</td></tr>
+<tr><td><span class="component-name">KA doom &gt;192</span></td><td>✅</td><td>OOM snapshot path beyond stack+overflow only <code>shutdown</code>d — ghost subs until EOF. Record id+gen in <code>stack_extra</code> and <code>worker_teardown_or_shutdown</code> after unlock.</td></tr>
+</table>
+</div>
+
 
 
 

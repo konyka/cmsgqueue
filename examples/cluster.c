@@ -10,8 +10,12 @@
 static void demo_cluster(void) {
     printf("=== Cluster Membership Demo ===\n");
     cmq_cluster_t *cluster = cmq_cluster_create("dc1", "node-1");
-    printf("Created cluster '%s', self_id='%s'\n",
-           cmq_cluster_name(cluster), cmq_cluster_self_id(cluster));
+    char cname[64], self[CMQ_NODE_ID_SIZE];
+    if (cmq_cluster_name(cluster, cname, sizeof(cname)) != 0)
+        cname[0] = '\0';
+    if (cmq_cluster_self_id(cluster, self, sizeof(self)) != 0)
+        self[0] = '\0';
+    printf("Created cluster '%s', self_id='%s'\n", cname, self);
 
     cmq_cluster_add_node(cluster, "node-2", "10.0.0.2", 7654);
     cmq_cluster_add_node(cluster, "node-3", "10.0.0.3", 7654);

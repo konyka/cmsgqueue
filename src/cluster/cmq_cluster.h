@@ -30,8 +30,9 @@ typedef struct cmq_cluster cmq_cluster_t;
 cmq_cluster_t *cmq_cluster_create(const char *cluster_name, const char *self_id);
 void cmq_cluster_destroy(cmq_cluster_t *cluster);
 
-const char *cmq_cluster_name(cmq_cluster_t *cluster);
-const char *cmq_cluster_self_id(cmq_cluster_t *cluster);
+/* Copy-out under begin_op — never return an interior pointer (destroy UAF). */
+int cmq_cluster_name(cmq_cluster_t *cluster, char *out, size_t out_len);
+int cmq_cluster_self_id(cmq_cluster_t *cluster, char *out, size_t out_len);
 
 int cmq_cluster_add_node(cmq_cluster_t *cluster, const char *id,
                           const char *addr, int port);

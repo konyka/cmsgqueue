@@ -72,16 +72,38 @@ void cmq_cluster_destroy(cmq_cluster_t *cluster) {
     free(cluster);
 }
 
-const char *cmq_cluster_name(cmq_cluster_t *cluster) {
-    if (!cluster || atomic_load_explicit(&cluster->dying, memory_order_acquire))
-        return NULL;
-    return cluster->name;
+int cmq_cluster_name(cmq_cluster_t *cluster, char *out, size_t out_len) {
+    if (!cluster || !out || out_len == 0) return -1;
+    if (cluster_begin_op(cluster) != 0) return -1;
+    cmq_mutex_lock(&cluster->lock);
+    size_t n = strnlen(cluster->name, sizeof(cluster->name));
+    if (n + 1 > out_len) {
+        cmq_mutex_unlock(&cluster->lock);
+        cluster_end_op(cluster);
+        return -1;
+    }
+    memcpy(out, cluster->name, n);
+    out[n] = '\0';
+    cmq_mutex_unlock(&cluster->lock);
+    cluster_end_op(cluster);
+    return 0;
 }
 
-const char *cmq_cluster_self_id(cmq_cluster_t *cluster) {
-    if (!cluster || atomic_load_explicit(&cluster->dying, memory_order_acquire))
-        return NULL;
-    return cluster->self_id;
+int cmq_cluster_self_id(cmq_cluster_t *cluster, char *out, size_t out_len) {
+    if (!cluster || !out || out_len == 0) return -1;
+    if (cluster_begin_op(cluster) != 0) return -1;
+    cmq_mutex_lock(&cluster->lock);
+    size_t n = strnlen(cluster->self_id, sizeof(cluster->self_id));
+    if (n + 1 > out_len) {
+        cmq_mutex_unlock(&cluster->lock);
+        cluster_end_op(cluster);
+        return -1;
+    }
+    memcpy(out, cluster->self_id, n);
+    out[n] = '\0';
+    cmq_mutex_unlock(&cluster->lock);
+    cluster_end_op(cluster);
+    return 0;
 }
 
 static int cluster_add_node_impl(cmq_cluster_t *cluster, const char *id,

@@ -13,8 +13,11 @@
 TEST(cluster, create_destroy) {
     cmq_cluster_t *c = cmq_cluster_create("test-cluster", "node-1");
     ASSERT_NOT_NULL(c);
-    ASSERT_STR_EQ(cmq_cluster_name(c), "test-cluster");
-    ASSERT_STR_EQ(cmq_cluster_self_id(c), "node-1");
+    char name[64], self[CMQ_NODE_ID_SIZE];
+    ASSERT_EQ(cmq_cluster_name(c, name, sizeof(name)), 0);
+    ASSERT_EQ(cmq_cluster_self_id(c, self, sizeof(self)), 0);
+    ASSERT_STR_EQ(name, "test-cluster");
+    ASSERT_STR_EQ(self, "node-1");
     cmq_cluster_destroy(c);
 }
 
