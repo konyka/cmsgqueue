@@ -4560,6 +4560,14 @@ All 15 test suites passing, 0 warnings.
 </table>
 </div>
 
+<div class="phase">
+  <h2>Phase — ERROR skips activity refresh</h2>
+<table>
+<tr><th>Item</th><th>Status</th><th>Notes</th></tr>
+<tr><td><span class="component-name">send_local ERROR</span></td><td>✅</td><td>Fail-closed ERROR refreshed <code>last_activity_ms</code> while still CONNECTED, delaying CLOSING idle reclaim (same class as DISCONNECT). Skip activity touch for ERROR frames too.</td></tr>
+</table>
+</div>
+
 
 
 

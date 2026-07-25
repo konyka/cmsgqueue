@@ -1624,9 +1624,11 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
         free(wsbuf);
     }
     /* Outbound keepalive refresh only for CONNECTED (INIT must stay frozen).
-       DISCONNECT must not refresh — CLOSING reclaim uses activity idle. */
+       DISCONNECT/ERROR must not refresh — CLOSING reclaim uses activity idle. */
     if (rc == 0 && client_state(c) == CMQ_CLIENT_CONNECTED &&
-        !(len >= CMQ_PROTO_HDR_SIZE && data[4] == (uint8_t)CMQ_OP_DISCONNECT))
+        !(len >= CMQ_PROTO_HDR_SIZE &&
+          (data[4] == (uint8_t)CMQ_OP_DISCONNECT ||
+           data[4] == (uint8_t)CMQ_OP_ERROR)))
         client_touch_activity(c);
     return rc;
 }
