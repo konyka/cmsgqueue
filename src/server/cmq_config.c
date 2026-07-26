@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
@@ -40,10 +41,14 @@ static void strip_comments(char *line) {
     }
 }
 
+static void cfg_free_owned(const char *ptr) {
+    free((void *)(uintptr_t)ptr);
+}
+
 static int cfg_set_str(const char **dst, const char *value) {
     char *copy = strdup(value);
     if (!copy) return -1;
-    free((void *)*dst);
+    cfg_free_owned(*dst);
     *dst = copy;
     return 0;
 }
@@ -59,7 +64,7 @@ static int cfg_eq_ci(const char *a, const char *b) {
     return *a == '\0' && *b == '\0';
 }
 
-/* Names (README) or 0..5 — atoi("info") is 0 and must not mean TRACE. */
+/* Names (README) or 0..5 - atoi("info") is 0 and must not mean TRACE. */
 static int parse_log_level(const char *value, int *out) {
     if (!value || !out) return -1;
     if (cfg_eq_ci(value, "trace")) { *out = 0; return 0; }
@@ -79,31 +84,42 @@ static int parse_log_level(const char *value, int *out) {
     return 0;
 }
 
+static int parse_int_range(const char *value, int min, int max, int *out) {
+    if (!value || !out || min > max) return -1;
+    char *end = NULL;
+    long v = strtol(value, &end, 10);
+    if (!end || end == value || *end != '\0' || v < min || v > max)
+        return -1;
+    *out = (int)v;
+    return 0;
+}
+
 static int parse_key_value(const char *key, const char *value, cmq_config_t *config) {
     if (strcmp(key, "host") == 0) {
         return cfg_set_str(&config->host, value);
     } else if (strcmp(key, "port") == 0) {
-        config->port = atoi(value);
+        return parse_int_range(value, 0, 65535, &config->port);
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
-        config->num_threads = atoi(value);
+        return parse_int_range(value, 0, 64, &config->num_threads);
     } else if (strcmp(key, "max_clients") == 0) {
-        config->max_clients = atoi(value);
+        return parse_int_range(value, 0, CMQ_MAX_CLIENTS_LIMIT, &config->max_clients);
     } else if (strcmp(key, "max_payload_size") == 0) {
-        config->max_payload_size = atoi(value);
+        return parse_int_range(value, 0, CMQ_MAX_PAYLOAD_LIMIT, &config->max_payload_size);
     } else if (strcmp(key, "max_subs_per_client") == 0) {
-        config->max_subs_per_client = atoi(value);
+        return parse_int_range(value, 0, CMQ_DEFAULT_MAX_SUBS_PER_CLIENT,
+                               &config->max_subs_per_client);
     } else if (strcmp(key, "ping_interval") == 0 || strcmp(key, "ping_interval_ms") == 0) {
-        config->ping_interval_ms = atoi(value);
+        return parse_int_range(value, 0, 86400000, &config->ping_interval_ms);
     } else if (strcmp(key, "write_timeout") == 0 || strcmp(key, "write_timeout_ms") == 0) {
-        config->write_timeout_ms = atoi(value);
+        return parse_int_range(value, 0, 86400000, &config->write_timeout_ms);
     } else if (strcmp(key, "log_file") == 0) {
         return cfg_set_str(&config->log_file, value);
     } else if (strcmp(key, "log_level") == 0) {
         return parse_log_level(value, &config->log_level);
     } else if (strcmp(key, "log_to_stdout") == 0) {
-        config->log_to_stdout = atoi(value);
+        return parse_int_range(value, 0, 1, &config->log_to_stdout);
     } else if (strcmp(key, "log_to_file") == 0) {
-        config->log_to_file = atoi(value);
+        return parse_int_range(value, 0, 1, &config->log_to_file);
     } else if (strcmp(key, "auth_username") == 0) {
         return cfg_set_str(&config->auth_username, value);
     } else if (strcmp(key, "auth_password") == 0) {
@@ -113,7 +129,7 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "cluster_node_id") == 0) {
         return cfg_set_str(&config->cluster_node_id, value);
     } else if (strcmp(key, "tls_enabled") == 0) {
-        config->tls_enabled = atoi(value);
+        return parse_int_range(value, 0, 1, &config->tls_enabled);
     } else if (strcmp(key, "tls_cert") == 0) {
         return cfg_set_str(&config->tls_cert, value);
     } else if (strcmp(key, "tls_key") == 0) {
@@ -127,8 +143,8 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         if (!addr) return -1;
         memcpy(addr, value, alen);
         addr[alen] = '\0';
-        int port = atoi(colon + 1);
-        if (port <= 0 || port > 65535) {
+        int port = 0;
+        if (parse_int_range(colon + 1, 1, 65535, &port) != 0) {
             free(addr);
             return -1;
         }
@@ -141,16 +157,16 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
 
 void cmq_config_free(cmq_config_t *config) {
     if (!config) return;
-    free((void *)config->host);
-    free((void *)config->log_file);
-    free((void *)config->auth_username);
-    free((void *)config->auth_password);
-    free((void *)config->cluster_name);
-    free((void *)config->cluster_node_id);
-    free((void *)config->tls_cert);
-    free((void *)config->tls_key);
+    cfg_free_owned(config->host);
+    cfg_free_owned(config->log_file);
+    cfg_free_owned(config->auth_username);
+    cfg_free_owned(config->auth_password);
+    cfg_free_owned(config->cluster_name);
+    cfg_free_owned(config->cluster_node_id);
+    cfg_free_owned(config->tls_cert);
+    cfg_free_owned(config->tls_key);
     for (int i = 0; i < config->route_count && i < 8; i++)
-        free((void *)config->routes[i].addr);
+        cfg_free_owned(config->routes[i].addr);
     config->host = NULL;
     config->log_file = NULL;
     config->auth_username = NULL;
@@ -286,7 +302,7 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
          config->cluster_name[0] == '\0' ||
          config->cluster_node_id[0] == '\0'))
         return CMQ_ERR_INVALID_ARG;
-    /* strncpy into fixed pads — reject so IDs cannot collide after truncate. */
+    /* strncpy into fixed pads - reject so IDs cannot collide after truncate. */
     if (config->cluster_node_id &&
         strnlen(config->cluster_node_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE)
         return CMQ_ERR_INVALID_ARG;

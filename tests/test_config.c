@@ -84,6 +84,29 @@ TEST(config, load_logging) {
     cmq_config_free(&config);
 }
 
+TEST(config, load_rejects_invalid_numbers) {
+    const char *path = write_test_config("port = 12abc\n");
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    ASSERT(cmq_config_load(path, &config) != CMQ_OK);
+
+    path = write_test_config("threads = -1\n");
+    memset(&config, 0, sizeof(config));
+    ASSERT(cmq_config_load(path, &config) != CMQ_OK);
+
+    path = write_test_config("log_to_stdout = 2\n");
+    memset(&config, 0, sizeof(config));
+    ASSERT(cmq_config_load(path, &config) != CMQ_OK);
+
+    path = write_test_config(
+        "cluster_name = c1\n"
+        "cluster_node_id = n1\n"
+        "route = 10.0.0.1:7654x\n"
+    );
+    memset(&config, 0, sizeof(config));
+    ASSERT(cmq_config_load(path, &config) != CMQ_OK);
+}
+
 TEST(config, log_level_names_and_trace) {
     const char *path = write_test_config("log_level = debug\n");
     cmq_config_t config;
@@ -201,8 +224,16 @@ TEST(config, validate_routes_unique_ip) {
     config.routes[1].addr = strdup("10.0.0.1");
     config.routes[1].port = 7655;
     ASSERT(cmq_config_validate(&config) != CMQ_OK);
-    free((void *)config.routes[1].addr);
+    cmq_config_free(&config);
+    memset(&config, 0, sizeof(config));
+    config.port = 7654;
+    config.cluster_name = strdup("c1");
+    config.cluster_node_id = strdup("n1");
+    config.route_count = 2;
+    config.routes[0].addr = strdup("10.0.0.1");
+    config.routes[0].port = 7654;
     config.routes[1].addr = strdup("10.0.0.2");
+    config.routes[1].port = 7655;
     ASSERT_EQ(cmq_config_validate(&config), CMQ_OK);
     cmq_config_free(&config);
 }
