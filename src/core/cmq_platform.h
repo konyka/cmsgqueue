@@ -29,15 +29,31 @@
 /* ---- Architecture Detection ---- */
 #if defined(__x86_64__) || defined(_M_X64) || defined(__amd64__)
     #define CMQ_ARCH_X86_64  1
+    #define CMQ_ARCH_AARCH64 0
+    #define CMQ_ARCH_ARM     0
+    #define CMQ_ARCH_X86     0
     #define CMQ_ARCH_64BIT   1
+    #define CMQ_ARCH_32BIT   0
 #elif defined(__aarch64__) || defined(_M_ARM64)
+    #define CMQ_ARCH_X86_64  0
     #define CMQ_ARCH_AARCH64 1
+    #define CMQ_ARCH_ARM     0
+    #define CMQ_ARCH_X86     0
     #define CMQ_ARCH_64BIT   1
+    #define CMQ_ARCH_32BIT   0
 #elif defined(__arm__) || defined(_M_ARM)
+    #define CMQ_ARCH_X86_64  0
+    #define CMQ_ARCH_AARCH64 0
     #define CMQ_ARCH_ARM     1
+    #define CMQ_ARCH_X86     0
+    #define CMQ_ARCH_64BIT   0
     #define CMQ_ARCH_32BIT   1
 #elif defined(__i386__) || defined(_M_IX86)
+    #define CMQ_ARCH_X86_64  0
+    #define CMQ_ARCH_AARCH64 0
+    #define CMQ_ARCH_ARM     0
     #define CMQ_ARCH_X86     1
+    #define CMQ_ARCH_64BIT   0
     #define CMQ_ARCH_32BIT   1
 #else
     #error "Unsupported architecture"

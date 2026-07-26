@@ -160,11 +160,6 @@ static int fs_refresh_next_seq(cmq_filestore_t *fs, int may_truncate) {
     return 0;
 }
 
-static void build_paths(cmq_filestore_t *fs) {
-    snprintf(fs->data_path, sizeof(fs->data_path), "%s/%s.data", fs->dir, fs->prefix);
-    snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx", fs->dir, fs->prefix);
-}
-
 /* Prefix is a single path component under dir — reject traversal / separators. */
 static int prefix_safe(const char *prefix) {
     if (!prefix || !prefix[0]) return 0;
@@ -722,4 +717,3 @@ int cmq_filestore_sync(cmq_filestore_t *fs) {
     fs_end_op(fs);
     return rc;
 }
-

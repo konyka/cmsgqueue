@@ -126,7 +126,7 @@ int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
     if (buf_len < header_len + (size_t)payload_len) return 0; /* need more */
 
     out_frame->payload_len = (size_t)payload_len;
-    out_frame->payload = (uint8_t *)&buf[header_len];
+    out_frame->payload = &buf[header_len];
     return (int)(header_len + (size_t)payload_len);
 }
 
