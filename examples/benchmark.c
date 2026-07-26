@@ -19,6 +19,16 @@
 #define DEFAULT_CLIENTS 10
 #define MSG_SIZE 64
 
+static int parse_int_arg(const char *value, int min, int max, int *out) {
+    if (!value || !out || min > max) return -1;
+    char *end = NULL;
+    long v = strtol(value, &end, 10);
+    if (!end || end == value || *end != '\0' || v < min || v > max)
+        return -1;
+    *out = (int)v;
+    return 0;
+}
+
 static int connect_to(int port) {
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if (fd < 0) return -1;
@@ -95,12 +105,25 @@ int main(int argc, char **argv) {
     int nthreads = 1;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) port = atoi(argv[++i]);
-        else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) nclients = atoi(argv[++i]);
-        else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc) nmsgs = atoi(argv[++i]);
-        else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) nthreads = atoi(argv[++i]);
+        if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
+            if (parse_int_arg(argv[++i], 1, 65535, &port) != 0) goto usage;
+        } else if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
+            if (parse_int_arg(argv[++i], 1, 10000, &nclients) != 0) goto usage;
+        } else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc) {
+            if (parse_int_arg(argv[++i], 1, 100000000, &nmsgs) != 0) goto usage;
+        } else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
+            if (parse_int_arg(argv[++i], 1, 64, &nthreads) != 0) goto usage;
+        } else {
+            goto usage;
+        }
     }
+    goto run;
 
+usage:
+    fprintf(stderr, "Usage: %s [-p port] [-c clients] [-n messages] [-t threads]\n", argv[0]);
+    return 1;
+
+run:
     printf("CMSGQueue Benchmark\n");
     printf("  port=%d clients=%d msgs=%d threads=%d\n", port, nclients, nmsgs, nthreads);
 

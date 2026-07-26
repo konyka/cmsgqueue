@@ -15,6 +15,16 @@
 static volatile int g_running = 1;
 static void signal_handler(int sig) { (void)sig; g_running = 0; }
 
+static int parse_int_arg(const char *value, int min, int max, int *out) {
+    if (!value || !out || min > max) return -1;
+    char *end = NULL;
+    long v = strtol(value, &end, 10);
+    if (!end || end == value || *end != '\0' || v < min || v > max)
+        return -1;
+    *out = (int)v;
+    return 0;
+}
+
 static int connect_to(const char *host, int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
@@ -135,7 +145,10 @@ int main(int argc, char *argv[]) {
     const char *host = "127.0.0.1";
     int port = 7654;
     if (argc > 1) host = argv[1];
-    if (argc > 2) port = atoi(argv[2]);
+    if (argc > 2 && parse_int_arg(argv[2], 1, 65535, &port) != 0) {
+        fprintf(stderr, "Invalid port: %s\n", argv[2]);
+        return 1;
+    }
 
     printf("CMSGQueue Request-Reply Example v%s\n", cmq_version());
     printf("Usage: %s [host] [port]\n\n", argv[0]);

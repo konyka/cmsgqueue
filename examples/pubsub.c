@@ -19,6 +19,16 @@ static void signal_handler(int sig) {
     g_running = 0;
 }
 
+static int parse_int_arg(const char *value, int min, int max, int *out) {
+    if (!value || !out || min > max) return -1;
+    char *end = NULL;
+    long v = strtol(value, &end, 10);
+    if (!end || end == value || *end != '\0' || v < min || v > max)
+        return -1;
+    *out = (int)v;
+    return 0;
+}
+
 static int connect_to_server(const char *host, int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
@@ -80,7 +90,10 @@ int main(int argc, char *argv[]) {
 
     if (argc > 1) mode = argv[1];
     if (argc > 2) host = argv[2];
-    if (argc > 3) port = atoi(argv[3]);
+    if (argc > 3 && parse_int_arg(argv[3], 1, 65535, &port) != 0) {
+        fprintf(stderr, "Invalid port: %s\n", argv[3]);
+        return 1;
+    }
 
     printf("CMSGQueue Pub/Sub Example v%s\n", cmq_version());
     printf("Usage: %s [publish|subscribe|both] [host] [port]\n\n", argv[0]);
