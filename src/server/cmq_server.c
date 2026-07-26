@@ -362,10 +362,6 @@ static int cmq_client_send_checked(cmq_client_t *c, const uint8_t *data, size_t 
                                     uint32_t require_sub_id);
 static ssize_t client_sock_read(cmq_client_t *c, uint8_t *buf, size_t len);
 static ssize_t client_sock_write(cmq_client_t *c, const uint8_t *buf, size_t len);
-static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
-                              const char *subject,
-                              const uint8_t *payload, size_t payload_len,
-                              const uint8_t *headers, size_t headers_len);
 static void deliver_ctx_free(void *arg);
 
 /* NATS-style pattern vs concrete subject (* = one token, > = rest, final). */
@@ -1099,61 +1095,6 @@ static void *worker_thread(void *arg) {
     return NULL;
 }
 
-static cmq_worker_t *cmq_worker_create(cmq_server_t *srv, int id) {
-    cmq_worker_t *w = calloc(1, sizeof(cmq_worker_t));
-    if (!w) return NULL;
-    w->server = srv;
-    w->worker_id = id;
-    w->ev_loop = cmq_ev_loop_create(1024);
-    if (!w->ev_loop) { free(w); return NULL; }
-
-    w->wakeup_fd = -1;
-    w->wakeup_wfd = -1;
-    if (wakeup_fd_pair(&w->wakeup_fd, &w->wakeup_wfd) != 0) {
-        cmq_ev_loop_destroy(w->ev_loop);
-        free(w);
-        return NULL;
-    }
-    if (cmq_ev_add(w->ev_loop, w->wakeup_fd, CMQ_EV_READ, worker_wakeup_cb, w) != 0) {
-        wakeup_fd_close(w->wakeup_fd, w->wakeup_wfd);
-        cmq_ev_loop_destroy(w->ev_loop);
-        free(w);
-        return NULL;
-    }
-
-    w->clients_cap = 64;
-    w->clients_count = 0;
-    w->clients = calloc((size_t)w->clients_cap, sizeof(cmq_client_t *));
-    w->idmap = cmq_idmap_create(64);
-    if (!w->clients || !w->idmap) {
-        free(w->clients);
-        cmq_idmap_destroy(w->idmap);
-        wakeup_fd_close(w->wakeup_fd, w->wakeup_wfd);
-        cmq_ev_loop_destroy(w->ev_loop);
-        free(w);
-        return NULL;
-    }
-    cmq_mutex_init(&w->clients_lock);
-    cmq_mutex_init(&w->msg_lock);
-    w->msg_head = NULL;
-    w->msg_tail = NULL;
-
-    w->coro_cap = CMQ_CORO_MAX_PER_WORKER;
-    w->coro_count = 0;
-    w->coro_pool = calloc((size_t)w->coro_cap, sizeof(cmq_coro_t *));
-    if (!w->coro_pool) {
-        cmq_mutex_destroy(&w->msg_lock);
-        cmq_mutex_destroy(&w->clients_lock);
-        free(w->clients);
-        cmq_idmap_destroy(w->idmap);
-        wakeup_fd_close(w->wakeup_fd, w->wakeup_wfd);
-        cmq_ev_loop_destroy(w->ev_loop);
-        free(w);
-        return NULL;
-    }
-    return w;
-}
-
 static void cmq_worker_destroy(cmq_worker_t *w) {
     if (!w) return;
     if (w->clients) {
@@ -1192,22 +1133,6 @@ static void cmq_worker_destroy(cmq_worker_t *w) {
     if (w->ev_loop) { cmq_ev_loop_destroy(w->ev_loop); w->ev_loop = NULL; }
     cmq_mutex_destroy(&w->clients_lock);
     cmq_mutex_destroy(&w->msg_lock);
-}
-
-static cmq_worker_t *client_worker(cmq_server_t *srv, cmq_client_t *c) {
-    if (!srv->workers) return NULL;
-    for (int i = 0; i < srv->num_workers; i++) {
-        cmq_worker_t *w = &srv->workers[i];
-        cmq_mutex_lock(&w->clients_lock);
-        for (int j = 0; j < w->clients_count; j++) {
-            if (w->clients[j] == c) {
-                cmq_mutex_unlock(&w->clients_lock);
-                return w;
-            }
-        }
-        cmq_mutex_unlock(&w->clients_lock);
-    }
-    return NULL;
 }
 
 static size_t cmq_client_frame_hard_cap(const cmq_server_t *srv) {
@@ -1835,18 +1760,6 @@ static void cmq_patch_message_sub_id(uint8_t *buf, uint32_t sub_id) {
     p[1] = (sub_id >> 16) & 0xFF;
     p[2] = (sub_id >> 8) & 0xFF;
     p[3] = sub_id & 0xFF;
-}
-
-static void cmq_send_message(cmq_client_t *c, uint32_t sub_id,
-                              const char *subject,
-                              const uint8_t *payload, size_t payload_len,
-                              const uint8_t *headers, size_t headers_len) {
-    size_t len = 0;
-    uint8_t *buf = cmq_build_message_frame(sub_id, subject, payload, payload_len,
-                                            headers, headers_len, &len);
-    if (!buf) return;
-    cmq_client_send(c, buf, len);
-    free(buf);
 }
 
 static uint8_t *cmq_build_request_message_frame(uint32_t sub_id,
@@ -2524,9 +2437,9 @@ typedef struct {
     char subject[CMQ_MAX_SUBJECT];
     char pub_account[CMQ_ACCOUNT_NAME_SIZE];
     uint32_t pub_epoch;
-    const uint8_t *payload;
+    uint8_t *payload;
     size_t payload_len;
-    const uint8_t *headers;
+    uint8_t *headers;
     size_t headers_len;
     uint8_t *frame;                 /* MESSAGE template; sub_id patched per target */
     size_t frame_len;
@@ -2673,10 +2586,10 @@ done:
         }
     }
     /* Ownership transferred to deliver_ctx_free via NULLed fields. */
-    free((void *)ctx->payload);
+    free(ctx->payload);
     ctx->payload = NULL;
     if (ctx->headers) {
-        free((void *)ctx->headers);
+        free(ctx->headers);
         ctx->headers = NULL;
     }
     free(ctx->targets);
@@ -2688,8 +2601,8 @@ done:
 static void deliver_ctx_free(void *arg) {
     cmq_deliver_ctx_t *ctx = (cmq_deliver_ctx_t *)arg;
     if (!ctx) return;
-    free((void *)ctx->payload);
-    if (ctx->headers) free((void *)ctx->headers);
+    free(ctx->payload);
+    free(ctx->headers);
     free(ctx->targets);
     free(ctx->frame);
     free(ctx);
@@ -2724,16 +2637,16 @@ static void worker_coro_tick(cmq_worker_t *w) {
    Takes ownership of targets/payload/headers on success; frees on failure.
    Returns 0 on success, -1 on OOM (caller should ERROR / sync-fallback). */
 static int worker_coro_spawn_deliver(cmq_worker_t *w,
-                                       cmq_server_t *srv,
-                                       cmq_deliver_tgt_t *targets,
-                                       size_t target_count,
-                                       const char *subject,
-                                       const char *pub_account,
-                                       uint32_t pub_epoch,
-                                       const uint8_t *payload,
-                                       size_t payload_len,
-                                       const uint8_t *headers,
-                                       size_t headers_len,
+                                        cmq_server_t *srv,
+                                        cmq_deliver_tgt_t *targets,
+                                        size_t target_count,
+                                        const char *subject,
+                                        const char *pub_account,
+                                        uint32_t pub_epoch,
+                                        uint8_t *payload,
+                                        size_t payload_len,
+                                        uint8_t *headers,
+                                        size_t headers_len,
                                        uint32_t publisher_id,
                                        uint32_t publisher_gen,
                                        int publisher_worker_id,
@@ -2744,8 +2657,8 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
         int _rc = deliver_targets_sync(srv, (tgts), (n), (subj), (pub), (pep), \
                                         (pay), (plen), (hdr), (hlen)); \
         free(tgts); \
-        free((void *)(pay)); \
-        if (hdr) free((void *)(hdr)); \
+        free(pay); \
+        free(hdr); \
         return _rc; \
     } while (0)
 
@@ -2777,9 +2690,9 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
         /* Steal owned buffers out of ctx so sync path can free them once. */
         cmq_deliver_tgt_t *tgts = ctx->targets;
         size_t n = ctx->target_count;
-        const uint8_t *pay = ctx->payload;
+        uint8_t *pay = ctx->payload;
         size_t plen = ctx->payload_len;
-        const uint8_t *hdr = ctx->headers;
+        uint8_t *hdr = ctx->headers;
         size_t hlen = ctx->headers_len;
         char subj[CMQ_MAX_SUBJECT];
         char pub[CMQ_ACCOUNT_NAME_SIZE];
@@ -5123,6 +5036,7 @@ static int client_dispatch_parser(cmq_server_t *srv, cmq_client_t *c, int rc) {
 }
 
 static void client_read_cb(int fd, int events, void *data) {
+    (void)fd;
     cmq_client_t *c = (cmq_client_t *)data;
     cmq_server_t *srv = c->server;
 

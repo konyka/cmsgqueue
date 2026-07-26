@@ -26,11 +26,11 @@ void cmq_log_add_stdout(cmq_log_t *log);
 void cmq_log_write(cmq_log_t *log, cmq_log_level_t level, const char *file, int line, const char *fmt, ...);
 void cmq_log_flush(cmq_log_t *log);
 
-#define cmq_log_trace(log, fmt, ...) cmq_log_write(log, CMQ_LOG_TRACE, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-#define cmq_log_debug(log, fmt, ...) cmq_log_write(log, CMQ_LOG_DEBUG, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-#define cmq_log_info(log, fmt, ...)  cmq_log_write(log, CMQ_LOG_INFO,  __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-#define cmq_log_warn(log, fmt, ...)  cmq_log_write(log, CMQ_LOG_WARN,  __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-#define cmq_log_error(log, fmt, ...) cmq_log_write(log, CMQ_LOG_ERROR, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-#define cmq_log_fatal(log, fmt, ...) cmq_log_write(log, CMQ_LOG_FATAL, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define cmq_log_trace(log, ...) cmq_log_write(log, CMQ_LOG_TRACE, __FILE__, __LINE__, __VA_ARGS__)
+#define cmq_log_debug(log, ...) cmq_log_write(log, CMQ_LOG_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
+#define cmq_log_info(log, ...)  cmq_log_write(log, CMQ_LOG_INFO,  __FILE__, __LINE__, __VA_ARGS__)
+#define cmq_log_warn(log, ...)  cmq_log_write(log, CMQ_LOG_WARN,  __FILE__, __LINE__, __VA_ARGS__)
+#define cmq_log_error(log, ...) cmq_log_write(log, CMQ_LOG_ERROR, __FILE__, __LINE__, __VA_ARGS__)
+#define cmq_log_fatal(log, ...) cmq_log_write(log, CMQ_LOG_FATAL, __FILE__, __LINE__, __VA_ARGS__)
 
 #endif
