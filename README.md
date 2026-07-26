@@ -193,51 +193,32 @@ cmake --build build --target pubsub streaming cluster
 
 ## Test Suite
 
-21 test suites with 200+ assertions:
+22 test targets with 236 registered test cases:
 
 | Suite | Tests | Area |
 |-------|-------|------|
-| test_atomic | 2 | Platform atomics |
-| test_mpool | 4 | Memory pool |
-| test_slab | 4 | Slab allocator |
+| test_atomic | 4 | Platform atomics |
+| test_mpool | 9 | Memory pool |
+| test_slab | 8 | Slab allocator |
 | test_log | 5 | Logger |
-| test_coro | 5 | Coroutines |
-| test_ev | 4 | Event loop |
-| test_parser | 11 | Protocol parser |
-| test_config | 3 | Config parser |
-| test_platform | 2 | Platform detection |
-| test_store | 2 | Memstore |
-| test_stream | 3 | Streams + consumers |
-| test_filestore | 2 | File persistence |
-| test_sublist | 5 | Subject trie |
-| test_cluster | 2 | Cluster membership |
-| test_enterprise | 5 | Accounts, TLS, MQTT, WS |
-| test_server | 4 | Server lifecycle |
-| test_phase2 | 4 | Queue groups, headers, auth, monitoring |
+| test_coro | 6 | Coroutines |
+| test_ev | 11 | Event loop |
+| test_parser | 21 | Protocol parser |
+| test_config | 28 | Config parser |
+| test_platform | 3 | Platform detection |
+| test_queue | 4 | MPSC queue |
+| test_sublist | 18 | Subject trie |
+| test_server | 4 | TCP server integration |
+| test_phase2 | 5 | Queue groups, auth, headers, stats |
+| test_store | 22 | Persistence layer |
+| test_cluster | 18 | Clustering |
+| test_enterprise | 31 | Accounts, TLS, MQTT, WebSocket |
 | test_integration | 4 | Account stats, WS detection |
 | test_worker | 2 | Multi-worker pub/sub |
 | test_stress | 3 | High-load: many clients, fan-out, wildcards |
 | test_coro_integration | 2 | Coroutine high-fanout delivery |
 | test_request_reply | 2 | Request-reply pattern |
-| test_server_ops | 3 | Stats, batch, keepalive |
-
-| Suite | Tests | Area |
-|-------|-------|------|
-| test_atomic | 2 | Platform atomics |
-| test_mpool | 4 | Memory pool |
-| test_slab | 4 | Slab allocator |
-| test_log | 5 | Logger |
-| test_coro | 5 | Coroutines |
-| test_ev | 4 | Event loop |
-| test_parser | 11 | Protocol parser |
-| test_config | 10 | Config parser |
-| test_platform | 3 | Platform detection |
-| test_sublist | 14 | Subject trie |
-| test_server | 4 | TCP server integration |
-| test_phase2 | 5 | Queue groups, auth, headers, stats |
-| test_store | 13 | Persistence layer |
-| test_cluster | 12 | Clustering |
-| test_enterprise | 23 | Accounts, TLS, MQTT, WebSocket |
+| test_server_ops | 26 | Stats, batch, keepalive |
 
 ## Build Options
 
