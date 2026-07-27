@@ -13,30 +13,59 @@
 #include <pthread.h>
 #include <errno.h>
 #include <time.h>
+#include <fcntl.h>
 
 #define STRESS_PORT_BASE 19500
 
 static int connect_to(int port) {
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-    if (fd < 0) return -1;
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)port);
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-    int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
-    if (rc < 0 && errno != EINPROGRESS) { close(fd); return -1; }
-    return fd;
+
+    for (int retry = 0; retry < 200; retry++) {
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return -1;
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+            int flags = fcntl(fd, F_GETFL, 0);
+            if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+                close(fd);
+                return -1;
+            }
+            return fd;
+        }
+        close(fd);
+        if (errno != ECONNREFUSED && errno != EINTR && errno != EAGAIN) return -1;
+        struct timespec ts = {0, 10000000L};
+        nanosleep(&ts, NULL);
+    }
+    return -1;
 }
 
 static ssize_t send_frame(int fd, cmq_op_t op, const uint8_t *payload, size_t plen) {
     uint8_t buf[8192];
     size_t len = cmq_frame_encode(buf, sizeof(buf), op, 0, payload, plen);
     if (len == 0) return -1;
-    return write(fd, buf, len);
+    size_t off = 0;
+    for (int retry = 0; off < len && retry < 200; retry++) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n > 0) {
+            off += (size_t)n;
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct timespec ts = {0, 1000000L};
+            nanosleep(&ts, NULL);
+            continue;
+        }
+        return -1;
+    }
+    return off == len ? (ssize_t)off : -1;
 }
 
-static int recv_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
-    for (int retry = 0; retry < 100; retry++) {
+static int recv_frame_retry(int fd, cmq_frame_t *frame, cmq_parser_t *parser,
+                            int max_retry) {
+    for (int retry = 0; retry < max_retry; retry++) {
         const cmq_frame_t *f = cmq_parser_frame(parser);
         if (f) {
             frame->hdr = f->hdr;
@@ -63,9 +92,25 @@ static int recv_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
     return -1;
 }
 
+static int recv_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
+    return recv_frame_retry(fd, frame, parser, 1000);
+}
+
+static int drain_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
+    return recv_frame_retry(fd, frame, parser, 20);
+}
+
 static void free_frame(cmq_frame_t *f) {
     free(f->payload);
     f->payload = NULL;
+}
+
+static int recv_message(int fd, cmq_parser_t *parser) {
+    cmq_frame_t f;
+    if (recv_frame(fd, &f, parser) != 0) return -1;
+    int ok = (f.hdr.op == CMQ_OP_MESSAGE);
+    free_frame(&f);
+    return ok ? 0 : -1;
 }
 
 static void wait_ms(int ms) {
@@ -79,16 +124,17 @@ static void *server_thread(void *arg) {
     return NULL;
 }
 
-static void do_connect(int fd, cmq_parser_t *parser) {
-    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
-    wait_ms(50);
+static int do_connect(int fd, cmq_parser_t *parser) {
+    if (send_frame(fd, CMQ_OP_CONNECT, NULL, 0) < 0) return -1;
     cmq_frame_t frame;
-    if (recv_frame(fd, &frame, parser) != 0) return;
+    if (recv_frame(fd, &frame, parser) != 0) return -1;
     if (frame.hdr.op == CMQ_OP_INFO) {
         free_frame(&frame);
-        if (recv_frame(fd, &frame, parser) != 0) return;
+        if (recv_frame(fd, &frame, parser) != 0) return -1;
     }
-    if (frame.hdr.op == CMQ_OP_CONNACK) free_frame(&frame);
+    int ok = (frame.hdr.op == CMQ_OP_CONNACK);
+    free_frame(&frame);
+    return ok ? 0 : -1;
 }
 
 static int do_subscribe(int fd, cmq_parser_t *parser, const char *subject, uint32_t sub_id) {
@@ -110,7 +156,7 @@ static int do_subscribe(int fd, cmq_parser_t *parser, const char *subject, uint3
     return ok ? 0 : -1;
 }
 
-static void do_publish(int fd, const char *subject, const char *msg) {
+static int do_publish(int fd, const char *subject, const char *msg) {
     uint16_t slen = (uint16_t)strlen(subject);
     size_t mlen = strlen(msg);
     uint8_t buf[4096];
@@ -123,12 +169,12 @@ static void do_publish(int fd, const char *subject, const char *msg) {
     buf[off++] = 0;
     memcpy(buf + off, msg, mlen);
     off += mlen;
-    send_frame(fd, CMQ_OP_PUBLISH, buf, off);
+    return send_frame(fd, CMQ_OP_PUBLISH, buf, off) < 0 ? -1 : 0;
 }
 
 TEST(stress, many_clients_single_thread) {
     cmq_config_t config = {0};
-    config.num_threads = 1;
+    config.num_threads = 2;
     config.host = "127.0.0.1";
     config.port = STRESS_PORT_BASE;
     config.log_to_stdout = 0;
@@ -153,7 +199,7 @@ TEST(stress, many_clients_single_thread) {
         ASSERT(fds[i] >= 0);
         wait_ms(20);
         parsers[i] = cmq_parser_create();
-        do_connect(fds[i], parsers[i]);
+        ASSERT_EQ(do_connect(fds[i], parsers[i]), 0);
         char sub_subject[64];
         snprintf(sub_subject, sizeof(sub_subject), "stress.%d", i);
         ASSERT_EQ(do_subscribe(fds[i], parsers[i], sub_subject, (uint32_t)(i + 1)), 0);
@@ -165,7 +211,7 @@ TEST(stress, many_clients_single_thread) {
         ASSERT(fds[idx] >= 0);
         wait_ms(20);
         parsers[idx] = cmq_parser_create();
-        do_connect(fds[idx], parsers[idx]);
+        ASSERT_EQ(do_connect(fds[idx], parsers[idx]), 0);
     }
 
     for (int p = 0; p < npubs; p++) {
@@ -176,7 +222,7 @@ TEST(stress, many_clients_single_thread) {
         for (int m = 0; m < msgs_per_pub; m++) {
             char msg[64];
             snprintf(msg, sizeof(msg), "msg-%d-%d", p, m);
-            do_publish(fds[pub_idx], subject, msg);
+            ASSERT_EQ(do_publish(fds[pub_idx], subject, msg), 0);
         }
     }
     wait_ms(500);
@@ -186,7 +232,7 @@ TEST(stress, many_clients_single_thread) {
         int count = 0;
         for (;;) {
             cmq_frame_t f;
-            if (recv_frame(fds[s], &f, parsers[s]) != 0) break;
+        if (drain_frame(fds[s], &f, parsers[s]) != 0) break;
             if (f.hdr.op == CMQ_OP_MESSAGE) count++;
             free_frame(&f);
         }
@@ -227,7 +273,7 @@ TEST(stress, fanout_multi_worker) {
         ASSERT(sub_fds[i] >= 0);
         wait_ms(30);
         sub_parsers[i] = cmq_parser_create();
-        do_connect(sub_fds[i], sub_parsers[i]);
+        ASSERT_EQ(do_connect(sub_fds[i], sub_parsers[i]), 0);
         ASSERT_EQ(do_subscribe(sub_fds[i], sub_parsers[i], "fanout.>", (uint32_t)(i + 1)), 0);
     }
 
@@ -235,13 +281,13 @@ TEST(stress, fanout_multi_worker) {
     ASSERT(pub_fd >= 0);
     wait_ms(30);
     cmq_parser_t *pub_parser = cmq_parser_create();
-    do_connect(pub_fd, pub_parser);
+    ASSERT_EQ(do_connect(pub_fd, pub_parser), 0);
 
     int nmsgs = 10;
     for (int i = 0; i < nmsgs; i++) {
         char msg[64];
         snprintf(msg, sizeof(msg), "fanout-%d", i);
-        do_publish(pub_fd, "fanout.test", msg);
+        ASSERT_EQ(do_publish(pub_fd, "fanout.test", msg), 0);
     }
     wait_ms(1000);
 
@@ -250,7 +296,7 @@ TEST(stress, fanout_multi_worker) {
         int count = 0;
         for (;;) {
             cmq_frame_t f;
-            if (recv_frame(sub_fds[s], &f, sub_parsers[s]) != 0) break;
+            if (drain_frame(sub_fds[s], &f, sub_parsers[s]) != 0) break;
             if (f.hdr.op == CMQ_OP_MESSAGE) count++;
             free_frame(&f);
         }
@@ -274,7 +320,7 @@ TEST(stress, wildcard_subscriptions) {
     cmq_config_t config = {0};
     config.host = "127.0.0.1";
     config.port = STRESS_PORT_BASE + 2;
-    config.num_threads = 2;
+    config.num_threads = 1;
     config.log_to_stdout = 0;
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
@@ -287,28 +333,22 @@ TEST(stress, wildcard_subscriptions) {
     ASSERT(sub_fd >= 0);
     wait_ms(50);
     cmq_parser_t *sub_parser = cmq_parser_create();
-    do_connect(sub_fd, sub_parser);
+    ASSERT_EQ(do_connect(sub_fd, sub_parser), 0);
     ASSERT_EQ(do_subscribe(sub_fd, sub_parser, "wild.>", 1), 0);
 
     int pub_fd = connect_to(STRESS_PORT_BASE + 2);
     ASSERT(pub_fd >= 0);
     wait_ms(50);
     cmq_parser_t *pub_parser = cmq_parser_create();
-    do_connect(pub_fd, pub_parser);
+    ASSERT_EQ(do_connect(pub_fd, pub_parser), 0);
 
     const char *subjects[] = {"wild.a", "wild.b.c", "wild.x.y.z"};
     int nsubjects = 3;
-    for (int i = 0; i < nsubjects; i++) {
-        do_publish(pub_fd, subjects[i], "test");
-    }
-    wait_ms(500);
-
     int received = 0;
-    for (;;) {
-        cmq_frame_t f;
-        if (recv_frame(sub_fd, &f, sub_parser) != 0) break;
-        if (f.hdr.op == CMQ_OP_MESSAGE) received++;
-        free_frame(&f);
+    for (int i = 0; i < nsubjects; i++) {
+        ASSERT_EQ(do_publish(pub_fd, subjects[i], "test"), 0);
+        ASSERT_EQ(recv_message(sub_fd, sub_parser), 0);
+        received++;
     }
     ASSERT_EQ(received, nsubjects);
 

@@ -7,6 +7,17 @@ include(CTest)
 # Discover all test_*.c files in this directory
 file(GLOB TEST_SOURCES "test_*.c")
 
+set(CMQ_TCP_TESTS
+  test_coro_integration
+  test_integration
+  test_phase2
+  test_request_reply
+  test_server
+  test_server_ops
+  test_stress
+  test_worker
+)
+
 foreach(TEST_SRC ${TEST_SOURCES})
   get_filename_component(TEST_NAME ${TEST_SRC} NAME_WE)
   add_executable(${TEST_NAME} ${TEST_SRC})
@@ -32,5 +43,9 @@ foreach(TEST_SRC ${TEST_SOURCES})
   include(CTest)
   if(TARGET ${TEST_NAME})
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+    list(FIND CMQ_TCP_TESTS ${TEST_NAME} CMQ_TCP_TEST_INDEX)
+    if(NOT CMQ_TCP_TEST_INDEX EQUAL -1)
+      set_tests_properties(${TEST_NAME} PROPERTIES RESOURCE_LOCK cmq_tcp_server)
+    endif()
   endif()
 endforeach()
