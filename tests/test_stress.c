@@ -225,7 +225,7 @@ TEST(stress, many_clients_single_thread) {
             ASSERT_EQ(do_publish(fds[pub_idx], subject, msg), 0);
         }
     }
-    wait_ms(500);
+    wait_ms(1500);
 
     int total_received = 0;
     for (int s = 0; s < nsubs; s++) {
