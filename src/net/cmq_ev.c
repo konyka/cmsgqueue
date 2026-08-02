@@ -72,6 +72,8 @@ struct cmq_ev_loop {
     atomic_int in_timer_cb; /* run thread inside timer callback (reentrant del) */
     atomic_int run_owned;   /* 1 while cmq_ev_run owns the loop */
     cmq_thread_t run_tid;   /* valid when run_owned — foil cross-thread del */
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
 };
 
 /* 0 = enter wait loop; -1 = pending stop (or nested run) — caller returns 0. */
@@ -195,7 +197,12 @@ static int ev_begin_op(cmq_ev_loop_t *loop) {
 }
 
 static void ev_end_op(cmq_ev_loop_t *loop) {
-    atomic_fetch_sub_explicit(&loop->in_flight, 1, memory_order_acq_rel);
+    if (atomic_fetch_sub_explicit(&loop->in_flight, 1, memory_order_acq_rel) - 1 == 0 &&
+        atomic_load_explicit(&loop->dying, memory_order_acquire)) {
+        pthread_mutex_lock(&loop->mu);
+        pthread_cond_broadcast(&loop->cv);
+        pthread_mutex_unlock(&loop->mu);
+    }
 }
 
 static uint64_t cmq_ev_now_ms(void) {
@@ -237,6 +244,8 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
     }
     cmq_mutex_init(&loop->watchers_lock);
     cmq_mutex_init(&loop->timers_lock);
+    pthread_mutex_init(&loop->mu, NULL);
+    pthread_cond_init(&loop->cv, NULL);
 
     for (int i = 0; i < CMQ_EV_MAX_TIMERS; i++) {
         loop->timers[i].active = 0;
@@ -260,6 +269,8 @@ cmq_ev_loop_t *cmq_ev_loop_create(int max_events) {
     if (loop->backend_fd < 0) {
         cmq_mutex_destroy(&loop->timers_lock);
         cmq_mutex_destroy(&loop->watchers_lock);
+        pthread_cond_destroy(&loop->cv);
+        pthread_mutex_destroy(&loop->mu);
         free(loop->watchers);
         free(loop);
         return NULL;
@@ -315,6 +326,8 @@ fail_loop:
     if (loop->backend_fd >= 0) close(loop->backend_fd);
     cmq_mutex_destroy(&loop->timers_lock);
     cmq_mutex_destroy(&loop->watchers_lock);
+    pthread_cond_destroy(&loop->cv);
+    pthread_mutex_destroy(&loop->mu);
     free(loop->watchers);
     free(loop);
     return NULL;
@@ -354,7 +367,18 @@ void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
     /* Cannot use public stop/wakeup (begin_op fails once dying). */
     cmq_atomic_store_int(&loop->running, CMQ_EV_RS_STOP, CMQ_ATOMIC_RELEASE);
     ev_wakeup_raw(loop);
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_nsec += 50 * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&loop->mu);
     while (atomic_load_explicit(&loop->in_flight, memory_order_acquire) > 0) {
+        int rc = pthread_cond_timedwait(&loop->cv, &loop->mu, &deadline);
+        if (rc == ETIMEDOUT) break;
+    }
+    pthread_mutex_unlock(&loop->mu);
+    if (atomic_load_explicit(&loop->in_flight, memory_order_acquire) > 0) {
+        /* nanosleep fallback for stragglers */
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
     }
@@ -364,6 +388,8 @@ void cmq_ev_loop_destroy(cmq_ev_loop_t *loop) {
     if (loop->backend_fd >= 0) close(loop->backend_fd);
     cmq_mutex_destroy(&loop->timers_lock);
     cmq_mutex_destroy(&loop->watchers_lock);
+    pthread_cond_destroy(&loop->cv);
+    pthread_mutex_destroy(&loop->mu);
     free(loop->watchers);
     free(loop);
 }

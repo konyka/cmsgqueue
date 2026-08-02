@@ -1,6 +1,7 @@
 #ifndef CMQ_QUEUE_H
 #define CMQ_QUEUE_H
 
+#include <pthread.h>
 #include "cmq_atomic.h"
 #include "cmq_platform.h"
 
@@ -15,6 +16,8 @@ typedef struct {
     cmq_queue_node_t *stub;
     cmq_atomic_int in_flight; /* push vs destroy */
     cmq_atomic_int dying;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
 } cmq_queue_t;
 
 void cmq_queue_init(cmq_queue_t *q);

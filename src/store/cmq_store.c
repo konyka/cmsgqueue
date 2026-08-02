@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_store.h"
 #include "cmq_thread.h"
+#include <errno.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -23,6 +25,8 @@ struct cmq_store {
     cmq_mutex_t lock;
     atomic_int in_flight;
     atomic_int dying;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
 };
 
 static int store_begin_op(cmq_store_t *store) {
@@ -37,7 +41,12 @@ static int store_begin_op(cmq_store_t *store) {
 }
 
 static void store_end_op(cmq_store_t *store) {
-    atomic_fetch_sub_explicit(&store->in_flight, 1, memory_order_acq_rel);
+    if (atomic_fetch_sub_explicit(&store->in_flight, 1, memory_order_acq_rel) - 1 == 0 &&
+        atomic_load_explicit(&store->dying, memory_order_acquire)) {
+        pthread_mutex_lock(&store->mu);
+        pthread_cond_broadcast(&store->cv);
+        pthread_mutex_unlock(&store->mu);
+    }
 }
 
 static uint64_t now_ms(void) {
@@ -58,6 +67,8 @@ cmq_store_t *cmq_store_create(size_t capacity) {
     s->count = 0;
     atomic_init(&s->in_flight, 0);
     atomic_init(&s->dying, 0);
+    pthread_mutex_init(&s->mu, NULL);
+    pthread_cond_init(&s->cv, NULL);
     cmq_mutex_init(&s->lock);
     return s;
 }
@@ -65,7 +76,18 @@ cmq_store_t *cmq_store_create(size_t capacity) {
 void cmq_store_destroy(cmq_store_t *store) {
     if (!store) return;
     atomic_store_explicit(&store->dying, 1, memory_order_release);
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_nsec += 50 * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&store->mu);
     while (atomic_load_explicit(&store->in_flight, memory_order_acquire) > 0) {
+        int rc = pthread_cond_timedwait(&store->cv, &store->mu, &deadline);
+        if (rc == ETIMEDOUT) break;
+    }
+    pthread_mutex_unlock(&store->mu);
+    if (atomic_load_explicit(&store->in_flight, memory_order_acquire) > 0) {
+        /* nanosleep fallback for stragglers */
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
     }
@@ -74,6 +96,8 @@ void cmq_store_destroy(cmq_store_t *store) {
     }
     free(store->ring);
     cmq_mutex_destroy(&store->lock);
+    pthread_cond_destroy(&store->cv);
+    pthread_mutex_destroy(&store->mu);
     free(store);
 }
 

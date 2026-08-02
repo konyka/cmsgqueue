@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_cluster.h"
 #include "cmq_thread.h"
+#include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +17,8 @@ struct cmq_cluster {
     cmq_mutex_t lock;
     atomic_int in_flight;
     atomic_int dying;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
 };
 
 static int cluster_begin_op(cmq_cluster_t *cluster) {
@@ -29,7 +33,12 @@ static int cluster_begin_op(cmq_cluster_t *cluster) {
 }
 
 static void cluster_end_op(cmq_cluster_t *cluster) {
-    atomic_fetch_sub_explicit(&cluster->in_flight, 1, memory_order_acq_rel);
+    if (atomic_fetch_sub_explicit(&cluster->in_flight, 1, memory_order_acq_rel) - 1 == 0 &&
+        atomic_load_explicit(&cluster->dying, memory_order_acquire)) {
+        pthread_mutex_lock(&cluster->mu);
+        pthread_cond_broadcast(&cluster->cv);
+        pthread_mutex_unlock(&cluster->mu);
+    }
 }
 
 static int cluster_id_ok(const char *id) {
@@ -57,6 +66,8 @@ cmq_cluster_t *cmq_cluster_create(const char *cluster_name, const char *self_id)
     c->count = 0;
     atomic_init(&c->in_flight, 0);
     atomic_init(&c->dying, 0);
+    pthread_mutex_init(&c->mu, NULL);
+    pthread_cond_init(&c->cv, NULL);
     cmq_mutex_init(&c->lock);
     return c;
 }
@@ -64,11 +75,24 @@ cmq_cluster_t *cmq_cluster_create(const char *cluster_name, const char *self_id)
 void cmq_cluster_destroy(cmq_cluster_t *cluster) {
     if (!cluster) return;
     atomic_store_explicit(&cluster->dying, 1, memory_order_release);
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_nsec += 50 * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&cluster->mu);
     while (atomic_load_explicit(&cluster->in_flight, memory_order_acquire) > 0) {
+        int rc = pthread_cond_timedwait(&cluster->cv, &cluster->mu, &deadline);
+        if (rc == ETIMEDOUT) break;
+    }
+    pthread_mutex_unlock(&cluster->mu);
+    if (atomic_load_explicit(&cluster->in_flight, memory_order_acquire) > 0) {
+        /* nanosleep fallback for stragglers */
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
     }
     cmq_mutex_destroy(&cluster->lock);
+    pthread_cond_destroy(&cluster->cv);
+    pthread_mutex_destroy(&cluster->mu);
     free(cluster);
 }
 

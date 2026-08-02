@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_sublist.h"
+#include <errno.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +25,8 @@ struct cmq_sublist {
     size_t count;
     atomic_int in_flight; /* public ops vs destroy */
     atomic_int dying;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
 };
 
 static int sublist_begin_op(cmq_sublist_t *sl) {
@@ -37,7 +41,12 @@ static int sublist_begin_op(cmq_sublist_t *sl) {
 }
 
 static void sublist_end_op(cmq_sublist_t *sl) {
-    atomic_fetch_sub_explicit(&sl->in_flight, 1, memory_order_acq_rel);
+    if (atomic_fetch_sub_explicit(&sl->in_flight, 1, memory_order_acq_rel) - 1 == 0 &&
+        atomic_load_explicit(&sl->dying, memory_order_acquire)) {
+        pthread_mutex_lock(&sl->mu);
+        pthread_cond_broadcast(&sl->cv);
+        pthread_mutex_unlock(&sl->mu);
+    }
 }
 
 static cmq_sl_node_t *cmq_sl_node_create(const char *token, int is_pwc, int is_fwc) {
@@ -204,6 +213,8 @@ cmq_sublist_t *cmq_sublist_create(void) {
     if (!sl) return NULL;
     atomic_init(&sl->in_flight, 0);
     atomic_init(&sl->dying, 0);
+    pthread_mutex_init(&sl->mu, NULL);
+    pthread_cond_init(&sl->cv, NULL);
     cmq_rwlock_init(&sl->lock);
     return sl;
 }
@@ -232,7 +243,18 @@ void cmq_sublist_free_data(cmq_sublist_t *sl) {
 void cmq_sublist_destroy(cmq_sublist_t *sl) {
     if (!sl) return;
     atomic_store_explicit(&sl->dying, 1, memory_order_release);
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_nsec += 50 * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&sl->mu);
     while (atomic_load_explicit(&sl->in_flight, memory_order_acquire) > 0) {
+        int rc = pthread_cond_timedwait(&sl->cv, &sl->mu, &deadline);
+        if (rc == ETIMEDOUT) break;
+    }
+    pthread_mutex_unlock(&sl->mu);
+    if (atomic_load_explicit(&sl->in_flight, memory_order_acquire) > 0) {
+        /* nanosleep fallback for stragglers */
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
     }
@@ -247,6 +269,8 @@ void cmq_sublist_destroy(cmq_sublist_t *sl) {
     }
     cmq_rwlock_unlock(&sl->lock);
     cmq_rwlock_destroy(&sl->lock);
+    pthread_cond_destroy(&sl->cv);
+    pthread_mutex_destroy(&sl->mu);
     free(sl);
 }
 

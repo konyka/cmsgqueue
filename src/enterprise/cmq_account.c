@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_account.h"
 #include "cmq_thread.h"
+#include <errno.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
@@ -22,6 +24,8 @@ struct cmq_account_manager {
     cmq_mutex_t lock;
     atomic_int in_flight; /* mgr APIs + outstanding get() holds */
     atomic_int dying;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
 };
 
 static int mgr_begin_op(cmq_account_manager_t *mgr) {
@@ -36,7 +40,12 @@ static int mgr_begin_op(cmq_account_manager_t *mgr) {
 }
 
 static void mgr_end_op(cmq_account_manager_t *mgr) {
-    atomic_fetch_sub_explicit(&mgr->in_flight, 1, memory_order_acq_rel);
+    if (atomic_fetch_sub_explicit(&mgr->in_flight, 1, memory_order_acq_rel) - 1 == 0 &&
+        atomic_load_explicit(&mgr->dying, memory_order_acquire)) {
+        pthread_mutex_lock(&mgr->mu);
+        pthread_cond_broadcast(&mgr->cv);
+        pthread_mutex_unlock(&mgr->mu);
+    }
 }
 
 static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char *name);
@@ -86,6 +95,8 @@ cmq_account_manager_t *cmq_account_manager_create(void) {
     if (!mgr) return NULL;
     atomic_init(&mgr->in_flight, 0);
     atomic_init(&mgr->dying, 0);
+    pthread_mutex_init(&mgr->mu, NULL);
+    pthread_cond_init(&mgr->cv, NULL);
     cmq_mutex_init(&mgr->lock);
     return mgr;
 }
@@ -93,11 +104,24 @@ cmq_account_manager_t *cmq_account_manager_create(void) {
 void cmq_account_manager_destroy(cmq_account_manager_t *mgr) {
     if (!mgr) return;
     atomic_store_explicit(&mgr->dying, 1, memory_order_release);
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_nsec += 50 * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&mgr->mu);
     while (atomic_load_explicit(&mgr->in_flight, memory_order_acquire) > 0) {
+        int rc = pthread_cond_timedwait(&mgr->cv, &mgr->mu, &deadline);
+        if (rc == ETIMEDOUT) break;
+    }
+    pthread_mutex_unlock(&mgr->mu);
+    if (atomic_load_explicit(&mgr->in_flight, memory_order_acquire) > 0) {
+        /* nanosleep fallback for stragglers */
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
     }
     cmq_mutex_destroy(&mgr->lock);
+    pthread_cond_destroy(&mgr->cv);
+    pthread_mutex_destroy(&mgr->mu);
     free(mgr);
 }
 
