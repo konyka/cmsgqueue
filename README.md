@@ -12,12 +12,14 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Server Stats** query connections, messages, bytes, subscriptions via CMQ_OP_STATS
 - **Authentication** username/password on CONNECT, configurable via config file
 - **Keepalive** automatic disconnect of idle clients (configurable ping_interval_ms)
-- **Backpressure** 4MB write buffer limit per client; oversize consumers are torn down (subscriptions reclaimed)
+- **Backpressure** 4MB write buffer limit per client; validated by tests/test_parser_backpressure.c
 - **Connection Limit** atomic `active_clients` gate on accept (`max_clients`)
-- **Graceful Shutdown** cmq_server_drain() sends DISCONNECT to all clients before stopping
+- **Graceful Shutdown** cmq_server_drain() sends DISCONNECT to all clients before stopping; validated by tests/test_server_ops.c shutdown path
 - **Persistence** ring buffer memstore, durable streams with consumers, file-based with CRC32 (library APIs; optional server wiring)
+  Note: durable streams and file-based persistence are library APIs only — not wired into the server process.
 - **Clustering** node membership and outbound route broadcast (gateway/leaf APIs available as libraries)
 - **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired), MQTT bridge library, WebSocket transport with frame reassembly
+- **Wire flags**: CMQ_FLAG_HEADERS, CMQ_FLAG_BATCH, CMQ_FLAG_ROUTE are implemented; CMQ_FLAG_COMPRESSED and CMQ_FLAG_CHECKSUM are reserved but not yet implemented.
 - **Assembly Coroutines** x86_64 + ARM64 context switching; high-fanout delivery uses value snapshots (no live ref UAF)
 - **Multi-Worker** N worker threads with eventfd cross-thread messaging keyed by stable client id
 - **Cross-Platform CI** Linux (gcc/clang), macOS, Windows, ARM64 cross-compile
