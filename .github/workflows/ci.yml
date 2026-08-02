@@ -88,3 +88,39 @@ jobs:
             -DCMQ_BUILD_EXAMPLES=OFF
       - name: Build
         run: cmake --build build --parallel $(nproc)
+
+  tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMQ_ENABLE_TSAN=ON
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+      - name: Test (focused)
+        working-directory: build
+        run: ctest --output-on-failure -j1 -R "queue|parser|sublist|slab|stress|server_ops"
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake gcc gcovr
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMQ_ENABLE_COVERAGE=ON
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure -j1
+      - name: Report coverage
+        working-directory: build
+        run: gcovr --root .. --filter '.*/src/.*' --print-summary --xml coverage.xml
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build/coverage.xml
