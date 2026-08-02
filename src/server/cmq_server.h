@@ -13,6 +13,7 @@
 #include "cmq_ws.h"
 #include "cmq_coro.h"
 #include "cmq_tls.h"
+#include "cmq_mpool.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -121,6 +122,7 @@ typedef struct cmq_worker_msg {
     uint32_t pub_account_epoch;     /* publisher CONNECT epoch for may_deliver */
     int *sync_result;               /* NULL=async; else 0 pending, 1 ok, -1 fail */
     uint8_t sync_heap;              /* 1: sync_result is cmq_req_sync_t (refcount) */
+    uint8_t from_pool;              /* 1: msg->buf was allocated from msg_payload_pool; do not free() */
     uint8_t *buf;
     size_t len;
     struct cmq_worker_msg *next;
@@ -172,7 +174,8 @@ struct cmq_server {
     cmq_mutex_t clients_lock;
 
     cmq_sublist_t *sublist;
-    cmq_rwlock_t sublist_lock;
+    /* cmq_sublist is internally self-locking (cmq_rwlock inside cmq_sublist_t);
+       no extra server-side lock is required. */
 
     cmq_log_t *log;
 
@@ -180,6 +183,8 @@ struct cmq_server {
     cmq_route_pool_t *routes;
     cmq_cluster_t *cluster;
     cmq_tls_config_t *tls_config;
+
+    cmq_mpool_t *msg_payload_pool;  /* pool for worker SEND msg->buf (<=64KiB); NULL = malloc fallback */
 
     cmq_atomic_u32 active_clients;  /* accept/teardown gate for max_clients */
     cmq_atomic_int acceptor_drain;  /* 1: acceptor loop must DISCONNECT locals */

@@ -643,7 +643,11 @@ static void worker_deliver_send_msg(cmq_worker_t *w, cmq_worker_msg_t *msg) {
     worker_complete_sync(msg, sync_ok ? 1 : -1);
     if (finish_dead && target)
         client_finish_closing(target);
-    free(msg->buf);
+    /* Pool-owned buffers are reused until server destroy; the next push
+       overwrites contents after memcpy. Wipe the bytes defensively so a
+       leftover reference cannot observe previous payload tail bytes. */
+    if (msg->from_pool && msg->buf) memset(msg->buf, 0, msg->len);
+    if (!msg->from_pool) free(msg->buf);
     free(msg);
 }
 
@@ -871,7 +875,7 @@ static void worker_purge_send_for_id(cmq_worker_t *w, uint32_t target_id,
             if (w->server)
                 cmq_atomic_fetch_add_u64(&w->server->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
-            free(m->buf);
+            if (!m->from_pool) free(m->buf);
             free(m);
             continue;
         }
@@ -931,7 +935,15 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
         msg->pub_account[0] = '\0';
         msg->pub_account_epoch = 0;
     }
-    msg->buf = malloc(len);
+    msg->buf = NULL;
+    msg->from_pool = 0;
+    if (w->server && w->server->msg_payload_pool && len <= 64 * 1024) {
+        msg->buf = cmq_mpool_alloc(w->server->msg_payload_pool, len);
+        if (msg->buf) msg->from_pool = 1;
+    }
+    if (!msg->buf) {
+        msg->buf = malloc(len);
+    }
     if (!msg->buf) {
         free(msg);
         return -1;
@@ -943,7 +955,7 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
     cmq_mutex_lock(&w->msg_lock);
     if (w->msg_pending >= CMQ_WORKER_MSG_QUEUE_MAX) {
         cmq_mutex_unlock(&w->msg_lock);
-        free(msg->buf);
+        if (!msg->from_pool) free(msg->buf);
         free(msg);
         return -1;
     }
@@ -981,7 +993,7 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
     if (!found)
         return 0;
     worker_complete_sync(msg, -1);
-    free(msg->buf);
+    if (!msg->from_pool) free(msg->buf);
     free(msg);
     return -1;
 }
@@ -1110,7 +1122,7 @@ static void cmq_worker_destroy(cmq_worker_t *w) {
     while (msg) {
         cmq_worker_msg_t *next = msg->next;
         worker_complete_sync(msg, -1);
-        free(msg->buf);
+        if (!msg->from_pool) free(msg->buf);
         free(msg);
         msg = next;
     }
@@ -1202,9 +1214,7 @@ static void cmq_client_destroy(cmq_client_t *c) {
     while (s) {
         cmq_sub_entry_t *next = s->next;
         if (s->ref && c->server && c->server->sublist) {
-            cmq_rwlock_wrlock(&c->server->sublist_lock);
             cmq_sublist_remove(c->server->sublist, s->subject, s->ref);
-            cmq_rwlock_unlock(&c->server->sublist_lock);
             free(s->ref);
             s->ref = NULL;
         }
@@ -1243,9 +1253,7 @@ static void client_teardown(cmq_client_t *c) {
     while (s) {
         cmq_sub_entry_t *next = s->next;
         if (s->ref) {
-            cmq_rwlock_wrlock(&srv->sublist_lock);
             cmq_sublist_remove(srv->sublist, s->subject, s->ref);
-            cmq_rwlock_unlock(&srv->sublist_lock);
             free(s->ref);
             s->ref = NULL;
             uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
@@ -1848,7 +1856,7 @@ static void cmq_fill_deliver_tgt(cmq_deliver_tgt_t *t, const cmq_sub_ref_t *ref)
 
 /* Build a queue-group-deduped target list from match results.
    Queue groups (scoped by subscription subject) pick one member via
-   round-robin (srv->qg_rr_counter). Must hold sublist_lock (rd).
+   round-robin (srv->qg_rr_counter). cmq_sublist is self-locking.
    Returns malloc'd array; *out_n = count. OOM: NULL + *out_n = SIZE_MAX.
    Empty/filtered: NULL + *out_n = 0. Caller frees. */
 static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
@@ -2887,17 +2895,14 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     size_t route_sent = 0;
     int route_rc = 0;
 
-    cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
-        cmq_rwlock_unlock(&srv->sublist_lock);
         cmq_send_error(c, "delivery failed");
         return; /* OOM after validation — surface error, no silent drop */
     }
 
     if (result.count == 0) {
         cmq_sublist_result_free(&result);
-        cmq_rwlock_unlock(&srv->sublist_lock);
         /* Soft-delete may race after the entry check — revalidate. */
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
@@ -2928,7 +2933,6 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     size_t ntgt = 0;
     cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
     cmq_sublist_result_free(&result);
-    cmq_rwlock_unlock(&srv->sublist_lock);
     if (ntgt == SIZE_MAX) {
         cmq_send_error(c, "delivery failed");
         return;
@@ -3176,7 +3180,6 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     strncpy(ref->queue_group, queue_group, CMQ_MAX_QUEUE_GROUP - 1);
     ref->queue_group[CMQ_MAX_QUEUE_GROUP - 1] = '\0';
 
-    cmq_rwlock_wrlock(&srv->sublist_lock);
     /* Exact _INBOX.* is first-claim: another live client's exact sub wins.
        Soft-deleted (epoch-dead) holders do not block reclaim. */
     typedef struct {
@@ -3194,7 +3197,6 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         /* Fail-closed: match OOM must not skip first-claim (duplicate live
            _INBOX holders). */
         if (cmq_sublist_match(srv->sublist, subject, &claim) != 0) {
-            cmq_rwlock_unlock(&srv->sublist_lock);
             free(ref);
             free(entry);
             cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
@@ -3241,7 +3243,6 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                 continue;
             }
             cmq_sublist_result_free(&claim);
-            cmq_rwlock_unlock(&srv->sublist_lock);
             for (size_t di = 0; di < ndead; di++) {
                 if (deads[di].worker_id >= 0 && srv->workers &&
                     deads[di].worker_id < srv->num_workers) {
@@ -3292,7 +3293,6 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         pre_acc = cmq_account_get(srv->accounts, c->account_name, NULL);
         if (!pre_acc ||
             cmq_account_inc_subscriptions(pre_acc, c->account_epoch) != 0) {
-            cmq_rwlock_unlock(&srv->sublist_lock);
             if (pre_acc) cmq_account_release(srv->accounts, pre_acc);
             free(heap_deads);
             free(ref);
@@ -3306,7 +3306,6 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         pre_credited = 1;
         if (!client_account_live(srv, c)) {
             cmq_account_dec_subscriptions(pre_acc, c->account_epoch);
-            cmq_rwlock_unlock(&srv->sublist_lock);
             cmq_account_release(srv->accounts, pre_acc);
             free(heap_deads);
             free(ref);
@@ -3359,7 +3358,6 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         entry->next = c->subs;
         c->subs = entry;
     }
-    cmq_rwlock_unlock(&srv->sublist_lock);
     for (size_t di = 0; di < ndead; di++) {
         if (deads[di].worker_id >= 0 && srv->workers &&
             deads[di].worker_id < srv->num_workers) {
@@ -3441,13 +3439,11 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
             if (pre_acc) cmq_account_release(srv->accounts, pre_acc);
             /* Trie before unlink c->subs — mirror UNSUB / avoid PUBLISH match
                then silent-drop on client_require_sub_ok. */
-            cmq_rwlock_wrlock(&srv->sublist_lock);
             if (entry->ref) {
                 cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
                 free(entry->ref);
                 entry->ref = NULL;
             }
-            cmq_rwlock_unlock(&srv->sublist_lock);
             c->subs = entry->next;
             if (c->sub_count > 0) c->sub_count--;
             uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
@@ -3464,13 +3460,11 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     } else if (!client_account_live(srv, c)) {
         /* Replace path: old entry already freed — roll back counts too or
            sub_count/stat/account quota stay inflated with zero live subs. */
-        cmq_rwlock_wrlock(&srv->sublist_lock);
         if (entry->ref) {
             cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
             free(entry->ref);
             entry->ref = NULL;
         }
-        cmq_rwlock_unlock(&srv->sublist_lock);
         c->subs = entry->next;
         if (c->sub_count > 0) c->sub_count--;
         uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
@@ -3509,13 +3503,11 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
             cmq_sub_entry_t *entry = *pp;
             /* Drop trie interest before unlinking c->subs (align SUB replace)
                so PUBLISH cannot match then silent-drop on missing sub_id. */
-            cmq_rwlock_wrlock(&srv->sublist_lock);
             if (entry->ref) {
                 cmq_sublist_remove(srv->sublist, entry->subject, entry->ref);
                 free(entry->ref);
                 entry->ref = NULL;
             }
-            cmq_rwlock_unlock(&srv->sublist_lock);
             *pp = entry->next;
 
             free(entry);
@@ -3621,17 +3613,14 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     size_t route_sent = 0;
     int route_rc = 0;
 
-    cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
-        cmq_rwlock_unlock(&srv->sublist_lock);
         cmq_send_error(c, "delivery failed");
         return;
     }
     size_t ntgt = 0;
     cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
     cmq_sublist_result_free(&result);
-    cmq_rwlock_unlock(&srv->sublist_lock);
 
     if (ntgt == SIZE_MAX) {
         cmq_send_error(c, "delivery failed");
@@ -3779,17 +3768,14 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     size_t route_sent = 0;
     int route_rc = 0;
 
-    cmq_rwlock_rdlock(&srv->sublist_lock);
     cmq_sublist_result_t result;
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
-        cmq_rwlock_unlock(&srv->sublist_lock);
         cmq_send_error(c, "delivery failed");
         return;
     }
     size_t ntgt = 0;
     cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
     cmq_sublist_result_free(&result);
-    cmq_rwlock_unlock(&srv->sublist_lock);
     if (ntgt == SIZE_MAX) {
         cmq_send_error(c, "delivery failed");
         return;
@@ -4084,10 +4070,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         prep[msg].payload_len = payload_len;
         offset += payload_len;
 
-        cmq_rwlock_rdlock(&srv->sublist_lock);
         cmq_sublist_result_t result;
         if (cmq_sublist_match(srv->sublist, prep[msg].subject, &result) != 0) {
-            cmq_rwlock_unlock(&srv->sublist_lock);
             for (uint16_t k = 0; k <= msg; k++) free(prep[k].tgts);
             free(prep);
             cmq_send_error(c, "delivery failed");
@@ -4096,7 +4080,6 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         size_t ntgt = 0;
         cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
         cmq_sublist_result_free(&result);
-        cmq_rwlock_unlock(&srv->sublist_lock);
         if (ntgt == SIZE_MAX) {
             for (uint16_t k = 0; k < msg; k++) free(prep[k].tgts);
             free(prep);
@@ -6152,12 +6135,10 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     cmq_atomic_store_int(&srv->run_active, 0, CMQ_ATOMIC_SEQ_CST);
 
     cmq_mutex_init(&srv->clients_lock);
-    cmq_rwlock_init(&srv->sublist_lock);
 
     srv->sublist = cmq_sublist_create();
     if (!srv->sublist) {
         cmq_mutex_destroy(&srv->clients_lock);
-        cmq_rwlock_destroy(&srv->sublist_lock);
         cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_NO_MEMORY;
@@ -6186,7 +6167,6 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         cmq_sublist_destroy(srv->sublist);
         cmq_log_destroy(srv->log);
         cmq_mutex_destroy(&srv->clients_lock);
-        cmq_rwlock_destroy(&srv->sublist_lock);
         cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_NO_MEMORY;
@@ -6201,7 +6181,6 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         cmq_sublist_destroy(srv->sublist);
         cmq_log_destroy(srv->log);
         cmq_mutex_destroy(&srv->clients_lock);
-        cmq_rwlock_destroy(&srv->sublist_lock);
         cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_NO_MEMORY;
@@ -6255,6 +6234,13 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         *server = NULL;
         return CMQ_ERR_NO_MEMORY;
     }
+
+    /* Worker message payload pool. 64 KiB default block; small (<=64 KiB)
+       SEND payloads will be carved from here, so worker_push_msg avoids
+       malloc for the common case. cmq_mpool_create may add overflow blocks
+       on demand for large bursts. NULL is non-fatal — calloc/malloc path
+       remains (see worker_push_msg). */
+    srv->msg_payload_pool = cmq_mpool_create(64 * 1024);
 
     *server = srv;
     return CMQ_OK;
@@ -6806,6 +6792,14 @@ void cmq_server_destroy(cmq_server_t *srv) {
         srv->workers = NULL;
         srv->num_workers = 0;
     }
+    /* Drop the payload pool after workers are torn down — cmq_worker_destroy
+       walks any in-flight SEND queue and references msg->buf. Pool still owns
+       those buffers until this destroy; cmq_mpool_destroy frees the whole
+       arena. */
+    if (srv->msg_payload_pool) {
+        cmq_mpool_destroy(srv->msg_payload_pool);
+        srv->msg_payload_pool = NULL;
+    }
     if (srv->sublist) {
         cmq_sublist_free_data(srv->sublist);
         cmq_sublist_destroy(srv->sublist);
@@ -6832,7 +6826,6 @@ void cmq_server_destroy(cmq_server_t *srv) {
         srv->tls_config = NULL;
     }
     cmq_mutex_destroy(&srv->clients_lock);
-    cmq_rwlock_destroy(&srv->sublist_lock);
     cmq_config_free(&srv->config);
     free(srv);
 }
