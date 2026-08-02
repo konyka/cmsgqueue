@@ -24,6 +24,7 @@ struct cmq_slab {
     size_t obj_size;
     size_t capacity;      /* initial capacity per page */
     cmq_slab_page_t *head;
+    cmq_slab_page_t *last_free_page; /* cache: skip linear scan on hot-path free */
     size_t total_allocated; /* total number of objects ever allocated (per tests) */
 };
 
@@ -74,7 +75,7 @@ cmq_slab_t *cmq_slab_create(size_t obj_size, size_t capacity) {
     /* head_index is int — index freelist cannot exceed INT_MAX slots. */
     if (obj_size < sizeof(void *) && capacity > (size_t)INT_MAX)
         return NULL;
-    cmq_slab_t *slab = (cmq_slab_t *)malloc(sizeof(*slab));
+    cmq_slab_t *slab = (cmq_slab_t *)calloc(1, sizeof(*slab));
     if (!slab) return NULL;
     slab->obj_size = obj_size;
     slab->capacity = (capacity > 0) ? capacity : 4;
@@ -96,6 +97,7 @@ void cmq_slab_destroy(cmq_slab_t *slab) {
         free(cur);
         cur = n;
     }
+    slab->last_free_page = NULL;
     free(slab);
 }
 
@@ -189,8 +191,19 @@ void *cmq_slab_alloc(cmq_slab_t *slab) {
 
 void cmq_slab_free(cmq_slab_t *slab, void *obj) {
     if (!slab || !obj) return;
-    cmq_slab_page_t *page = slab_find_page(slab, obj);
-    if (!page) return;
+    cmq_slab_page_t *page = slab->last_free_page;
+    if (page) {
+        size_t span;
+        if (size_mul(page->capacity, page->obj_size, &span) != 0 ||
+            (uint8_t *)obj < page->mem || (uint8_t *)obj >= page->mem + span) {
+            page = NULL; /* miss — fall back to linear scan */
+        }
+    }
+    if (!page) {
+        page = slab_find_page(slab, obj);
+        if (!page) return;
+        slab->last_free_page = page;
+    }
     uintptr_t off = (uintptr_t)((uint8_t *)obj - page->mem);
     if (off % page->obj_size != 0) return;
     size_t idx = off / page->obj_size;

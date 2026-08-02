@@ -15,7 +15,9 @@ void cmq_slab_destroy(cmq_slab_t *slab);
 /* Allocate an object from the slab */
 void *cmq_slab_alloc(cmq_slab_t *slab);
 
-/* Free an object back to the slab */
+/* Free an object back to the slab.
+   NOTE: cmq_slab is single-threaded — concurrent alloc/free from multiple
+   threads on the same slab is not safe. */
 void cmq_slab_free(cmq_slab_t *slab, void *obj);
 
 /* Get number of currently allocated objects */
