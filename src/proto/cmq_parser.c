@@ -8,11 +8,13 @@
 #include "cmq_platform.h"
 #include "cmq_types.h"
 #include "cmq_proto.h"
+#include "cmq_slab.h"
 
 /* Internal parser state */
 typedef struct cmq_frame_node {
     cmq_frame_t frame;
     struct cmq_frame_node *next;
+    int from_slab;                  /* 1 = owned by node_slab, 0 = malloc fallback */
 } cmq_frame_node_t;
 
 struct cmq_parser {
@@ -36,6 +38,11 @@ struct cmq_parser {
     uint8_t *hold;
     size_t hold_len;
     size_t hold_cap;
+
+    /* Per-parser slab for cmq_frame_node_t (initial capacity 128; doubles on
+       demand). Payload buffer remains malloc-backed because frame body is
+       variable-size. */
+    cmq_slab_t *node_slab;
 };
 
 #define CMQ_MAX_PAYLOAD (16 * 1024 * 1024) /* 16 MB application body ceiling */
@@ -45,6 +52,8 @@ struct cmq_parser {
 #define CMQ_PARSER_FRAME_QUEUE_MAX 64
 /* Bound queued payload memory ≈ 2× max_payload (not 64×). */
 #define CMQ_PARSER_QUEUED_BYTES_FACTOR 2
+/* Per-parser slab initial capacity for cmq_frame_node_t. Doubles on demand. */
+#define CMQ_PARSER_NODE_SLAB_CAP 128
 
 static cmq_frame_node_t *cmq_push_frame(cmq_parser_t *p, cmq_frame_t *frame) {
     if (p->queued >= CMQ_PARSER_FRAME_QUEUE_MAX) return NULL; /* backpressure */
@@ -56,10 +65,16 @@ static cmq_frame_node_t *cmq_push_frame(cmq_parser_t *p, cmq_frame_t *frame) {
     if (p->queued_bytes > budget ||
         frame->payload_len > budget - p->queued_bytes)
         return NULL; /* backpressure */
-    cmq_frame_node_t *node = (cmq_frame_node_t *)malloc(sizeof(*node));
-    if (!node) {
-        p->pending_error = 1; /* OOM is fatal — not retryable backpressure */
-        return NULL;
+    cmq_frame_node_t *node = (cmq_frame_node_t *)cmq_slab_alloc(p->node_slab);
+    if (node) {
+        node->from_slab = 1;
+    } else {
+        node = (cmq_frame_node_t *)malloc(sizeof(*node));
+        if (!node) {
+            p->pending_error = 1; /* OOM is fatal — not retryable backpressure */
+            return NULL;
+        }
+        node->from_slab = 0;
     }
     node->frame = *frame;
     node->next = NULL;
@@ -93,6 +108,13 @@ cmq_parser_t *cmq_parser_create(void) {
     p->hold = NULL;
     p->hold_len = 0;
     p->hold_cap = 0;
+    p->node_slab = cmq_slab_create(sizeof(cmq_frame_node_t),
+                                   CMQ_PARSER_NODE_SLAB_CAP);
+    if (!p->node_slab) {
+        free(p->inbuf);
+        free(p);
+        return NULL;
+    }
     return p;
 }
 
@@ -113,7 +135,10 @@ void cmq_parser_destroy(cmq_parser_t *p) {
     while (cur) {
         cmq_frame_node_t *n = cur->next;
         if (cur->frame.payload) free(cur->frame.payload);
-        free(cur);
+        if (cur->from_slab)
+            cmq_slab_free(p->node_slab, cur);
+        else
+            free(cur);
         cur = n;
     }
     p->head = p->tail = NULL;
@@ -121,6 +146,7 @@ void cmq_parser_destroy(cmq_parser_t *p) {
     p->queued_bytes = 0;
     if (p->inbuf) free(p->inbuf);
     free(p->hold);
+    cmq_slab_destroy(p->node_slab);
     free(p);
 }
 
@@ -131,7 +157,10 @@ void cmq_parser_reset(cmq_parser_t *p) {
     while (cur) {
         cmq_frame_node_t *n = cur->next;
         if (cur->frame.payload) free(cur->frame.payload);
-        free(cur);
+        if (cur->from_slab)
+            cmq_slab_free(p->node_slab, cur);
+        else
+            free(cur);
         cur = n;
     }
     p->head = p->tail = NULL;
@@ -447,7 +476,10 @@ int cmq_parser_next(cmq_parser_t *p) {
     else
         p->queued_bytes = 0;
     if (n->frame.payload) free(n->frame.payload);
-    free(n);
+    if (n->from_slab)
+        cmq_slab_free(p->node_slab, n);
+    else
+        free(n);
     return (p->head != NULL) ? 1 : 0;
 }
 
