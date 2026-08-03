@@ -20,6 +20,14 @@ NATS JetStream's "ack on persist" model — durability is a
 publisher-side concern. A future PR can wire explicit
 PUBLISH-with-ack semantics.
 
+**Current limitation (v0.2.0):** the append at `credit_msgs_in` is
+a zero-byte marker per published message. The actual payload
+(subject + body + headers) is NOT yet persisted — only a count.
+Wiring the payload through `credit_msgs_in` requires changing
+its signature to take the `frame` parameter, which is a refactor
+of multiple call sites. This is deferred. Recovery on restart is
+out of scope.
+
 ## Files touched
 
 - `src/include/cmq.h` — `persist_dir` config field.
