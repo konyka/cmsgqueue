@@ -430,4 +430,74 @@ TEST(parser, hard_cap_keeps_queued) {
     cmq_parser_destroy(p);
 }
 
+/* F11: Reject unknown CMQ_FLAG_* bits pre-CONNACK.
+ * The flags 0x01 (CMQ_FLAG_COMPRESSED) and 0x02 (CMQ_FLAG_CHECKSUM) are
+ * reserved but not yet implemented on the wire. A peer setting them
+ * currently gets garbage fanned out — interop bug. Parser must mark
+ * pending_error so the server tears down the connection.
+ */
+TEST(parser, reject_flag_compressed) {
+    cmq_parser_t *p = cmq_parser_create();
+    uint8_t buf[32];
+    /* Encode with flags=CMQ_FLAG_COMPRESSED (0x01) */
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
+                                CMQ_FLAG_COMPRESSED, NULL, 0);
+    ASSERT(n > 0);
+    (void)cmq_parser_feed(p, buf, n);
+    ASSERT_EQ(cmq_parser_pending_error(p), 1);
+    cmq_parser_destroy(p);
+}
+
+TEST(parser, reject_flag_checksum) {
+    cmq_parser_t *p = cmq_parser_create();
+    uint8_t buf[32];
+    /* Encode with flags=CMQ_FLAG_CHECKSUM (0x02) */
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
+                                CMQ_FLAG_CHECKSUM, NULL, 0);
+    ASSERT(n > 0);
+    (void)cmq_parser_feed(p, buf, n);
+    ASSERT_EQ(cmq_parser_pending_error(p), 1);
+    cmq_parser_destroy(p);
+}
+
+TEST(parser, reject_flag_combined_reserved) {
+    cmq_parser_t *p = cmq_parser_create();
+    uint8_t buf[32];
+    /* flags = 0x03 (both COMPRESSED|Checksum) — must also reject */
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
+                                0x03, NULL, 0);
+    ASSERT(n > 0);
+    (void)cmq_parser_feed(p, buf, n);
+    ASSERT_EQ(cmq_parser_pending_error(p), 1);
+    cmq_parser_destroy(p);
+}
+
+TEST(parser, accept_flag_headers) {
+    /* Sanity: CMQ_FLAG_HEADERS (0x04) is already implemented and must
+     * still parse without error. */
+    cmq_parser_t *p = cmq_parser_create();
+    uint8_t buf[32];
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
+                                CMQ_FLAG_HEADERS, NULL, 0);
+    ASSERT(n > 0);
+    int rc = cmq_parser_feed(p, buf, n);
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 0);
+    cmq_parser_destroy(p);
+}
+
+TEST(parser, accept_flag_batch) {
+    /* Sanity: CMQ_FLAG_BATCH (0x08) is already implemented and must
+     * still parse without error. */
+    cmq_parser_t *p = cmq_parser_create();
+    uint8_t buf[32];
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_BATCH,
+                                CMQ_FLAG_BATCH, NULL, 0);
+    ASSERT(n > 0);
+    int rc = cmq_parser_feed(p, buf, n);
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 0);
+    cmq_parser_destroy(p);
+}
+
 TEST_MAIN()

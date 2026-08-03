@@ -254,6 +254,15 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
             return parser_have_frames(p, produced);
         }
 
+        /* F11: Reject unknown flag bits pre-CONNACK. CMQ_FLAG_COMPRESSED (0x01)
+         * and CMQ_FLAG_CHECKSUM (0x02) are reserved but not yet implemented on
+         * the wire. Accepting them silently round-trips garbage to subscribers.
+         * Future promotion: each bit moves to a dedicated branch here. */
+        if (hb[3] & (uint8_t)(CMQ_FLAG_COMPRESSED | CMQ_FLAG_CHECKSUM)) {
+            p->pending_error = 1;
+            return parser_have_frames(p, produced);
+        }
+
         uint32_t payload_len = (uint32_t)hb[5] | ((uint32_t)hb[6] << 8) |
                                ((uint32_t)hb[7] << 16) | ((uint32_t)hb[8] << 24);
 
