@@ -1944,7 +1944,11 @@ static void credit_msgs_in(cmq_server_t *srv, cmq_client_t *c, size_t msg_len) {
         cmq_account_release(srv->accounts, acc);
     }
     /* F5: persist to WAL. Best-effort: a failed append is logged
-     * but does not block delivery. Operators monitor stat_persist_fail. */
+     * but does not block delivery. Operators monitor stat_persist_fail.
+     * NOTE: this is a marker append (zero bytes). Wiring the actual
+     * payload requires passing the frame through credit_msgs_in, which
+     * is deferred to a follow-up. The WAL is created and incremented
+     * for every published message. */
     if (srv->filestore) {
         uint64_t seq = 0;
         if (cmq_filestore_append(srv->filestore, (const uint8_t *)"", 0,
@@ -3587,14 +3591,15 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
      * hold the head-of-line lock; once inbox_max_pending is
      * reached, additional REQUESTs are rejected with a clear
      * error so the publisher can back off. */
+    int pending = cmq_atomic_load_int(&c->inbox_pending, CMQ_ATOMIC_RELAXED);
     if (srv->config.inbox_max_pending > 0 &&
-        c->inbox_pending >= srv->config.inbox_max_pending) {
+        pending >= srv->config.inbox_max_pending) {
         cmq_send_error(c, "inbox full");
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
         return;
     }
-    c->inbox_pending++;
+    cmq_atomic_fetch_add_int(&c->inbox_pending, 1, CMQ_ATOMIC_RELAXED);
 
     size_t offset = 0;
     uint16_t wire_subj = ((uint16_t)frame->payload[offset] << 8) |
@@ -3776,7 +3781,8 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
      * response is matched to a previous REQUEST by reply-to subject;
      * the simple per-conn count is sufficient for the HoL protection
      * even if exact match is racy. */
-    if (c->inbox_pending > 0) c->inbox_pending--;
+    if (cmq_atomic_load_int(&c->inbox_pending, CMQ_ATOMIC_RELAXED) > 0)
+        cmq_atomic_fetch_sub_int(&c->inbox_pending, 1, CMQ_ATOMIC_RELAXED);
 
     size_t offset = 0;
     uint16_t wire_subj = ((uint16_t)frame->payload[offset] << 8) |
@@ -6119,21 +6125,16 @@ static void accept_cb(int fd, int events, void *data) {
          * over a 1-second bucket. Bucket key is the 32-bit IPv4
          * address; collisions are tolerable (worst case, an attacker
          * shares the same source address with itself). The cap is
-         * uniform across all IPs. */
+         * uniform across all IPs. rate_lock is per-server, initialized
+         * in cmq_server_create. */
         if (srv->config.max_connects_per_sec > 0 && addr.sin_family == AF_INET) {
-            static cmq_mutex_t rate_lock = PTHREAD_MUTEX_INITIALIZER;
-            static int rate_lock_inited = 0;
-            if (!rate_lock_inited) {
-                cmq_mutex_init(&rate_lock);
-                rate_lock_inited = 1;
-            }
             uint32_t ip = (uint32_t)addr.sin_addr.s_addr;
             int admitted_rate = 0;
             struct timespec ts_now;
             clock_gettime(CLOCK_MONOTONIC, &ts_now);
             uint64_t now_ms = (uint64_t)ts_now.tv_sec * 1000ULL +
                               (uint64_t)ts_now.tv_nsec / 1000000ULL;
-            cmq_mutex_lock(&rate_lock);
+            cmq_mutex_lock(&srv->rate_lock);
             for (int i = 0; i < CMQ_RATE_LIMIT_SLOTS; i++) {
                 if (srv->rate_slots[i].ip == ip) {
                     if (now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
@@ -6155,7 +6156,7 @@ static void accept_cb(int fd, int events, void *data) {
                     break;
                 }
             }
-            cmq_mutex_unlock(&rate_lock);
+            cmq_mutex_unlock(&srv->rate_lock);
             if (!admitted_rate) {
                 cmq_atomic_fetch_add_u32(&srv->active_clients, -1,
                                           CMQ_ATOMIC_RELAXED);
@@ -6382,10 +6383,12 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     cmq_atomic_store_int(&srv->run_active, 0, CMQ_ATOMIC_SEQ_CST);
 
     cmq_mutex_init(&srv->clients_lock);
+    cmq_mutex_init(&srv->rate_lock);
 
     srv->sublist = cmq_sublist_create();
     if (!srv->sublist) {
         cmq_mutex_destroy(&srv->clients_lock);
+        cmq_mutex_destroy(&srv->rate_lock);
         cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_NO_MEMORY;
@@ -7127,6 +7130,7 @@ void cmq_server_destroy(cmq_server_t *srv) {
         srv->tls_config = NULL;
     }
     cmq_mutex_destroy(&srv->clients_lock);
+    cmq_mutex_destroy(&srv->rate_lock);
     cmq_config_free(&srv->config);
     free(srv);
 }

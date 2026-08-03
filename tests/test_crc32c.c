@@ -37,7 +37,7 @@ TEST(crc32c, streaming_consistency) {
      * (init=0xFFFFFFFF applied by caller); cmq_crc32c applies the
      * standard init/xorout on the public API. */
     const char *s = "Hello, CMSGQueue! This is a streaming test.";
-    size_t len = 48;
+    size_t len = strlen(s);
     uint32_t one_shot = cmq_crc32c(0, (const uint8_t *)s, len);
     uint32_t stream = 0xFFFFFFFFu;
     for (size_t i = 0; i < len; i++) {

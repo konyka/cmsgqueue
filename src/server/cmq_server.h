@@ -80,7 +80,7 @@ typedef struct cmq_client {
     uint32_t next_sub_id;
     cmq_sub_entry_t *subs;
     int sub_count;
-    int inbox_pending;
+    cmq_atomic_int inbox_pending;
     char *username;
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
     uint32_t account_epoch;         /* must match account->epoch after CONNECT */
@@ -196,6 +196,7 @@ struct cmq_server {
 
     cmq_atomic_u32 active_clients;  /* accept/teardown gate for max_clients */
     cmq_atomic_int acceptor_drain;  /* 1: acceptor loop must DISCONNECT locals */
+    cmq_mutex_t rate_lock;          /* F10: protects rate_slots[] */
 
     cmq_atomic_u64 stat_connections;
     cmq_atomic_u64 stat_messages_in;

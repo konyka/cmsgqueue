@@ -58,6 +58,14 @@ static cmq_inline void cmq_atomic_store_int(cmq_atomic_int *a, int v, memory_ord
     atomic_store_explicit(a, v, mo);
 }
 
+static cmq_inline int cmq_atomic_fetch_add_int(cmq_atomic_int *a, int v, memory_order mo) {
+    return atomic_fetch_add_explicit(a, v, mo);
+}
+
+static cmq_inline int cmq_atomic_fetch_sub_int(cmq_atomic_int *a, int v, memory_order mo) {
+    return atomic_fetch_sub_explicit(a, v, mo);
+}
+
 static cmq_inline bool cmq_atomic_compare_exchange_ptr(cmq_atomic_ptr *a, void **expected, void *desired, memory_order mo) {
     memory_order fail_mo = (mo == memory_order_release) ? memory_order_relaxed : mo;
     if (fail_mo == memory_order_acq_rel) fail_mo = memory_order_acquire;
