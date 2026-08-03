@@ -103,9 +103,11 @@ endfunction()
 # Architecture-specific flags
 # ---------------------------------------------------------------------------
 if(CMQ_ARCH_X86_64)
-    # Ensure SSE2 for x86_64 (always available)
+    # Ensure SSE2 for x86_64 (always available). SSE4.2 is enabled for
+    # the CRC32C hot path on x86_64 (Nehalem+ baseline).
     if(NOT CMAKE_C_COMPILER_ID STREQUAL "MSVC")
         add_compile_options(-msse2)
+        add_compile_options(-msse4.2)
     endif()
 endif()
 
