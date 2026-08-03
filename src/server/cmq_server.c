@@ -1935,28 +1935,18 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
 }
 
 /* Credit ingress after match/snapshot succeed — not on OOM / early reject. */
-static void credit_msgs_in(cmq_server_t *srv, cmq_client_t *c, size_t msg_len) {
+static void credit_msgs_in(cmq_server_t *srv, cmq_client_t *c,
+                            const cmq_frame_t *frame) {
     if (!srv || !c) return;
+    size_t msg_len = frame ? frame->payload_len : 0;
     cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
     if (acc) {
         cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)msg_len);
         cmq_account_release(srv->accounts, acc);
     }
-    /* F5: persist to WAL. Best-effort: a failed append is logged
-     * but does not block delivery. Operators monitor stat_persist_fail.
-     * NOTE: this is a marker append (zero bytes). Wiring the actual
-     * payload requires passing the frame through credit_msgs_in, which
-     * is deferred to a follow-up. The WAL is created and incremented
-     * for every published message. */
-    if (srv->filestore) {
-        uint64_t seq = 0;
-        if (cmq_filestore_append(srv->filestore, (const uint8_t *)"", 0,
-                                  &seq) != 0) {
-            cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
-                                      CMQ_ATOMIC_RELAXED);
-        }
-    }
+    /* F5 persistence happens in handle_publish BEFORE the sublist
+     * match, so this function only handles credit. */
 }
 
 /* pub_account non-empty: recheck may_deliver (same as mailbox SEND). */
@@ -2935,6 +2925,17 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    /* F5: persist to WAL BEFORE sublist match. We persist validated
+     * publishes regardless of subscriber count. */
+    if (srv->filestore && frame && frame->payload) {
+        uint64_t seq = 0;
+        if (cmq_filestore_append(srv->filestore, frame->payload,
+                                  frame->payload_len, &seq) != 0) {
+            cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        }
+    }
+
     size_t route_sent = 0;
     int route_rc = 0;
 
@@ -2968,7 +2969,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             }
         }
         /* Align BATCH — credit only after remote-only ingress succeeds. */
-        credit_msgs_in(srv, c, msg_len);
+        credit_msgs_in(srv, c, frame);
         return;
     }
 
@@ -3008,7 +3009,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                 return;
             }
         }
-        credit_msgs_in(srv, c, msg_len);
+        credit_msgs_in(srv, c, frame);
         return;
     }
 
@@ -3050,7 +3051,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             free(tgts);
             /* Align sync — cluster already has the message. */
             if (route_sent > 0)
-                credit_msgs_in(srv, c, msg_len);
+                credit_msgs_in(srv, c, frame);
             else
                 cmq_send_error(c, "delivery failed");
             return;
@@ -3062,7 +3063,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                 free(coro_payload);
                 free(tgts);
                 if (route_sent > 0)
-                    credit_msgs_in(srv, c, msg_len);
+                    credit_msgs_in(srv, c, frame);
                 else
                     cmq_send_error(c, "delivery failed");
                 return;
@@ -3079,12 +3080,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
                                       CMQ_ATOMIC_RELAXED);
             if (route_sent > 0)
-                credit_msgs_in(srv, c, msg_len);
+                credit_msgs_in(srv, c, frame);
             else
                 cmq_send_error(c, "delivery failed");
         } else {
             /* Async accepted or sync-fallback delivered — align BATCH. */
-            credit_msgs_in(srv, c, msg_len);
+            credit_msgs_in(srv, c, frame);
         }
         return;
     }
@@ -3096,11 +3097,11 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         /* Cluster already has the message — do not ERROR the publisher. */
         if (route_sent > 0)
-            credit_msgs_in(srv, c, msg_len);
+            credit_msgs_in(srv, c, frame);
         else
             cmq_send_error(c, "delivery failed");
     } else {
-        credit_msgs_in(srv, c, msg_len);
+        credit_msgs_in(srv, c, frame);
     }
     free(tgts);
 }
@@ -3718,7 +3719,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             return;
         }
         if (n > 0) {
-            credit_msgs_in(srv, c, msg_len);
+            credit_msgs_in(srv, c, frame);
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
@@ -3737,7 +3738,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                 return;
             }
             if (route_sent > 0) {
-                credit_msgs_in(srv, c, msg_len);
+                credit_msgs_in(srv, c, frame);
                 uint8_t ack[4] = {0};
                 size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK,
                                                    0, NULL, 0);
@@ -3758,7 +3759,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             return;
         }
         if (!c->is_route && route_sent > 0) {
-            credit_msgs_in(srv, c, msg_len);
+            credit_msgs_in(srv, c, frame);
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
@@ -3905,7 +3906,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
                     return;
                 }
                 if (route_sent > 0) {
-                    credit_msgs_in(srv, c, msg_len);
+                    credit_msgs_in(srv, c, frame);
                 } else if (cmq_route_forward_missed(srv, route_rc, route_sent)) {
                     cmq_send_error(c, "route failed");
                 } else {
@@ -3915,11 +3916,11 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
                 cmq_send_error(c, "delivery failed");
             }
         } else {
-            credit_msgs_in(srv, c, msg_len);
+            credit_msgs_in(srv, c, frame);
         }
     } else if (!c->is_route) {
         if (route_sent > 0) {
-            credit_msgs_in(srv, c, msg_len);
+            credit_msgs_in(srv, c, frame);
         } else if (cmq_route_forward_missed(srv, route_rc, route_sent)) {
             cmq_send_error(c, "route failed");
         } else {

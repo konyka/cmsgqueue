@@ -10,9 +10,10 @@ needed durability had no way to enable it from the public config.
 
 A new config field `persist_dir` (default NULL = disabled). When
 set, `cmq_server_create` opens a filestore at `persist_dir/<prefix>`
-and credits every published message to it via
-`cmq_filestore_append`. On shutdown, `cmq_filestore_sync` is called
-for a graceful flush before destroy.
+and appends every **validated publish** to it via
+`cmq_filestore_append`. The append happens in `handle_publish`
+**after** subject validation and ACL check, **before** the sublist
+match — so a publish with no subscribers is still persisted.
 
 The wiring is **best-effort**: a failed append increments
 `stat_persist_fail` but does not block delivery. This matches
@@ -20,13 +21,14 @@ NATS JetStream's "ack on persist" model — durability is a
 publisher-side concern. A future PR can wire explicit
 PUBLISH-with-ack semantics.
 
-**Current limitation (v0.2.0):** the append at `credit_msgs_in` is
-a zero-byte marker per published message. The actual payload
-(subject + body + headers) is NOT yet persisted — only a count.
-Wiring the payload through `credit_msgs_in` requires changing
-its signature to take the `frame` parameter, which is a refactor
-of multiple call sites. This is deferred. Recovery on restart is
-out of scope.
+The full wire payload is appended: subject (with length),
+reply-to (with length), and body. The format is the raw wire
+bytes — no transformation. On recovery, a future replay
+implementation parses each record by reading the wire payload
+length and dispatching.
+
+On shutdown, `cmq_filestore_sync` is called for a graceful flush
+before destroy.
 
 ## Files touched
 
@@ -36,10 +38,15 @@ out of scope.
 
 ## Tests
 
-The existing `test_store.c` exercises the filestore library. No new
-test added for the wire-up because the lifecycle test would require
-a full server teardown and fsync verification (slow, out of scope
-for this PR).
+`tests/test_persist_unit.c` (new):
+- `filestore_not_opened_when_null` — server starts without any
+  filestore files when `persist_dir` is NULL.
+- `filestore_opened_when_set` — server creates `cmq.data` and
+  `cmq.idx` when `persist_dir` is set.
+- `stat_persist_fail_starts_at_zero` — implicit (server starts).
+- `config_field_default` — `persist_dir` defaults to NULL.
+
+The existing `test_store.c` exercises the filestore library.
 
 ## Verification gates
 
