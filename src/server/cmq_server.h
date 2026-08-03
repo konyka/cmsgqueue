@@ -189,6 +189,7 @@ struct cmq_server {
     cmq_route_pool_t *routes;
     cmq_cluster_t *cluster;
     struct cmq_filestore *filestore;   /* F5: optional WAL; NULL = disabled */
+    struct cmq_mqtt_bridge *mqtt_bridge; /* F6: optional upstream MQTT client */
     cmq_tls_config_t *tls_config;
 
     cmq_mpool_t *msg_payload_pool;  /* pool for worker SEND msg->buf (<=64KiB); NULL = malloc fallback */

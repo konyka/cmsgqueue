@@ -6,6 +6,7 @@
 #include "cmq_crc32c.h"
 #include "cmq_compress.h"
 #include "cmq_filestore.h"
+#include "cmq_mqtt.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -6486,6 +6487,28 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         cmq_log_info(srv->log, "Persistence enabled: dir=%s", srv->config.persist_dir);
     }
 
+    /* F6: MQTT upstream bridge (client mode). When mqtt_bridge_addr
+     * is set, the server connects to the upstream broker and can
+     * forward published messages. Forwarding policy is left to the
+     * operator (cmq_mqtt_add_mapping); this just opens the client. */
+    if (srv->config.mqtt_bridge_addr && srv->config.mqtt_bridge_addr[0] != '\0') {
+        srv->mqtt_bridge = cmq_mqtt_bridge_create("cmsgbridge");
+        if (srv->mqtt_bridge) {
+            if (cmq_mqtt_bridge_connect(srv->mqtt_bridge,
+                                          srv->config.mqtt_bridge_addr,
+                                          srv->config.mqtt_bridge_port) != 0) {
+                cmq_log_warn(srv->log,
+                    "MQTT bridge connect failed; bridge disabled");
+                cmq_mqtt_bridge_destroy(srv->mqtt_bridge);
+                srv->mqtt_bridge = NULL;
+            } else {
+                cmq_log_info(srv->log, "MQTT bridge connected: %s:%d",
+                             srv->config.mqtt_bridge_addr,
+                             srv->config.mqtt_bridge_port);
+            }
+        }
+    }
+
     if (srv->config.cluster_name && srv->config.cluster_node_id) {
         srv->cluster = cmq_cluster_create(srv->config.cluster_name,
                                            srv->config.cluster_node_id);
@@ -7077,6 +7100,11 @@ void cmq_server_destroy(cmq_server_t *srv) {
         cmq_filestore_sync(srv->filestore);
         cmq_filestore_destroy(srv->filestore);
         srv->filestore = NULL;
+    }
+    if (srv->mqtt_bridge) {
+        cmq_mqtt_bridge_disconnect(srv->mqtt_bridge);
+        cmq_mqtt_bridge_destroy(srv->mqtt_bridge);
+        srv->mqtt_bridge = NULL;
     }
     if (srv->log) {
         cmq_log_destroy(srv->log);

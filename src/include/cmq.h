@@ -86,6 +86,11 @@ typedef struct cmq_config {
     int max_connects_per_sec;  /* F10: per-IP connect rate cap; 0=disabled */
     int inbox_max_pending;     /* F15: per-conn REQUEST pending cap; 0=disabled */
     const char *persist_dir;   /* F5: WAL directory; NULL = disabled */
+    /* F6: MQTT bridge (client mode). When mqtt_bridge_addr is set,
+     * the server forwards published messages matching a subject
+     * mapping to the upstream broker. NULL = disabled. */
+    const char *mqtt_bridge_addr;
+    int mqtt_bridge_port;
 } cmq_config_t;
 
 /**
