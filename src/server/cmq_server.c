@@ -5,6 +5,7 @@
 #include "cmq_coro.h"
 #include "cmq_crc32c.h"
 #include "cmq_compress.h"
+#include "cmq_filestore.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -1940,6 +1941,16 @@ static void credit_msgs_in(cmq_server_t *srv, cmq_client_t *c, size_t msg_len) {
     if (acc) {
         cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)msg_len);
         cmq_account_release(srv->accounts, acc);
+    }
+    /* F5: persist to WAL. Best-effort: a failed append is logged
+     * but does not block delivery. Operators monitor stat_persist_fail. */
+    if (srv->filestore) {
+        uint64_t seq = 0;
+        if (cmq_filestore_append(srv->filestore, (const uint8_t *)"", 0,
+                                  &seq) != 0) {
+            cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        }
     }
 }
 
@@ -6460,6 +6471,21 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         cmq_log_info(srv->log, "TLS enabled: cert=%s", srv->config.tls_cert);
     }
 
+    /* F5: persistence WAL. When persist_dir is set, open a filestore
+     * and persist every published message. fsync is amortized
+     * (cmq_filestore_sync is called by the accept loop tick). */
+    if (srv->config.persist_dir && srv->config.persist_dir[0] != '\0') {
+        srv->filestore = cmq_filestore_create(srv->config.persist_dir, "cmq");
+        if (!srv->filestore) {
+            cmq_log_error(srv->log,
+                "filestore create failed for dir=%s", srv->config.persist_dir);
+            cmq_server_destroy(srv);
+            *server = NULL;
+            return CMQ_ERR_INVALID_ARG;
+        }
+        cmq_log_info(srv->log, "Persistence enabled: dir=%s", srv->config.persist_dir);
+    }
+
     if (srv->config.cluster_name && srv->config.cluster_node_id) {
         srv->cluster = cmq_cluster_create(srv->config.cluster_name,
                                            srv->config.cluster_node_id);
@@ -7046,6 +7072,11 @@ void cmq_server_destroy(cmq_server_t *srv) {
         cmq_sublist_free_data(srv->sublist);
         cmq_sublist_destroy(srv->sublist);
         srv->sublist = NULL;
+    }
+    if (srv->filestore) {
+        cmq_filestore_sync(srv->filestore);
+        cmq_filestore_destroy(srv->filestore);
+        srv->filestore = NULL;
     }
     if (srv->log) {
         cmq_log_destroy(srv->log);

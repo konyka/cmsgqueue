@@ -188,6 +188,7 @@ struct cmq_server {
     cmq_account_manager_t *accounts;
     cmq_route_pool_t *routes;
     cmq_cluster_t *cluster;
+    struct cmq_filestore *filestore;   /* F5: optional WAL; NULL = disabled */
     cmq_tls_config_t *tls_config;
 
     cmq_mpool_t *msg_payload_pool;  /* pool for worker SEND msg->buf (<=64KiB); NULL = malloc fallback */
@@ -204,6 +205,7 @@ struct cmq_server {
     cmq_atomic_u64 stat_publishes_rejected;
     cmq_atomic_u64 stat_subscribes_rejected;
     cmq_atomic_u64 stat_messages_dropped;   /* worker queue full / push OOM */
+    cmq_atomic_u64 stat_persist_fail;       /* F5: filestore append failures */
     cmq_atomic_u64 qg_rr_counter;           /* queue-group round-robin pick */
 
     cmq_thread_t route_reconn_thr;
