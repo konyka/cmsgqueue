@@ -3571,6 +3571,19 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    /* F15: per-conn inbox budget. Slow responders can no longer
+     * hold the head-of-line lock; once inbox_max_pending is
+     * reached, additional REQUESTs are rejected with a clear
+     * error so the publisher can back off. */
+    if (srv->config.inbox_max_pending > 0 &&
+        c->inbox_pending >= srv->config.inbox_max_pending) {
+        cmq_send_error(c, "inbox full");
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        return;
+    }
+    c->inbox_pending++;
+
     size_t offset = 0;
     uint16_t wire_subj = ((uint16_t)frame->payload[offset] << 8) |
                           frame->payload[offset + 1];
@@ -3747,6 +3760,11 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "invalid response");
         return;
     }
+    /* F15: RESPONSE decrements the inbox_pending counter. The
+     * response is matched to a previous REQUEST by reply-to subject;
+     * the simple per-conn count is sufficient for the HoL protection
+     * even if exact match is racy. */
+    if (c->inbox_pending > 0) c->inbox_pending--;
 
     size_t offset = 0;
     uint16_t wire_subj = ((uint16_t)frame->payload[offset] << 8) |

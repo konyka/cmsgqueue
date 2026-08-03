@@ -110,6 +110,8 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
                                &config->max_subs_per_client);
     } else if (strcmp(key, "max_connects_per_sec") == 0) {
         return parse_int_range(value, 0, 100000, &config->max_connects_per_sec);
+    } else if (strcmp(key, "inbox_max_pending") == 0) {
+        return parse_int_range(value, 0, 100000, &config->inbox_max_pending);
     } else if (strcmp(key, "ping_interval") == 0 || strcmp(key, "ping_interval_ms") == 0) {
         return parse_int_range(value, 0, 86400000, &config->ping_interval_ms);
     } else if (strcmp(key, "write_timeout") == 0 || strcmp(key, "write_timeout_ms") == 0) {
@@ -257,6 +259,8 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         return CMQ_ERR_INVALID_ARG;
     if (config->max_connects_per_sec < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_connects_per_sec > 100000) return CMQ_ERR_INVALID_ARG;
+    if (config->inbox_max_pending < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->inbox_max_pending > 100000) return CMQ_ERR_INVALID_ARG;
     if (config->ping_interval_ms < 0) return CMQ_ERR_INVALID_ARG;
     /* Cap so keepalive timeout_ms = interval*2 cannot overflow int. */
     if (config->ping_interval_ms > 86400000) /* 24h */

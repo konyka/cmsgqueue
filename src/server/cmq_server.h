@@ -80,6 +80,7 @@ typedef struct cmq_client {
     uint32_t next_sub_id;
     cmq_sub_entry_t *subs;
     int sub_count;
+    int inbox_pending;
     char *username;
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
     uint32_t account_epoch;         /* must match account->epoch after CONNECT */

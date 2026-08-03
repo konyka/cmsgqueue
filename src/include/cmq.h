@@ -84,6 +84,7 @@ typedef struct cmq_config {
     const char *tls_cert;
     const char *tls_key;
     int max_connects_per_sec;  /* F10: per-IP connect rate cap; 0=disabled */
+    int inbox_max_pending;     /* F15: per-conn REQUEST pending cap; 0=disabled */
 } cmq_config_t;
 
 /**
