@@ -168,6 +168,11 @@ struct cmq_server {
     cmq_client_t **clients;
     int clients_count;
     int clients_cap;
+    struct {
+        uint32_t ip;
+        uint64_t window_start_ms;
+        uint32_t count;
+    } rate_slots[CMQ_RATE_LIMIT_SLOTS];
     struct cmq_idmap *idmap;        /* acceptor-thread clients */
     cmq_atomic_u32 next_client_id;
     cmq_atomic_u32 next_conn_gen;   /* per-connection generation (id wrap safe) */

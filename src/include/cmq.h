@@ -32,6 +32,7 @@ extern "C" {
 #define CMQ_MAX_PAYLOAD_LIMIT \
     ((4 * 1024 * 1024) - (256 * 2 + 65536 + 64 + 10))
 #define CMQ_DEFAULT_MAX_SUBS_PER_CLIENT 1024
+#define CMQ_RATE_LIMIT_SLOTS 1024
 #define CMQ_DEFAULT_PING_INTERVAL 30000  /* 30 seconds */
 #define CMQ_DEFAULT_WRITE_TIMEOUT  5000  /* 5 seconds */
 
@@ -82,6 +83,7 @@ typedef struct cmq_config {
     int tls_enabled;
     const char *tls_cert;
     const char *tls_key;
+    int max_connects_per_sec;  /* F10: per-IP connect rate cap; 0=disabled */
 } cmq_config_t;
 
 /**

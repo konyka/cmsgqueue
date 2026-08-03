@@ -6085,6 +6085,55 @@ static void accept_cb(int fd, int events, void *data) {
             cmq_atomic_fetch_add_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
         }
 
+        /* F10: per-IP connect rate limit. Fixed-window counter
+         * over a 1-second bucket. Bucket key is the 32-bit IPv4
+         * address; collisions are tolerable (worst case, an attacker
+         * shares the same source address with itself). The cap is
+         * uniform across all IPs. */
+        if (srv->config.max_connects_per_sec > 0 && addr.sin_family == AF_INET) {
+            static cmq_mutex_t rate_lock = PTHREAD_MUTEX_INITIALIZER;
+            static int rate_lock_inited = 0;
+            if (!rate_lock_inited) {
+                cmq_mutex_init(&rate_lock);
+                rate_lock_inited = 1;
+            }
+            uint32_t ip = (uint32_t)addr.sin_addr.s_addr;
+            int admitted_rate = 0;
+            struct timespec ts_now;
+            clock_gettime(CLOCK_MONOTONIC, &ts_now);
+            uint64_t now_ms = (uint64_t)ts_now.tv_sec * 1000ULL +
+                              (uint64_t)ts_now.tv_nsec / 1000000ULL;
+            cmq_mutex_lock(&rate_lock);
+            for (int i = 0; i < CMQ_RATE_LIMIT_SLOTS; i++) {
+                if (srv->rate_slots[i].ip == ip) {
+                    if (now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
+                        srv->rate_slots[i].window_start_ms = now_ms;
+                        srv->rate_slots[i].count = 0;
+                    }
+                    if ((int)srv->rate_slots[i].count <
+                        srv->config.max_connects_per_sec) {
+                        srv->rate_slots[i].count++;
+                        admitted_rate = 1;
+                    }
+                    break;
+                }
+                if (srv->rate_slots[i].ip == 0) {
+                    srv->rate_slots[i].ip = ip;
+                    srv->rate_slots[i].window_start_ms = now_ms;
+                    srv->rate_slots[i].count = 1;
+                    admitted_rate = 1;
+                    break;
+                }
+            }
+            cmq_mutex_unlock(&rate_lock);
+            if (!admitted_rate) {
+                cmq_atomic_fetch_add_u32(&srv->active_clients, -1,
+                                          CMQ_ATOMIC_RELAXED);
+                close(client_fd);
+                continue;
+            }
+        }
+
         uint32_t cid = 0;
         for (int id_try = 0; id_try < 16; id_try++) {
             uint32_t cand = cmq_atomic_fetch_add_u32(&srv->next_client_id, 1,
