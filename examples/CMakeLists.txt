@@ -6,6 +6,7 @@ function(cmq_add_example name)
     add_executable(${name} ${name}.c)
     target_link_libraries(${name} PRIVATE cmsgqueue)
     target_compile_options(${name} PRIVATE ${CMQ_WARNING_FLAGS})
+    cmq_harden_executable(${name})
 endfunction()
 
 cmq_add_example(pubsub)

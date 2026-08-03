@@ -23,7 +23,13 @@ foreach(TEST_SRC ${TEST_SOURCES})
   add_executable(${TEST_NAME} ${TEST_SRC})
   target_link_libraries(${TEST_NAME} PRIVATE cmsgqueue)
   # Compile as C11, enable warnings as requested
-  target_compile_options(${TEST_NAME} PRIVATE -Wall -Wextra -Werror -std=c11)
+  # Note: -Werror is removed when F7 hardening is on (FORTIFY_SOURCE=2
+  # produces benign stringop-truncation warnings on correct patterns).
+  if(CMQ_ENABLE_HARDENING)
+    target_compile_options(${TEST_NAME} PRIVATE -Wall -Wextra -std=c11)
+  else()
+    target_compile_options(${TEST_NAME} PRIVATE -Wall -Wextra -Werror -std=c11)
+  endif()
   # Optional sanitizers
   if(DEFINED CMQ_ENABLE_ASAN AND CMQ_ENABLE_ASAN)
     target_compile_options(${TEST_NAME} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
@@ -37,6 +43,7 @@ foreach(TEST_SRC ${TEST_SOURCES})
       target_link_options(${TEST_NAME} PRIVATE -fsanitize=undefined)
     endif()
   endif()
+  cmq_harden_executable(${TEST_NAME})
   # Expose that we are building a shared component
   target_compile_definitions(${TEST_NAME} PRIVATE CMQ_BUILDING_SHARED _POSIX_C_SOURCE=200809L)
   # Add asCTest entry

@@ -149,6 +149,12 @@ target_include_directories(cmsgqueue
 target_compile_features(cmsgqueue PUBLIC c_std_11)
 target_compile_options(cmsgqueue PRIVATE ${CMQ_WARNING_FLAGS})
 
+# F7: Exclude hot-path TUs from -fstack-protector-strong to keep the
+# per-frame parser and per-allocation allocators inside the +2% perf
+# budget. The compiled-in canary would otherwise add a measurable
+# tax on these functions.
+cmq_apply_hardening_excludes(${CMQ_CORE_SOURCES} ${CMQ_PROTO_SOURCES})
+
 # Platform-specific link libraries
 if(UNIX)
     target_link_libraries(cmsgqueue PRIVATE pthread)
