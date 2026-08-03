@@ -255,10 +255,11 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
         }
 
         /* F11: Reject unknown flag bits pre-CONNACK. CMQ_FLAG_COMPRESSED (0x01)
-         * and CMQ_FLAG_CHECKSUM (0x02) are reserved but not yet implemented on
-         * the wire. Accepting them silently round-trips garbage to subscribers.
-         * Future promotion: each bit moves to a dedicated branch here. */
-        if (hb[3] & (uint8_t)(CMQ_FLAG_COMPRESSED | CMQ_FLAG_CHECKSUM)) {
+         * is reserved but not yet implemented on the wire. Accepting it
+         * silently round-trips garbage to subscribers. CMQ_FLAG_CHECKSUM
+         * (0x02) is now implemented (F3) — see handle_publish() for the
+         * trailing-4-byte verification. */
+        if (hb[3] & (uint8_t)CMQ_FLAG_COMPRESSED) {
             p->pending_error = 1;
             return parser_have_frames(p, produced);
         }

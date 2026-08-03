@@ -3,6 +3,7 @@
 #include "cmq_config.h"
 #include "cmq_platform.h"
 #include "cmq_coro.h"
+#include "cmq_crc32c.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -2876,6 +2877,31 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     }
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
+
+    /* F3: Wire checksum verification. When CMQ_FLAG_CHECKSUM is set on
+     * the PUBLISH, the trailing 4 bytes are the CRC32C (little-endian,
+     * standard form: init=0xFFFFFFFF, xorout=0xFFFFFFFF) of the wire
+     * payload excluding the trailing 4 bytes themselves. The checksum
+     * covers the entire wire payload (subject, reply-to, headers, body)
+     * so a single bit flip anywhere on the wire is detected. */
+    if (frame->hdr.flags & CMQ_FLAG_CHECKSUM) {
+        if (msg_len < 4) {
+            cmq_send_error(c, "checksum: payload too short");
+            return;
+        }
+        size_t data_len = msg_len - 4;
+        uint32_t expect = (uint32_t)msg_payload[data_len] |
+                          ((uint32_t)msg_payload[data_len + 1] << 8) |
+                          ((uint32_t)msg_payload[data_len + 2] << 16) |
+                          ((uint32_t)msg_payload[data_len + 3] << 24);
+        uint32_t got = cmq_crc32c(0, (const uint8_t *)frame->payload,
+                                    frame->payload_len - 4);
+        if (expect != got) {
+            cmq_send_error(c, "checksum mismatch");
+            return;
+        }
+        msg_len = data_len;
+    }
 
     if (srv->config.max_payload_size > 0 &&
         msg_len > (size_t)srv->config.max_payload_size) {

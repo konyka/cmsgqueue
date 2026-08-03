@@ -449,14 +449,18 @@ TEST(parser, reject_flag_compressed) {
 }
 
 TEST(parser, reject_flag_checksum) {
+    /* CMQ_FLAG_CHECKSUM (0x02) is now implemented by F3 — the parser
+     * does NOT reject it. The server-side handle_publish is responsible
+     * for verifying the trailing 4-byte CRC32C. This test verifies the
+     * parser accepts the flag (no pending_error). */
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
-    /* Encode with flags=CMQ_FLAG_CHECKSUM (0x02) */
     size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
                                 CMQ_FLAG_CHECKSUM, NULL, 0);
     ASSERT(n > 0);
-    (void)cmq_parser_feed(p, buf, n);
-    ASSERT_EQ(cmq_parser_pending_error(p), 1);
+    int rc = cmq_parser_feed(p, buf, n);
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 0);
     cmq_parser_destroy(p);
 }
 
