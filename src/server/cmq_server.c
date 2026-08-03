@@ -4884,6 +4884,99 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
 
     if (strncmp(req, "GET ", 4) != 0) { free(req); return -1; }
 
+    /* F12/F13: HTTP GET dispatcher for /healthz, /readyz, /metrics.
+     * Extracts the path and dispatches BEFORE the WS upgrade path so
+     * health/metrics endpoints serve plain HTTP responses. */
+    {
+        const char *path_start = req + 4;
+        const char *path_end = strchr(path_start, ' ');
+        if (path_end) {
+            size_t plen = (size_t)(path_end - path_start);
+            if (plen == 9 && memcmp(path_start, "/healthz", 9) == 0) {
+                free(req);
+                const char *body = "{\"status\":\"ok\"}\n";
+                char resp[256];
+                int rl = snprintf(resp, sizeof(resp),
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Content-Length: %zu\r\n"
+                    "Connection: close\r\n\r\n%s",
+                    strlen(body), body);
+                if (rl > 0) (void)client_sock_write(c, (const uint8_t *)resp, (size_t)rl);
+                client_set_state(c, CMQ_CLIENT_CLOSING);
+                if (consumed) *consumed = hdr_end;
+                return 0;
+            }
+            if (plen == 8 && memcmp(path_start, "/readyz", 8) == 0) {
+                free(req);
+                int draining = (c && c->server &&
+                                cmq_atomic_load_int(&c->server->acceptor_drain,
+                                                     CMQ_ATOMIC_RELAXED) != 0);
+                const char *body = draining
+                    ? "{\"status\":\"ready\"}\n"
+                    : "{\"status\":\"draining\"}\n";
+                const char *status = draining ? "200 OK" : "503 Service Unavailable";
+                char resp[256];
+                int rl = snprintf(resp, sizeof(resp),
+                    "HTTP/1.1 %s\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Content-Length: %zu\r\n"
+                    "Connection: close\r\n\r\n%s",
+                    status, strlen(body), body);
+                if (rl > 0) cmq_client_send(c, (const uint8_t *)resp, (size_t)rl);
+                client_set_state(c, CMQ_CLIENT_CLOSING);
+                if (consumed) *consumed = hdr_end;
+                return 0;
+            }
+            if (plen == 8 && memcmp(path_start, "/metrics", 8) == 0) {
+                free(req);
+                /* F13: Prometheus exposition via the existing stat
+                 * counters. Body length capped at 4 KiB. */
+                char body[4096];
+                int bl = snprintf(body, sizeof(body),
+                    "# HELP cmq_connections Current connections\n"
+                    "# TYPE cmq_connections gauge\n"
+                    "cmq_connections %llu\n"
+                    "# HELP cmq_subscriptions Current subscriptions\n"
+                    "# TYPE cmq_subscriptions gauge\n"
+                    "cmq_subscriptions %llu\n"
+                    "# HELP cmq_messages_in_total Total messages received\n"
+                    "# TYPE cmq_messages_in_total counter\n"
+                    "cmq_messages_in_total %llu\n"
+                    "# HELP cmq_messages_out_total Total messages delivered\n"
+                    "# TYPE cmq_messages_out_total counter\n"
+                    "cmq_messages_out_total %llu\n",
+                    c && c->server ?
+                        (unsigned long long)cmq_atomic_load_u64(
+                            &c->server->stat_connections, CMQ_ATOMIC_RELAXED) : 0ULL,
+                    c && c->server ?
+                        (unsigned long long)cmq_atomic_load_u64(
+                            &c->server->stat_subscriptions, CMQ_ATOMIC_RELAXED) : 0ULL,
+                    c && c->server ?
+                        (unsigned long long)cmq_atomic_load_u64(
+                            &c->server->stat_messages_in, CMQ_ATOMIC_RELAXED) : 0ULL,
+                    c && c->server ?
+                        (unsigned long long)cmq_atomic_load_u64(
+                            &c->server->stat_messages_out, CMQ_ATOMIC_RELAXED) : 0ULL);
+                if (bl < 0) bl = 0;
+                if ((size_t)bl > sizeof(body) - 1) bl = sizeof(body) - 1;
+                char resp[4600];
+                int rl = snprintf(resp, sizeof(resp),
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: text/plain; version=0.0.4\r\n"
+                    "Content-Length: %d\r\n"
+                    "Connection: close\r\n\r\n",
+                    bl);
+                if (rl > 0) (void)client_sock_write(c, (const uint8_t *)resp, (size_t)rl);
+                (void)client_sock_write(c, (const uint8_t *)body, (size_t)bl);
+                client_set_state(c, CMQ_CLIENT_CLOSING);
+                if (consumed) *consumed = hdr_end;
+                return 0;
+            }
+        }
+    }
+
+
     /* Header names/values: RFC 7230 case-insensitive (align with WS Key parse). */
     char upgrade[64] = {0}, version[32] = {0};
     if (http_header_value(req, "Upgrade", upgrade, sizeof(upgrade)) != 0) {
