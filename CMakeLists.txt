@@ -83,6 +83,7 @@ set(CMQ_NET_SOURCES
 
 set(CMQ_PROTO_SOURCES
     src/proto/cmq_parser.c
+    src/proto/cmq_compress.c
 )
 
 set(CMQ_SERVER_SOURCES
@@ -166,6 +167,12 @@ endif()
 find_package(OpenSSL REQUIRED)
 target_link_libraries(cmsgqueue PRIVATE OpenSSL::Crypto OpenSSL::SSL)
 target_compile_definitions(cmsgqueue PRIVATE CMQ_TLS_OPENSSL=1)
+
+# F2: zstd compression (system libzstd 1.5+).
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ZSTD REQUIRED libzstd)
+target_include_directories(cmsgqueue PRIVATE ${ZSTD_INCLUDE_DIRS})
+target_link_libraries(cmsgqueue PRIVATE ${ZSTD_LIBRARIES})
 
 # ---------------------------------------------------------------------------
 # Subdirectories

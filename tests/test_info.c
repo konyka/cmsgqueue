@@ -60,13 +60,9 @@ TEST(info, expected_capability_keys) {
     }
 }
 
-TEST(info, compression_is_none_until_f2) {
-    /* F2 not shipped yet. Clients must NOT see compression as
-     * supported. */
-    const char *json =
-        "{\"compression\":\"none\"}";
-    ASSERT(strstr(json, "\"none\"") != NULL);
-    ASSERT(strstr(json, "\"zstd\"") == NULL);
+TEST(info, compression_is_zstd) {
+    const char *json = "{\"compression\":\"zstd\"}";
+    ASSERT(strstr(json, "zstd") != NULL);
 }
 
 TEST(info, checksum_is_crc32c) {

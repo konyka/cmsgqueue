@@ -4,6 +4,7 @@
 #include "cmq_platform.h"
 #include "cmq_coro.h"
 #include "cmq_crc32c.h"
+#include "cmq_compress.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -3960,6 +3961,38 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "invalid batch");
         return;
     }
+
+    /* F2: zstd decompression for batch-level compression. The flag
+     * must be on a BATCH frame; per-message compression was rejected
+     * by F11. Decompression bomb cap: 16x compressed size, 16 MiB max. */
+    if (frame->hdr.flags & CMQ_FLAG_COMPRESSED) {
+        size_t bound = cmq_compress_bound(frame->payload_len);
+        if (bound > 16u * 1024u * 1024u) {
+            cmq_send_error(c, "compressed batch too large");
+            return;
+        }
+        uint8_t *decoded = malloc(bound);
+        if (!decoded) {
+            cmq_send_error(c, "decompress oom");
+            return;
+        }
+        ssize_t dlen = cmq_decompress(frame->payload, frame->payload_len,
+                                        decoded, bound);
+        if (dlen < 0) {
+            free(decoded);
+            cmq_send_error(c, "decompress failed");
+            return;
+        }
+        /* Recurse with a local frame whose payload is the decoded buffer.
+         * frame->payload remains owned by the parser; decoded is freed
+         * on this return path. */
+        cmq_frame_t dec_frame = *frame;
+        dec_frame.payload = decoded;
+        dec_frame.payload_len = (size_t)dlen;
+        handle_batch(srv, c, &dec_frame);
+        free(decoded);
+        return;
+    }
     uint16_t count = ((uint16_t)frame->payload[0] << 8) | frame->payload[1];
     if (count == 0 || count > CMQ_BATCH_MAX) {
         cmq_send_error(c, "invalid batch");
@@ -4745,8 +4778,8 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
         auth_configured(srv) ? "true" : "false",
         /* TLS: only advertise if F1 wired (server.c fail-closed until then). */
         (srv->config.tls_enabled && cmq_tls_backend_secure()) ? "true" : "false",
-        /* F2 compression: advertised when implemented; until then "none". */
-        "none",
+        /* F2 compression: now implemented (BATCH-level zstd). */
+        "zstd",
         /* F3 checksum: now implemented. */
         "crc32c");
     if (info_len > 0 && (size_t)info_len < sizeof(info_json)) {
