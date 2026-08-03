@@ -18,8 +18,12 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Persistence** ring buffer memstore, durable streams with consumers, file-based with CRC32 (library APIs; optional server wiring)
   Note: durable streams and file-based persistence are library APIs only — not wired into the server process.
 - **Clustering** node membership and outbound route broadcast (gateway/leaf APIs available as libraries)
-- **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired), MQTT bridge library, WebSocket transport with frame reassembly
-- **Wire flags**: CMQ_FLAG_HEADERS, CMQ_FLAG_BATCH, CMQ_FLAG_ROUTE are implemented; CMQ_FLAG_COMPRESSED and CMQ_FLAG_CHECKSUM are reserved but not yet implemented.
+- **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired, F1 pending), MQTT bridge library, WebSocket transport with frame reassembly
+- **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
+- **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
+- **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability
+- **Capability Negotiation (F4)**: extended INFO frame advertises server_id, max_payload, auth, tls, compression, checksum, headers, batch
+- **Wire flags**: CMQ_FLAG_HEADERS, CMQ_FLAG_BATCH, CMQ_FLAG_ROUTE are implemented; **CMQ_FLAG_CHECKSUM is now implemented (F3)** with CRC32C verification (RFC 3309 / SSE4.2 HW-accelerated); CMQ_FLAG_COMPRESSED is rejected pre-CONNACK until F2 ships.
 - **Assembly Coroutines** x86_64 + ARM64 context switching; high-fanout delivery uses value snapshots (no live ref UAF)
 - **Multi-Worker** N worker threads with eventfd cross-thread messaging keyed by stable client id
 - **Cross-Platform CI** Linux (gcc/clang), macOS, Windows, ARM64 cross-compile
