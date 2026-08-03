@@ -4724,15 +4724,31 @@ static void client_flush_write(cmq_client_t *c) {
 }
 
 static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
-    uint8_t info_buf[256];
+    uint8_t info_buf[512];
     uint64_t conns = cmq_atomic_load_u64(&srv->stat_connections, CMQ_ATOMIC_RELAXED);
     uint64_t subs = cmq_atomic_load_u64(&srv->stat_subscriptions, CMQ_ATOMIC_RELAXED);
-    char info_json[256];
+    char info_json[512];
+    /* F4: Extended INFO with capabilities. The capability bitmap is a
+     * comma-separated list of strings, matching NATS Server's INFO
+     * format. Clients negotiate compression / checksum / TLS by
+     * sending a CONNECT with the corresponding flags set. */
     int info_len = snprintf(info_json, sizeof(info_json),
-        "{\"version\":\"0.1.0\",\"proto\":1,\"connections\":%llu,\"subscriptions\":%llu,\"auth\":%s}",
-        (unsigned long long)conns, (unsigned long long)subs,
-        auth_configured(srv) ? "true" : "false");
-    /* Truncated snprintf returns would-be length — never encode past buffer. */
+        "{\"server_id\":\"cmsgsrv\",\"version\":\"0.2.0\",\"proto\":1,"
+        "\"go\":\"20m\",\"host\":\"0.0.0.0\",\"port\":%d,"
+        "\"max_payload\":%d,\"connections\":%llu,\"subscriptions\":%llu,"
+        "\"auth\":%s,\"tls\":%s,\"compression\":\"%s\","
+        "\"checksum\":%s,\"headers\":true,\"batch\":true}",
+        (int)srv->config.port,
+        (int)srv->config.max_payload_size,
+        (unsigned long long)conns,
+        (unsigned long long)subs,
+        auth_configured(srv) ? "true" : "false",
+        /* TLS: only advertise if F1 wired (server.c fail-closed until then). */
+        (srv->config.tls_enabled && cmq_tls_backend_secure()) ? "true" : "false",
+        /* F2 compression: advertised when implemented; until then "none". */
+        "none",
+        /* F3 checksum: now implemented. */
+        "crc32c");
     if (info_len > 0 && (size_t)info_len < sizeof(info_json)) {
         size_t len = cmq_frame_encode(info_buf, sizeof(info_buf), CMQ_OP_INFO, 0,
                                        (const uint8_t *)info_json, (size_t)info_len);
