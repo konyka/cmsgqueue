@@ -8,6 +8,23 @@
 #include <stdatomic.h>
 #include <time.h>
 
+/* F1: OpenSSL-backed TLS implementation (replaces plaintext stub).
+ *
+ * When CMQ_TLS_OPENSSL is defined (set by CMake when OpenSSL is found),
+ * the implementation uses OpenSSL 1.1.1+ / 3.x APIs. When not defined,
+ * the cmq_tls_backend_secure() returns 0 and the server fails closed.
+ *
+ * The OpenSSL context (SSL_CTX) is per-tls_config (one per listener),
+ * not per-connection. Sessions hold an SSL* and operate on the BIO
+ * wrapping the underlying fd.
+ */
+#ifdef CMQ_TLS_OPENSSL
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509v3.h>
+#include <fcntl.h>
+#endif
+
 #define CMQ_TLS_PATH_MAX 512
 #define CMQ_TLS_NAME_MAX 256
 
@@ -21,6 +38,10 @@ struct cmq_tls_config {
     int has_key;
     atomic_int in_flight;
     atomic_int dying;
+#ifdef CMQ_TLS_OPENSSL
+    SSL_CTX *ssl_ctx;  /* per-listener context, immutable after init */
+    int ssl_ctx_init_done;
+#endif
 };
 
 struct cmq_tls_session {
@@ -28,6 +49,9 @@ struct cmq_tls_session {
     int fd;
     int is_server;
     int handshake_done;
+#ifdef CMQ_TLS_OPENSSL
+    SSL *ssl;
+#endif
 };
 
 static int tls_begin_op(cmq_tls_config_t *cfg) {
@@ -62,11 +86,68 @@ static int tls_copy_field(cmq_tls_config_t *cfg, size_t field_off, size_t field_
     return 0;
 }
 
+#ifdef CMQ_TLS_OPENSSL
+/* Build the SSL_CTX for a configured listener. Called once per
+ * cmq_tls_config after cert/key are set. Returns 0 on success. */
+static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
+    if (cfg->ssl_ctx_init_done) return 0;
+    const SSL_METHOD *method = TLS_server_method();
+    if (!method) return -1;
+    cfg->ssl_ctx = SSL_CTX_new(method);
+    if (!cfg->ssl_ctx) return -1;
+    /* TLS 1.2 floor; TLS 1.3 preferred. */
+    SSL_CTX_set_min_proto_version(cfg->ssl_ctx, TLS1_2_VERSION);
+    /* AEAD-only cipher list: TLS 1.3 ciphers are fixed by the protocol
+     * (AEAD-only). For TLS 1.2, restrict to AEAD suites. */
+    const char *ciphers =
+        "ECDHE-ECDSA-AES256-GCM-SHA384:"
+        "ECDHE-RSA-AES256-GCM-SHA384:"
+        "ECDHE-ECDSA-AES128-GCM-SHA256:"
+        "ECDHE-RSA-AES128-GCM-SHA256:"
+        "ECDHE-ECDSA-CHACHA20-POLY1305:"
+        "ECDHE-RSA-CHACHA20-POLY1305";
+    SSL_CTX_set_cipher_list(cfg->ssl_ctx, ciphers);
+    /* CRIME/BREACH mitigation: disable TLS-level compression. */
+    SSL_CTX_set_options(cfg->ssl_ctx, SSL_OP_NO_COMPRESSION);
+    /* Best-effort defaults. */
+    SSL_CTX_set_mode(cfg->ssl_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER |
+                                    SSL_MODE_ENABLE_PARTIAL_WRITE);
+    /* Load cert chain. */
+    if (SSL_CTX_use_certificate_chain_file(cfg->ssl_ctx, cfg->cert) != 1) {
+        SSL_CTX_free(cfg->ssl_ctx);
+        cfg->ssl_ctx = NULL;
+        return -1;
+    }
+    /* Load private key. */
+    if (SSL_CTX_use_PrivateKey_file(cfg->ssl_ctx, cfg->key,
+                                      SSL_FILETYPE_PEM) != 1) {
+        SSL_CTX_free(cfg->ssl_ctx);
+        cfg->ssl_ctx = NULL;
+        return -1;
+    }
+    if (SSL_CTX_check_private_key(cfg->ssl_ctx) != 1) {
+        SSL_CTX_free(cfg->ssl_ctx);
+        cfg->ssl_ctx = NULL;
+        return -1;
+    }
+    /* Optional CA for client cert verification. */
+    if (cfg->ca[0] != '\0') {
+        SSL_CTX_load_verify_locations(cfg->ssl_ctx, cfg->ca, NULL);
+    }
+    cfg->ssl_ctx_init_done = 1;
+    return 0;
+}
+#endif
+
 cmq_tls_config_t *cmq_tls_config_create(void) {
     cmq_tls_config_t *cfg = calloc(1, sizeof(cmq_tls_config_t));
     if (!cfg) return NULL;
     atomic_init(&cfg->in_flight, 0);
     atomic_init(&cfg->dying, 0);
+#ifdef CMQ_TLS_OPENSSL
+    cfg->ssl_ctx = NULL;
+    cfg->ssl_ctx_init_done = 0;
+#endif
     return cfg;
 }
 
@@ -77,6 +158,12 @@ void cmq_tls_config_destroy(cmq_tls_config_t *cfg) {
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
     }
+#ifdef CMQ_TLS_OPENSSL
+    if (cfg->ssl_ctx) {
+        SSL_CTX_free(cfg->ssl_ctx);
+        cfg->ssl_ctx = NULL;
+    }
+#endif
     free(cfg);
 }
 
@@ -98,6 +185,19 @@ int cmq_tls_set_key(cmq_tls_config_t *cfg, const char *key_path) {
     cfg->has_key = 1;
     tls_end_op(cfg);
     return 0;
+}
+
+int cmq_tls_load(cmq_tls_config_t *cfg) {
+    if (!cfg) return -1;
+    if (!cfg->has_cert || !cfg->has_key) return -1;
+#ifdef CMQ_TLS_OPENSSL
+    if (tls_begin_op(cfg) != 0) return -1;
+    int rc = tls_build_ssl_ctx(cfg);
+    tls_end_op(cfg);
+    return rc;
+#else
+    return 0;
+#endif
 }
 
 int cmq_tls_set_ca(cmq_tls_config_t *cfg, const char *ca_path) {
@@ -159,34 +259,88 @@ int cmq_tls_configured(cmq_tls_config_t *cfg) {
 }
 
 int cmq_tls_backend_secure(void) {
-    /* This translation unit is a plaintext stub — fail closed at the server. */
+#ifdef CMQ_TLS_OPENSSL
+    return 1;
+#else
+    /* Plaintext stub — fail closed at the server. */
     return 0;
+#endif
 }
 
 cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
     if (!cfg || fd < 0 || !cmq_tls_configured(cfg)) return NULL;
+#ifdef CMQ_TLS_OPENSSL
+    /* Build the SSL_CTX lazily on first session. */
+    if (!cfg->ssl_ctx_init_done) {
+        if (tls_build_ssl_ctx(cfg) != 0) return NULL;
+    }
+#endif
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));
     if (!s) return NULL;
     s->cfg = cfg;
     s->fd = fd;
     s->is_server = 1;
     s->handshake_done = 0;
+#ifdef CMQ_TLS_OPENSSL
+    s->ssl = SSL_new(cfg->ssl_ctx);
+    if (!s->ssl) {
+        free(s);
+        return NULL;
+    }
+    SSL_set_fd(s->ssl, fd);
+    /* Set the fd non-blocking so SSL_do_handshake returns
+     * WANT_READ/WANT_WRITE instead of blocking on a low-level read. */
+    {
+        int fl = fcntl(fd, F_GETFL, 0);
+        if (fl >= 0) (void)fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    }
+    SSL_set_accept_state(s->ssl);
+#endif
     return s;
 }
 
 cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
     if (!cfg || fd < 0 || !cmq_tls_configured(cfg)) return NULL;
+#ifdef CMQ_TLS_OPENSSL
+    if (!cfg->ssl_ctx_init_done) {
+        if (tls_build_ssl_ctx(cfg) != 0) return NULL;
+    }
+#endif
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));
     if (!s) return NULL;
     s->cfg = cfg;
     s->fd = fd;
     s->is_server = 0;
     s->handshake_done = 0;
+#ifdef CMQ_TLS_OPENSSL
+    s->ssl = SSL_new(cfg->ssl_ctx);
+    if (!s->ssl) {
+        free(s);
+        return NULL;
+    }
+    SSL_set_fd(s->ssl, fd);
+    /* Set the fd non-blocking so SSL_do_handshake returns
+     * WANT_READ/WANT_WRITE instead of blocking on a low-level read. */
+    {
+        int fl = fcntl(fd, F_GETFL, 0);
+        if (fl >= 0) (void)fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    }
+    SSL_set_connect_state(s->ssl);
+#endif
     return s;
 }
 
 void cmq_tls_session_destroy(cmq_tls_session_t *session) {
     if (!session) return;
+#ifdef CMQ_TLS_OPENSSL
+    if (session->ssl) {
+        /* Best-effort TLS shutdown. Don't loop: if the kernel buffer
+         * is full, we just close the underlying fd. */
+        SSL_shutdown(session->ssl);
+        SSL_free(session->ssl);
+        session->ssl = NULL;
+    }
+#endif
     /* Session does not own the fd — the client closes it once. */
     session->fd = -1;
     free(session);
@@ -194,22 +348,65 @@ void cmq_tls_session_destroy(cmq_tls_session_t *session) {
 
 int cmq_tls_handshake(cmq_tls_session_t *session) {
     if (!session) return -1;
+#ifndef CMQ_TLS_OPENSSL
+    /* Plaintext stub: handshake is a no-op. */
     session->handshake_done = 1;
     return 0;
+#else
+    if (session->handshake_done) return 0;
+    if (!session->ssl) return -1;
+    int rc = SSL_do_handshake(session->ssl);
+    if (rc == 1) {
+        session->handshake_done = 1;
+        return 1;
+    }
+    int err = SSL_get_error(session->ssl, rc);
+    /* WANT_READ/WANT_WRITE mean "try again later" — non-blocking. */
+    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+        return 0;
+    }
+    /* Real error. */
+    return -1;
+#endif
 }
 
 ssize_t cmq_tls_read(cmq_tls_session_t *session, uint8_t *buf, size_t len) {
     if (!session || !buf || len == 0 || session->fd < 0 ||
         !session->handshake_done)
         return -1;
+#ifndef CMQ_TLS_OPENSSL
     return read(session->fd, buf, len);
+#else
+    int n = SSL_read(session->ssl, buf, (int)len);
+    if (n > 0) return (ssize_t)n;
+    int err = SSL_get_error(session->ssl, n);
+    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+        errno = EAGAIN;
+        return -1;
+    }
+    if (err == SSL_ERROR_ZERO_RETURN) {
+        return 0; /* clean shutdown */
+    }
+    return -1;
+#endif
 }
 
 ssize_t cmq_tls_write(cmq_tls_session_t *session, const uint8_t *buf, size_t len) {
     if (!session || !buf || len == 0 || session->fd < 0 ||
         !session->handshake_done)
         return -1;
+#ifndef CMQ_TLS_OPENSSL
     return write(session->fd, buf, len);
+#else
+    int n = SSL_write(session->ssl, buf, (int)len);
+    if (n > 0) return (ssize_t)n;
+    int err = SSL_get_error(session->ssl, n);
+    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return -1;
+#endif
 }
 
 int cmq_tls_fd(cmq_tls_session_t *session) {

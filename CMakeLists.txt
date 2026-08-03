@@ -163,12 +163,9 @@ endif()
 if(CMQ_HAVE_LIBRT)
     target_link_libraries(cmsgqueue PRIVATE rt)
 endif()
-find_package(OpenSSL QUIET)
-if(OpenSSL_FOUND)
-    target_link_libraries(cmsgqueue PRIVATE OpenSSL::Crypto OpenSSL::SSL)
-else()
-    target_link_libraries(cmsgqueue PRIVATE crypto ssl)
-endif()
+find_package(OpenSSL REQUIRED)
+target_link_libraries(cmsgqueue PRIVATE OpenSSL::Crypto OpenSSL::SSL)
+target_compile_definitions(cmsgqueue PRIVATE CMQ_TLS_OPENSSL=1)
 
 # ---------------------------------------------------------------------------
 # Subdirectories

@@ -6257,6 +6257,13 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         }
         cmq_tls_set_cert(srv->tls_config, srv->config.tls_cert);
         cmq_tls_set_key(srv->tls_config, srv->config.tls_key);
+        if (cmq_tls_load(srv->tls_config) != 0) {
+            cmq_log_error(srv->log,
+                "TLS cert/key load failed — refusing plaintext");
+            cmq_server_destroy(srv);
+            *server = NULL;
+            return CMQ_ERR_INVALID_ARG;
+        }
         cmq_log_info(srv->log, "TLS enabled: cert=%s", srv->config.tls_cert);
     }
 

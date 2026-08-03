@@ -13,6 +13,13 @@ void cmq_tls_config_destroy(cmq_tls_config_t *cfg);
 
 int cmq_tls_set_cert(cmq_tls_config_t *cfg, const char *cert_path);
 int cmq_tls_set_key(cmq_tls_config_t *cfg, const char *key_path);
+
+/* Eagerly load the cert chain and private key into the SSL_CTX.
+ * Returns 0 on success, -1 on failure (bad cert file, bad key, mismatch).
+ * Must be called after the last cmq_tls_set_* call but before any
+ * session creation. With OpenSSL this is implemented in tls_build_ssl_ctx;
+ * without OpenSSL this is a no-op returning 0. */
+int cmq_tls_load(cmq_tls_config_t *cfg);
 int cmq_tls_set_ca(cmq_tls_config_t *cfg, const char *ca_path);
 int cmq_tls_set_verify(cmq_tls_config_t *cfg, int verify_peer);
 int cmq_tls_set_server_name(cmq_tls_config_t *cfg, const char *name);
