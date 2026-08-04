@@ -6489,6 +6489,61 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             return CMQ_ERR_INVALID_ARG;
         }
         cmq_log_info(srv->log, "Persistence enabled: dir=%s", srv->config.persist_dir);
+        /* F5 recovery: replay the WAL on startup. Each record is
+         * dispatched via the same handle_publish path as a fresh
+         * publish. The sublist matches against current subscribers
+         * so recovered messages only reach live subscribers (no
+         * persistent subscription state). */
+        uint64_t last = cmq_filestore_last_seq(srv->filestore);
+        if (last > 0) {
+            cmq_log_info(srv->log, "Replaying %llu WAL records",
+                         (unsigned long long)last);
+            uint64_t replayed = 0;
+            for (uint64_t seq = 1; seq <= last; seq++) {
+                uint8_t *data = NULL;
+                size_t data_len = 0;
+                if (cmq_filestore_read(srv->filestore, seq, &data, &data_len) != 0) {
+                    cmq_log_warn(srv->log,
+                        "WAL read failed at seq=%llu", (unsigned long long)seq);
+                    continue;
+                }
+                if (data && data_len >= 9) {
+                    /* Build a frame from the recorded bytes. The frame
+                     * uses an internal client (no fd) so handle_publish
+                     * can run end-to-end. */
+                    cmq_frame_t rf;
+                    rf.hdr.magic[0] = CMQ_PROTO_MAGIC_0;
+                    rf.hdr.magic[1] = CMQ_PROTO_MAGIC_1;
+                    rf.hdr.version = CMQ_PROTO_VERSION;
+                    rf.hdr.flags = 0;
+                    rf.hdr.op = CMQ_OP_PUBLISH;
+                    rf.hdr.length = (uint32_t)data_len;
+                    rf.payload = data;
+                    rf.payload_len = data_len;
+                    /* Synthesize a client for the duration of the
+                     * replay so handle_publish has a valid `c`. The
+                     * account_name is "$default" (the default account
+                     * is created in handle_frame's CONNECT path). */
+                    cmq_client_t replay_c;
+                    memset(&replay_c, 0, sizeof(replay_c));
+                    replay_c.account_name[0] = '$';
+                    replay_c.account_name[1] = 'd';
+                    replay_c.account_name[2] = 'e';
+                    replay_c.account_name[3] = 'f';
+                    replay_c.account_name[4] = 'a';
+                    replay_c.account_name[5] = 'u';
+                    replay_c.account_name[6] = 'l';
+                    replay_c.account_name[7] = 't';
+                    replay_c.account_name[8] = '\0';
+                    replay_c.server = srv;
+                    handle_publish(srv, &replay_c, &rf);
+                    replayed++;
+                }
+                free(data);
+            }
+            cmq_log_info(srv->log, "WAL replay complete: %llu records",
+                         (unsigned long long)replayed);
+        }
     }
 
     /* F6: MQTT upstream bridge (client mode). When mqtt_bridge_addr

@@ -23,12 +23,27 @@ PUBLISH-with-ack semantics.
 
 The full wire payload is appended: subject (with length),
 reply-to (with length), and body. The format is the raw wire
-bytes — no transformation. On recovery, a future replay
-implementation parses each record by reading the wire payload
-length and dispatching.
+bytes — no transformation.
 
 On shutdown, `cmq_filestore_sync` is called for a graceful flush
 before destroy.
+
+### Recovery (Replay on Startup)
+
+`cmq_server_create` reads `cmq_filestore_last_seq` after opening
+the filestore. If non-zero, every record is read back via
+`cmq_filestore_read` and re-dispatched through `handle_publish`. The
+dispatch uses a synthesized internal client (no fd) so the publish
+path runs end-to-end subject validation, ACL check, and sublist
+match. The sublist matches against current subscribers — a
+recovered message only reaches subscribers who have re-subscribed
+after the restart. There is no persistent subscription state in
+v0.2.0 (that requires durable sublist, a follow-up).
+
+Limits: replay runs synchronously during `cmq_server_create`.
+Operators with millions of WAL records should snapshot/compact
+the filestore before the next restart. The replay path is
+single-threaded; future work can parallelize.
 
 ## Files touched
 
@@ -38,13 +53,19 @@ before destroy.
 
 ## Tests
 
-`tests/test_persist_unit.c` (new):
+`tests/test_persist_unit.c`:
 - `filestore_not_opened_when_null` — server starts without any
   filestore files when `persist_dir` is NULL.
 - `filestore_opened_when_set` — server creates `cmq.data` and
   `cmq.idx` when `persist_dir` is set.
 - `stat_persist_fail_starts_at_zero` — implicit (server starts).
 - `config_field_default` — `persist_dir` defaults to NULL.
+
+`tests/test_recover.c` (new):
+- `write_and_read_back` — writes records, closes the filestore,
+  reopens, reads each record back byte-exact. Read beyond end
+  returns error.
+- `empty_filestore` — fresh filestore has `last_seq = 0`.
 
 The existing `test_store.c` exercises the filestore library.
 
