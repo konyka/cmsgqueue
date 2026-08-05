@@ -7,6 +7,7 @@
 #include "cmq_compress.h"
 #include "cmq_filestore.h"
 #include "cmq_mqtt.h"
+#include "cmq_password.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -4400,14 +4401,28 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             }
             if (srv->config.auth_username && srv->config.auth_username[0])
                 strncpy(expect_u, srv->config.auth_username, sizeof(expect_u) - 1);
-            if (srv->config.auth_password && srv->config.auth_password[0])
-                strncpy(expect_p, srv->config.auth_password, sizeof(expect_p) - 1);
+            int f8_hashed_fail = 0;
+            if (srv->config.auth_password && srv->config.auth_password[0]) {
+                if (srv->config.auth_password[0] == '$') {
+                    /* F8: hashed password. Verify with cmq_password_verify. */
+                    int v = cmq_password_verify(srv->config.auth_password, passwd);
+                    if (v < 0) {
+                        cmq_send_connack(c, 1);
+                        client_set_state(c, CMQ_CLIENT_CLOSING);
+                        break;
+                    }
+                    f8_hashed_fail = (v == 0);
+                } else {
+                    /* Legacy plaintext. */
+                    strncpy(expect_p, srv->config.auth_password, sizeof(expect_p) - 1);
+                }
+            }
             /* Always run padded compares so early rejects share timing with auth. */
             int need_user = (srv->config.auth_username &&
                              srv->config.auth_username[0]);
             int need_pass = (srv->config.auth_password &&
                              srv->config.auth_password[0]);
-            int bad = malformed;
+            int bad = malformed | f8_hashed_fail;
             if (need_user)
                 bad |= !ct_memeq(uname, expect_u, sizeof(uname));
             else

@@ -65,6 +65,7 @@ set(CMQ_CORE_SOURCES
     src/core/cmq_log.c
     src/core/cmq_queue.c
     src/core/cmq_crc32c.c
+    src/server/cmq_password.c
 )
 
 set(CMQ_CORO_SOURCES
