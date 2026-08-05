@@ -1,0 +1,20 @@
+# Pre-commit hooks for CMSGQueue.
+# Install: pip install pre-commit && pre-commit install
+# Manual run: pre-commit run --all-files
+repos:
+  - repo: local
+    hooks:
+      - id: build
+        name: build (cmake + make)
+        language: system
+        entry: bash -c 'mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMQ_ENABLE_HARDENING=ON && cmake --build . -j$(nproc)'
+        pass_filenames: false
+        always_run: true
+
+      - id: test
+        name: test (ctest)
+        language: system
+        entry: bash -c 'cd build && stdbuf -oL ctest -j1'
+        pass_filenames: false
+        always_run: true
+        stages: [manual]

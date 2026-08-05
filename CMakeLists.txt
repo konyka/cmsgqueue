@@ -112,6 +112,7 @@ set(CMQ_ENTERPRISE_SOURCES
     src/enterprise/cmq_account.c
     src/enterprise/cmq_tls.c
     src/enterprise/cmq_mqtt.c
+    src/enterprise/cmq_mqtt_server.c
     src/enterprise/cmq_ws.c
 )
 
