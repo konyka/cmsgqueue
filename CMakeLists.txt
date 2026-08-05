@@ -90,8 +90,9 @@ set(CMQ_PROTO_SOURCES
 
 set(CMQ_SERVER_SOURCES
     src/server/cmq_server.c
-    src/server/cmq_sublist.c
     src/server/cmq_config.c
+    src/server/cmq_sublist.c
+    src/server/cmq_sublist_persist.c
 )
 
 set(CMQ_STORE_SOURCES
@@ -113,6 +114,9 @@ set(CMQ_ENTERPRISE_SOURCES
     src/enterprise/cmq_tls.c
     src/enterprise/cmq_mqtt.c
     src/enterprise/cmq_mqtt_server.c
+    src/enterprise/cmq_audit.c
+    src/enterprise/cmq_quota.c
+    src/enterprise/cmq_acl.c
     src/enterprise/cmq_ws.c
 )
 
