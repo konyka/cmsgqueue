@@ -4374,6 +4374,60 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_connack(c, 1);
             break;
         }
+        /* F8b: per-IP auth brute-force rate limit. The check uses the
+         * peer IP of the connected socket. If the IP is over its
+         * per-second budget, reject without invoking password verify. */
+        if (auth_configured(srv) && c->fd >= 0) {
+            struct sockaddr_in peer;
+            socklen_t plen = sizeof(peer);
+            if (getpeername(c->fd, (struct sockaddr *)&peer, &plen) == 0 &&
+                peer.sin_family == AF_INET) {
+                uint32_t ip = (uint32_t)peer.sin_addr.s_addr;
+                cmq_mutex_lock(&srv->rate_lock);
+                int admitted = 1;
+                for (int i = 0; i < 1024; i++) {
+                    if (srv->rate_slots[i].ip == ip) {
+                        struct timespec ts_now;
+                        clock_gettime(CLOCK_MONOTONIC, &ts_now);
+                        uint64_t now_ms = (uint64_t)ts_now.tv_sec * 1000ULL +
+                                          (uint64_t)ts_now.tv_nsec / 1000000ULL;
+                        if (now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
+                            srv->rate_slots[i].window_start_ms = now_ms;
+                            srv->rate_slots[i].count = 0;
+                        }
+                        if (srv->rate_slots[i].count >= 10) {
+                            admitted = 0;
+                        }
+                        break;
+                    }
+                    if (srv->rate_slots[i].ip == 0) {
+                        srv->rate_slots[i].ip = ip;
+                        struct timespec ts_now;
+                        clock_gettime(CLOCK_MONOTONIC, &ts_now);
+                        srv->rate_slots[i].window_start_ms =
+                            (uint64_t)ts_now.tv_sec * 1000ULL +
+                            (uint64_t)ts_now.tv_nsec / 1000000ULL;
+                        srv->rate_slots[i].count = 0;
+                        break;
+                    }
+                }
+                cmq_mutex_unlock(&srv->rate_lock);
+                if (!admitted) {
+                    cmq_send_connack(c, 4);
+                    client_set_state(c, CMQ_CLIENT_CLOSING);
+                    break;
+                }
+                /* Record the attempt; bumped on success below. */
+                cmq_mutex_lock(&srv->rate_lock);
+                for (int i = 0; i < 1024; i++) {
+                    if (srv->rate_slots[i].ip == ip) {
+                        srv->rate_slots[i].count++;
+                        break;
+                    }
+                }
+                cmq_mutex_unlock(&srv->rate_lock);
+            }
+        }
         if (client_state(c) == CMQ_CLIENT_CONNECTED) {
             cmq_send_connack(c, 1);
             break;
