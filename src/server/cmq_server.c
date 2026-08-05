@@ -8,6 +8,7 @@
 #include "cmq_filestore.h"
 #include "cmq_mqtt.h"
 #include "cmq_password.h"
+#include "cmq_trace.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -4369,6 +4370,16 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
 
     switch (frame->hdr.op) {
     case CMQ_OP_CONNECT:
+        /* F11: assign a trace ID at the earliest point in the
+         * connection's lifecycle so log entries from this point
+         * forward can be correlated. */
+        {
+            int assigned = 0;
+            for (int i = 0; i < 16; i++) {
+                if (c->trace_id[i] == 0) { assigned = 1; break; }
+            }
+            if (!assigned) cmq_trace_id(c->trace_id);
+        }
         /* Only virgin INIT sockets may CONNECT — CLOSING must not resurrect. */
         if (client_state(c) == CMQ_CLIENT_CLOSING || client_state(c) == CMQ_CLIENT_CLOSED) {
             cmq_send_connack(c, 1);

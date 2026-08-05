@@ -81,6 +81,7 @@ typedef struct cmq_client {
     cmq_sub_entry_t *subs;
     int sub_count;
     cmq_atomic_int inbox_pending;
+    uint8_t trace_id[16];             /* F11: connection trace ID */
     char *username;
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
     uint32_t account_epoch;         /* must match account->epoch after CONNECT */
