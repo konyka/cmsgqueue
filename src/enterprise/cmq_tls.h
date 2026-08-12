@@ -24,6 +24,15 @@ int cmq_tls_set_ca(cmq_tls_config_t *cfg, const char *ca_path);
 int cmq_tls_set_verify(cmq_tls_config_t *cfg, int verify_peer);
 int cmq_tls_set_server_name(cmq_tls_config_t *cfg, const char *name);
 
+/* F12: ALPN protocol list. Comma-separated (e.g. "h2,http/1.1").
+ * Set BEFORE cmq_tls_load. NULL clears. */
+int cmq_tls_set_alpn(cmq_tls_config_t *cfg, const char *protos_csv);
+
+/* F12: Reload the SSL_CTX from the current cert/key paths.
+ * Atomically swaps; existing sessions continue with the old CTX
+ * until they tear down. Returns 0 on success, -1 on failure. */
+int cmq_tls_reload(cmq_tls_config_t *cfg);
+
 /* Copy-out under begin_op — never return an interior pointer (destroy UAF). */
 int cmq_tls_cert_path(cmq_tls_config_t *cfg, char *out, size_t out_len);
 int cmq_tls_key_path(cmq_tls_config_t *cfg, char *out, size_t out_len);

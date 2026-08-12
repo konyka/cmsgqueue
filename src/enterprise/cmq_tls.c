@@ -36,6 +36,9 @@ struct cmq_tls_config {
     int verify_peer;
     int has_cert;
     int has_key;
+    /* F12: ALPN protocol list. CSV-encoded (e.g. "h2,http/1.1"). */
+    unsigned char alpn_data[256];
+    unsigned int alpn_len;
     atomic_int in_flight;
     atomic_int dying;
 #ifdef CMQ_TLS_OPENSSL
@@ -215,6 +218,91 @@ int cmq_tls_set_verify(cmq_tls_config_t *cfg, int verify_peer) {
     cfg->verify_peer = verify_peer;
     tls_end_op(cfg);
     return 0;
+}
+
+/* F12: ALPN protocol list. CSV "proto1,proto2" → wire-format
+ * length-prefixed string list. Must be called BEFORE cmq_tls_load. */
+int cmq_tls_set_alpn(cmq_tls_config_t *cfg, const char *protos_csv) {
+    if (!cfg) return -1;
+    if (tls_begin_op(cfg) != 0) return -1;
+    cfg->alpn_len = 0;
+    if (!protos_csv) { tls_end_op(cfg); return 0; }
+    /* Each protocol encoded as: 1 byte length + N bytes string. */
+    const char *p = protos_csv;
+    while (*p && cfg->alpn_len + 2 < sizeof(cfg->alpn_data)) {
+        const char *comma = strchr(p, ',');
+        size_t plen = comma ? (size_t)(comma - p) : strlen(p);
+        if (plen == 0 || plen > 127) { p = comma ? comma + 1 : p + plen; continue; }
+        cfg->alpn_data[cfg->alpn_len++] = (unsigned char)plen;
+        if (cfg->alpn_len + plen >= sizeof(cfg->alpn_data)) break;
+        memcpy(cfg->alpn_data + cfg->alpn_len, p, plen);
+        cfg->alpn_len += (unsigned int)plen;
+        p = comma ? comma + 1 : p + plen;
+    }
+    tls_end_op(cfg);
+    return 0;
+}
+
+/* F12: Reload the SSL_CTX from the current cert/key paths.
+ * Existing sessions continue with the old CTX until they tear down.
+ * Returns 0 on success, -1 on failure. */
+int cmq_tls_reload(cmq_tls_config_t *cfg) {
+    if (!cfg) return -1;
+#ifndef CMQ_TLS_OPENSSL
+    return 0;
+#else
+    if (tls_begin_op(cfg) != 0) return -1;
+    /* Build new CTX off-line. */
+    const char *method = "TLS";
+    (void)method;
+    const SSL_METHOD *m = TLS_server_method();
+    if (!m) { tls_end_op(cfg); return -1; }
+    SSL_CTX *new_ctx = SSL_CTX_new(m);
+    if (!new_ctx) { tls_end_op(cfg); return -1; }
+    SSL_CTX_set_min_proto_version(new_ctx, TLS1_2_VERSION);
+    const char *ciphers =
+        "ECDHE-ECDSA-AES256-GCM-SHA384:"
+        "ECDHE-RSA-AES256-GCM-SHA384:"
+        "ECDHE-ECDSA-AES128-GCM-SHA256:"
+        "ECDHE-RSA-AES128-GCM-SHA256:"
+        "ECDHE-ECDSA-CHACHA20-POLY1305:"
+        "ECDHE-RSA-CHACHA20-POLY1305";
+    SSL_CTX_set_cipher_list(new_ctx, ciphers);
+    SSL_CTX_set_options(new_ctx, SSL_OP_NO_COMPRESSION);
+    if (cfg->alpn_len > 0) {
+        SSL_CTX_set_alpn_protos(new_ctx, cfg->alpn_data, cfg->alpn_len);
+    }
+    if (SSL_CTX_use_certificate_chain_file(new_ctx, cfg->cert) != 1) {
+        SSL_CTX_free(new_ctx);
+        tls_end_op(cfg);
+        return -1;
+    }
+    if (SSL_CTX_use_PrivateKey_file(new_ctx, cfg->key, SSL_FILETYPE_PEM) != 1) {
+        SSL_CTX_free(new_ctx);
+        tls_end_op(cfg);
+        return -1;
+    }
+    if (SSL_CTX_check_private_key(new_ctx) != 1) {
+        SSL_CTX_free(new_ctx);
+        tls_end_op(cfg);
+        return -1;
+    }
+    if (cfg->ca[0] != '\0') {
+        SSL_CTX_load_verify_locations(new_ctx, cfg->ca, NULL);
+    }
+    if (cfg->verify_peer) {
+        SSL_CTX_set_verify(new_ctx, SSL_VERIFY_PEER |
+                                 SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
+    }
+    /* Atomically swap. The old CTX is freed when its last reference
+     * drops — existing sessions still hold a pointer. */
+    SSL_CTX *old = cfg->ssl_ctx;
+    cfg->ssl_ctx = new_ctx;
+    cfg->ssl_ctx_init_done = 1;
+    tls_end_op(cfg);
+    if (old) SSL_CTX_free(old);
+    return 0;
+#endif
 }
 
 int cmq_tls_set_server_name(cmq_tls_config_t *cfg, const char *name) {
