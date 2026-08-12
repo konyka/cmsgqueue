@@ -204,6 +204,10 @@ TEST(stress, many_clients_single_thread) {
         snprintf(sub_subject, sizeof(sub_subject), "stress.%d", i);
         ASSERT_EQ(do_subscribe(fds[i], parsers[i], sub_subject, (uint32_t)(i + 1)), 0);
     }
+    /* Settle: subs are queued server-side but processed asynchronously.
+     * Without this, the publisher may publish before the server has
+     * finished processing the sub. */
+    wait_ms(200);
 
     for (int i = 0; i < npubs; i++) {
         int idx = nsubs + i;
@@ -225,18 +229,37 @@ TEST(stress, many_clients_single_thread) {
             ASSERT_EQ(do_publish(fds[pub_idx], subject, msg), 0);
         }
     }
-    wait_ms(1500);
 
+    /* Drain deterministically: each subscriber expects npubs/5 msgs
+     * (publishers target sub index p%nsubs, so 10 pubs across 5
+     * subs gives each sub exactly 2 publishers, each sending
+     * msgs_per_pub msgs). Wait until each reaches that count,
+     * with a 5s total timeout. The previous wait_ms(1500) was
+     * racy because it didn't account for slow connect/accept. */
+    int per_sub_expected = (npubs / nsubs) * msgs_per_pub;
+    int per_sub_received[16] = {0};
+    int total_expected = nsubs * per_sub_expected;
+    int total_received_now = 0;
+    int deadline_calls = 0;
+    while (total_received_now < total_expected && deadline_calls < 100) {
+        for (int s = 0; s < nsubs; s++) {
+            cmq_frame_t f;
+            while (drain_frame(fds[s], &f, parsers[s]) == 0) {
+                if (f.hdr.op == CMQ_OP_MESSAGE) {
+                    per_sub_received[s]++;
+                    total_received_now++;
+                }
+                free_frame(&f);
+            }
+        }
+        if (total_received_now >= total_expected) break;
+        wait_ms(50);
+        deadline_calls++;
+    }
     int total_received = 0;
     for (int s = 0; s < nsubs; s++) {
-        int count = 0;
-        for (;;) {
-            cmq_frame_t f;
-        if (drain_frame(fds[s], &f, parsers[s]) != 0) break;
-            if (f.hdr.op == CMQ_OP_MESSAGE) count++;
-            free_frame(&f);
-        }
-        total_received += count;
+        ASSERT(per_sub_received[s] >= per_sub_expected);
+        total_received += per_sub_received[s];
     }
     ASSERT(total_received >= total_msgs);
 
