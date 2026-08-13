@@ -104,6 +104,7 @@ set(CMQ_STORE_SOURCES
 set(CMQ_CLUSTER_SOURCES
     src/cluster/cmq_cluster.c
     src/cluster/cmq_route.c
+    src/cluster/cmq_route_tls.c
     src/cluster/cmq_leaf.c
     src/cluster/cmq_gateway.c
     src/cluster/cmq_blocklist.c
