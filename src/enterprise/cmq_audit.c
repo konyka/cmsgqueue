@@ -21,6 +21,8 @@ static const char *event_name(cmq_audit_event_t e) {
     }
 }
 
+#define AUDIT_MAX_BYTES (100u * 1024u * 1024u)
+
 void cmq_audit_set_path(const char *path) {
     pthread_mutex_lock(&g_audit_lock);
     free(g_audit_path);
@@ -80,7 +82,16 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
         FILE *f = fopen(g_audit_path, "a");
         if (f) {
             fputs(line, f);
-            fclose(f);
+            fflush(f);
+            /* F7: rotate the audit log when it exceeds the cap. */
+            if (ftell(f) >= (long)AUDIT_MAX_BYTES) {
+                fclose(f);
+                char rotated[1024];
+                snprintf(rotated, sizeof(rotated), "%s.1", g_audit_path);
+                rename(g_audit_path, rotated);
+            } else {
+                fclose(f);
+            }
         }
     }
     pthread_mutex_unlock(&g_audit_lock);

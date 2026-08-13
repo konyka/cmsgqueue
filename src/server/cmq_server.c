@@ -5049,13 +5049,17 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
             if (plen == 9 && memcmp(path_start, "/healthz", 9) == 0) {
                 free(req);
                 const char *body = "{\"status\":\"ok\"}\n";
-                char resp[256];
+                /* F7: HSTS is sent only when TLS is configured. */
+                const char *hsts = cmq_tls_configured(c->server->tls_config)
+                                   ? "Strict-Transport-Security: max-age=31536000\r\n"
+                                   : "";
+                char resp[512];
                 int rl = snprintf(resp, sizeof(resp),
                     "HTTP/1.1 200 OK\r\n"
                     "Content-Type: application/json\r\n"
                     "Content-Length: %zu\r\n"
-                    "Connection: close\r\n\r\n%s",
-                    strlen(body), body);
+                    "Connection: close\r\n%s%s",
+                    strlen(body), hsts, body);
                 if (rl > 0) (void)client_sock_write(c, (const uint8_t *)resp, (size_t)rl);
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 if (consumed) *consumed = hdr_end;
