@@ -192,6 +192,12 @@ struct cmq_server {
     struct cmq_filestore *filestore;   /* F5: optional WAL; NULL = disabled */
     struct cmq_mqtt_bridge *mqtt_bridge; /* F6: optional upstream MQTT client */
     cmq_tls_config_t *tls_config;
+    /* F14: quota. NULL = no quota. */
+    struct cmq_quota *quota;
+    /* F16: ACL. NULL = no ACL. */
+    struct cmq_acl *acl;
+    /* F15: blocklist. NULL = no blocklist. */
+    struct cmq_blocklist *blocklist;
 
     cmq_mpool_t *msg_payload_pool;  /* pool for worker SEND msg->buf (<=64KiB); NULL = malloc fallback */
 

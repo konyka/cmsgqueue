@@ -80,6 +80,15 @@ typedef struct cmq_config {
     const char *cluster_node_id;
     struct { const char *addr; int port; } routes[8];
     int route_count;
+    /* F14 quota knobs. 0 disables each individual cap. */
+    int max_msgs_per_sec_per_account;
+    int max_bytes_per_sec_per_account;
+    int max_connections_per_account;
+    /* F16 ACL: CSV patterns. NULL disables. */
+    const char *acl_allow;
+    const char *acl_deny;
+    /* F15: connection blocklist file. NULL disables. */
+    const char *blocklist_file;
     int tls_enabled;
     const char *tls_cert;
     const char *tls_key;

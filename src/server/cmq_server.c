@@ -9,6 +9,10 @@
 #include "cmq_mqtt.h"
 #include "cmq_password.h"
 #include "cmq_trace.h"
+#include "cmq_audit.h"
+#include "cmq_quota.h"
+#include "cmq_acl.h"
+#include "cmq_blocklist.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -6626,11 +6630,57 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         }
     }
 
-    /* F6: MQTT upstream bridge (client mode). When mqtt_bridge_addr
-     * is set, the server connects to the upstream broker and can
-     * forward published messages. Forwarding policy is left to the
-     * operator (cmq_mqtt_add_mapping); this just opens the client. */
-    if (srv->config.mqtt_bridge_addr && srv->config.mqtt_bridge_addr[0] != '\0') {
+    /* F14: per-account quota. */
+    if (srv->config.max_msgs_per_sec_per_account > 0 ||
+        srv->config.max_bytes_per_sec_per_account > 0 ||
+        srv->config.max_connections_per_account > 0) {
+        srv->quota = cmq_quota_create(
+            (uint32_t)srv->config.max_msgs_per_sec_per_account,
+            (uint32_t)srv->config.max_bytes_per_sec_per_account,
+            (uint32_t)srv->config.max_connections_per_account);
+        cmq_log_info(srv->log, "Quota enabled: msgs=%d/s bytes=%d/s conns=%d",
+                     srv->config.max_msgs_per_sec_per_account,
+                     srv->config.max_bytes_per_sec_per_account,
+                     srv->config.max_connections_per_account);
+    }
+
+    /* F16: per-subject ACL. */
+    if (srv->config.acl_allow || srv->config.acl_deny) {
+        srv->acl = cmq_acl_create();
+        if (srv->acl) {
+            if (srv->config.acl_allow) {
+                char *copy = strdup(srv->config.acl_allow);
+                if (copy) {
+                    char *save = NULL;
+                    for (char *t = strtok_r(copy, ",", &save); t;
+                         t = strtok_r(NULL, ",", &save)) {
+                        cmq_acl_allow(srv->acl, t);
+                    }
+                    free(copy);
+                }
+            }
+            if (srv->config.acl_deny) {
+                char *copy = strdup(srv->config.acl_deny);
+                if (copy) {
+                    char *save = NULL;
+                    for (char *t = strtok_r(copy, ",", &save); t;
+                         t = strtok_r(NULL, ",", &save)) {
+                        cmq_acl_deny(srv->acl, t);
+                    }
+                    free(copy);
+                }
+            }
+            cmq_log_info(srv->log, "ACL enabled");
+        }
+    }
+
+    /* F15: connection blocklist. */
+    if (srv->config.blocklist_file) {
+        srv->blocklist = cmq_blocklist_load(srv->config.blocklist_file);
+        if (srv->blocklist) {
+            cmq_log_info(srv->log, "Blocklist loaded: %s",
+                         srv->config.blocklist_file);
+        }
         srv->mqtt_bridge = cmq_mqtt_bridge_create("cmsgbridge");
         if (srv->mqtt_bridge) {
             if (cmq_mqtt_bridge_connect(srv->mqtt_bridge,
@@ -7239,6 +7289,18 @@ void cmq_server_destroy(cmq_server_t *srv) {
         cmq_filestore_sync(srv->filestore);
         cmq_filestore_destroy(srv->filestore);
         srv->filestore = NULL;
+    }
+    if (srv->quota) {
+        cmq_quota_free(srv->quota);
+        srv->quota = NULL;
+    }
+    if (srv->acl) {
+        cmq_acl_free(srv->acl);
+        srv->acl = NULL;
+    }
+    if (srv->blocklist) {
+        cmq_blocklist_free(srv->blocklist);
+        srv->blocklist = NULL;
     }
     if (srv->mqtt_bridge) {
         cmq_mqtt_bridge_disconnect(srv->mqtt_bridge);
