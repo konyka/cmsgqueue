@@ -2947,6 +2947,21 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     int route_rc = 0;
 
     cmq_sublist_result_t result;
+    /* F16: per-subject ACL check. Reject before sublist match. */
+    if (srv->acl && cmq_acl_check(srv->acl, subject) == 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "permission denied");
+        return;
+    }
+    /* F14: per-account quota check. */
+    if (srv->quota &&
+        cmq_quota_check_publish(srv->quota, c->account_name, msg_len) == 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "quota exceeded");
+        return;
+    }
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
         cmq_send_error(c, "delivery failed");
         return; /* OOM after validation — surface error, no silent drop */
@@ -4400,6 +4415,21 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         if (client_state(c) == CMQ_CLIENT_CLOSING || client_state(c) == CMQ_CLIENT_CLOSED) {
             cmq_send_connack(c, 1);
             break;
+        }
+        /* F15: connection blocklist. Reject banned IPs pre-handshake. */
+        if (srv->blocklist && c->fd >= 0) {
+            struct sockaddr_in peer;
+            socklen_t plen = sizeof(peer);
+            if (getpeername(c->fd, (struct sockaddr *)&peer, &plen) == 0 &&
+                peer.sin_family == AF_INET) {
+                uint32_t ip = (uint32_t)peer.sin_addr.s_addr;
+                if (cmq_blocklist_check(srv->blocklist, ip)) {
+                    cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, NULL, "",
+                                  "blocklist reject");
+                    client_finish_closing(c);
+                    break;
+                }
+            }
         }
         /* F8b: per-IP auth brute-force rate limit. The check uses the
          * peer IP of the connected socket. If the IP is over its
