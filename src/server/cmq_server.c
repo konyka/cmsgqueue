@@ -13,6 +13,7 @@
 #include "cmq_quota.h"
 #include "cmq_acl.h"
 #include "cmq_blocklist.h"
+#include "cmq_sublist_persist.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -3533,6 +3534,13 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
     cmq_send_suback(c, sub_id, 0);
+    /* F18: record the subscription in the persistent WAL so it
+     * survives a server restart. Best-effort: a failed write does
+     * not roll back the in-memory subscription. */
+    if (srv->persist) {
+        cmq_sublist_persist_record_sub(srv->persist, sub_id, subject,
+                                        c->account_name);
+    }
 }
 
 static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
@@ -3562,6 +3570,10 @@ static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
 
             free(entry);
             if (c->sub_count > 0) c->sub_count--;
+            /* F18: record the unsubscribe in the persistent WAL. */
+            if (srv->persist) {
+                cmq_sublist_persist_record_unsub(srv->persist, sub_id);
+            }
             uint64_t cur = cmq_atomic_load_u64(&srv->stat_subscriptions,
                                                 CMQ_ATOMIC_RELAXED);
             if (cur > 0) {
@@ -6577,6 +6589,12 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             return CMQ_ERR_INVALID_ARG;
         }
         cmq_log_info(srv->log, "Persistence enabled: dir=%s", srv->config.persist_dir);
+        /* F18: also open the subscription persistence file. */
+        srv->persist = cmq_sublist_persist_open(srv->config.persist_dir);
+        if (!srv->persist) {
+            cmq_log_error(srv->log,
+                "subscription persist open failed for dir=%s", srv->config.persist_dir);
+        }
         /* F5 recovery: replay the WAL on startup. Each record is
          * dispatched via the same handle_publish path as a fresh
          * publish. The sublist matches against current subscribers
@@ -7293,6 +7311,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
         cmq_filestore_sync(srv->filestore);
         cmq_filestore_destroy(srv->filestore);
         srv->filestore = NULL;
+    }
+    if (srv->persist) {
+        cmq_sublist_persist_close(srv->persist);
+        srv->persist = NULL;
     }
     if (srv->quota) {
         cmq_quota_free(srv->quota);

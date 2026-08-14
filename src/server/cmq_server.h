@@ -190,6 +190,7 @@ struct cmq_server {
     cmq_route_pool_t *routes;
     cmq_cluster_t *cluster;
     struct cmq_filestore *filestore;   /* F5: optional WAL; NULL = disabled */
+    struct cmq_sublist_persist *persist; /* F18: optional subscription WAL; NULL = disabled */
     struct cmq_mqtt_bridge *mqtt_bridge; /* F6: optional upstream MQTT client */
     cmq_tls_config_t *tls_config;
     /* F14: quota. NULL = no quota. */
