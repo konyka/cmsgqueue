@@ -13,6 +13,7 @@
 #include "cmq_quota.h"
 #include "cmq_acl.h"
 #include "cmq_blocklist.h"
+#include "cmq_subject_rl.h"
 #include "cmq_sublist_persist.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
@@ -2960,6 +2961,14 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "quota exceeded");
+        return;
+    }
+    /* N1: per-subject rate limit. */
+    if (srv->subject_rl &&
+        cmq_subject_rl_check(srv->subject_rl, subject) == 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "subject rate limit");
         return;
     }
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
@@ -6696,6 +6705,14 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                      srv->config.max_connections_per_account);
     }
 
+    /* N1: per-subject rate limit. */
+    if (srv->config.max_msgs_per_sec_per_subject > 0) {
+        srv->subject_rl = cmq_subject_rl_create(
+            (uint32_t)srv->config.max_msgs_per_sec_per_subject);
+        cmq_log_info(srv->log, "Subject rate limit: %d msgs/s",
+                     srv->config.max_msgs_per_sec_per_subject);
+    }
+
     /* F16: per-subject ACL. */
     if (srv->config.acl_allow || srv->config.acl_deny) {
         srv->acl = cmq_acl_create();
@@ -7407,6 +7424,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->blocklist) {
         cmq_blocklist_free(srv->blocklist);
         srv->blocklist = NULL;
+    }
+    if (srv->subject_rl) {
+        cmq_subject_rl_free(srv->subject_rl);
+        srv->subject_rl = NULL;
     }
     if (srv->mqtt_bridge) {
         cmq_mqtt_bridge_disconnect(srv->mqtt_bridge);

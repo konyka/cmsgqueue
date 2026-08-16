@@ -82,6 +82,7 @@ typedef struct cmq_config {
     int route_count;
     /* F14 quota knobs. 0 disables each individual cap. */
     int max_msgs_per_sec_per_account;
+    int max_msgs_per_sec_per_subject;
     int max_bytes_per_sec_per_account;
     int max_connections_per_account;
     /* F16 ACL: CSV patterns. NULL disables. */

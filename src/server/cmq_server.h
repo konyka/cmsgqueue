@@ -199,6 +199,7 @@ struct cmq_server {
     struct cmq_acl *acl;
     /* F15: blocklist. NULL = no blocklist. */
     struct cmq_blocklist *blocklist;
+    struct cmq_subject_rl *subject_rl;
 
     cmq_mpool_t *msg_payload_pool;  /* pool for worker SEND msg->buf (<=64KiB); NULL = malloc fallback */
 
