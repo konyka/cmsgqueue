@@ -1,31 +1,32 @@
 # Changelog
 
-## [0.5.0] - 2026-08-14
+## [0.5.1] - 2026-08-14
 
 ### Added
-- F18 wire-up: `cmq_server_create` opens the subscription persistence file when `persist_dir` is set. `handle_subscribe` records subs in the WAL. `handle_unsubscribe` records unsubs. Subscriptions survive a server restart.
-- F14/F15/F16 enforcement: ACL check (`cmq_acl_check`) before sublist match; quota check (`cmq_quota_check_publish`) after; blocklist check (`cmq_blocklist_check`) at CONNECT. Reject with `cmq_send_error` on fail.
-- N3 audit log test: verifies file creation when path is set.
+- N2: `cmq_server_reload(server, config_path)` API. Re-reads config; hot-swaps blocklist, updates audit path, log levels. No listener threads stopped.
+- N1: `cmq_subject_rl` library (per-subject token bucket). `cmq_subject_rl_create(max_per_sec)`, `cmq_subject_rl_check(rl, subject)`, `cmq_subject_rl_free(rl)`.
+- mTLS API tests: `cmq_tls_set_verify` + `cmq_tls_set_ca` + `cmq_tls_verify_peer` validated.
 
 ### Tests
-- 52/52 (was 49 in v0.4.0; +3 new test files).
+- 53/53 (was 52 in v0.5.0; +3 new test files).
 
-### Deferred to v0.5.1
-- F17 full BIO-wrap in cmq_route.c.
+### Deferred to v0.5.2
+- F17 full BIO-wrap in `cmq_route.c`.
 - F19 MQTT 5.0 + QoS 2.
 - WAL replay parallelization.
-- mTLS client cert chain.
-- N1 per-subject rate limit.
-- N2 hot config reload (SIGHUP).
+- N1 server-side enforcement (library exists, wiring is follow-up).
+
+## [0.5.0] - 2026-08-14
+- F18 wire-up + F14/F15/F16 enforcement + N3 audit test.
 
 ## [0.4.0] - 2026-08-05
-7 features: F1 (test fix), F12 (TLS hardening), F14/F15/F16 wire-up, F17 (TLS lib), F18 (persistence), F19 (MQTT lib), F7 (hardening).
+- 7 features: F1, F12, F14/F15/F16 wire-up, F17 lib, F18 lib, F19 lib, F7.
 
 ## [0.3.0] - 2026-08-05
-11 features + 2 stubs.
+- 11 features + 2 stubs.
 
 ## [0.2.0] - 2026-08-03
-11 features.
+- 11 features.
 
 ## [0.1.0] - 2026-07-25
-Initial release.
+- Initial release.
