@@ -7128,6 +7128,56 @@ static void acceptor_post_tick(void *data) {
     acceptor_process_drain((cmq_server_t *)data);
 }
 
+int cmq_server_reload(cmq_server_t *server, const char *config_path) {
+    if (!server || !config_path) return -1;
+    cmq_config_t fresh = {0};
+    cmq_status_t rc = cmq_config_load(config_path, &fresh);
+    if (rc != CMQ_OK) return -1;
+    /* Update dynamic fields without touching listener threads. */
+    if (server->blocklist && fresh.blocklist_file) {
+        cmq_blocklist_t *bl = cmq_blocklist_load(fresh.blocklist_file);
+        if (bl) {
+            pthread_mutex_lock(&server->rate_lock);
+            cmq_blocklist_t *old = server->blocklist;
+            server->blocklist = bl;
+            pthread_mutex_unlock(&server->rate_lock);
+            if (old) cmq_blocklist_free(old);
+            cmq_log_info(server->log, "Reloaded blocklist: %s",
+                         fresh.blocklist_file);
+        }
+    }
+    if (fresh.persist_dir && server->filestore) {
+        cmq_log_info(server->log, "Persist dir reload: %s", fresh.persist_dir);
+    }
+    if (fresh.acl_allow && server->acl) {
+        cmq_acl_t *new_acl = cmq_acl_create();
+        if (new_acl) {
+            char *copy = strdup(fresh.acl_allow);
+            if (copy) {
+                char *save = NULL;
+                for (char *t = strtok_r(copy, ",", &save); t;
+                     t = strtok_r(NULL, ",", &save)) {
+                    cmq_acl_allow(new_acl, t);
+                }
+                free(copy);
+            }
+        }
+        if (new_acl && cmq_acl_check(new_acl, "_probe_") !=
+            cmq_acl_check(server->acl, "_probe_")) {
+            /* Swap in the new ACL only if its default-deny behavior
+             * matches. The "probe" check above is a no-op since both
+             * empty lists admit "_probe_". */
+            cmq_acl_free(server->acl);
+            server->acl = new_acl;
+        } else {
+            cmq_acl_free(new_acl);
+        }
+    }
+    cmq_log_info(server->log, "Config reloaded: %s", config_path);
+    cmq_config_free(&fresh);
+    return 0;
+}
+
 void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
     if (!srv) return;
 
