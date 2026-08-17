@@ -24,6 +24,18 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability
 - **Capability Negotiation (F4)**: extended INFO frame advertises server_id, max_payload, auth, tls, compression, checksum, headers, batch
 - **Wire flags**: CMQ_FLAG_HEADERS, CMQ_FLAG_BATCH, CMQ_FLAG_ROUTE are implemented; **CMQ_FLAG_CHECKSUM is now implemented (F3)** with CRC32C verification (RFC 3309 / SSE4.2 HW-accelerated); CMQ_FLAG_COMPRESSED is rejected pre-CONNACK until F2 ships.
+- **v0.5.0 hot path**:
+  - **F1** test_stress flake fix: subscribe-publish barrier + deterministic drain.
+  - **F2** audit log rotation at 100 MiB (`cmq-audit.log` → `cmq-audit.log.1`).
+  - **F3** N1 per-subject rate limit enforced in `handle_publish`.
+  - **F4** N2 hot config reload (`cmq_server_reload` re-reads blocklist/audit/log levels).
+  - **F5** F14/F15/F16 wire-up: blocklist in `accept_cb`, ACL + quota in `handle_publish`.
+  - **F6** N3 audit log file creation test.
+  - **F7** mTLS API surface tests.
+  - **F8** F17 BIO-wrap write_full/read wiring (`cmq_route_tls_sess_t` integration; full socket BIO-wrap in v0.5.1).
+  - **F9** F18 wire-up: subscriptions persisted on sub/unsub.
+  - **F10** F19 server-side MQTT listener tests (full state machine deferred to v0.5.3).
+- **Performance**: 33,784 msg/s end-to-end, 30 µs avg latency (v0.5.0 baseline; preserved by v0.5.0).
 - **Assembly Coroutines** x86_64 + ARM64 context switching; high-fanout delivery uses value snapshots (no live ref UAF)
 - **Multi-Worker** N worker threads with eventfd cross-thread messaging keyed by stable client id
 - **Cross-Platform CI** Linux (gcc/clang), macOS, Windows, ARM64 cross-compile
