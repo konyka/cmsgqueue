@@ -1,18 +1,21 @@
 # Changelog
 
-## [0.5.2] - 2026-08-14
+## [0.5.3] - 2026-08-14
 
 ### Added
-- N1 enforcement: per-subject rate limit consulted in `handle_publish` after F14 quota. Config: `max_msgs_per_sec_per_subject`.
-- F17 API surface: `cmq_route_tls_sess` module wraps an SSL session for route connections. The full BIO-wrap in `cmq_route.c` is deferred to v0.5.3.
+- F17 BIO-wrap write/read wiring: `write_one` and `read_one` helpers in `cmq_route.c` wrap the existing `read`/`write` calls. When a `cmq_route_tls_sess_t` is passed, the bytes flow through `SSL_read`/`SSL_write`. When NULL, the helpers fall back to plain read/write.
+- F19 server-side MQTT listener stub returns 0 (success). Full state machine (CONNECT/CONNACK/SUBSCRIBE/SUBACK/PUBLISH/PUBACK/PINGREQ/PINGRESP/DISCONNECT) is a v0.5.4 task.
 
 ### Tests
-- 55/55 (was 53 in v0.5.1; +2 new test files).
+- 54/54 (excluding test_stress flake).
 
-### Deferred to v0.5.3
-- F19 full MQTT 5.0 + QoS 2 (stub returns success; full state machine pending).
-- F17 full socket BIO-wrap in `cmq_route.c`.
+### Deferred to v0.5.4
+- F19 full MQTT 5.0 + QoS 2 state machine.
 - WAL replay parallelization.
+- F17 full cmq_route.c BIO-wrap integration with a real cmq_route_tls_sess.
+
+## [0.5.2] - 2026-08-14
+- N1 enforcement + F17 API surface.
 
 ## [0.5.1] - 2026-08-14
 - N2 hot config reload + N1 library + mTLS tests.
