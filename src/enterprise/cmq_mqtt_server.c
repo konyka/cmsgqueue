@@ -4,8 +4,8 @@
 int cmq_mqtt_server_listen(const char *bind_addr, int port) {
     (void)bind_addr;
     (void)port;
-    /* F19: full listener deferred to v0.5.3. The API returns 0
-     * (success) so callers can probe availability. */
+    /* F19: full implementation deferred to v0.5.5. The API returns
+     * 0 so callers can probe availability. */
     return 0;
 }
 
