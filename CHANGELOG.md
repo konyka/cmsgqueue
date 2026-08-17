@@ -1,20 +1,21 @@
 # Changelog
 
-## [0.5.1] - 2026-08-14
+## [0.5.2] - 2026-08-14
 
 ### Added
-- N2: `cmq_server_reload(server, config_path)` API. Re-reads config; hot-swaps blocklist, updates audit path, log levels. No listener threads stopped.
-- N1: `cmq_subject_rl` library (per-subject token bucket). `cmq_subject_rl_create(max_per_sec)`, `cmq_subject_rl_check(rl, subject)`, `cmq_subject_rl_free(rl)`.
-- mTLS API tests: `cmq_tls_set_verify` + `cmq_tls_set_ca` + `cmq_tls_verify_peer` validated.
+- N1 enforcement: per-subject rate limit consulted in `handle_publish` after F14 quota. Config: `max_msgs_per_sec_per_subject`.
+- F17 API surface: `cmq_route_tls_sess` module wraps an SSL session for route connections. The full BIO-wrap in `cmq_route.c` is deferred to v0.5.3.
 
 ### Tests
-- 53/53 (was 52 in v0.5.0; +3 new test files).
+- 55/55 (was 53 in v0.5.1; +2 new test files).
 
-### Deferred to v0.5.2
-- F17 full BIO-wrap in `cmq_route.c`.
-- F19 MQTT 5.0 + QoS 2.
+### Deferred to v0.5.3
+- F19 full MQTT 5.0 + QoS 2 (stub returns success; full state machine pending).
+- F17 full socket BIO-wrap in `cmq_route.c`.
 - WAL replay parallelization.
-- N1 server-side enforcement (library exists, wiring is follow-up).
+
+## [0.5.1] - 2026-08-14
+- N2 hot config reload + N1 library + mTLS tests.
 
 ## [0.5.0] - 2026-08-14
 - F18 wire-up + F14/F15/F16 enforcement + N3 audit test.

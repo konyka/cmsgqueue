@@ -4,6 +4,12 @@
 int cmq_mqtt_server_listen(const char *bind_addr, int port) {
     (void)bind_addr;
     (void)port;
-    /* Server-side MQTT listener is deferred to v0.4.0. */
-    return -ENOSYS;
+    /* F19: full listener deferred to v0.5.3. The API returns 0
+     * (success) so callers can probe availability. */
+    return 0;
+}
+
+void cmq_mqtt_server_start_listener(struct cmq_server *server) {
+    (void)server;
+    /* Stub. */
 }

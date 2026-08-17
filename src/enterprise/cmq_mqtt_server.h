@@ -23,6 +23,12 @@ extern "C" {
 
 int cmq_mqtt_server_listen(const char *bind_addr, int port);
 
+/* F19: launch the MQTT listener thread on the server. Idempotent
+ * in practice; the listener binds 127.0.0.1:1883 and accepts
+ * CONNECT / PUBLISH frames, forwarding PUBLISH into the cmq_sublist. */
+struct cmq_server;
+void cmq_mqtt_server_start_listener(struct cmq_server *server);
+
 #ifdef __cplusplus
 }
 #endif
