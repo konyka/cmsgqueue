@@ -4,6 +4,14 @@
 #include "cmq_proto.h"
 #include "cmq_thread.h"
 #include "cmq_types.h"
+#include "cmq_route_tls_sess.h"
+
+/* F17: TLS-aware read/write forward declarations. */
+static ssize_t write_one(int fd, const uint8_t *data, size_t len,
+                          cmq_route_tls_sess_t *sess);
+static ssize_t read_one(int fd, void *buf, size_t len,
+                         cmq_route_tls_sess_t *sess);
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -91,7 +99,7 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
 
     size_t off = 0;
     while (off < len) {
-        ssize_t n = write(fd, buf + off, len - off);
+        ssize_t n = write_one(fd, buf + off, len - off, NULL);
         if (n < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -145,7 +153,7 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
             continue;
         }
         if (rlen >= sizeof(rbuf)) return -1;
-        ssize_t n = read(fd, rbuf + rlen, sizeof(rbuf) - rlen);
+        ssize_t n = read_one(fd, rbuf + rlen, sizeof(rbuf) - rlen, NULL);
         if (n < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -159,6 +167,30 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
 /* 0 = full write, 1 = EAGAIN with zero progress (keep fd), -1 = hard failure.
    Partial progress + EAGAIN polls POLLOUT (EINTR-safe, bounded stall rounds)
    rather than closing mid-frame. */
+
+/* F17: TLS-aware read/write. When sess is NULL, fall back to plain
+ * read/write. When sess is non-NULL, the bytes flow through
+ * SSL_read/SSL_write with EAGAIN mapping for WANT_READ/WANT_WRITE. */
+static ssize_t write_one(int fd, const uint8_t *data, size_t len,
+                          cmq_route_tls_sess_t *sess) {
+    if (sess) return cmq_route_tls_sess_write(sess, fd, data, len);
+    ssize_t n;
+    do {
+        n = write(fd, data, len);
+    } while (n < 0 && errno == EINTR);
+    return n;
+}
+
+static ssize_t read_one(int fd, void *buf, size_t len,
+                         cmq_route_tls_sess_t *sess) {
+    if (sess) return cmq_route_tls_sess_read(sess, fd, buf, len);
+    ssize_t n;
+    do {
+        n = read(fd, buf, len);
+    } while (n < 0 && errno == EINTR);
+    return n;
+}
+
 static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
     int stall_rounds = 0;
