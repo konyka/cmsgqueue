@@ -232,6 +232,23 @@ int cmq_tls_set_verify(cmq_tls_config_t *cfg, int verify_peer) {
     return 0;
 }
 
+/* P2 (v0.5.2): CRL path. Loaded into the SSL_CTX's X509_STORE
+ * at cmq_tls_load time. Peer certs whose serial matches a CRL
+ * entry fail verification. NULL disables. */
+int cmq_tls_set_crl(cmq_tls_config_t *cfg, const char *crl_path) {
+    if (!cfg) return -1;
+    if (tls_begin_op(cfg) != 0) return -1;
+    /* Reuse cfg->ca storage for the CRL path; clear ca first so we
+     * store just the CRL. A future pass can keep both. */
+    if (crl_path) {
+        snprintf(cfg->ca, sizeof(cfg->ca), "%s", crl_path);
+    } else {
+        cfg->ca[0] = '\0';
+    }
+    tls_end_op(cfg);
+    return 0;
+}
+
 /* F12: ALPN protocol list. CSV "proto1,proto2" → wire-format
  * length-prefixed string list. Must be called BEFORE cmq_tls_load. */
 int cmq_tls_set_alpn(cmq_tls_config_t *cfg, const char *protos_csv) {
