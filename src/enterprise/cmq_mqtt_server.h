@@ -1,6 +1,9 @@
 #ifndef CMQ_MQTT_SERVER_H
 #define CMQ_MQTT_SERVER_H
 
+#include <stdint.h>
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -41,6 +44,14 @@ void cmq_mqtt_set_credentials(const char *user, const char *pass);
  * maintains an internal record. */
 int cmq_mqtt_record_subscriber(const char *topic_filter);
 int cmq_mqtt_subscriber_count(void);
+
+/* P4 (v0.5.2): retained-message store. Last retained payload per
+ * topic; cmq_mqtt_fetch_retained returns it for delivery on a new
+ * SUBSCRIBE. */
+void cmq_mqtt_store_retained(const char *topic, const uint8_t *payload,
+                              size_t len);
+int cmq_mqtt_fetch_retained(const char *topic, const uint8_t **out,
+                             size_t *out_len);
 
 #ifdef __cplusplus
 }

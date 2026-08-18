@@ -145,6 +145,65 @@ int cmq_mqtt_subscriber_count(void) {
     return n;
 }
 
+/* P4 (v0.5.2): retained-message store. Last retained payload per
+ * topic, delivered to new SUBSCRIBE on that topic. */
+#define MQTT_MAX_RETAINED 32
+struct retained_entry {
+    char topic[128];
+    uint8_t *payload;
+    size_t payload_len;
+};
+static struct retained_entry g_mqtt_retained[MQTT_MAX_RETAINED];
+static int g_mqtt_retained_count = 0;
+static pthread_mutex_t g_mqtt_retained_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void cmq_mqtt_store_retained(const char *topic, const uint8_t *payload,
+                              size_t len) {
+    if (!topic || !*topic || (!payload && len > 0)) return;
+    pthread_mutex_lock(&g_mqtt_retained_lock);
+    int idx = -1;
+    for (int i = 0; i < g_mqtt_retained_count; i++) {
+        if (strcmp(g_mqtt_retained[i].topic, topic) == 0) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) {
+        if (g_mqtt_retained_count >= MQTT_MAX_RETAINED) {
+            pthread_mutex_unlock(&g_mqtt_retained_lock);
+            return;
+        }
+        idx = g_mqtt_retained_count++;
+        snprintf(g_mqtt_retained[idx].topic, sizeof(g_mqtt_retained[idx].topic),
+                  "%s", topic);
+    } else {
+        free(g_mqtt_retained[idx].payload);
+    }
+    g_mqtt_retained[idx].payload = malloc(len > 0 ? len : 1);
+    if (g_mqtt_retained[idx].payload && len > 0) {
+        memcpy(g_mqtt_retained[idx].payload, payload, len);
+    }
+    g_mqtt_retained[idx].payload_len = len;
+    pthread_mutex_unlock(&g_mqtt_retained_lock);
+}
+
+int cmq_mqtt_fetch_retained(const char *topic, const uint8_t **out,
+                             size_t *out_len) {
+    if (!topic || !out || !out_len) return -1;
+    pthread_mutex_lock(&g_mqtt_retained_lock);
+    int rc = -1;
+    for (int i = 0; i < g_mqtt_retained_count; i++) {
+        if (strcmp(g_mqtt_retained[i].topic, topic) == 0) {
+            *out = g_mqtt_retained[i].payload;
+            *out_len = g_mqtt_retained[i].payload_len;
+            rc = 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_mqtt_retained_lock);
+    return rc;
+}
+
 /* P1 (v0.5.2): static credentials for the MQTT listener. When
  * non-empty, CONNECT must include matching Username/Password.
  * Compile-time settable via env at startup; default is empty (no
@@ -302,6 +361,19 @@ size_t got = (size_t)n;
             uint16_t topic_len = ((uint16_t)p[0] << 8) | p[1];
             if ((size_t)(2 + topic_len) > plen) continue;
             uint8_t qos = (buf[0] >> 1) & 0x03;
+            int retain = (buf[0] & 0x08) != 0;
+            /* P4: PUBLISH payload starts after topic + packet_id (if QoS>0). */
+            size_t payload_off = 2 + topic_len;
+            if (qos > 0) payload_off += 2;
+            size_t payload_len = 0;
+            if (payload_off <= plen) payload_len = plen - payload_off;
+            if (retain && topic_len > 0 && topic_len < 128) {
+                char topic[128];
+                memcpy(topic, p + 2, topic_len);
+                topic[topic_len] = '\0';
+                cmq_mqtt_store_retained(topic, p + payload_off,
+                                          payload_len);
+            }
             if (qos > 1) {
                 /* P2: QoS 2 — emit PUBREC. We don't track per-packet-id
                  * state; duplicate PUBREL on the same id is accepted. */
