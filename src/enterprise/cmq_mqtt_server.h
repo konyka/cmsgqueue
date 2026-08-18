@@ -35,6 +35,13 @@ void cmq_mqtt_server_start_listener(struct cmq_server *server);
  * any CONNECT). */
 void cmq_mqtt_set_credentials(const char *user, const char *pass);
 
+/* P1 (v0.5.2): record a SUBSCRIBE topic filter. The listener calls
+ * this on every accepted SUBSCRIBE. The cmq-sublist bridge (forwarding
+ * matching PUBLISH into cmq_sublist) is v0.6 work; today this only
+ * maintains an internal record. */
+int cmq_mqtt_record_subscriber(const char *topic_filter);
+int cmq_mqtt_subscriber_count(void);
+
 #ifdef __cplusplus
 }
 #endif

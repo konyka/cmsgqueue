@@ -86,6 +86,46 @@ static int send_puback(int fd, uint16_t packet_id) {
     return (int)send(fd, pkt, sizeof(pkt), 0);
 }
 
+/* P1: SUBACK for SUBSCRIBE. payload = sequence of granted QoS bytes
+ * (here we always grant QoS 0). packet_id (2B) + at least 1 byte. */
+static int send_suback(int fd, uint16_t packet_id,
+                        const uint8_t *granted_qos, size_t n) {
+    uint8_t buf[16];
+    if (n > 14) return -1;
+    buf[0] = MQTT_TYPE_SUBACK;
+    buf[1] = (uint8_t)(2 + n);
+    buf[2] = (uint8_t)(packet_id >> 8);
+    buf[3] = (uint8_t)(packet_id & 0xFF);
+    memcpy(buf + 4, granted_qos, n);
+    return (int)send(fd, buf, 4 + n, 0);
+}
+
+#define MQTT_MAX_SUBS 64
+static char g_mqtt_sub_topics[MQTT_MAX_SUBS][128];
+static int g_mqtt_sub_count = 0;
+static pthread_mutex_t g_mqtt_sub_lock = PTHREAD_MUTEX_INITIALIZER;
+
+int cmq_mqtt_record_subscriber(const char *topic_filter) {
+    if (!topic_filter || !*topic_filter) return -1;
+    pthread_mutex_lock(&g_mqtt_sub_lock);
+    int rc = -1;
+    if (g_mqtt_sub_count < MQTT_MAX_SUBS) {
+        snprintf(g_mqtt_sub_topics[g_mqtt_sub_count], 128, "%s",
+                  topic_filter);
+        g_mqtt_sub_count++;
+        rc = 0;
+    }
+    pthread_mutex_unlock(&g_mqtt_sub_lock);
+    return rc;
+}
+
+int cmq_mqtt_subscriber_count(void) {
+    pthread_mutex_lock(&g_mqtt_sub_lock);
+    int n = g_mqtt_sub_count;
+    pthread_mutex_unlock(&g_mqtt_sub_lock);
+    return n;
+}
+
 /* P1 (v0.5.2): static credentials for the MQTT listener. When
  * non-empty, CONNECT must include matching Username/Password.
  * Compile-time settable via env at startup; default is empty (no
@@ -189,6 +229,36 @@ size_t got = (size_t)n;
             if (send_pingresp(fd) < 0) return -1;
         } else if (type == MQTT_TYPE_DISCONNECT) {
             return 0;
+        } else if (type == MQTT_TYPE_SUBSCRIBE && connected) {
+            /* P1: SUBSCRIBE variable header = packet_id (2B).
+             * Payload = list of (topic_filter_len:2B + topic + qos:1B).
+             * We accept, record the topic filter, and grant QoS 0. */
+            const uint8_t *p = buf + 1 + rl_off;
+            size_t plen = rem_len;
+            if (plen < 5) continue;
+            uint16_t packet_id = ((uint16_t)p[0] << 8) | p[1];
+            size_t off = 2;
+            uint8_t granted[8];
+            int granted_n = 0;
+            while (off + 2 < plen && granted_n < 8) {
+                uint16_t tlen = ((uint16_t)p[off] << 8) | p[off + 1];
+                off += 2;
+                if (off + tlen + 1 > plen) break;
+                char topic[128];
+                if (tlen >= sizeof(topic)) tlen = sizeof(topic) - 1;
+                memcpy(topic, p + off, tlen);
+                topic[tlen] = '\0';
+                off += tlen;
+                uint8_t req_qos = p[off];
+                off += 1;
+                if (req_qos > 1) req_qos = 1;
+                cmq_mqtt_record_subscriber(topic);
+                granted[granted_n++] = req_qos;
+            }
+            if (granted_n > 0) {
+                if (send_suback(fd, packet_id, granted,
+                                   (size_t)granted_n) < 0) return -1;
+            }
         } else if (type == MQTT_TYPE_PUBLISH && connected) {
             /* P8: PUBLISH with QoS 0 (no packet_id) or QoS 1.
              * We accept and emit PUBACK for QoS 1. The variable
