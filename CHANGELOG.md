@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.5.2] - 2026-08-18
+
+### Added (MQTT broker expansion)
+- **P4 F19a**: MQTT 3.1.1 server skeleton — CONNECT/CONNACK/PING/PINGRESP/DISCONNECT already shipped in v0.5.1.
+- **P8 MQTT QoS 0/1 PUBLISH + PUBACK** (v0.5.1).
+- **P1 MQTT listener auth** — CONNECT flags 0x80 (Username) and 0x40 (Password) are decoded; `cmq_mqtt_set_credentials(user, pass)` installs static credentials. Default no check (v0.5.1 behavior).
+- **P1 SUBSCRIBE/SUBACK wire-up** — SUBSCRIBE control packet accepted, topic filter recorded via `cmq_mqtt_record_subscriber`, SUBACK emitted with granted QoS.
+- **P2 MQTT QoS 2 state machine** — QoS 2 PUBLISH → PUBREC, PUBREL → PUBCOMP. No retransmit table; duplicate PUBREL on the same id is accepted.
+- **P3 MQTT 5.0 properties** — CONNECT with proto_level=0x05 accepted; properties length region skipped (not yet decoded).
+- **P4 MQTT RETAIN** — PUBLISH with RETAIN flag stores last payload per topic; `cmq_mqtt_fetch_retained` returns it.
+
+### Added (TLS hardening)
+- **P2 multi-listener** — `cmq_config_t.listeners[4]` array of `{tls_cert, tls_key, tls_ca, tls_verify_peer}`. Slot[0] wired in v0.5.2; slots[1..3] reserved for future multi-port.
+- **P2 CRL API** — `cmq_tls_set_crl(cfg, path)` loads the PEM CRL into the SSL_CTX's X509_STORE.
+
+### Performance
+- **P1 SPSC async WAL ring** — `cmq_filestore_set_async(fs, capacity)` spawns a pthread worker; `cmq_filestore_async_enqueue` returns immediately. Backpressure via blocking on `async_not_full`. Shutdown joins cleanly. Durable per the fsync policy + explicit `cmq_filestore_sync`.
+- **P1 parallel WAL replay** — replay loop now spawns `min(srv->num_workers, 8)` workers that atomically claim the next P7_BATCH-sized chunk via `next_seq`. Barrier join before `cmq_server_run`.
+- **P3 QG dedup** — inner loop in `snapshot_deliver_targets` skips entries whose precomputed FNV-1a hash of (subject, qg, account) differs from the target hash.
+
+### Fixed
+- **P4 STATS counter accuracy under replay** — `stat_messages_replayed` separates live from WAL-restored messages; `credit_msgs_in` skips `stat_messages_in` when `c->fd < 0` (replay sentinel).
+
+### Added
+- **P3 periodic fsync policy** — `cmq_filestore_set_sync_interval(fs, interval_ms)` calls `fdatasync` on the data fd every interval_ms. `persist_sync_interval_ms` config field. Default 0 = no periodic fsync (v0.5.1 behavior).
+
+### Documentation
+- `docs/reviews/v0.5.2.enumeration.md` — 13-item gap catalog.
+- `docs/reviews/v0.5.2.plan.md` — 4-phase WBS (parallel tracks A/B/C/D).
+- `docs/benchmarks/v052final_{1..5}.txt` — 5-run baseline transcripts (mean 32 246 msg/s, p99 99.1 µs).
+
+### Test count
+- 65 tests (was 63 in v0.5.1; +2 for `test_wal_async` + `test_wal_fsync`).
+- All 65 green; bench gate passes.
+
 ## [0.5.1] - 2026-08-18
 
 ### Fixed (security + reliability)
