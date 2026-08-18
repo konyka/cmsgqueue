@@ -6469,6 +6469,33 @@ const char *cmq_version(void) {
     return CMQ_VERSION_STRING;
 }
 
+/* P3: F18 subscription-recovery callback. Re-inserts each persisted
+ * SUB record into the sublist as a "ghost" reference (client=NULL).
+ * The ref is owned by the sublist and freed via cmq_sublist_free_data
+ * during destroy. No live client means messages match the pattern
+ * but get no delivery target — see ADR 0012-persistent-subs-wal.md. */
+static int cmq_sublist_recover_cb(void *ctx, int is_sub,
+                                    uint64_t sub_id,
+                                    const char *subject,
+                                    const char *account) {
+    cmq_server_t *srv = (cmq_server_t *)ctx;
+    if (!is_sub) {
+        /* UNSUB during recovery: nothing to do (no live subs). */
+        return 0;
+    }
+    (void)account;
+    cmq_sub_ref_t *ref = calloc(1, sizeof(*ref));
+    if (!ref) return -1;
+    ref->client = NULL;
+    ref->sub_id = (uint32_t)sub_id;
+    snprintf(ref->subject, sizeof(ref->subject), "%s", subject);
+    if (cmq_sublist_insert(srv->sublist, subject, ref) != 0) {
+        free(ref);
+        return -1;
+    }
+    return 0;
+}
+
 cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config) {
     if (!server) return CMQ_ERR_INVALID_ARG;
 
@@ -6745,6 +6772,16 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             }
             cmq_log_info(srv->log, "WAL replay complete: %llu records",
                          (unsigned long long)replayed);
+        }
+        /* F18 P3: restore persisted subscriptions before accepting clients.
+         * Each record becomes a subject pattern in the sublist — no live
+         * client, but matching publishes can land in any active subscriber
+         * (the "cluster" or a re-connecting client that re-subscribes). */
+        if (srv->persist) {
+            int n = cmq_sublist_persist_load(srv->persist,
+                                              cmq_sublist_recover_cb, srv);
+            cmq_log_info(srv->log,
+                "Subscription persist loaded: %d entries", n);
         }
     }
 
