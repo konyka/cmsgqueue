@@ -177,8 +177,8 @@ if(CMQ_HAVE_LIBRT)
     target_link_libraries(cmsgqueue PRIVATE rt)
 endif()
 find_package(OpenSSL REQUIRED)
-target_link_libraries(cmsgqueue PRIVATE OpenSSL::Crypto OpenSSL::SSL)
-target_compile_definitions(cmsgqueue PRIVATE CMQ_TLS_OPENSSL=1)
+target_link_libraries(cmsgqueue PUBLIC OpenSSL::Crypto OpenSSL::SSL)
+target_compile_definitions(cmsgqueue PUBLIC CMQ_TLS_OPENSSL=1)
 
 # F2: zstd compression (system libzstd 1.5+).
 find_package(PkgConfig REQUIRED)

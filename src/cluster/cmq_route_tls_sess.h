@@ -26,6 +26,10 @@ typedef struct cmq_route_tls_sess cmq_route_tls_sess_t;
 
 cmq_route_tls_sess_t *cmq_route_tls_sess_create(int fd, void *ssl_ctx);
 
+/* Drive the handshake step-wise. Returns 1 when complete, 0 to retry
+ * (errno=EAGAIN), -1 on fatal error. */
+int cmq_route_tls_sess_handshake(cmq_route_tls_sess_t *sess);
+
 ssize_t cmq_route_tls_sess_read(cmq_route_tls_sess_t *sess,
                                  int fd, void *buf, size_t len);
 
