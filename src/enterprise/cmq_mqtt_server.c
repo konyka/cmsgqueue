@@ -76,6 +76,16 @@ static int send_pingresp(int fd) {
     return (int)send(fd, pkt, sizeof(pkt), 0);
 }
 
+/* P8: PUBACK for QoS 1 PUBLISH. packet_id (2B) only. */
+static int send_puback(int fd, uint16_t packet_id) {
+    uint8_t pkt[4];
+    pkt[0] = MQTT_TYPE_PUBACK;
+    pkt[1] = 0x02;
+    pkt[2] = (uint8_t)(packet_id >> 8);
+    pkt[3] = (uint8_t)(packet_id & 0xFF);
+    return (int)send(fd, pkt, sizeof(pkt), 0);
+}
+
 static int parse_connect(const uint8_t *buf, size_t len,
                           char *client_id_out, size_t client_id_max) {
     if (len < 8) return -1;
@@ -127,6 +137,28 @@ size_t got = (size_t)n;
             if (send_pingresp(fd) < 0) return -1;
         } else if (type == MQTT_TYPE_DISCONNECT) {
             return 0;
+        } else if (type == MQTT_TYPE_PUBLISH && connected) {
+            /* P8: PUBLISH with QoS 0 (no packet_id) or QoS 1.
+             * We accept and emit PUBACK for QoS 1. The variable
+             * header is: topic_name (length-prefixed string) +
+             * packet_id (2B, only if QoS > 0). We do NOT bridge
+             * into the cmq sublist (deferred to v0.6). */
+            const uint8_t *p = buf + 1 + rl_off;
+            size_t plen = rem_len;
+            if (plen < 2) continue;
+            uint16_t topic_len = ((uint16_t)p[0] << 8) | p[1];
+            if ((size_t)(2 + topic_len) > plen) continue;
+            uint8_t qos = (buf[0] >> 1) & 0x03;
+            if (qos > 1) {
+                /* QoS 2 deferred to v0.6 — disconnect. */
+                return -1;
+            }
+            if (qos == 1) {
+                if ((size_t)(2 + topic_len + 2) > plen) continue;
+                uint16_t packet_id =
+                    ((uint16_t)p[2 + topic_len] << 8) | p[2 + topic_len + 1];
+                if (send_puback(fd, packet_id) < 0) return -1;
+            }
         } else if (!connected) {
             send_connack(fd, MQTT_CONNACK_PROTO);
             return -1;
