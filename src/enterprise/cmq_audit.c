@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <sys/stat.h>
 #include <time.h>
 
 static char *g_audit_path = NULL;
@@ -83,14 +84,18 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
         if (f) {
             fputs(line, f);
             fflush(f);
-            /* F7: rotate the audit log when it exceeds the cap. */
-            if (ftell(f) >= (long)AUDIT_MAX_BYTES) {
-                fclose(f);
+            /* P6: rotate when on-disk size exceeds the cap. Use
+             * fstat — ftell on append-mode stdio doesn't reliably
+             * return the file size (was the source of v0.5.0's
+             * silent-non-rotation bug, see v0.5.1.bundle.md B7). */
+            struct stat st;
+            int needs_rotate = (fstat(fileno(f), &st) == 0 &&
+                                 (uint64_t)st.st_size >= AUDIT_MAX_BYTES);
+            fclose(f);
+            if (needs_rotate) {
                 char rotated[1024];
                 snprintf(rotated, sizeof(rotated), "%s.1", g_audit_path);
                 rename(g_audit_path, rotated);
-            } else {
-                fclose(f);
             }
         }
     }
