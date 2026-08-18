@@ -14,6 +14,7 @@
 #include "cmq_coro.h"
 #include "cmq_tls.h"
 #include "cmq_mpool.h"
+#include "cmq_rch.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -195,10 +196,10 @@ struct cmq_server {
     cmq_tls_config_t *tls_config;
     /* F14: quota. NULL = no quota. */
     struct cmq_quota *quota;
-    /* F16: ACL. NULL = no ACL. */
-    struct cmq_acl *acl;
-    /* F15: blocklist. NULL = no blocklist. */
-    struct cmq_blocklist *blocklist;
+    /* F16: ACL. NULL handle = no ACL. Refcounted for reload safety (P1). */
+    struct cmq_rch *acl_h;
+    /* F15: blocklist. NULL handle = no blocklist. Refcounted for reload. */
+    struct cmq_rch *blocklist_h;
     struct cmq_subject_rl *subject_rl;
 
     cmq_mpool_t *msg_payload_pool;  /* pool for worker SEND msg->buf (<=64KiB); NULL = malloc fallback */

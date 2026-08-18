@@ -155,6 +155,7 @@ target_include_directories(cmsgqueue
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/store>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/cluster>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/enterprise>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/util>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
