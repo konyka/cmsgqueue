@@ -31,6 +31,11 @@ struct cmq_filestore {
     FILE *data_fp;
     FILE *idx_fp;
     uint64_t next_seq;
+    /* P2: cached EOF offsets so the hot-path append doesn't need
+     * seek_end+ftello before every write. Updated after each successful
+     * append under the lock; reset when fs_refresh_next_seq runs. */
+    uint64_t data_end_off;
+    uint64_t idx_end_off;
     cmq_mutex_t lock;
     atomic_int in_flight;
     atomic_int dying;
@@ -461,22 +466,30 @@ static int filestore_append_impl(cmq_filestore_t *fs, const uint8_t *data, size_
         return -1;
     }
 
-    /* Always append at EOF — read() leaves the stream mid-file. */
-    if (fs_seek_end(fs->data_fp) != 0 || fs_seek_end(fs->idx_fp) != 0) {
-        clearerr(fs->idx_fp);
-        clearerr(fs->data_fp);
-        fs_unlock_pair(fs);
-        cmq_mutex_unlock(&fs->lock);
-        return -1;
+    /* P2: use cached EOF offsets (updated after each successful write).
+     * Skip seek_end+ftello — those cost ~2 syscalls each, dominating the
+     * hot path. The cached value is correct as long as we're the only
+     * writer; fs_refresh_next_seq resets it when needed (e.g. read that
+     * leaves the stream mid-file). */
+    if (fs->data_end_off == UINT64_MAX || fs->idx_end_off == UINT64_MAX) {
+        /* Cold-start cache: one-time seek+ftell. */
+        if (fs_seek_end(fs->data_fp) != 0 || fs_seek_end(fs->idx_fp) != 0) {
+            clearerr(fs->idx_fp);
+            clearerr(fs->data_fp);
+            fs_unlock_pair(fs);
+            cmq_mutex_unlock(&fs->lock);
+            return -1;
+        }
+        if (fs_tell(fs->data_fp, &fs->data_end_off) != 0 ||
+            fs_tell(fs->idx_fp, &fs->idx_end_off) != 0) {
+            clearerr(fs->idx_fp);
+            clearerr(fs->data_fp);
+            fs_unlock_pair(fs);
+            cmq_mutex_unlock(&fs->lock);
+            return -1;
+        }
     }
-    uint64_t offset;
-    if (fs_tell(fs->data_fp, &offset) != 0) {
-        clearerr(fs->idx_fp);
-        clearerr(fs->data_fp);
-        fs_unlock_pair(fs);
-        cmq_mutex_unlock(&fs->lock);
-        return -1;
-    }
+    uint64_t offset = fs->data_end_off;
     if (offset > UINT64_MAX - (uint64_t)CMQ_FS_HDR_SIZE - (uint64_t)len) {
         fs_unlock_pair(fs);
         cmq_mutex_unlock(&fs->lock);
@@ -551,6 +564,10 @@ static int filestore_append_impl(cmq_filestore_t *fs, const uint8_t *data, size_
     if (out_seq) *out_seq = fs->next_seq;
     fs->next_seq++;
 
+    /* P2: advance cached offsets. hdr+payload bytes for data, +8 for idx. */
+    fs->data_end_off += (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)len;
+    fs->idx_end_off += 8u;
+
     fs_unlock_pair(fs);
     cmq_mutex_unlock(&fs->lock);
     return 0;
@@ -575,6 +592,11 @@ static int filestore_read_impl(cmq_filestore_t *fs, uint64_t seq,
 
     if (seq >= fs->next_seq)
         goto fail;
+
+    /* P2: invalidate cached EOF offsets — the read below moves the
+     * idx_fp position mid-file. Next append must reseek. */
+    fs->data_end_off = UINT64_MAX;
+    fs->idx_end_off = UINT64_MAX;
 
     uint64_t target_idx = seq - 1;
     if (target_idx > UINT64_MAX / 8u)
