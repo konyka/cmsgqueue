@@ -716,12 +716,109 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
 }
 
 int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,
-                        uint8_t **out_data, size_t *out_len) {
-    if (!fs) return -1;
-    if (fs_begin_op(fs) != 0) return -1;
-    int rc = filestore_read_impl(fs, seq, out_data, out_len);
+                          uint8_t **out_data, size_t *out_len) {
+    int rc = fs_begin_op(fs);
+    if (rc != 0) return -1;
+    rc = filestore_read_impl(fs, seq, out_data, out_len);
     fs_end_op(fs);
     return rc;
+}
+
+/* P7: read a contiguous range of records in one pass. The output array
+ * is allocated; caller frees with cmq_filestore_range_free. Skips records
+ * whose seq is out of range (e.g. gaps). Returns count read, or -1. */
+static int filestore_read_range_impl(cmq_filestore_t *fs, uint64_t seq_lo,
+                                      uint64_t seq_hi,
+                                      cmq_filestore_range_entry_t **out_arr,
+                                      size_t *out_count) {
+    if (!fs || !out_arr || !out_count || seq_lo == 0 || seq_hi < seq_lo)
+        return -1;
+    cmq_mutex_lock(&fs->lock);
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    if (fs_lock_pair(fs, LOCK_SH) != 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    uint64_t next_seq = 0;
+    if (fs_refresh_next_seq(fs, 0) != 0) {
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    next_seq = fs->next_seq;
+    /* P2: invalidate cache (read moves stream position). */
+    fs->data_end_off = UINT64_MAX;
+    fs->idx_end_off = UINT64_MAX;
+
+    if (seq_hi >= next_seq) seq_hi = next_seq - 1;
+    uint64_t n = seq_hi - seq_lo + 1;
+    if (n > 65536u) n = 65536u;
+
+    cmq_filestore_range_entry_t *arr = calloc((size_t)n, sizeof(*arr));
+    if (!arr) {
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    size_t got = 0;
+    /* Bulk-read the entire index range in one fread (saves 1 syscall/seq). */
+    uint64_t idx_off = (seq_lo - 1) * 8u;
+    if (fs_seek(fs->idx_fp, (long)idx_off) != 0) goto out;
+    uint8_t *idx_buf = malloc((size_t)n * 8u);
+    if (!idx_buf) goto out;
+    if (fread(idx_buf, 8u, (size_t)n, fs->idx_fp) != (size_t)n) {
+        free(idx_buf);
+        goto out;
+    }
+    /* Now read each data record. Each record has its own offset. */
+    for (uint64_t i = 0; i < n; i++) {
+        uint64_t data_offset = get_le64(idx_buf + i * 8u);
+        uint8_t hdr[CMQ_FS_HDR_SIZE];
+        if (fs_seek(fs->data_fp, (long)data_offset) != 0) continue;
+        if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1) continue;
+        if (get_le32(hdr + 0) != CMQ_FS_MAGIC) continue;
+        uint32_t plen = get_le32(hdr + 14);
+        if (plen == 0 || plen > 16u * 1024 * 1024) continue;
+        uint8_t *payload = malloc(plen);
+        if (!payload) continue;
+        if (fread(payload, 1, plen, fs->data_fp) != plen) {
+            free(payload);
+            continue;
+        }
+        arr[got].data = payload;
+        arr[got].len = plen;
+        got++;
+    }
+    free(idx_buf);
+
+out:
+    fs_unlock_pair(fs);
+    cmq_mutex_unlock(&fs->lock);
+    *out_arr = arr;
+    *out_count = got;
+    return (int)got;
+}
+
+int cmq_filestore_read_range(cmq_filestore_t *fs, uint64_t seq_lo,
+                              uint64_t seq_hi,
+                              cmq_filestore_range_entry_t **out_arr,
+                              size_t *out_count) {
+    int rc = fs_begin_op(fs);
+    if (rc != 0) return -1;
+    rc = filestore_read_range_impl(fs, seq_lo, seq_hi, out_arr, out_count);
+    fs_end_op(fs);
+    return rc;
+}
+
+void cmq_filestore_range_free(cmq_filestore_range_entry_t *arr, size_t n) {
+    if (!arr) return;
+    for (size_t i = 0; i < n; i++) {
+        free(arr[i].data);
+    }
+    free(arr);
 }
 
 uint64_t cmq_filestore_last_seq(cmq_filestore_t *fs) {

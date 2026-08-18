@@ -6708,24 +6708,39 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
          * dispatched via the same handle_publish path as a fresh
          * publish. The sublist matches against current subscribers
          * so recovered messages only reach live subscribers (no
-         * persistent subscription state). */
+         * persistent subscription state).
+         *
+         * P7: chunked sequential replay. We iterate the WAL in
+         * BATCH-sized chunks (P7_BATCH). Future work (parallel
+         * replay) partitions by stable subject hash; today the
+         * loop is sequential but bounded to keep steady progress
+         * visible via the existing log line. */
         uint64_t last = cmq_filestore_last_seq(srv->filestore);
         if (last > 0) {
             cmq_log_info(srv->log, "Replaying %llu WAL records",
                          (unsigned long long)last);
             uint64_t replayed = 0;
-            for (uint64_t seq = 1; seq <= last; seq++) {
-                uint8_t *data = NULL;
-                size_t data_len = 0;
-                if (cmq_filestore_read(srv->filestore, seq, &data, &data_len) != 0) {
-                    cmq_log_warn(srv->log,
-                        "WAL read failed at seq=%llu", (unsigned long long)seq);
+            /* P7: bulk-read the WAL in chunks of P7_BATCH. Saves N-1
+             * idx_fp seek+ftello syscalls per chunk (the bulk fread
+             * brings in P7_BATCH index entries in one syscall).
+             * Sequential dispatch through handle_publish. */
+            const uint64_t P7_BATCH = 1024;
+            for (uint64_t seq_lo = 1; seq_lo <= last; seq_lo += P7_BATCH) {
+                uint64_t seq_hi = seq_lo + P7_BATCH - 1;
+                if (seq_hi > last) seq_hi = last;
+                cmq_filestore_range_entry_t *arr = NULL;
+                size_t got = 0;
+                int nread = cmq_filestore_read_range(srv->filestore,
+                                                       seq_lo, seq_hi,
+                                                       &arr, &got);
+                if (nread < 0 || got == 0) {
+                    cmq_filestore_range_free(arr, got);
                     continue;
                 }
-                if (data && data_len >= 9) {
-                    /* Build a frame from the recorded bytes. The frame
-                     * uses an internal client (no fd) so handle_publish
-                     * can run end-to-end. */
+                for (size_t i = 0; i < got; i++) {
+                    uint8_t *data = arr[i].data;
+                    size_t data_len = arr[i].len;
+                    if (!data || data_len < 9) continue;
                     cmq_frame_t rf;
                     rf.hdr.magic[0] = CMQ_PROTO_MAGIC_0;
                     rf.hdr.magic[1] = CMQ_PROTO_MAGIC_1;
@@ -6735,30 +6750,13 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                     rf.hdr.length = (uint32_t)data_len;
                     rf.payload = data;
                     rf.payload_len = data_len;
-                    /* Synthesize a client for the duration of the
-                     * replay so handle_publish has a valid `c`. The
-                     * account_name is "$default" (the default account
-                     * is created in handle_frame's CONNECT path). */
                     cmq_client_t replay_c;
                     memset(&replay_c, 0, sizeof(replay_c));
-                    replay_c.account_name[0] = '$';
-                    replay_c.account_name[1] = 'd';
-                    replay_c.account_name[2] = 'e';
-                    replay_c.account_name[3] = 'f';
-                    replay_c.account_name[4] = 'a';
-                    replay_c.account_name[5] = 'u';
-                    replay_c.account_name[6] = 'l';
-                    replay_c.account_name[7] = 't';
-                    replay_c.account_name[8] = '\0';
+                    const char *name = "$default";
+                    for (size_t k = 0; k < 9; k++)
+                        replay_c.account_name[k] = name[k];
                     replay_c.server = srv;
-                    /* fd=-1 marks this as a replay (no real socket), and
-                     * stops handle_publish from re-appending to the WAL
-                     * (the record is already on disk) or writing to a
-                     * real fd. */
                     replay_c.fd = -1;
-                    /* Stamp the live $default epoch so client_account_live
-                     * passes (it requires ep==c->account_epoch; replay_c
-                     * zero-init would otherwise fail and drop the record). */
                     uint32_t default_ep = 0;
                     cmq_account_t *da = cmq_account_get(srv->accounts,
                                                           "$default", &default_ep);
@@ -6769,7 +6767,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                     handle_publish(srv, &replay_c, &rf);
                     replayed++;
                 }
-                free(data);
+                cmq_filestore_range_free(arr, got);
             }
             cmq_log_info(srv->log, "WAL replay complete: %llu records",
                          (unsigned long long)replayed);
