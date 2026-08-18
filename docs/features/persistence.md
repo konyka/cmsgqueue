@@ -89,9 +89,17 @@ trade-off.
 
 Threats closed:
 - **Crash recovery** — WAL survives `kill -9`. On restart, the
-  filestore is reopened and the existing `cmq_filestore_read` API
-  supports replay (out of scope for this PR — replay wiring is a
-  follow-up).
+  filestore is reopened and the replay loop in `cmq_server_create`
+  (`src/server/cmq_server.c`) restores every persisted record via
+  the same `handle_publish` path. The replay path uses an internal
+  client with `fd=-1` (a sentinel that prevents re-appending to the
+  WAL, since the record is already on disk) and stamps the live
+  `$default` epoch (so `client_account_live` admits the record
+  instead of silently discarding it — the v0.5.0 epoch gate dropped
+  every record on restart; P0 in v0.5.1 closes that hole).
+- **Replay idempotency** — replayed records do NOT re-append to the
+  WAL. After a restart the `last_seq` is preserved (verified by
+  `tests/test_wal_regression.c::persist_unit.replay_restores_messages`).
 
 Threats NOT closed:
 - **Encryption at rest** — the WAL is plaintext. Production with
@@ -103,8 +111,10 @@ Threats NOT closed:
 
 ## Limitations
 
-- No replay on startup. Recovery is a follow-up.
-- No read API surface for replayed messages.
+- Replay is single-threaded; large WALs take O(N) time on restart.
+  P7 (parallel replay, Phase 2) addresses this.
+- No read API surface for replayed messages beyond the internal
+  `cmq_filestore_read`.
 - fsync per message (no group-commit batching). Batched fsync
   is a follow-up.
 

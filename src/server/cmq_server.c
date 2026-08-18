@@ -2934,8 +2934,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     }
 
     /* F5: persist to WAL BEFORE sublist match. We persist validated
-     * publishes regardless of subscriber count. */
-    if (srv->filestore && frame && frame->payload) {
+     * publishes regardless of subscriber count. During replay (fd==-1),
+     * the record is already on disk, so we MUST NOT re-append or the
+     * WAL grows unbounded and the record is delivered twice. */
+    if (srv->filestore && frame && frame->payload && c->fd != -1) {
         uint64_t seq = 0;
         if (cmq_filestore_append(srv->filestore, frame->payload,
                                   frame->payload_len, &seq) != 0) {
@@ -6681,6 +6683,21 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                     replay_c.account_name[7] = 't';
                     replay_c.account_name[8] = '\0';
                     replay_c.server = srv;
+                    /* fd=-1 marks this as a replay (no real socket), and
+                     * stops handle_publish from re-appending to the WAL
+                     * (the record is already on disk) or writing to a
+                     * real fd. */
+                    replay_c.fd = -1;
+                    /* Stamp the live $default epoch so client_account_live
+                     * passes (it requires ep==c->account_epoch; replay_c
+                     * zero-init would otherwise fail and drop the record). */
+                    uint32_t default_ep = 0;
+                    cmq_account_t *da = cmq_account_get(srv->accounts,
+                                                          "$default", &default_ep);
+                    if (da) {
+                        replay_c.account_epoch = default_ep;
+                        cmq_account_release(srv->accounts, da);
+                    }
                     handle_publish(srv, &replay_c, &rf);
                     replayed++;
                 }
