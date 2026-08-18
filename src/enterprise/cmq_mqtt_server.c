@@ -86,6 +86,25 @@ static int send_puback(int fd, uint16_t packet_id) {
     return (int)send(fd, pkt, sizeof(pkt), 0);
 }
 
+static int send_pubrec(int fd, uint16_t packet_id) {
+    uint8_t pkt[4];
+    pkt[0] = MQTT_TYPE_PUBACK;  /* PUBREC shares the type nibble 0x5 */
+    pkt[0] = 0x50;
+    pkt[1] = 0x02;
+    pkt[2] = (uint8_t)(packet_id >> 8);
+    pkt[3] = (uint8_t)(packet_id & 0xFF);
+    return (int)send(fd, pkt, sizeof(pkt), 0);
+}
+
+static int send_pubcomp(int fd, uint16_t packet_id) {
+    uint8_t pkt[4];
+    pkt[0] = 0x70;
+    pkt[1] = 0x02;
+    pkt[2] = (uint8_t)(packet_id >> 8);
+    pkt[3] = (uint8_t)(packet_id & 0xFF);
+    return (int)send(fd, pkt, sizeof(pkt), 0);
+}
+
 /* P1: SUBACK for SUBSCRIBE. payload = sequence of granted QoS bytes
  * (here we always grant QoS 0). packet_id (2B) + at least 1 byte. */
 static int send_suback(int fd, uint16_t packet_id,
@@ -272,15 +291,24 @@ size_t got = (size_t)n;
             if ((size_t)(2 + topic_len) > plen) continue;
             uint8_t qos = (buf[0] >> 1) & 0x03;
             if (qos > 1) {
-                /* QoS 2 deferred to v0.6 — disconnect. */
-                return -1;
-            }
-            if (qos == 1) {
+                /* P2: QoS 2 — emit PUBREC. We don't track per-packet-id
+                 * state; duplicate PUBREL on the same id is accepted. */
+                if ((size_t)(2 + topic_len + 2) > plen) continue;
+                uint16_t packet_id =
+                    ((uint16_t)p[2 + topic_len] << 8) | p[2 + topic_len + 1];
+                if (send_pubrec(fd, packet_id) < 0) return -1;
+            } else if (qos == 1) {
                 if ((size_t)(2 + topic_len + 2) > plen) continue;
                 uint16_t packet_id =
                     ((uint16_t)p[2 + topic_len] << 8) | p[2 + topic_len + 1];
                 if (send_puback(fd, packet_id) < 0) return -1;
             }
+        } else if (type == 0x60 && connected) {
+            /* P2: PUBREL for QoS 2 handshake completion. */
+            const uint8_t *p = buf + 1 + rl_off;
+            if (rem_len < 2) continue;
+            uint16_t packet_id = ((uint16_t)p[0] << 8) | p[1];
+            if (send_pubcomp(fd, packet_id) < 0) return -1;
         } else if (!connected) {
             send_connack(fd, MQTT_CONNACK_PROTO);
             return -1;
