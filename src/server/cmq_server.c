@@ -6501,6 +6501,73 @@ static int cmq_sublist_recover_cb(void *ctx, int is_sub,
     return 0;
 }
 
+/* P1: replay one WAL record through handle_publish. Extracted so
+ * the parallel replay dispatcher can call it from worker threads
+ * without duplication. */
+static void replay_one_record(cmq_server_t *srv, uint8_t *data,
+                                size_t data_len) {
+    if (!data || data_len < 9) return;
+    cmq_frame_t rf;
+    rf.hdr.magic[0] = CMQ_PROTO_MAGIC_0;
+    rf.hdr.magic[1] = CMQ_PROTO_MAGIC_1;
+    rf.hdr.version = CMQ_PROTO_VERSION;
+    rf.hdr.flags = 0;
+    rf.hdr.op = CMQ_OP_PUBLISH;
+    rf.hdr.length = (uint32_t)data_len;
+    rf.payload = data;
+    rf.payload_len = data_len;
+    cmq_client_t replay_c;
+    memset(&replay_c, 0, sizeof(replay_c));
+    const char *name = "$default";
+    for (size_t k = 0; k < 9; k++)
+        replay_c.account_name[k] = name[k];
+    replay_c.server = srv;
+    replay_c.fd = -1;
+    uint32_t default_ep = 0;
+    cmq_account_t *da = cmq_account_get(srv->accounts, "$default",
+                                          &default_ep);
+    if (da) {
+        replay_c.account_epoch = default_ep;
+        cmq_account_release(srv->accounts, da);
+    }
+    handle_publish(srv, &replay_c, &rf);
+    cmq_atomic_fetch_add_u64(&srv->stat_messages_replayed, 1,
+                              CMQ_ATOMIC_RELAXED);
+}
+
+typedef struct {
+    cmq_server_t *srv;
+    uint64_t last;
+    uint64_t P7_BATCH;
+    cmq_atomic_u64 next_seq;
+    int worker_id;
+} replay_worker_ctx_t;
+
+static void *replay_worker(void *arg) {
+    replay_worker_ctx_t *ctx = (replay_worker_ctx_t *)arg;
+    for (;;) {
+        uint64_t seq_lo = cmq_atomic_fetch_add_u64(&ctx->next_seq,
+                                                    ctx->P7_BATCH,
+                                                    CMQ_ATOMIC_ACQ_REL);
+        if (seq_lo > ctx->last) break;
+        uint64_t seq_hi = seq_lo + ctx->P7_BATCH - 1;
+        if (seq_hi > ctx->last) seq_hi = ctx->last;
+        cmq_filestore_range_entry_t *arr = NULL;
+        size_t got = 0;
+        int nread = cmq_filestore_read_range(ctx->srv->filestore, seq_lo, seq_hi,
+                                               &arr, &got);
+        if (nread < 0 || got == 0) {
+            cmq_filestore_range_free(arr, got);
+            continue;
+        }
+        for (size_t i = 0; i < got; i++) {
+            replay_one_record(ctx->srv, arr[i].data, arr[i].len);
+        }
+        cmq_filestore_range_free(arr, got);
+    }
+    return NULL;
+}
+
 cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config) {
     if (!server) return CMQ_ERR_INVALID_ARG;
 
@@ -6731,62 +6798,42 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         if (last > 0) {
             cmq_log_info(srv->log, "Replaying %llu WAL records",
                          (unsigned long long)last);
-            uint64_t replayed = 0;
-            /* P7: bulk-read the WAL in chunks of P7_BATCH. Saves N-1
-             * idx_fp seek+ftello syscalls per chunk (the bulk fread
-             * brings in P7_BATCH index entries in one syscall).
-             * Sequential dispatch through handle_publish. */
+            /* P1 (v0.5.2): parallel replay. Chunk size P7_BATCH; each
+             * worker atomically claims the next chunk via next_seq.
+             * Workers exit when next_seq > last. Barrier join before
+             * cmq_server_run. Bounded by num_workers (default = 1 for
+             * single-thread tests; multi-worker is opt-in). */
             const uint64_t P7_BATCH = 1024;
-            for (uint64_t seq_lo = 1; seq_lo <= last; seq_lo += P7_BATCH) {
-                uint64_t seq_hi = seq_lo + P7_BATCH - 1;
-                if (seq_hi > last) seq_hi = last;
-                cmq_filestore_range_entry_t *arr = NULL;
-                size_t got = 0;
-                int nread = cmq_filestore_read_range(srv->filestore,
-                                                       seq_lo, seq_hi,
-                                                       &arr, &got);
-                if (nread < 0 || got == 0) {
-                    cmq_filestore_range_free(arr, got);
-                    continue;
+            int n_workers = (int)srv->num_workers;
+            if (n_workers < 1) n_workers = 1;
+            if (n_workers > 8) n_workers = 8;
+            replay_worker_ctx_t *ctxs = calloc((size_t)n_workers,
+                                                  sizeof(replay_worker_ctx_t));
+            if (!ctxs) {
+                cmq_log_error(srv->log, "replay: ctx alloc failed");
+            } else {
+                cmq_atomic_store_u64(&ctxs[0].next_seq, 1, CMQ_ATOMIC_RELAXED);
+                ctxs[0].srv = srv;
+                ctxs[0].last = last;
+                ctxs[0].P7_BATCH = P7_BATCH;
+                ctxs[0].worker_id = 0;
+                pthread_t *threads = calloc((size_t)(n_workers - 1),
+                                             sizeof(pthread_t));
+                for (int i = 1; i < n_workers; i++) {
+                    ctxs[i] = ctxs[0];
+                    ctxs[i].worker_id = i;
+                    pthread_create(&threads[i - 1], NULL, replay_worker,
+                                    &ctxs[i]);
                 }
-                for (size_t i = 0; i < got; i++) {
-                    uint8_t *data = arr[i].data;
-                    size_t data_len = arr[i].len;
-                    if (!data || data_len < 9) continue;
-                    cmq_frame_t rf;
-                    rf.hdr.magic[0] = CMQ_PROTO_MAGIC_0;
-                    rf.hdr.magic[1] = CMQ_PROTO_MAGIC_1;
-                    rf.hdr.version = CMQ_PROTO_VERSION;
-                    rf.hdr.flags = 0;
-                    rf.hdr.op = CMQ_OP_PUBLISH;
-                    rf.hdr.length = (uint32_t)data_len;
-                    rf.payload = data;
-                    rf.payload_len = data_len;
-                    cmq_client_t replay_c;
-                    memset(&replay_c, 0, sizeof(replay_c));
-                    const char *name = "$default";
-                    for (size_t k = 0; k < 9; k++)
-                        replay_c.account_name[k] = name[k];
-                    replay_c.server = srv;
-                    replay_c.fd = -1;
-                    uint32_t default_ep = 0;
-                    cmq_account_t *da = cmq_account_get(srv->accounts,
-                                                          "$default", &default_ep);
-                    if (da) {
-                        replay_c.account_epoch = default_ep;
-                        cmq_account_release(srv->accounts, da);
-                    }
-                    handle_publish(srv, &replay_c, &rf);
-                    replayed++;
-                    /* P4: track replayed messages separately so
-                     * stat_messages_in reflects live traffic only. */
-                    cmq_atomic_fetch_add_u64(&srv->stat_messages_replayed,
-                                              1, CMQ_ATOMIC_RELAXED);
+                replay_worker(&ctxs[0]);
+                for (int i = 1; i < n_workers; i++) {
+                    pthread_join(threads[i - 1], NULL);
                 }
-                cmq_filestore_range_free(arr, got);
+                free(threads);
+                free(ctxs);
             }
             cmq_log_info(srv->log, "WAL replay complete: %llu records",
-                         (unsigned long long)replayed);
+                         (unsigned long long)last);
         }
         /* F18 P3: restore persisted subscriptions before accepting clients.
          * Each record becomes a subject pattern in the sublist — no live
