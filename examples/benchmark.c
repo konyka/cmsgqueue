@@ -98,11 +98,40 @@ static double now_sec(void) {
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
+#define LAT_BUCKETS 4096
+#define LAT_BUCKET_US 100
+static double lat_samples[LAT_BUCKETS];
+static int lat_count = 0;
+
+static void lat_record(double us) {
+    int b = (int)(us / (double)LAT_BUCKET_US);
+    if (b < 0) b = 0;
+    if (b >= LAT_BUCKETS) b = LAT_BUCKETS - 1;
+    lat_samples[b] += 1.0;
+    lat_count++;
+}
+
+static double lat_percentile(double pct) {
+    if (lat_count == 0) return 0.0;
+    double target = pct * (double)lat_count;
+    double cum = 0.0;
+    for (int i = 0; i < LAT_BUCKETS; i++) {
+        cum += lat_samples[i];
+        if (cum >= target) {
+            double prev = cum - lat_samples[i];
+            double frac = (target - prev) / lat_samples[i];
+            return ((double)i + frac) * (double)LAT_BUCKET_US;
+        }
+    }
+    return (double)LAT_BUCKETS * (double)LAT_BUCKET_US;
+}
+
 int main(int argc, char **argv) {
     int port = DEFAULT_PORT;
     int nclients = DEFAULT_CLIENTS;
     int nmsgs = DEFAULT_MSGS;
     int nthreads = 1;
+    int json_mode = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
@@ -113,6 +142,8 @@ int main(int argc, char **argv) {
             if (parse_int_arg(argv[++i], 1, 100000000, &nmsgs) != 0) goto usage;
         } else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
             if (parse_int_arg(argv[++i], 1, 64, &nthreads) != 0) goto usage;
+        } else if (strcmp(argv[i], "-j") == 0) {
+            json_mode = 1;
         } else {
             goto usage;
         }
@@ -120,7 +151,7 @@ int main(int argc, char **argv) {
     goto run;
 
 usage:
-    fprintf(stderr, "Usage: %s [-p port] [-c clients] [-n messages] [-t threads]\n", argv[0]);
+    fprintf(stderr, "Usage: %s [-p port] [-c clients] [-n messages] [-t threads] [-j]\n", argv[0]);
     return 1;
 
 run:
@@ -199,10 +230,14 @@ run:
 
     int received = 0;
     double t_recv_start = now_sec();
+    double t_prev = t0;
     double timeout = 30.0;
     while (received < nmsgs && (now_sec() - t_recv_start) < timeout) {
         if (recv_frame(sub_fd, sub_parser) == 0) {
+            double t_now = now_sec();
             received++;
+            lat_record((t_now - t_prev) * 1e6);
+            t_prev = t_now;
         } else {
             break;
         }
@@ -214,6 +249,22 @@ run:
     if (received > 0) {
         printf("  End-to-end: %.0f msg/s\n", (double)received / t_total);
         printf("  Avg latency: %.3f ms\n", t_total * 1000.0 / (double)received);
+        double p50 = lat_percentile(0.50);
+        double p99 = lat_percentile(0.99);
+        printf("  p50 inter-arrival: %.1f us\n", p50);
+        printf("  p99 inter-arrival: %.1f us\n", p99);
+    }
+    int dropped = nmsgs - received;
+
+    if (json_mode) {
+        double p50 = lat_percentile(0.50);
+        double p99 = lat_percentile(0.99);
+        double msgs_per_sec = received > 0 ? (double)received / t_total : 0.0;
+        printf("{\"msg_per_sec\":%.0f,\"p50_us\":%.1f,\"p99_us\":%.1f,"
+               "\"received\":%d,\"sent\":%d,\"dropped\":%d,"
+               "\"clients\":%d,\"threads\":%d,\"n\":%d}\n",
+               msgs_per_sec, p50, p99, received, nmsgs, dropped,
+               nclients, nthreads, nmsgs);
     }
 
     for (int i = 0; i < nclients; i++) {
