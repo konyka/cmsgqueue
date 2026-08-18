@@ -4085,7 +4085,9 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
     }
     size_t offset = 2;
 
-    /* Pass 1: validate the entire batch before any delivery (no partial fan-out). */
+    /* Pass 1: validate the entire batch before any delivery (no partial fan-out).
+     * P1: ACL + quota + subject_rl gates applied to every batch entry
+     * (same checks as handle_publish, see v0.5.1.bundle.md B3). */
     for (uint16_t msg = 0; msg < count; msg++) {
         if (offset + 2 > frame->payload_len) {
             cmq_send_error(c, "invalid batch");
@@ -4099,21 +4101,37 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_error(c, "invalid batch");
             return;
         }
-        {
-            char subj[CMQ_MAX_SUBJECT];
-            memcpy(subj, frame->payload + offset, subject_len);
-            subj[subject_len] = '\0';
-            if (!wire_cstr_exact(subj, subject_len) ||
-                cmq_sublist_publish_subject_valid(subj) != 0) {
-                cmq_send_error(c, "invalid subject");
-                return;
-            }
-            if (!cmq_account_can_export(srv->accounts, c->account_name, subj)) {
-                cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
-                                          CMQ_ATOMIC_RELAXED);
-                cmq_send_error(c, "permission denied");
-                return;
-            }
+        char subj[CMQ_MAX_SUBJECT];
+        memcpy(subj, frame->payload + offset, subject_len);
+        subj[subject_len] = '\0';
+        if (!wire_cstr_exact(subj, subject_len) ||
+            cmq_sublist_publish_subject_valid(subj) != 0) {
+            cmq_send_error(c, "invalid subject");
+            return;
+        }
+        if (!cmq_account_can_export(srv->accounts, c->account_name, subj)) {
+            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_error(c, "permission denied");
+            return;
+        }
+        /* F16: per-subject ACL. */
+        cmq_acl_t *acl = (cmq_acl_t *)cmq_rch_acquire(srv->acl_h);
+        int acl_ok = !acl || cmq_acl_check(acl, subj) != 0;
+        cmq_rch_release(srv->acl_h, acl);
+        if (!acl_ok) {
+            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_error(c, "permission denied");
+            return;
+        }
+        /* F14: per-account quota — checked against payload_len later. */
+        /* N1: per-subject rate limit. */
+        if (srv->subject_rl && cmq_subject_rl_check(srv->subject_rl, subj) == 0) {
+            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_error(c, "rate limited");
+            return;
         }
         offset += subject_len;
 
@@ -4161,6 +4179,14 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
             cmq_send_error(c, "payload too large");
+            return;
+        }
+        /* F14: per-account quota check (against this entry's payload). */
+        if (srv->quota && cmq_quota_check_publish(srv->quota, c->account_name,
+                                                   payload_len) == 0) {
+            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_error(c, "quota exceeded");
             return;
         }
         offset += payload_len;
