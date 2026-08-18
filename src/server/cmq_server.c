@@ -5137,7 +5137,7 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                 free(req);
                 const char *body = "{\"status\":\"ok\"}\n";
                 /* F7: HSTS is sent only when TLS is configured. */
-                const char *hsts = cmq_tls_configured(c->server->tls_config)
+                const char *hsts = cmq_tls_configured(c->server->tls_config_slots[0])
                                    ? "Strict-Transport-Security: max-age=31536000\r\n"
                                    : "";
                 char resp[512];
@@ -6225,8 +6225,8 @@ static void *route_reconnect_thread(void *arg) {
 }
 
 static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
-    if (!srv->tls_config) return 0;
-    cmq_tls_session_t *tls = cmq_tls_server_session(srv->tls_config, client->fd);
+    if (!srv->tls_config_slots[0]) return 0;
+    cmq_tls_session_t *tls = cmq_tls_server_session(srv->tls_config_slots[0], client->fd);
     if (!tls) return -1;
     int rc = cmq_tls_handshake(tls);
     if (rc != 0) {
@@ -6641,7 +6641,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
 
     srv->routes = NULL;
     srv->cluster = NULL;
-    srv->tls_config = NULL;
+    srv->tls_config_slots[0] = NULL;
 
     if (srv->config.tls_enabled) {
         if (!srv->config.tls_cert || !srv->config.tls_key ||
@@ -6659,22 +6659,22 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             *server = NULL;
             return CMQ_ERR_INVALID_ARG;
         }
-        srv->tls_config = cmq_tls_config_create();
-        if (!srv->tls_config) {
+        srv->tls_config_slots[0] = cmq_tls_config_create();
+        if (!srv->tls_config_slots[0]) {
             cmq_log_error(srv->log, "TLS config allocation failed — refusing plaintext");
             cmq_server_destroy(srv);
             *server = NULL;
             return CMQ_ERR_NO_MEMORY;
         }
-        cmq_tls_set_cert(srv->tls_config, srv->config.tls_cert);
-        cmq_tls_set_key(srv->tls_config, srv->config.tls_key);
+        cmq_tls_set_cert(srv->tls_config_slots[0], srv->config.tls_cert);
+        cmq_tls_set_key(srv->tls_config_slots[0], srv->config.tls_key);
         if (srv->config.tls_ca) {
-            cmq_tls_set_ca(srv->tls_config, srv->config.tls_ca);
+            cmq_tls_set_ca(srv->tls_config_slots[0], srv->config.tls_ca);
         }
         if (srv->config.tls_verify_peer) {
-            cmq_tls_set_verify(srv->tls_config, 1);
+            cmq_tls_set_verify(srv->tls_config_slots[0], 1);
         }
-        if (cmq_tls_load(srv->tls_config) != 0) {
+        if (cmq_tls_load(srv->tls_config_slots[0]) != 0) {
             cmq_log_error(srv->log,
                 "TLS cert/key load failed — refusing plaintext");
             cmq_server_destroy(srv);
@@ -6682,6 +6682,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             return CMQ_ERR_INVALID_ARG;
         }
         cmq_log_info(srv->log, "TLS enabled: cert=%s", srv->config.tls_cert);
+        srv->tls_config_count = 1;
     }
 
     /* F5: persistence WAL. When persist_dir is set, open a filestore
@@ -7560,10 +7561,13 @@ void cmq_server_destroy(cmq_server_t *srv) {
         cmq_cluster_destroy(srv->cluster);
         srv->cluster = NULL;
     }
-    if (srv->tls_config) {
-        cmq_tls_config_destroy(srv->tls_config);
-        srv->tls_config = NULL;
+    for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
+        if (srv->tls_config_slots[i]) {
+            cmq_tls_config_destroy(srv->tls_config_slots[i]);
+            srv->tls_config_slots[i] = NULL;
+        }
     }
+    srv->tls_config_count = 0;
     cmq_mutex_destroy(&srv->clients_lock);
     cmq_mutex_destroy(&srv->rate_lock);
     cmq_config_free(&srv->config);

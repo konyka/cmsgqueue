@@ -161,6 +161,11 @@ typedef struct cmq_worker {
 struct cmq_server {
     cmq_config_t config;
     int listen_fd;
+    /* P5: per-listener SSL_CTX slots. Slot 0 is the primary listener.
+     * Subsequent slots reserved for multi-listener (port + cert) support. */
+#define CMQ_MAX_LISTENERS 4
+    cmq_tls_config_t *tls_config_slots[CMQ_MAX_LISTENERS];
+    int tls_config_count;
     cmq_atomic_int running;
 
     cmq_ev_loop_t *ev_loop;
@@ -193,7 +198,7 @@ struct cmq_server {
     struct cmq_filestore *filestore;   /* F5: optional WAL; NULL = disabled */
     struct cmq_sublist_persist *persist; /* F18: optional subscription WAL; NULL = disabled */
     struct cmq_mqtt_bridge *mqtt_bridge; /* F6: optional upstream MQTT client */
-    cmq_tls_config_t *tls_config;
+    /* P5: per-listener SSL_CTX slots. tls_config_count entries used. */
     /* F14: quota. NULL = no quota. */
     struct cmq_quota *quota;
     /* F16: ACL. NULL handle = no ACL. Refcounted for reload safety (P1). */
