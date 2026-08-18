@@ -29,6 +29,12 @@ int cmq_mqtt_server_listen(const char *bind_addr, int port);
 struct cmq_server;
 void cmq_mqtt_server_start_listener(struct cmq_server *server);
 
+/* P1 (v0.5.2): install static credentials for the MQTT listener.
+ * When set, CONNECT must include matching Username/Password. NULL
+ * or empty strings disable the check (default — listener accepts
+ * any CONNECT). */
+void cmq_mqtt_set_credentials(const char *user, const char *pass);
+
 #ifdef __cplusplus
 }
 #endif

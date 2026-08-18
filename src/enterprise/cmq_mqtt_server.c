@@ -86,14 +86,29 @@ static int send_puback(int fd, uint16_t packet_id) {
     return (int)send(fd, pkt, sizeof(pkt), 0);
 }
 
+/* P1 (v0.5.2): static credentials for the MQTT listener. When
+ * non-empty, CONNECT must include matching Username/Password.
+ * Compile-time settable via env at startup; default is empty (no
+ * auth). Future work: per-server config plumbing. */
+static const char *g_mqtt_user = "";
+static const char *g_mqtt_pass = "";
+
+void cmq_mqtt_set_credentials(const char *user, const char *pass) {
+    if (user) g_mqtt_user = user;
+    if (pass) g_mqtt_pass = pass;
+}
+
 static int parse_connect(const uint8_t *buf, size_t len,
-                          char *client_id_out, size_t client_id_max) {
+                          char *client_id_out, size_t client_id_max,
+                          uint8_t *flags_out,
+                          char *user_out, size_t user_max,
+                          char *pass_out, size_t pass_max) {
     if (len < 8) return -1;
     if (buf[0] != 0 || buf[1] != 4) return -1;
     if (memcmp(buf + 2, "MQTT", 4) != 0) return -1;
     if (buf[6] != 0x04) return -1;
     uint8_t flags = buf[7];
-    (void)flags;
+    if (flags_out) *flags_out = flags;
     size_t off = 10;
     if (off + 2 > len) return -1;
     uint16_t cid_len = ((uint16_t)buf[off] << 8) | buf[off + 1];
@@ -102,12 +117,35 @@ static int parse_connect(const uint8_t *buf, size_t len,
     if (cid_len >= client_id_max) cid_len = (uint16_t)(client_id_max - 1);
     memcpy(client_id_out, buf + off, cid_len);
     client_id_out[cid_len] = '\0';
+    off += cid_len;
+
+    user_out[0] = '\0';
+    pass_out[0] = '\0';
+    if (flags & 0x04) {
+        if (off + 2 > len) return -1;
+        uint16_t wlen = ((uint16_t)buf[off] << 8) | buf[off + 1];
+        off += 2;
+        if (off + wlen > len || wlen >= user_max) return -1;
+        memcpy(user_out, buf + off, wlen);
+        user_out[wlen] = '\0';
+        off += wlen;
+    }
+    if (flags & 0x02) {
+        if (off + 2 > len) return -1;
+        uint16_t wlen = ((uint16_t)buf[off] << 8) | buf[off + 1];
+        off += 2;
+        if (off + wlen > len || wlen >= pass_max) return -1;
+        memcpy(pass_out, buf + off, wlen);
+        pass_out[wlen] = '\0';
+    }
     return 0;
 }
 
 static int mqtt_handle_client(int fd) {
     uint8_t buf[MQTT_MAX_PACKET];
     char client_id[64] = {0};
+    char user[64] = {0};
+    char pass[64] = {0};
     int connected = 0;
 
     for (;;) {
@@ -126,9 +164,23 @@ size_t got = (size_t)n;
 
         if (type == MQTT_TYPE_CONNECT && !connected) {
             if (parse_connect(buf + 1 + rl_off, rem_len,
-                                client_id, sizeof(client_id)) == 0) {
-                if (send_connack(fd, MQTT_CONNACK_ACCEPTED) < 0) return -1;
-                connected = 1;
+                                client_id, sizeof(client_id), NULL,
+                                user, sizeof(user), pass,
+                                sizeof(pass)) == 0) {
+                int auth_ok = 1;
+                if (g_mqtt_user[0] || g_mqtt_pass[0]) {
+                    if (strcmp(user, g_mqtt_user) != 0 ||
+                        strcmp(pass, g_mqtt_pass) != 0) {
+                        auth_ok = 0;
+                    }
+                }
+                if (auth_ok) {
+                    if (send_connack(fd, MQTT_CONNACK_ACCEPTED) < 0) return -1;
+                    connected = 1;
+                } else {
+                    send_connack(fd, MQTT_CONNACK_BAD_AUTH);
+                    return -1;
+                }
             } else {
                 send_connack(fd, MQTT_CONNACK_PROTO);
                 return -1;
