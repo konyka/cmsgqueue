@@ -165,10 +165,22 @@ static int parse_connect(const uint8_t *buf, size_t len,
     if (len < 8) return -1;
     if (buf[0] != 0 || buf[1] != 4) return -1;
     if (memcmp(buf + 2, "MQTT", 4) != 0) return -1;
-    if (buf[6] != 0x04) return -1;
+    uint8_t proto_level = buf[6];
+    if (proto_level != 0x04 && proto_level != 0x05) return -1;
+    /* P3 (v0.5.2): MQTT 5.0 (proto_level=0x05) is accepted at the
+     * CONNECT level; 5.0 properties (variable-length region) are
+     * skipped over for now (we don't decode them). */
+    int is_v5 = (proto_level == 0x05);
     uint8_t flags = buf[7];
     if (flags_out) *flags_out = flags;
     size_t off = 10;
+    if (is_v5) {
+        if (off + 1 > len) return -1;
+        uint32_t props_len = 0;
+        int rl = decode_remaining_length(buf + off, len - off, &props_len);
+        if (rl < 0) return -1;
+        off += (size_t)rl + props_len;
+    }
     if (off + 2 > len) return -1;
     uint16_t cid_len = ((uint16_t)buf[off] << 8) | buf[off + 1];
     off += 2;
