@@ -6641,6 +6641,12 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         }
         cmq_tls_set_cert(srv->tls_config, srv->config.tls_cert);
         cmq_tls_set_key(srv->tls_config, srv->config.tls_key);
+        if (srv->config.tls_ca) {
+            cmq_tls_set_ca(srv->tls_config, srv->config.tls_ca);
+        }
+        if (srv->config.tls_verify_peer) {
+            cmq_tls_set_verify(srv->tls_config, 1);
+        }
         if (cmq_tls_load(srv->tls_config) != 0) {
             cmq_log_error(srv->log,
                 "TLS cert/key load failed — refusing plaintext");

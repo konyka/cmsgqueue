@@ -156,6 +156,10 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->tls_cert, value);
     } else if (strcmp(key, "tls_key") == 0) {
         return cfg_set_str(&config->tls_key, value);
+    } else if (strcmp(key, "tls_ca") == 0) {
+        return cfg_set_str(&config->tls_ca, value);
+    } else if (strcmp(key, "tls_verify_peer") == 0) {
+        return parse_int_range(value, 0, 1, &config->tls_verify_peer);
     } else if (strcmp(key, "route") == 0) {
         if (config->route_count >= 8) return -1;
         char *colon = strrchr(value, ':');

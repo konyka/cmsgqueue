@@ -137,6 +137,18 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     if (cfg->ca[0] != '\0') {
         SSL_CTX_load_verify_locations(cfg->ssl_ctx, cfg->ca, NULL);
     }
+    /* P1: honor cfg->verify_peer. Without this the CA is loaded but
+     * never checked (any client cert is accepted). Per the bundle B4,
+     * set SSL_VERIFY_PEER + fail-if-no-cert when the caller opted in. */
+    if (cfg->verify_peer) {
+        int mode = SSL_VERIFY_PEER;
+        if (cfg->ca[0] != '\0') mode |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
+        SSL_CTX_set_verify(cfg->ssl_ctx, mode, NULL);
+        if (cfg->ca[0] != '\0') {
+            /* Set the verification depth (chain-of-trust). */
+            SSL_CTX_set_verify_depth(cfg->ssl_ctx, 9);
+        }
+    }
     cfg->ssl_ctx_init_done = 1;
     return 0;
 }
