@@ -39,6 +39,9 @@ struct cmq_filestore {
     cmq_mutex_t lock;
     atomic_int in_flight;
     atomic_int dying;
+    /* P3: periodic fsync policy. */
+    unsigned fsync_interval_ms;
+    uint64_t last_sync_ms;
 };
 
 static int fs_begin_op(cmq_filestore_t *fs) {
@@ -706,13 +709,48 @@ static int filestore_sync_impl(cmq_filestore_t *fs) {
     return rc;
 }
 
+static int filestore_maybe_fsync(cmq_filestore_t *fs);
+
 int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
                           uint64_t *out_seq) {
     if (!fs || !data || len == 0) return -1;
     if (fs_begin_op(fs) != 0) return -1;
     int rc = filestore_append_impl(fs, data, len, out_seq);
+    if (rc == 0 && fs->fsync_interval_ms > 0) {
+        if (filestore_maybe_fsync(fs) != 0) {
+            /* fsync failure is not fatal for the append itself;
+             * the data is on disk via fflush, just not durable across
+             * a crash. */
+        }
+    }
     fs_end_op(fs);
     return rc;
+}
+
+/* P3: install a periodic fsync policy. interval_ms=0 disables
+ * periodic fsync (default; only explicit cmq_filestore_sync forces
+ * durability). interval_ms>0 calls fdatasync on the data fd every
+ * interval_ms milliseconds. */
+void cmq_filestore_set_sync_interval(cmq_filestore_t *fs,
+                                       unsigned interval_ms) {
+    if (!fs) return;
+    fs->fsync_interval_ms = interval_ms;
+}
+
+static int filestore_maybe_fsync(cmq_filestore_t *fs) {
+    if (!fs->fsync_interval_ms) return 0;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ULL +
+                      (uint64_t)ts.tv_nsec / 1000000ULL;
+    if (fs->last_sync_ms == 0 ||
+        now_ms - fs->last_sync_ms >= fs->fsync_interval_ms) {
+        if (fs->data_fp && fflush(fs->data_fp) != 0) return -1;
+        if (fs->idx_fp && fflush(fs->idx_fp) != 0) return -1;
+        if (fs->data_fp && fdatasync(fileno(fs->data_fp)) != 0) return -1;
+        fs->last_sync_ms = now_ms;
+    }
+    return 0;
 }
 
 int cmq_filestore_read(cmq_filestore_t *fs, uint64_t seq,

@@ -6702,6 +6702,13 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             *server = NULL;
             return CMQ_ERR_INVALID_ARG;
         }
+        if (srv->config.persist_sync_interval_ms > 0) {
+            cmq_filestore_set_sync_interval(srv->filestore,
+                                              srv->config.persist_sync_interval_ms);
+            cmq_log_info(srv->log,
+                "WAL periodic fsync: every %u ms",
+                srv->config.persist_sync_interval_ms);
+        }
         cmq_log_info(srv->log, "Persistence enabled: dir=%s", srv->config.persist_dir);
         /* F18: also open the subscription persistence file. */
         srv->persist = cmq_sublist_persist_open(srv->config.persist_dir);
