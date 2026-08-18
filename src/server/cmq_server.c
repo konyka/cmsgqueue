@@ -1891,6 +1891,27 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
         *out_n = SIZE_MAX;
         return NULL;
     }
+    /* qg_hash is allocated lazily below; failure is handled there. */
+
+    /* P3 (v0.5.2): precompute a hash per matched entry so the QG
+     * dedup inner loop can compare hashes first and only do the full
+     * strcmp when hashes match. With K groups this avoids ~K*(K-1)/2
+     * strcmps on the hot path. */
+    uint64_t *qg_hash = calloc(result->count, sizeof(uint64_t));
+    if (qg_hash) {
+        for (size_t i = 0; i < result->count; i++) {
+            cmq_sub_ref_t *r = (cmq_sub_ref_t *)result->entries[i];
+            if (!r || !r->client || r->queue_group[0] == '\0') continue;
+            uint64_t h = 0xcbf29ce484222325ULL;
+            const char *s = r->subject;
+            while (*s) { h ^= (uint8_t)*s++; h *= 0x100000001b3ULL; }
+            s = r->queue_group;
+            while (*s) { h ^= (uint8_t)*s++; h *= 0x100000001b3ULL; }
+            s = r->client->account_name;
+            while (*s) { h ^= (uint8_t)*s++; h *= 0x100000001b3ULL; }
+            qg_hash[i] = h;
+        }
+    }
 
     size_t n = 0;
     for (size_t i = 0; i < result->count; i++) {
@@ -1913,11 +1934,13 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
            send paths will drop (one pick, no QG retry → silent loss).
            client_state is atomic ACQUIRE — safe under sublist rdlock. */
         size_t mn = 0;
+        uint64_t target_hash = qg_hash ? qg_hash[i] : 0;
         for (size_t j = i; j < result->count; j++) {
             if (used[j]) continue;
             cmq_sub_ref_t *rj = (cmq_sub_ref_t *)result->entries[j];
             if (!rj || !rj->client) continue;
             if (rj->queue_group[0] == '\0') continue;
+            if (qg_hash && qg_hash[j] != target_hash) continue;
             if (strcmp(rj->queue_group, ref->queue_group) != 0) continue;
             if (strcmp(rj->subject, ref->subject) != 0) continue;
             if (strcmp(rj->client->account_name, ref->client->account_name) != 0)
@@ -1938,6 +1961,7 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
     }
     free(used);
     free(memb);
+    free(qg_hash);
     *out_n = n;
     return tgts;
 }
