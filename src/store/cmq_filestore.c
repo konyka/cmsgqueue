@@ -42,6 +42,20 @@ struct cmq_filestore {
     /* P3: periodic fsync policy. */
     unsigned fsync_interval_ms;
     uint64_t last_sync_ms;
+    /* P1: async WAL ring (SPSC + worker thread). The producer enqueues
+     * a copy of (data, len); the worker drains and writes. */
+    pthread_t async_thread;
+    int async_active;
+    unsigned async_capacity;
+    unsigned async_head;       /* producer writes here */
+    unsigned async_tail;       /* consumer reads here */
+    unsigned async_count;      /* in-flight entries */
+    pthread_mutex_t async_lock; /* protects ring */
+    pthread_cond_t async_not_empty;
+    pthread_cond_t async_not_full;
+    uint8_t **async_entries;    /* each: hdr+payload, allocated by producer */
+    size_t *async_lens;
+    uint64_t *async_seqs;
 };
 
 static int fs_begin_op(cmq_filestore_t *fs) {
@@ -422,6 +436,22 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
 void cmq_filestore_destroy(cmq_filestore_t *fs) {
     if (!fs) return;
     atomic_store_explicit(&fs->dying, 1, memory_order_release);
+    if (fs->async_active) {
+        pthread_mutex_lock(&fs->async_lock);
+        pthread_cond_broadcast(&fs->async_not_empty);
+        pthread_mutex_unlock(&fs->async_lock);
+        pthread_join(fs->async_thread, NULL);
+        pthread_mutex_destroy(&fs->async_lock);
+        pthread_cond_destroy(&fs->async_not_empty);
+        pthread_cond_destroy(&fs->async_not_full);
+        /* Free any leftover ring entries. */
+        for (unsigned i = 0; i < fs->async_count; i++) {
+            free(fs->async_entries[(fs->async_tail + i) % fs->async_capacity]);
+        }
+        free(fs->async_entries);
+        free(fs->async_lens);
+        free(fs->async_seqs);
+    }
     while (atomic_load_explicit(&fs->in_flight, memory_order_acquire) > 0) {
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
@@ -727,6 +757,34 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
     return rc;
 }
 
+int cmq_filestore_async_enqueue(cmq_filestore_t *fs, const uint8_t *data,
+                                 size_t len, uint64_t seq) {
+    if (!fs || !fs->async_active || !data || len == 0) return -1;
+    pthread_mutex_lock(&fs->async_lock);
+    while ((unsigned)fs->async_count >= fs->async_capacity &&
+           !atomic_load(&fs->dying)) {
+        pthread_cond_wait(&fs->async_not_full, &fs->async_lock);
+    }
+    if (atomic_load(&fs->dying)) {
+        pthread_mutex_unlock(&fs->async_lock);
+        return -1;
+    }
+    uint8_t *copy = malloc(len);
+    if (!copy) {
+        pthread_mutex_unlock(&fs->async_lock);
+        return -1;
+    }
+    memcpy(copy, data, len);
+    fs->async_entries[fs->async_head] = copy;
+    fs->async_lens[fs->async_head] = len;
+    fs->async_seqs[fs->async_head] = seq;
+    fs->async_head = (fs->async_head + 1) % fs->async_capacity;
+    fs->async_count++;
+    pthread_cond_signal(&fs->async_not_empty);
+    pthread_mutex_unlock(&fs->async_lock);
+    return 0;
+}
+
 /* P3: install a periodic fsync policy. interval_ms=0 disables
  * periodic fsync (default; only explicit cmq_filestore_sync forces
  * durability). interval_ms>0 calls fdatasync on the data fd every
@@ -873,4 +931,65 @@ int cmq_filestore_sync(cmq_filestore_t *fs) {
     int rc = filestore_sync_impl(fs);
     fs_end_op(fs);
     return rc;
+}
+
+static void *async_worker(void *arg) {
+    cmq_filestore_t *fs = (cmq_filestore_t *)arg;
+    while (!atomic_load(&fs->dying)) {
+        pthread_mutex_lock(&fs->async_lock);
+        while (fs->async_count == 0 && !atomic_load(&fs->dying)) {
+            pthread_cond_wait(&fs->async_not_empty, &fs->async_lock);
+        }
+        if (atomic_load(&fs->dying) && fs->async_count == 0) {
+            pthread_mutex_unlock(&fs->async_lock);
+            break;
+        }
+        uint8_t *entry = fs->async_entries[fs->async_tail];
+        size_t len = fs->async_lens[fs->async_tail];
+        fs->async_tail = (fs->async_tail + 1) % fs->async_capacity;
+        fs->async_count--;
+        pthread_cond_signal(&fs->async_not_full);
+        pthread_mutex_unlock(&fs->async_lock);
+
+        cmq_mutex_lock(&fs->lock);
+        if (fs->data_fp && fs->idx_fp) {
+            (void)fwrite(entry, 1, len, fs->data_fp);
+            (void)fflush(fs->data_fp);
+            (void)fflush(fs->idx_fp);
+        }
+        cmq_mutex_unlock(&fs->lock);
+        free(entry);
+    }
+    return NULL;
+}
+
+int cmq_filestore_set_async(cmq_filestore_t *fs, unsigned queue_capacity) {
+    if (!fs) return -1;
+    if (fs->async_active) return 0;
+    if (queue_capacity == 0) return -1;
+    fs->async_capacity = queue_capacity;
+    fs->async_head = fs->async_tail = fs->async_count = 0;
+    fs->async_entries = calloc(queue_capacity, sizeof(uint8_t *));
+    fs->async_lens = calloc(queue_capacity, sizeof(size_t));
+    fs->async_seqs = calloc(queue_capacity, sizeof(uint64_t));
+    if (!fs->async_entries || !fs->async_lens || !fs->async_seqs) {
+        free(fs->async_entries);
+        free(fs->async_lens);
+        free(fs->async_seqs);
+        return -1;
+    }
+    pthread_mutex_init(&fs->async_lock, NULL);
+    pthread_cond_init(&fs->async_not_empty, NULL);
+    pthread_cond_init(&fs->async_not_full, NULL);
+    if (pthread_create(&fs->async_thread, NULL, async_worker, fs) != 0) {
+        pthread_mutex_destroy(&fs->async_lock);
+        pthread_cond_destroy(&fs->async_not_empty);
+        pthread_cond_destroy(&fs->async_not_full);
+        free(fs->async_entries);
+        free(fs->async_lens);
+        free(fs->async_seqs);
+        return -1;
+    }
+    fs->async_active = 1;
+    return 0;
 }

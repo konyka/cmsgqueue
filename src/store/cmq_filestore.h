@@ -36,4 +36,15 @@ int cmq_filestore_sync(cmq_filestore_t *fs);
 void cmq_filestore_set_sync_interval(cmq_filestore_t *fs,
                                        unsigned interval_ms);
 
+/* P1: enable async WAL writes via SPSC ring + worker thread.
+ * queue_capacity: max in-flight writes (each ~4 KiB avg). 0 = off.
+ * Returns 0 on success, -1 on failure (worker thread spawn). */
+int cmq_filestore_set_async(cmq_filestore_t *fs, unsigned queue_capacity);
+
+/* P1: enqueue a record for async write. Returns 0 if queued, -1 if
+ * queue full / dying / async not enabled. The worker will fwrite +
+ * fflush the record; durability follows the fsync policy. */
+int cmq_filestore_async_enqueue(cmq_filestore_t *fs, const uint8_t *data,
+                                 size_t len, uint64_t seq);
+
 #endif
