@@ -215,6 +215,7 @@ struct cmq_server {
 
     cmq_atomic_u64 stat_connections;
     cmq_atomic_u64 stat_messages_in;
+    cmq_atomic_u64 stat_messages_replayed;  /* P4: messages restored from WAL */
     cmq_atomic_u64 stat_messages_out;
     cmq_atomic_u64 stat_bytes_in;
     cmq_atomic_u64 stat_bytes_out;

@@ -47,10 +47,11 @@ TEST(persist_unit, replay_deterministic_under_restart) {
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
 
-    uint64_t in = cmq_atomic_load_u64(&srv->stat_messages_in, CMQ_ATOMIC_RELAXED);
-    printf("  stat_messages_in after restart = %llu (expect >= %d)\n",
-           (unsigned long long)in, P7_N);
-    ASSERT(in >= (uint64_t)P7_N);
+    uint64_t replayed = cmq_atomic_load_u64(&srv->stat_messages_replayed,
+                                             CMQ_ATOMIC_RELAXED);
+    printf("  stat_messages_replayed after restart = %llu (expect >= %d)\n",
+           (unsigned long long)replayed, P7_N);
+    ASSERT(replayed >= (uint64_t)P7_N);
 
     /* Idempotency: last_seq must equal P7_N (no re-append). */
     ASSERT_EQ(cmq_filestore_last_seq(srv->filestore), (uint64_t)P7_N);

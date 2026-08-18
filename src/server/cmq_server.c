@@ -1947,7 +1947,12 @@ static void credit_msgs_in(cmq_server_t *srv, cmq_client_t *c,
                             const cmq_frame_t *frame) {
     if (!srv || !c) return;
     size_t msg_len = frame ? frame->payload_len : 0;
-    cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
+    /* P4: replayed messages (fd == -1 sentinel) skip the live counter.
+     * They are accounted separately via stat_messages_replayed by the
+     * replay loop in cmq_server_create. */
+    if (c->fd >= 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_in, 1, CMQ_ATOMIC_RELAXED);
+    }
     cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
     if (acc) {
         cmq_account_inc_msgs_in(acc, c->account_epoch, (uint64_t)msg_len);
@@ -6766,6 +6771,10 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                     }
                     handle_publish(srv, &replay_c, &rf);
                     replayed++;
+                    /* P4: track replayed messages separately so
+                     * stat_messages_in reflects live traffic only. */
+                    cmq_atomic_fetch_add_u64(&srv->stat_messages_replayed,
+                                              1, CMQ_ATOMIC_RELAXED);
                 }
                 cmq_filestore_range_free(arr, got);
             }
