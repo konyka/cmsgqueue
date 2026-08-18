@@ -7,24 +7,28 @@
 10 publishers, 1 subscriber, 10 000 64-byte messages, single worker thread.
 Release build (`-DCMAKE_BUILD_TYPE=Release`).
 
-## Headline metrics (v0.5.0 baseline, 5-run mean)
+## Headline metrics (v0.5.1 final, 5-run mean)
 
 | metric | mean | floor (P9 gate) |
 |---|---|---|
-| msg/s (end-to-end) | 33 000 | ≥ 25 000 |
+| msg/s (end-to-end) | 31 300 | ≥ 25 000 |
 | p50 inter-arrival (µs) | 50 | — |
 | p99 inter-arrival (µs) | 99 | ≤ 200 |
 | avg latency (ms) | 0.030 | — |
 | dropped / 10 000 | ~2 400 | ≤ 5 000 |
 
-The 25K-msg/s floor is ~25 % below the v0.5.0 baseline. The 200-µs p99
-floor is roughly 2× the measured p99. Together they catch material
-regressions without flaking on lower-resource CI runners.
+The 25K-msg/s floor is ~25 % below the v0.5.0 baseline (33 784 msg/s).
+The 200-µs p99 floor is roughly 2× the measured p99. Together they
+catch material regressions without flaking on lower-resource CI
+runners.
 
 ## Recorded per-run transcripts
 
-`docs/benchmarks/after_*.txt` (5 runs) capture the v0.5.0 baseline at
-commit `cbc5cc9`. Future runs go alongside as `v051_*.txt` etc.
+- `docs/benchmarks/after_*.txt` (5 runs) — v0.5.0 baseline at
+  commit `cbc5cc9`.
+- `docs/benchmarks/v051p9_*.txt` (5 runs) — v0.5.1 P9 bootstrap.
+- `docs/benchmarks/v051final_*.txt` (5 runs) — v0.5.1 final
+  (after P9 consolidation).
 
 ## JSON mode (`-j`)
 
