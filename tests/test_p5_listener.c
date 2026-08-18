@@ -64,4 +64,22 @@ TEST(p5, tls_enabled_populates_slot0) {
     (void)rc;
 }
 
+TEST(p5, listeners_array_present) {
+    /* P2 (v0.5.2): cmq_config_t exposes a listeners[4] array.
+     * listener_count defaults to 0; legacy tls_cert path still works
+     * (covered by tls_enabled_populates_slot0 above). */
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 19986;
+    cfg.log_to_stdout = 0;
+    /* Manually set listener_count to exercise the array. */
+    cfg.listeners[0].tls_cert = NULL;
+    cfg.listeners[0].tls_key = NULL;
+    cfg.listener_count = 1;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
