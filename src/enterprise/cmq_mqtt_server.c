@@ -330,6 +330,7 @@ size_t got = (size_t)n;
             size_t off = 2;
             uint8_t granted[8];
             int granted_n = 0;
+            char last_topic[128] = {0};
             while (off + 2 < plen && granted_n < 8) {
                 uint16_t tlen = ((uint16_t)p[off] << 8) | p[off + 1];
                 off += 2;
@@ -343,11 +344,37 @@ size_t got = (size_t)n;
                 off += 1;
                 if (req_qos > 1) req_qos = 1;
                 cmq_mqtt_record_subscriber(topic);
+                snprintf(last_topic, sizeof(last_topic), "%s", topic);
                 granted[granted_n++] = req_qos;
             }
             if (granted_n > 0) {
                 if (send_suback(fd, packet_id, granted,
                                    (size_t)granted_n) < 0) return -1;
+            }
+            /* P3 (v0.5.3): deliver retained messages to the new
+             * subscriber. v0.5.2 stored them; this round trips them.
+             * Iterate through the SUBSCRIBE payload again to deliver
+             * matches — single-topic for now (MQTT_MAX_RETAINED=32). */
+            if (last_topic[0]) {
+                const uint8_t *rp = NULL;
+                size_t rlen = 0;
+                if (cmq_mqtt_fetch_retained(last_topic, &rp, &rlen) == 0) {
+                    uint8_t rpkt[256];
+                    size_t tlen = strlen(last_topic);
+                    if (tlen < 125 && rlen < 128) {
+                        size_t off2 = 0;
+                        rpkt[off2++] = 0x30 | 0x01;  /* PUBLISH + RETAIN */
+                        uint32_t var_len = 2 + tlen + rlen;
+                        rpkt[off2++] = (uint8_t)var_len;
+                        rpkt[off2++] = (uint8_t)(tlen >> 8);
+                        rpkt[off2++] = (uint8_t)(tlen & 0xFF);
+                        memcpy(rpkt + off2, last_topic, tlen);
+                        off2 += tlen;
+                        memcpy(rpkt + off2, rp, rlen);
+                        off2 += rlen;
+                        (void)send(fd, rpkt, off2, 0);
+                    }
+                }
             }
         } else if (type == MQTT_TYPE_PUBLISH && connected) {
             /* P8: PUBLISH with QoS 0 (no packet_id) or QoS 1.
