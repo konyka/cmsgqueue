@@ -5178,7 +5178,18 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
             size_t plen = (size_t)(path_end - path_start);
             if (plen == 9 && memcmp(path_start, "/healthz", 9) == 0) {
                 free(req);
-                const char *body = "{\"status\":\"ok\"}\n";
+                /* P4 (v0.5.3): report async WAL + reload state. We
+                 * surface degraded status if the filestore has any
+                 * async enqueue blocks (ring full / worker stuck) or
+                 * if the reload path is in flight. */
+                uint64_t async_blocked = (c->server && c->server->filestore) ?
+                    cmq_filestore_async_blocked_count(c->server->filestore) : 0;
+                const char *status_str = async_blocked > 0 ?
+                    "degraded" : "ok";
+                char body[256];
+                snprintf(body, sizeof(body),
+                    "{\"status\":\"%s\",\"async_blocked\":%llu}\n",
+                    status_str, (unsigned long long)async_blocked);
                 /* F7: HSTS is sent only when TLS is configured. */
                 const char *hsts = cmq_tls_configured(c->server->tls_config_slots[0])
                                    ? "Strict-Transport-Security: max-age=31536000\r\n"
