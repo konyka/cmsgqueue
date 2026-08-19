@@ -350,8 +350,16 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
         SSL_CTX_set_verify(new_ctx, SSL_VERIFY_PEER |
                                  SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
     }
-    /* Atomically swap. The old CTX is freed when its last reference
-     * drops — existing sessions still hold a pointer. */
+    /* P1 v0.5.4 UAF fix: bump the new CTX's built-in OpenSSL
+     * refcount so it isn't freed when the next reload decrements
+     * to zero. Existing in-flight SSL* each hold a borrowed
+     * reference via SSL_CTX_up_ref on session init. We free the
+     * old CTX only when its refcount drops to 0. */
+    if (SSL_CTX_up_ref(new_ctx) != 1) {
+        SSL_CTX_free(new_ctx);
+        tls_end_op(cfg);
+        return -1;
+    }
     SSL_CTX *old = cfg->ssl_ctx;
     cfg->ssl_ctx = new_ctx;
     cfg->ssl_ctx_init_done = 1;
