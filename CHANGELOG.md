@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.5.5] - 2026-08-18
+
+### Fixed
+- **P1 async WAL max payload size cap** — `cmq_filestore_set_max_payload_size` + default 1 MiB cap. OOM guard on hostile clients.
+- **P1 sublist_insert no slot leak on malloc failure** — malloc before head++/count++ so a permanent failure can't leak ring entries.
+- **P3 TLS load() checks return values** — ALPN + load_verify_locations failures now free the new CTX and return -1.
+- **P3 stat_messages_out live/replay split** — same pattern as v0.5.3 P2 for stat_messages_in.
+
+### Added
+- **P1 MQTT per-source-IP rate limit** — `cmq_mqtt_set_rate_limit(capacity, refill_per_sec)` token bucket. Default off.
+- **P1 MQTT bridge cleanup smoke test** — `tests/test_mqtt_bridge_cleanup.c`.
+
+### Documentation
+- `docs/reviews/v0.5.5.enumeration.md` — 11-item gap catalog.
+- `docs/reviews/v0.5.5.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v055final_{1..5}.txt` — 5-run baseline (mean 32 625 msg/s, p99 99 µs).
+
+### Test count
+- 71 tests (was 70 in v0.5.4; +1 for `test_mqtt_bridge_cleanup`).
+- All 71 green; bench gate passes.
+
+### Deferred to v0.6
+- WS permessage-deflate
+- rwlock fairness
+- close-by-fd protection
+- multi-threaded accept
+- Redis wire protocol, JWT auth
+
 ## [0.5.4] - 2026-08-18
 
 ### Fixed
