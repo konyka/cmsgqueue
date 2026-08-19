@@ -160,7 +160,9 @@ typedef struct cmq_worker {
 
 struct cmq_server {
     cmq_config_t config;
-    int listen_fd;
+    int listen_fds[4];  /* P1 v0.5.4: per-listener listen fd */
+#define listen_fd listen_fds[0]   /* back-compat alias */
+#define CMQ_MAX_LISTENERS 4
     /* P5: per-listener SSL_CTX slots. Slot 0 is the primary listener.
      * Subsequent slots reserved for multi-listener (port + cert) support. */
 #define CMQ_MAX_LISTENERS 4
