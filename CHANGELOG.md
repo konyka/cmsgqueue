@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.5.3] - 2026-08-18
+
+### Fixed
+- **P1 CRL X509_STORE integration** — `cmq_tls_set_crl()` actually loads the PEM CRL into the SSL_CTX's X509_STORE now. v0.5.2 stored the path but never consulted the CRL. Revoked client certs are now rejected.
+- **P2 STATS replay counter accuracy** — `stat_messages_replayed` only ticks when `handle_publish` actually runs (snapshots `stat_publishes_rejected` before/after).
+
+### Added
+- **P2 cmq_rch leak/UAF test** — 4 tests covering double-release, multi-acquire, swap-transfer, and NULL-safety. Run under ASAN.
+- **P2 subject_rl hash collision test** — 1000 distinct subjects admitted, 50 same-subject admitted (limit enforced exactly).
+- **P1 cmq_mqtt_get_subscribed_topic** — bridge API surface (full bridge is v0.6 work).
+- **P1 QoS2 retransmit table** — `g_qos2[]` tracks packet_id → phase; duplicate PUBLISH/PUBREL re-emit the right control packet.
+- **P3 retained-message delivery on SUBSCRIBE** — after SUBACK, emit PUBLISH for any stored retained payload.
+- **P3 persistent retain store** — `cmq_mqtt_set_retain_path()` loads on init + appends on store; retained messages survive restart.
+- **P2 async WAL bounded wait** — `pthread_cond_timedwait` with 10s timeout; `cmq_filestore_async_blocked_count()` accessor.
+- **P4 per-gate publish-rejection counters** — `stat_publishes_rejected_{size,acl,quota,ratelimit}` for ops dashboards.
+- **P4 HEALTHZ async state** — `/HEALTHZ` returns `degraded` when async_blocked > 0; k8s probes can route accordingly.
+
+### Deferred to v0.6
+- Multi-listener slots[1..3] wired (data structure landed in v0.5.2; runtime multi-bind in v0.6)
+- F19b full PUBLISH→cmq_sublist bridge (server_t* plumbing)
+- 5.0 properties decode on PUBLISH/SUBSCRIBE
+- 5.0 properties decode fully
+
+### Documentation
+- `docs/reviews/v0.5.3.enumeration.md` — 13-item gap catalog.
+- `docs/reviews/v0.5.3.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v053final_{1..5}.txt` — 5-run baseline transcripts (mean 32 414 msg/s, p99 99 µs).
+
+### Test count
+- 67 tests (was 65 in v0.5.2; +2 for `test_rch_overflow` + `test_subject_rl_collisions`).
+- All 67 green; bench gate passes.
+
 ## [0.5.2] - 2026-08-18
 
 ### Added (MQTT broker expansion)
