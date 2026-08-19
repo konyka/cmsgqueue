@@ -4,6 +4,7 @@
 #endif
 #include "cmq_filestore.h"
 #include "cmq_thread.h"
+#include "cmq_atomic.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +40,8 @@ struct cmq_filestore {
     cmq_mutex_t lock;
     atomic_int in_flight;
     atomic_int dying;
+    /* P2 (v0.5.3): stat counter for async-enqueue blocks. */
+    cmq_atomic_u64 *async_blocked;
     /* P3: periodic fsync policy. */
     unsigned fsync_interval_ms;
     uint64_t last_sync_ms;
@@ -389,6 +392,8 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     atomic_init(&fs->in_flight, 0);
     atomic_init(&fs->dying, 0);
     cmq_mutex_init(&fs->lock);
+    fs->async_blocked = calloc(1, sizeof(cmq_atomic_u64));
+    if (!fs->async_blocked) { cmq_mutex_destroy(&fs->lock); free(fs); return NULL; }
     int dlen = snprintf(fs->data_path, sizeof(fs->data_path), "%s/%s.data",
                         fs->dir, fs->prefix);
     int ilen = snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx",
@@ -401,10 +406,19 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     }
 
     fs->data_fp = fopen(fs->data_path, "a+b");
-    if (!fs->data_fp) { cmq_mutex_destroy(&fs->lock); free(fs); return NULL; }
+    if (!fs->data_fp) {
+        cmq_mutex_destroy(&fs->lock);
+        free(fs->async_blocked); free(fs);
+        return NULL;
+    }
 
     fs->idx_fp = fopen(fs->idx_path, "a+b");
-    if (!fs->idx_fp) { fclose(fs->data_fp); cmq_mutex_destroy(&fs->lock); free(fs); return NULL; }
+    if (!fs->idx_fp) {
+        fclose(fs->data_fp);
+        cmq_mutex_destroy(&fs->lock);
+        free(fs->async_blocked); free(fs);
+        return NULL;
+    }
 
     uint64_t n = 0;
     int orphan_rc = 0;
@@ -426,6 +440,7 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
         fclose(fs->idx_fp);
         fclose(fs->data_fp);
         cmq_mutex_destroy(&fs->lock);
+        free(fs->async_blocked);
         free(fs);
         return NULL;
     }
@@ -468,6 +483,7 @@ void cmq_filestore_destroy(cmq_filestore_t *fs) {
     }
     cmq_mutex_unlock(&fs->lock);
     cmq_mutex_destroy(&fs->lock);
+    free(fs->async_blocked);
     free(fs);
 }
 
@@ -761,9 +777,29 @@ int cmq_filestore_async_enqueue(cmq_filestore_t *fs, const uint8_t *data,
                                  size_t len, uint64_t seq) {
     if (!fs || !fs->async_active || !data || len == 0) return -1;
     pthread_mutex_lock(&fs->async_lock);
+    /* P2 (v0.5.3): bounded wait. Without this a slow worker stalls
+     * publishers indefinitely. We use a 10s timeout — long enough
+     * for normal bursts, short enough that operators can detect
+     * a stuck worker via stat_async_blocked. */
+    int blocked = 0;
     while ((unsigned)fs->async_count >= fs->async_capacity &&
            !atomic_load(&fs->dying)) {
-        pthread_cond_wait(&fs->async_not_full, &fs->async_lock);
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += 10;
+        int rc = pthread_cond_timedwait(&fs->async_not_full,
+                                          &fs->async_lock, &deadline);
+        if (rc == ETIMEDOUT) {
+            blocked = 1;
+            break;
+        }
+    }
+    if (blocked) {
+        pthread_mutex_unlock(&fs->async_lock);
+        if (fs->async_blocked)
+            cmq_atomic_fetch_add_u64(fs->async_blocked, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        return -1;
     }
     if (atomic_load(&fs->dying)) {
         pthread_mutex_unlock(&fs->async_lock);
@@ -931,6 +967,11 @@ int cmq_filestore_sync(cmq_filestore_t *fs) {
     int rc = filestore_sync_impl(fs);
     fs_end_op(fs);
     return rc;
+}
+
+uint64_t cmq_filestore_async_blocked_count(cmq_filestore_t *fs) {
+    if (!fs || !fs->async_blocked) return 0;
+    return cmq_atomic_load_u64(fs->async_blocked, CMQ_ATOMIC_RELAXED);
 }
 
 static void *async_worker(void *arg) {
