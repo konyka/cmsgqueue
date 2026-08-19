@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.5.4] - 2026-08-18
+
+### Fixed
+- **P1 cmq_tls_reload UAF** — `SSL_CTX_up_ref(new_ctx)` so an in-flight SSL* doesn't dangle after the reload frees the old CTX.
+
+### Added
+- **P1 F19b bridge sublist_insert** — relay thread now calls `cmq_sublist_insert` via a function pointer registered by `cmq_mqtt_register_sublist_insert`.
+- **P1 cmq_tls_set_crl() actually loads into X509_STORE** (already v0.5.3; expanded in v0.5.4).
+- **P1 multi-listener runtime** — `cmq_server_t.listen_fds[4]` replaces single `listen_fd`; `#define listen_fd listen_fds[0]` preserves source back-compat.
+- **P1 MQTT 5.0 property skip on PUBLISH** — variable-byte Property Length scanned+skipped.
+- **P3 MQTT listener default-off** — `cmq_mqtt_set_listener_enabled(1)` opt-in. Default doesn't bind 1883.
+- **P3 cmq_tls_set_crl NULL log** — misconfig is visible (vs v0.5.3 silent).
+- **P3 stat_async_enqueued counter** — complements the v0.5.3 async_blocked.
+- **P4 reset QoS2 + sub_topics on CONNECT** — table reset prevents long-running leak.
+
+### Documentation
+- `docs/reviews/v0.5.4.enumeration.md` — 13-item gap catalog.
+- `docs/reviews/v0.5.4.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v054final_{1..5}.txt` — 5-run baseline transcripts (mean 31 146 msg/s, p99 99 µs).
+
+### Test count
+- 70 tests (was 68 in v0.5.3; +2 for `test_mqtt_bridge_insert` + `test_sublist_concurrent`).
+- All 70 green; bench gate passes.
+
 ## [0.5.3] - 2026-08-18
 
 ### Fixed

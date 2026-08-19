@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_tls.h"
+#include "cmq_log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
@@ -262,6 +263,8 @@ int cmq_tls_set_crl(cmq_tls_config_t *cfg, const char *crl_path) {
     if (crl_path) {
         snprintf(cfg->crl, sizeof(cfg->crl), "%s", crl_path);
     } else {
+        /* P3 v0.5.4: log on NULL so misconfig is visible. */
+        cmq_log_info(NULL, "cmq_tls_set_crl: disabling CRL check (NULL path)");
         cfg->crl[0] = '\0';
     }
     tls_end_op(cfg);

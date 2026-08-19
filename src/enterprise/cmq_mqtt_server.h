@@ -49,6 +49,9 @@ void cmq_mqtt_set_retain_path(const char *path);
  * snapshot_deliver_targets path. Pass NULL to disable. */
 void cmq_mqtt_set_bridge_server(struct cmq_server *server);
 
+/* P3 v0.5.4: enable the MQTT listener. Default off — opt-in. */
+void cmq_mqtt_set_listener_enabled(int enabled);
+
 /* P1 v0.5.4: register the cmq_sublist_insert function + sublist
  * pointer so the relay thread can call into cmq_sublist_insert
  * without circular include deps. Called once during cmq_server_create. */

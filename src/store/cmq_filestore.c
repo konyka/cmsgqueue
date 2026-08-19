@@ -42,6 +42,8 @@ struct cmq_filestore {
     atomic_int dying;
     /* P2 (v0.5.3): stat counter for async-enqueue blocks. */
     cmq_atomic_u64 *async_blocked;
+    /* P3 v0.5.4: successful async enqueue counter (vs blocked). */
+    cmq_atomic_u64 *async_enqueued;
     /* P3: periodic fsync policy. */
     unsigned fsync_interval_ms;
     uint64_t last_sync_ms;
@@ -393,7 +395,14 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
     atomic_init(&fs->dying, 0);
     cmq_mutex_init(&fs->lock);
     fs->async_blocked = calloc(1, sizeof(cmq_atomic_u64));
-    if (!fs->async_blocked) { cmq_mutex_destroy(&fs->lock); free(fs); return NULL; }
+    fs->async_enqueued = calloc(1, sizeof(cmq_atomic_u64));
+    if (!fs->async_blocked || !fs->async_enqueued) {
+        cmq_mutex_destroy(&fs->lock);
+        free(fs->async_blocked);
+        free(fs->async_enqueued);
+        free(fs);
+        return NULL;
+    }
     int dlen = snprintf(fs->data_path, sizeof(fs->data_path), "%s/%s.data",
                         fs->dir, fs->prefix);
     int ilen = snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx",
@@ -484,6 +493,7 @@ void cmq_filestore_destroy(cmq_filestore_t *fs) {
     cmq_mutex_unlock(&fs->lock);
     cmq_mutex_destroy(&fs->lock);
     free(fs->async_blocked);
+    free(fs->async_enqueued);
     free(fs);
 }
 
@@ -818,6 +828,9 @@ int cmq_filestore_async_enqueue(cmq_filestore_t *fs, const uint8_t *data,
     fs->async_count++;
     pthread_cond_signal(&fs->async_not_empty);
     pthread_mutex_unlock(&fs->async_lock);
+    if (fs->async_enqueued)
+        cmq_atomic_fetch_add_u64(fs->async_enqueued, 1,
+                                  CMQ_ATOMIC_RELAXED);
     return 0;
 }
 
@@ -972,6 +985,11 @@ int cmq_filestore_sync(cmq_filestore_t *fs) {
 uint64_t cmq_filestore_async_blocked_count(cmq_filestore_t *fs) {
     if (!fs || !fs->async_blocked) return 0;
     return cmq_atomic_load_u64(fs->async_blocked, CMQ_ATOMIC_RELAXED);
+}
+
+uint64_t cmq_filestore_async_enqueued_count(cmq_filestore_t *fs) {
+    if (!fs || !fs->async_enqueued) return 0;
+    return cmq_atomic_load_u64(fs->async_enqueued, CMQ_ATOMIC_RELAXED);
 }
 
 static void *async_worker(void *arg) {

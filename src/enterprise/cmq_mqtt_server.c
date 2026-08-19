@@ -34,6 +34,10 @@
  * individual property tags. */
 static int mqtt_v5_props_skip = 1;
 
+/* P3 v0.5.4: listener opt-in. Default off (anyone-on-host risk).
+ * Call cmq_mqtt_set_listener_enabled(1) to bind 127.0.0.1:1883. */
+static int mqtt_listener_enabled = 0;
+
 /* P3 (v0.5.3): retain file path. Forward-declared because
  * cmq_mqtt_set_retain_path uses it before its full definition. */
 static char g_mqtt_retain_path[256] = {0};
@@ -118,6 +122,10 @@ void cmq_mqtt_set_bridge_server(struct cmq_server *server) {
             g_mqtt_bridge_thread_started = 1;
         }
     }
+}
+
+void cmq_mqtt_set_listener_enabled(int enabled) {
+    mqtt_listener_enabled = enabled ? 1 : 0;
 }
 
 /* P1 v0.5.4: register the sublist insert function + pointer so
@@ -502,6 +510,11 @@ size_t got = (size_t)n;
             }
 
         if (type == MQTT_TYPE_CONNECT && !connected) {
+            /* P4 v0.5.4: reset per-session tables on CONNECT. Stale
+             * entries from a prior session would otherwise leak
+             * packet_ids + topic filters. */
+            g_mqtt_sub_count = 0;
+            g_qos2_count = 0;
             if (parse_connect(buf + 1 + rl_off, rem_len,
                                 client_id, sizeof(client_id), NULL,
                                 user, sizeof(user), pass,
@@ -706,6 +719,7 @@ int cmq_mqtt_server_listen(const char *bind_addr, int port) {
 }
 
 void cmq_mqtt_server_start_listener(struct cmq_server *server) {
+    if (!mqtt_listener_enabled) return;
     (void)server;
     int s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) return;

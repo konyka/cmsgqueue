@@ -32,6 +32,7 @@ int cmq_filestore_sync(cmq_filestore_t *fs);
 /* P2 (v0.5.3): stat counter for async-enqueue blocks. Returns 0 if
  * the filestore has no async ring. */
 uint64_t cmq_filestore_async_blocked_count(cmq_filestore_t *fs);
+uint64_t cmq_filestore_async_enqueued_count(cmq_filestore_t *fs);
 
 /* P3: install a periodic fsync policy. interval_ms=0 disables
  * periodic fsync (default; only explicit cmq_filestore_sync forces
