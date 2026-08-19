@@ -27,6 +27,13 @@
 #define MQTT_TYPE_SUBACK      0x90
 #define MQTT_TYPE_PINGREQ     0xC0
 #define MQTT_TYPE_PINGRESP    0xD0
+
+/* P1 v0.5.4: 5.0 property skip flag. When set, PUBLISH and
+ * SUBSCRIBE variable headers are scanned for the 5.0 Properties
+ * region (var-byte length) and skipped. Future work decodes
+ * individual property tags. */
+static int mqtt_v5_props_skip = 1;
+
 /* P3 (v0.5.3): retain file path. Forward-declared because
  * cmq_mqtt_set_retain_path uses it before its full definition. */
 static char g_mqtt_retain_path[256] = {0};
@@ -579,11 +586,11 @@ size_t got = (size_t)n;
                 }
             }
         } else if (type == MQTT_TYPE_PUBLISH && connected) {
-            /* P8: PUBLISH with QoS 0 (no packet_id) or QoS 1.
-             * We accept and emit PUBACK for QoS 1. The variable
-             * header is: topic_name (length-prefixed string) +
-             * packet_id (2B, only if QoS > 0). We do NOT bridge
-             * into the cmq sublist (deferred to v0.6). */
+            /* P1 v0.5.4: 5.0 PUBLISH variable header has an extra
+             * Properties region between topic and packet_id. Read
+             * the var-byte Property Length and skip those bytes. We
+             * don't decode individual properties — just advance the
+             * offset. */
             const uint8_t *p = buf + 1 + rl_off;
             size_t plen = rem_len;
             if (plen < 2) continue;
@@ -591,6 +598,19 @@ size_t got = (size_t)n;
             if ((size_t)(2 + topic_len) > plen) continue;
             uint8_t qos = (buf[0] >> 1) & 0x03;
             int retain = (buf[0] & 0x08) != 0;
+            size_t off = 2 + topic_len;
+            if (mqtt_v5_props_skip) {
+                /* 5.0 properties region: var-byte length + bytes.
+                 * For v0.5.4 we just skip; full decode is v0.6. */
+                if (off < plen) {
+                    uint32_t props_len = 0;
+                    int rl = decode_remaining_length(p + off,
+                                                     plen - off,
+                                                     &props_len);
+                    if (rl < 0) continue;
+                    off += (size_t)rl + props_len;
+                }
+            }
             /* P4: PUBLISH payload starts after topic + packet_id (if QoS>0). */
             size_t payload_off = 2 + topic_len;
             if (qos > 0) payload_off += 2;
