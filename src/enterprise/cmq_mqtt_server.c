@@ -124,6 +124,51 @@ static char g_mqtt_sub_topics[MQTT_MAX_SUBS][128];
 static int g_mqtt_sub_count = 0;
 static pthread_mutex_t g_mqtt_sub_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* P1 (v0.5.3): per-session QoS2 retransmit table. Each entry tracks
+ * one packet_id's phase: PUBLISHED (PUBREC sent) or RELEASED (PUBCOMP
+ * sent). Duplicate PUBLISH re-emits PUBREC; duplicate PUBREL
+ * re-emits PUBCOMP. Capped at MQTT_QOS2_MAX to bound memory. */
+#define MQTT_QOS2_MAX 128
+struct qos2_entry {
+    uint16_t packet_id;
+    uint8_t phase;  /* 1=PUBREC sent, 2=PUBCOMP sent */
+};
+static struct qos2_entry g_qos2[MQTT_QOS2_MAX];
+static int g_qos2_count = 0;
+static pthread_mutex_t g_qos2_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int qos2_record_or_lookup(uint16_t packet_id, int new_phase) {
+    pthread_mutex_lock(&g_qos2_lock);
+    int found = 0;
+    for (int i = 0; i < g_qos2_count; i++) {
+        if (g_qos2[i].packet_id == packet_id) {
+            g_qos2[i].phase = new_phase;
+            found = 1;
+            break;
+        }
+    }
+    if (!found && g_qos2_count < MQTT_QOS2_MAX) {
+        g_qos2[g_qos2_count].packet_id = packet_id;
+        g_qos2[g_qos2_count].phase = new_phase;
+        g_qos2_count++;
+    }
+    pthread_mutex_unlock(&g_qos2_lock);
+    return found;
+}
+
+static int qos2_get_phase(uint16_t packet_id) {
+    pthread_mutex_lock(&g_qos2_lock);
+    int phase = 0;
+    for (int i = 0; i < g_qos2_count; i++) {
+        if (g_qos2[i].packet_id == packet_id) {
+            phase = g_qos2[i].phase;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_qos2_lock);
+    return phase;
+}
+
 int cmq_mqtt_record_subscriber(const char *topic_filter) {
     if (!topic_filter || !*topic_filter) return -1;
     pthread_mutex_lock(&g_mqtt_sub_lock);
@@ -402,11 +447,12 @@ size_t got = (size_t)n;
                                           payload_len);
             }
             if (qos > 1) {
-                /* P2: QoS 2 — emit PUBREC. We don't track per-packet-id
-                 * state; duplicate PUBREL on the same id is accepted. */
+                /* P1 v0.5.3: QoS 2 — record PUBREC phase. Re-emit if
+                 * duplicate PUBLISH. */
                 if ((size_t)(2 + topic_len + 2) > plen) continue;
                 uint16_t packet_id =
                     ((uint16_t)p[2 + topic_len] << 8) | p[2 + topic_len + 1];
+                qos2_record_or_lookup(packet_id, 1);
                 if (send_pubrec(fd, packet_id) < 0) return -1;
             } else if (qos == 1) {
                 if ((size_t)(2 + topic_len + 2) > plen) continue;
@@ -415,10 +461,12 @@ size_t got = (size_t)n;
                 if (send_puback(fd, packet_id) < 0) return -1;
             }
         } else if (type == 0x60 && connected) {
-            /* P2: PUBREL for QoS 2 handshake completion. */
+            /* P1 v0.5.3: PUBREL completes QoS 2 handshake. Mark
+             * PUBCOMP phase; re-emit if duplicate PUBREL. */
             const uint8_t *p = buf + 1 + rl_off;
             if (rem_len < 2) continue;
             uint16_t packet_id = ((uint16_t)p[0] << 8) | p[1];
+            qos2_record_or_lookup(packet_id, 2);
             if (send_pubcomp(fd, packet_id) < 0) return -1;
         } else if (!connected) {
             send_connack(fd, MQTT_CONNACK_PROTO);
