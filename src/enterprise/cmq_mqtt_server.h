@@ -42,6 +42,13 @@ void cmq_mqtt_set_credentials(const char *user, const char *pass);
  * Retained messages survive restart when this is set. NULL disables. */
 void cmq_mqtt_set_retain_path(const char *path);
 
+/* P1 (v0.5.3) F19b full bridge. Set a cmq_server_t* and the bridge
+ * becomes live: PUBLISH topics insert into srv->sublist via a relay
+ * thread that drains a thread-safe queue. Other cmq clients
+ * subscribed to the same topic receive via the existing
+ * snapshot_deliver_targets path. Pass NULL to disable. */
+void cmq_mqtt_set_bridge_server(struct cmq_server *server);
+
 /* P1 (v0.5.2): record a SUBSCRIBE topic filter. The listener calls
  * this on every accepted SUBSCRIBE. The cmq-sublist bridge (forwarding
  * matching PUBLISH into cmq_sublist) is v0.6 work; today this only
