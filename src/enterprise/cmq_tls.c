@@ -329,7 +329,12 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
     SSL_CTX_set_cipher_list(new_ctx, ciphers);
     SSL_CTX_set_options(new_ctx, SSL_OP_NO_COMPRESSION);
     if (cfg->alpn_len > 0) {
-        SSL_CTX_set_alpn_protos(new_ctx, cfg->alpn_data, cfg->alpn_len);
+        if (SSL_CTX_set_alpn_protos(new_ctx, cfg->alpn_data,
+                                     cfg->alpn_len) != 0) {
+            SSL_CTX_free(new_ctx);
+            tls_end_op(cfg);
+            return -1;
+        }
     }
     if (SSL_CTX_use_certificate_chain_file(new_ctx, cfg->cert) != 1) {
         SSL_CTX_free(new_ctx);
@@ -347,7 +352,11 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
         return -1;
     }
     if (cfg->ca[0] != '\0') {
-        SSL_CTX_load_verify_locations(new_ctx, cfg->ca, NULL);
+        if (SSL_CTX_load_verify_locations(new_ctx, cfg->ca, NULL) != 1) {
+            SSL_CTX_free(new_ctx);
+            tls_end_op(cfg);
+            return -1;
+        }
     }
     if (cfg->verify_peer) {
         SSL_CTX_set_verify(new_ctx, SSL_VERIFY_PEER |
