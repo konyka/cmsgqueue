@@ -790,14 +790,15 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
 int cmq_filestore_async_enqueue(cmq_filestore_t *fs, const uint8_t *data,
                                  size_t len, uint64_t seq) {
     if (!fs || !fs->async_active || !data || len == 0) return -1;
+    pthread_mutex_lock(&fs->async_lock);
     /* P1 v0.5.5: OOM guard. Default 1 MiB. */
     if (fs->max_payload_bytes > 0 && len > fs->max_payload_bytes) {
+        pthread_mutex_unlock(&fs->async_lock);
         if (fs->async_blocked)
             cmq_atomic_fetch_add_u64(fs->async_blocked, 1,
                                       CMQ_ATOMIC_RELAXED);
         return -1;
     }
-    pthread_mutex_lock(&fs->async_lock);
     /* P2 (v0.5.3): bounded wait. Without this a slow worker stalls
      * publishers indefinitely. We use a 10s timeout — long enough
      * for normal bursts, short enough that operators can detect
@@ -826,7 +827,10 @@ int cmq_filestore_async_enqueue(cmq_filestore_t *fs, const uint8_t *data,
         pthread_mutex_unlock(&fs->async_lock);
         return -1;
     }
-    uint8_t *copy = malloc(len);
+    /* P1 v0.5.5: allocate BEFORE advancing the head pointer. If
+     * malloc fails, return -1 without consuming a slot — otherwise
+     * a permanent failure would silently leak ring entries. */
+    uint8_t *copy = malloc(len > 0 ? len : 1);
     if (!copy) {
         pthread_mutex_unlock(&fs->async_lock);
         return -1;
