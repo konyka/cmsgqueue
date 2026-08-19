@@ -6554,9 +6554,21 @@ static void replay_one_record(cmq_server_t *srv, uint8_t *data,
         replay_c.account_epoch = default_ep;
         cmq_account_release(srv->accounts, da);
     }
+    /* P2 (v0.5.3): only count replayed messages that actually went
+     * through handle_publish. We approximate "did it run" by
+     * snapshotting stat_publishes_rejected before/after; if it
+     * incremented the publish was rejected and we don't tick
+     * stat_messages_replayed. (handle_publish returns void; this is
+     * the cheapest success indicator.) */
+    uint64_t rej_before = cmq_atomic_load_u64(
+        &srv->stat_publishes_rejected, CMQ_ATOMIC_RELAXED);
     handle_publish(srv, &replay_c, &rf);
-    cmq_atomic_fetch_add_u64(&srv->stat_messages_replayed, 1,
-                              CMQ_ATOMIC_RELAXED);
+    uint64_t rej_after = cmq_atomic_load_u64(
+        &srv->stat_publishes_rejected, CMQ_ATOMIC_RELAXED);
+    if (rej_after == rej_before) {
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_replayed, 1,
+                                  CMQ_ATOMIC_RELAXED);
+    }
 }
 
 typedef struct {
