@@ -49,6 +49,18 @@ void cmq_mqtt_set_retain_path(const char *path);
  * snapshot_deliver_targets path. Pass NULL to disable. */
 void cmq_mqtt_set_bridge_server(struct cmq_server *server);
 
+/* P1 v0.5.4: register the cmq_sublist_insert function + sublist
+ * pointer so the relay thread can call into cmq_sublist_insert
+ * without circular include deps. Called once during cmq_server_create. */
+typedef int (*cmq_sublist_insert_fn)(void *sublist, const char *subject,
+                                     void *data);
+void cmq_mqtt_register_sublist_insert(cmq_sublist_insert_fn fn,
+                                       void *sublist);
+
+/* P2 v0.5.4: clean shutdown of the relay thread. Called by
+ * cmq_server_destroy. */
+void cmq_mqtt_bridge_shutdown(void);
+
 /* P1 (v0.5.2): record a SUBSCRIBE topic filter. The listener calls
  * this on every accepted SUBSCRIBE. The cmq-sublist bridge (forwarding
  * matching PUBLISH into cmq_sublist) is v0.6 work; today this only

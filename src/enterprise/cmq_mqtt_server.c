@@ -38,8 +38,10 @@ static char g_mqtt_retain_path[256] = {0};
 static struct cmq_server *g_mqtt_bridge_srv = NULL;
 static pthread_mutex_t g_mqtt_bridge_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_mqtt_bridge_not_empty = PTHREAD_COND_INITIALIZER;
+/* P1 v0.5.4: pointer to payload (heap-allocated) so we accept
+ * payloads of any size. Bounded by 256 entries. */
 static char g_mqtt_bridge_topics[256][128];
-static uint8_t g_mqtt_bridge_payloads[256][1024];
+static uint8_t *g_mqtt_bridge_payloads[256];
 static size_t g_mqtt_bridge_lens[256];
 static int g_mqtt_bridge_head;
 static int g_mqtt_bridge_tail;
@@ -47,6 +49,26 @@ static int g_mqtt_bridge_count;
 static pthread_t g_mqtt_bridge_thread;
 static int g_mqtt_bridge_thread_started;
 static atomic_int g_mqtt_bridge_dying;
+
+/* Forward decls: we can't include cmq_sublist.h / cmq_server.h
+ * here because of circular deps. The relay thread calls
+ * cmq_sublist_insert via a function pointer resolved at
+ * cmq_mqtt_set_bridge_server time. */
+typedef int (*cmq_sublist_insert_fn)(void *sublist, const char *topic_str,
+                                     void *data);
+
+/* Forward decls of the cmq_sub_ref_t struct (defined in
+ * cmq_server.c). We don't need to know its layout — we just
+ * hold a pointer and let cmq_sublist_match/remove handle it. */
+struct cmq_sub_ref;
+
+static int relay_insert_cb(void *sublist, const char *subject, void *data) {
+    (void)sublist; (void)subject; (void)data;
+    return 0;
+}
+
+static cmq_sublist_insert_fn g_relay_insert_fn = relay_insert_cb;
+static void *g_relay_sublist = NULL;
 
 static void *cmq_mqtt_bridge_relay(void *arg) {
     struct cmq_server *srv = (struct cmq_server *)arg;
@@ -62,22 +84,20 @@ static void *cmq_mqtt_bridge_relay(void *arg) {
             pthread_mutex_unlock(&g_mqtt_bridge_lock);
             break;
         }
-        /* Dequeue one. */
         char *topic = g_mqtt_bridge_topics[g_mqtt_bridge_tail];
         uint8_t *payload = g_mqtt_bridge_payloads[g_mqtt_bridge_tail];
         size_t plen = g_mqtt_bridge_lens[g_mqtt_bridge_tail];
         g_mqtt_bridge_tail = (g_mqtt_bridge_tail + 1) % 256;
         g_mqtt_bridge_count--;
+        pthread_cond_signal(&g_mqtt_bridge_not_empty);
         pthread_mutex_unlock(&g_mqtt_bridge_lock);
 
-        /* The actual sublist insertion is the cmq_server_t's job —
-         * but we don't have access here. Defer to a follow-up
-         * round. For v0.5.3 we just emit a debug log line so the
-         * bridge plumbing is shipped and tests can exercise the
-         * queue/dispatch path. */
-        (void)topic;
-        (void)payload;
-        (void)plen;
+        /* P1 v0.5.4: insert into cmq sublist via the function pointer
+         * registered at cmq_mqtt_set_bridge_server time. */
+        if (g_relay_sublist && g_relay_insert_fn != relay_insert_cb) {
+            (void)g_relay_insert_fn(g_relay_sublist, topic, payload);
+        }
+        free(payload);
     }
     return NULL;
 }
@@ -91,6 +111,27 @@ void cmq_mqtt_set_bridge_server(struct cmq_server *server) {
             g_mqtt_bridge_thread_started = 1;
         }
     }
+}
+
+/* P1 v0.5.4: register the sublist insert function + pointer so
+ * the relay can call into cmq_sublist_insert without circular
+ * includes. Called once during cmq_server_create. */
+void cmq_mqtt_register_sublist_insert(cmq_sublist_insert_fn fn,
+                                       void *sublist) {
+    g_relay_insert_fn = fn ? fn : relay_insert_cb;
+    g_relay_sublist = sublist;
+}
+
+/* P2 v0.5.4: clean shutdown of the relay thread. */
+void cmq_mqtt_bridge_shutdown(void) {
+    if (!g_mqtt_bridge_thread_started) return;
+    atomic_store(&g_mqtt_bridge_dying, 1);
+    pthread_mutex_lock(&g_mqtt_bridge_lock);
+    pthread_cond_broadcast(&g_mqtt_bridge_not_empty);
+    pthread_mutex_unlock(&g_mqtt_bridge_lock);
+    pthread_join(g_mqtt_bridge_thread, NULL);
+    g_mqtt_bridge_thread_started = 0;
+    g_mqtt_bridge_head = g_mqtt_bridge_tail = g_mqtt_bridge_count = 0;
 }
 
 #define MQTT_TYPE_DISCONNECT  0xE0
@@ -569,18 +610,27 @@ size_t got = (size_t)n;
                 char topic[128];
                 memcpy(topic, p + 2, topic_len);
                 topic[topic_len] = '\0';
-                if (payload_len <= 1024) {
+                /* P2 v0.5.4: heap-allocate payload of any size
+                 * (was bounded to 1024). The relay thread frees. */
+                uint8_t *payload_copy = NULL;
+                if (payload_len > 0) {
+                    payload_copy = malloc(payload_len);
+                    if (payload_copy)
+                        memcpy(payload_copy, p + payload_off, payload_len);
+                }
+                if (payload_copy || payload_len == 0) {
                     pthread_mutex_lock(&g_mqtt_bridge_lock);
                     if (g_mqtt_bridge_count < 256) {
                         strcpy(g_mqtt_bridge_topics[g_mqtt_bridge_head],
                                 topic);
-                        if (payload_len > 0)
-                            memcpy(g_mqtt_bridge_payloads[g_mqtt_bridge_head],
-                                    p + payload_off, payload_len);
+                        g_mqtt_bridge_payloads[g_mqtt_bridge_head] =
+                            payload_copy;
                         g_mqtt_bridge_lens[g_mqtt_bridge_head] = payload_len;
                         g_mqtt_bridge_head = (g_mqtt_bridge_head + 1) % 256;
                         g_mqtt_bridge_count++;
                         pthread_cond_signal(&g_mqtt_bridge_not_empty);
+                    } else {
+                        free(payload_copy);
                     }
                     pthread_mutex_unlock(&g_mqtt_bridge_lock);
                 }
