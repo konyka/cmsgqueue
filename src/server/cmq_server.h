@@ -216,6 +216,11 @@ struct cmq_server {
     cmq_atomic_u64 stat_connections;
     cmq_atomic_u64 stat_messages_in;
     cmq_atomic_u64 stat_messages_replayed;  /* P4: messages restored from WAL */
+    /* P4 (v0.5.3): per-gate publish-rejection counters. */
+    cmq_atomic_u64 stat_publishes_rejected_size;
+    cmq_atomic_u64 stat_publishes_rejected_acl;
+    cmq_atomic_u64 stat_publishes_rejected_quota;
+    cmq_atomic_u64 stat_publishes_rejected_ratelimit;
     cmq_atomic_u64 stat_messages_out;
     cmq_atomic_u64 stat_bytes_in;
     cmq_atomic_u64 stat_bytes_out;

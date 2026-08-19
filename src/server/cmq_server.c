@@ -2951,12 +2951,16 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         msg_len > (size_t)srv->config.max_payload_size) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
+                                  CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "payload too large");
         return;
     }
 
     if (!cmq_account_can_export(srv->accounts, c->account_name, subject)) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_acl, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "permission denied");
         return;
@@ -2995,6 +2999,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         cmq_quota_check_publish(srv->quota, c->account_name, msg_len) == 0) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_quota, 1,
+                                  CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "quota exceeded");
         return;
     }
@@ -3002,6 +3008,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     if (srv->subject_rl &&
         cmq_subject_rl_check(srv->subject_rl, subject) == 0) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_ratelimit, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "subject rate limit");
         return;
@@ -3734,12 +3742,16 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         msg_len > (size_t)srv->config.max_payload_size) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
+                                  CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "payload too large");
         return;
     }
 
     if (!cmq_account_can_export(srv->accounts, c->account_name, subject)) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_acl, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "permission denied");
         return;
@@ -3891,6 +3903,8 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     if (srv->config.max_payload_size > 0 &&
         msg_len > (size_t)srv->config.max_payload_size) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "payload too large");
         return;
