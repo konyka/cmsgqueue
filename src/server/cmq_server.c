@@ -6599,18 +6599,17 @@ static void replay_one_record(cmq_server_t *srv, uint8_t *data,
         replay_c.account_epoch = default_ep;
         cmq_account_release(srv->accounts, da);
     }
-    /* P2 (v0.5.3): only count replayed messages that actually went
-     * through handle_publish. We approximate "did it run" by
-     * snapshotting stat_publishes_rejected before/after; if it
-     * incremented the publish was rejected and we don't tick
-     * stat_messages_replayed. (handle_publish returns void; this is
-     * the cheapest success indicator.) */
-    uint64_t rej_before = cmq_atomic_load_u64(
-        &srv->stat_publishes_rejected, CMQ_ATOMIC_RELAXED);
+    /* P3 v0.5.5: same pattern for stat_messages_out as v0.5.3
+     * P2 did for stat_publishes_rejected. If the counter ticked
+     * during replay, the publish hit a live subscriber — still live
+     * traffic, not replay. We only tick stat_messages_replayed
+     * when nothing was delivered. */
+    uint64_t out_before = cmq_atomic_load_u64(
+        &srv->stat_messages_out, CMQ_ATOMIC_RELAXED);
     handle_publish(srv, &replay_c, &rf);
-    uint64_t rej_after = cmq_atomic_load_u64(
-        &srv->stat_publishes_rejected, CMQ_ATOMIC_RELAXED);
-    if (rej_after == rej_before) {
+    uint64_t out_after = cmq_atomic_load_u64(
+        &srv->stat_messages_out, CMQ_ATOMIC_RELAXED);
+    if (out_after == out_before) {
         cmq_atomic_fetch_add_u64(&srv->stat_messages_replayed, 1,
                                   CMQ_ATOMIC_RELAXED);
     }
