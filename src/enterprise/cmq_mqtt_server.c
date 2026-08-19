@@ -190,6 +190,18 @@ int cmq_mqtt_subscriber_count(void) {
     return n;
 }
 
+int cmq_mqtt_get_subscribed_topic(int index, char *out, size_t out_len) {
+    if (!out || out_len == 0 || index < 0) return -1;
+    pthread_mutex_lock(&g_mqtt_sub_lock);
+    int rc = -1;
+    if (index < g_mqtt_sub_count) {
+        snprintf(out, out_len, "%s", g_mqtt_sub_topics[index]);
+        rc = 0;
+    }
+    pthread_mutex_unlock(&g_mqtt_sub_lock);
+    return rc;
+}
+
 /* P4 (v0.5.2): retained-message store. Last retained payload per
  * topic, delivered to new SUBSCRIBE on that topic. */
 #define MQTT_MAX_RETAINED 32

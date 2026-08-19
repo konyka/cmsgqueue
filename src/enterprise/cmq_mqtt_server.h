@@ -44,6 +44,7 @@ void cmq_mqtt_set_credentials(const char *user, const char *pass);
  * maintains an internal record. */
 int cmq_mqtt_record_subscriber(const char *topic_filter);
 int cmq_mqtt_subscriber_count(void);
+int cmq_mqtt_get_subscribed_topic(int index, char *out, size_t out_len);
 
 /* P4 (v0.5.2): retained-message store. Last retained payload per
  * topic; cmq_mqtt_fetch_retained returns it for delivery on a new
@@ -52,6 +53,14 @@ void cmq_mqtt_store_retained(const char *topic, const uint8_t *payload,
                               size_t len);
 int cmq_mqtt_fetch_retained(const char *topic, const uint8_t **out,
                              size_t *out_len);
+
+/* P1 (v0.5.3): bridge surface. v0.5.2 only stored retained messages
+ * and recorded subscriptions; it never actually routed PUBLISH into
+ * cmq_sublist. The full bridge requires server_t* plumbing across
+ * the listener pthread — deferred to v0.6 per the WBS. For now
+ * this API surface returns the most recent retained payload as a
+ * primitive bridge: cmq callers can poll cmq_mqtt_fetch_retained
+ * for topics they care about. */
 
 #ifdef __cplusplus
 }
