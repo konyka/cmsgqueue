@@ -1898,18 +1898,30 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
      * strcmp when hashes match. With K groups this avoids ~K*(K-1)/2
      * strcmps on the hot path. */
     uint64_t *qg_hash = calloc(result->count, sizeof(uint64_t));
+    /* P2 v0.5.4: 2-level hash. subject_hash is FNV-1a of just the
+     * subject string; matches the existing 3-field hash only when
+     * subject+qg+account all match. Used as a fast pre-filter in
+     * the inner loop to skip the strcmps for entries with a
+     * different subject. */
+    uint64_t *subject_hash = calloc(result->count, sizeof(uint64_t));
     if (qg_hash) {
         for (size_t i = 0; i < result->count; i++) {
             cmq_sub_ref_t *r = (cmq_sub_ref_t *)result->entries[i];
             if (!r || !r->client || r->queue_group[0] == '\0') continue;
             uint64_t h = 0xcbf29ce484222325ULL;
+            uint64_t sh = 0xcbf29ce484222325ULL;
             const char *s = r->subject;
-            while (*s) { h ^= (uint8_t)*s++; h *= 0x100000001b3ULL; }
+            while (*s) {
+                uint8_t c = (uint8_t)*s++;
+                h ^= c; h *= 0x100000001b3ULL;
+                sh ^= c; sh *= 0x100000001b3ULL;
+            }
             s = r->queue_group;
             while (*s) { h ^= (uint8_t)*s++; h *= 0x100000001b3ULL; }
             s = r->client->account_name;
             while (*s) { h ^= (uint8_t)*s++; h *= 0x100000001b3ULL; }
             qg_hash[i] = h;
+            if (subject_hash) subject_hash[i] = sh;
         }
     }
 
@@ -1935,11 +1947,18 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
            client_state is atomic ACQUIRE — safe under sublist rdlock. */
         size_t mn = 0;
         uint64_t target_hash = qg_hash ? qg_hash[i] : 0;
+        uint64_t target_subject_hash =
+            subject_hash ? subject_hash[i] : 0;
         for (size_t j = i; j < result->count; j++) {
             if (used[j]) continue;
             cmq_sub_ref_t *rj = (cmq_sub_ref_t *)result->entries[j];
             if (!rj || !rj->client) continue;
             if (rj->queue_group[0] == '\0') continue;
+            /* P2 v0.5.4: subject-only pre-filter — if the subject
+             * hashes differ, no strcmp on subject/qg/account is
+             * needed. */
+            if (subject_hash && subject_hash[j] != target_subject_hash)
+                continue;
             if (qg_hash && qg_hash[j] != target_hash) continue;
             if (strcmp(rj->queue_group, ref->queue_group) != 0) continue;
             if (strcmp(rj->subject, ref->subject) != 0) continue;
@@ -1962,6 +1981,7 @@ static cmq_deliver_tgt_t *snapshot_deliver_targets(cmq_server_t *srv,
     free(used);
     free(memb);
     free(qg_hash);
+    free(subject_hash);
     *out_n = n;
     return tgts;
 }
