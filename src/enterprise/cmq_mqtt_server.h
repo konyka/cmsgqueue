@@ -52,6 +52,11 @@ void cmq_mqtt_set_bridge_server(struct cmq_server *server);
 /* P3 v0.5.4: enable the MQTT listener. Default off — opt-in. */
 void cmq_mqtt_set_listener_enabled(int enabled);
 
+/* P1 v0.5.5: per-source-IP rate limit on MQTT PUBLISH. Token
+ * bucket of `capacity` per second, refilled at `refill_per_sec`
+ * per second. Default off (0) — no limit. */
+void cmq_mqtt_set_rate_limit(uint32_t capacity, uint32_t refill_per_sec);
+
 /* P1 v0.5.4: register the cmq_sublist_insert function + sublist
  * pointer so the relay thread can call into cmq_sublist_insert
  * without circular include deps. Called once during cmq_server_create. */

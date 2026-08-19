@@ -38,6 +38,57 @@ static int mqtt_v5_props_skip = 1;
  * Call cmq_mqtt_set_listener_enabled(1) to bind 127.0.0.1:1883. */
 static int mqtt_listener_enabled = 0;
 
+/* P1 v0.5.5: per-source-IP rate limit on PUBLISH. Token bucket per
+ * 32-bit IPv4 address; capacity 100, refill 100/sec, default off. */
+#define MQTT_RATE_BUCKETS 1024
+struct rate_bucket {
+    uint32_t ip;
+    uint32_t tokens;
+    uint64_t last_refill_ms;
+};
+static struct rate_bucket g_rate_buckets[MQTT_RATE_BUCKETS];
+static pthread_mutex_t g_rate_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t g_rate_capacity = 0;
+static uint32_t g_rate_refill_per_sec = 0;
+
+void cmq_mqtt_set_rate_limit(uint32_t capacity, uint32_t refill_per_sec) {
+    g_rate_capacity = capacity;
+    g_rate_refill_per_sec = refill_per_sec;
+}
+
+static int rate_limit_check(uint32_t ip) {
+    if (g_rate_capacity == 0) return 1;
+    uint32_t slot = ip % MQTT_RATE_BUCKETS;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ULL +
+                      (uint64_t)ts.tv_nsec / 1000000ULL;
+    pthread_mutex_lock(&g_rate_lock);
+    if (g_rate_buckets[slot].ip != ip) {
+        g_rate_buckets[slot].ip = ip;
+        g_rate_buckets[slot].tokens = g_rate_capacity;
+        g_rate_buckets[slot].last_refill_ms = now_ms;
+    } else {
+        uint64_t delta = now_ms - g_rate_buckets[slot].last_refill_ms;
+        uint32_t refill = (uint32_t)(delta * g_rate_refill_per_sec / 1000);
+        if (refill > 0) {
+            uint32_t t = g_rate_buckets[slot].tokens + refill;
+            if (t > g_rate_capacity || t < g_rate_buckets[slot].tokens)
+                t = g_rate_capacity;
+            g_rate_buckets[slot].tokens = t;
+            g_rate_buckets[slot].last_refill_ms = now_ms;
+        }
+    }
+    int admit = 1;
+    if (g_rate_buckets[slot].tokens > 0) {
+        g_rate_buckets[slot].tokens--;
+    } else {
+        admit = 0;
+    }
+    pthread_mutex_unlock(&g_rate_lock);
+    return admit;
+}
+
 /* P3 (v0.5.3): retain file path. Forward-declared because
  * cmq_mqtt_set_retain_path uses it before its full definition. */
 static char g_mqtt_retain_path[256] = {0};
@@ -599,6 +650,19 @@ size_t got = (size_t)n;
                 }
             }
         } else if (type == MQTT_TYPE_PUBLISH && connected) {
+            /* P1 v0.5.5: per-source-IP rate limit. Default off. */
+            struct sockaddr_in peer;
+            socklen_t peer_len = sizeof(peer);
+            uint32_t ip = 0;
+            if (getpeername(fd, (struct sockaddr *)&peer, &peer_len) == 0 &&
+                peer.sin_family == AF_INET) {
+                ip = (uint32_t)peer.sin_addr.s_addr;
+            }
+            if (!rate_limit_check(ip)) {
+                uint8_t rpkt[4] = {0x90, 0x02, 0x03, 0x00};
+                (void)send(fd, rpkt, sizeof(rpkt), 0);
+                return -1;
+            }
             /* P1 v0.5.4: 5.0 PUBLISH variable header has an extra
              * Properties region between topic and packet_id. Read
              * the var-byte Property Length and skip those bytes. We
