@@ -23,6 +23,7 @@ int cmq_tls_load(cmq_tls_config_t *cfg);
 int cmq_tls_set_ca(cmq_tls_config_t *cfg, const char *ca_path);
 int cmq_tls_set_verify(cmq_tls_config_t *cfg, int verify_peer);
 int cmq_tls_set_crl(cmq_tls_config_t *cfg, const char *crl_path);
+int cmq_tls_crl_path(cmq_tls_config_t *cfg, char *out, size_t out_len);
 int cmq_tls_set_server_name(cmq_tls_config_t *cfg, const char *name);
 
 /* F12: ALPN protocol list. Comma-separated (e.g. "h2,http/1.1").

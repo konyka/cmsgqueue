@@ -32,6 +32,7 @@ struct cmq_tls_config {
     char cert[CMQ_TLS_PATH_MAX];
     char key[CMQ_TLS_PATH_MAX];
     char ca[CMQ_TLS_PATH_MAX];
+    char crl[CMQ_TLS_PATH_MAX];
     char server_name[CMQ_TLS_NAME_MAX];
     int verify_peer;
     int has_cert;
@@ -137,6 +138,26 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     if (cfg->ca[0] != '\0') {
         SSL_CTX_load_verify_locations(cfg->ssl_ctx, cfg->ca, NULL);
     }
+    /* P1 (v0.5.3): load the CRL into the SSL_CTX's X509_STORE. OpenSSL
+     * consults the store automatically when SSL_VERIFY_PEER is on.
+     * Failure to load is logged + CRL check is skipped (we don't want
+     * a bad CRL file to refuse all handshakes). */
+    if (cfg->crl[0] != '\0') {
+        BIO *crl_bio = BIO_new_file(cfg->crl, "r");
+        if (crl_bio) {
+            X509_CRL *crl_obj = PEM_read_bio_X509_CRL(crl_bio, NULL, NULL, NULL);
+            BIO_free(crl_bio);
+            if (crl_obj) {
+                X509_STORE *store = SSL_CTX_get_cert_store(cfg->ssl_ctx);
+                if (store) {
+                    X509_STORE_add_crl(store, crl_obj);
+                    /* Lookups consult the CRL when verify_peer is on. */
+                } else {
+                    X509_CRL_free(crl_obj);
+                }
+            }
+        }
+    }
     /* P1: honor cfg->verify_peer. Without this the CA is loaded but
      * never checked (any client cert is accepted). Per the bundle B4,
      * set SSL_VERIFY_PEER + fail-if-no-cert when the caller opted in. */
@@ -238,13 +259,19 @@ int cmq_tls_set_verify(cmq_tls_config_t *cfg, int verify_peer) {
 int cmq_tls_set_crl(cmq_tls_config_t *cfg, const char *crl_path) {
     if (!cfg) return -1;
     if (tls_begin_op(cfg) != 0) return -1;
-    /* Reuse cfg->ca storage for the CRL path; clear ca first so we
-     * store just the CRL. A future pass can keep both. */
     if (crl_path) {
-        snprintf(cfg->ca, sizeof(cfg->ca), "%s", crl_path);
+        snprintf(cfg->crl, sizeof(cfg->crl), "%s", crl_path);
     } else {
-        cfg->ca[0] = '\0';
+        cfg->crl[0] = '\0';
     }
+    tls_end_op(cfg);
+    return 0;
+}
+
+int cmq_tls_crl_path(cmq_tls_config_t *cfg, char *out, size_t out_len) {
+    if (!cfg || !out || out_len == 0) return -1;
+    if (tls_begin_op(cfg) != 0) return -1;
+    snprintf(out, out_len, "%s", cfg->crl);
     tls_end_op(cfg);
     return 0;
 }
