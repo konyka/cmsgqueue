@@ -26,6 +26,10 @@
 #define MQTT_TYPE_SUBACK      0x90
 #define MQTT_TYPE_PINGREQ     0xC0
 #define MQTT_TYPE_PINGRESP    0xD0
+/* P3 (v0.5.3): retain file path. Forward-declared because
+ * cmq_mqtt_set_retain_path uses it before its full definition. */
+static char g_mqtt_retain_path[256] = {0};
+
 #define MQTT_TYPE_DISCONNECT  0xE0
 #define MQTT_TYPE_MASK        0xF0
 
@@ -242,6 +246,17 @@ void cmq_mqtt_store_retained(const char *topic, const uint8_t *payload,
     }
     g_mqtt_retained[idx].payload_len = len;
     pthread_mutex_unlock(&g_mqtt_retained_lock);
+    /* P3: append to the persistent retain file (best-effort). */
+    if (g_mqtt_retain_path[0]) {
+        FILE *f = fopen(g_mqtt_retain_path, "a");
+        if (f) {
+            fprintf(f, "%s %d %zu ", g_mqtt_retained[idx].topic,
+                    (int)g_mqtt_retained[idx].payload_len, len);
+            if (len > 0) fwrite(payload, 1, len, f);
+            fputc('\n', f);
+            fclose(f);
+        }
+    }
 }
 
 int cmq_mqtt_fetch_retained(const char *topic, const uint8_t **out,
@@ -271,6 +286,32 @@ static const char *g_mqtt_pass = "";
 void cmq_mqtt_set_credentials(const char *user, const char *pass) {
     if (user) g_mqtt_user = user;
     if (pass) g_mqtt_pass = pass;
+}
+
+void cmq_mqtt_set_retain_path(const char *path) {
+    if (path) {
+        snprintf(g_mqtt_retain_path, sizeof(g_mqtt_retain_path),
+                  "%s", path);
+        FILE *f = fopen(g_mqtt_retain_path, "r");
+        if (f) {
+            char topic[128];
+            int tlen;
+            size_t plen;
+            while (fscanf(f, "%127s %d %zu ", topic, &tlen, &plen) == 3) {
+                if (tlen <= 0 || tlen >= 128 || plen == 0) continue;
+                uint8_t *buf = malloc(plen);
+                if (buf) {
+                    if (fread(buf, 1, plen, f) == plen) {
+                        cmq_mqtt_store_retained(topic, buf, plen);
+                    }
+                    free(buf);
+                }
+            }
+            fclose(f);
+        }
+    } else {
+        g_mqtt_retain_path[0] = '\0';
+    }
 }
 
 static int parse_connect(const uint8_t *buf, size_t len,

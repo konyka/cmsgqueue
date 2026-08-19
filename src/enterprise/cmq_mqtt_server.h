@@ -38,6 +38,10 @@ void cmq_mqtt_server_start_listener(struct cmq_server *server);
  * any CONNECT). */
 void cmq_mqtt_set_credentials(const char *user, const char *pass);
 
+/* P3 (v0.5.3): install a file path for persistent retain storage.
+ * Retained messages survive restart when this is set. NULL disables. */
+void cmq_mqtt_set_retain_path(const char *path);
+
 /* P1 (v0.5.2): record a SUBSCRIBE topic filter. The listener calls
  * this on every accepted SUBSCRIBE. The cmq-sublist bridge (forwarding
  * matching PUBLISH into cmq_sublist) is v0.6 work; today this only
