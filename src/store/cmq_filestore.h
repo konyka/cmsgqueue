@@ -46,6 +46,10 @@ void cmq_filestore_set_sync_interval(cmq_filestore_t *fs,
  * Returns 0 on success, -1 on failure (worker thread spawn). */
 int cmq_filestore_set_async(cmq_filestore_t *fs, unsigned queue_capacity);
 
+/* P1 v0.5.5: cap the per-record payload size accepted by the async
+ * enqueue. Default 1 MiB. 0 disables the cap (NOT recommended). */
+void cmq_filestore_set_max_payload_size(cmq_filestore_t *fs, size_t bytes);
+
 /* P1: enqueue a record for async write. Returns 0 if queued, -1 if
  * queue full / dying / async not enabled. The worker will fwrite +
  * fflush the record; durability follows the fsync policy. */

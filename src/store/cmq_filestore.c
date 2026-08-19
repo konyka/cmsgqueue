@@ -47,6 +47,8 @@ struct cmq_filestore {
     /* P3: periodic fsync policy. */
     unsigned fsync_interval_ms;
     uint64_t last_sync_ms;
+    /* P1 v0.5.5: max payload size for async enqueue. */
+    size_t max_payload_bytes;
     /* P1: async WAL ring (SPSC + worker thread). The producer enqueues
      * a copy of (data, len); the worker drains and writes. */
     pthread_t async_thread;
@@ -403,6 +405,8 @@ cmq_filestore_t *cmq_filestore_create(const char *dir, const char *prefix) {
         free(fs);
         return NULL;
     }
+    /* P1 v0.5.5: default 1 MiB cap, configurable later. */
+    fs->max_payload_bytes = 1u * 1024u * 1024u;
     int dlen = snprintf(fs->data_path, sizeof(fs->data_path), "%s/%s.data",
                         fs->dir, fs->prefix);
     int ilen = snprintf(fs->idx_path, sizeof(fs->idx_path), "%s/%s.idx",
@@ -786,6 +790,13 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
 int cmq_filestore_async_enqueue(cmq_filestore_t *fs, const uint8_t *data,
                                  size_t len, uint64_t seq) {
     if (!fs || !fs->async_active || !data || len == 0) return -1;
+    /* P1 v0.5.5: OOM guard. Default 1 MiB. */
+    if (fs->max_payload_bytes > 0 && len > fs->max_payload_bytes) {
+        if (fs->async_blocked)
+            cmq_atomic_fetch_add_u64(fs->async_blocked, 1,
+                                      CMQ_ATOMIC_RELAXED);
+        return -1;
+    }
     pthread_mutex_lock(&fs->async_lock);
     /* P2 (v0.5.3): bounded wait. Without this a slow worker stalls
      * publishers indefinitely. We use a 10s timeout — long enough
@@ -842,6 +853,11 @@ void cmq_filestore_set_sync_interval(cmq_filestore_t *fs,
                                        unsigned interval_ms) {
     if (!fs) return;
     fs->fsync_interval_ms = interval_ms;
+}
+
+void cmq_filestore_set_max_payload_size(cmq_filestore_t *fs, size_t bytes) {
+    if (!fs) return;
+    fs->max_payload_bytes = bytes;
 }
 
 static int filestore_maybe_fsync(cmq_filestore_t *fs) {
