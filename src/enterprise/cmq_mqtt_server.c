@@ -596,6 +596,10 @@ size_t got = (size_t)n;
         } else if (type == MQTT_TYPE_PINGREQ && connected) {
             if (send_pingresp(fd) < 0) return -1;
         } else if (type == MQTT_TYPE_DISCONNECT) {
+            /* P2 v0.5.8: clear per-session tables on disconnect so
+             * a new session's tables don't carry stale state. */
+            g_mqtt_sub_count = 0;
+            g_qos2_count = 0;
             return 0;
         } else if (type == MQTT_TYPE_SUBSCRIBE && connected) {
             /* P1 v0.5.6: 5.0 SUBSCRIBE has a Properties Length
