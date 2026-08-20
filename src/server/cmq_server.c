@@ -15,6 +15,7 @@
 #include "cmq_blocklist.h"
 #include "cmq_subject_rl.h"
 #include "cmq_sublist_persist.h"
+#include "cmq_mqtt_server.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -6748,6 +6749,12 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         free(srv);
         return CMQ_ERR_NO_MEMORY;
     }
+    /* P1 v0.5.6: wire the F19b mqtt bridge. The relay thread calls
+     * cmq_sublist_insert via the function pointer registered here.
+     * Without this, the relay is a no-op (relay_insert_cb default)
+     * and mqtt PUBLISH topics never reach cmq subscribers. */
+    cmq_mqtt_register_sublist_insert((cmq_sublist_insert_fn)cmq_sublist_insert,
+                                       srv->sublist);
 
     /* 0=TRACE is valid (cmq.h). Only out-of-range falls back to INFO. */
     int log_level = srv->config.log_level;
