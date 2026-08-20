@@ -36,6 +36,7 @@ struct cmq_tls_config {
     char crl[CMQ_TLS_PATH_MAX];
     char server_name[CMQ_TLS_NAME_MAX];
     int verify_peer;
+    uint64_t last_crl_log_ms;  /* P3 v0.5.6: log throttle */
     int has_cert;
     int has_key;
     /* F12: ALPN protocol list. CSV-encoded (e.g. "h2,http/1.1"). */
@@ -262,9 +263,18 @@ int cmq_tls_set_crl(cmq_tls_config_t *cfg, const char *crl_path) {
     if (tls_begin_op(cfg) != 0) return -1;
     if (crl_path) {
         snprintf(cfg->crl, sizeof(cfg->crl), "%s", crl_path);
+        cfg->last_crl_log_ms = 0;  /* P3 v0.5.6: reset log throttle */
     } else {
-        /* P3 v0.5.4: log on NULL so misconfig is visible. */
-        cmq_log_info(NULL, "cmq_tls_set_crl: disabling CRL check (NULL path)");
+        /* P3 v0.5.6: rate-limit log to 1/sec. */
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ULL +
+                          (uint64_t)ts.tv_nsec / 1000000ULL;
+        if (now_ms - cfg->last_crl_log_ms > 1000) {
+            cmq_log_info(NULL,
+                "cmq_tls_set_crl: disabling CRL check (NULL path)");
+            cfg->last_crl_log_ms = now_ms;
+        }
         cfg->crl[0] = '\0';
     }
     tls_end_op(cfg);

@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.5.6] - 2026-08-18
+
+### Fixed
+- **P1 F19b real bridge wire-up** — `cmq_server_create` now calls
+  `cmq_mqtt_register_sublist_insert(&cmq_sublist_insert, srv->sublist)`.
+  Without this the relay was a no-op. v0.5.6 ships the wire-up so the
+  F19b bridge actually inserts mqtt PUBLISH topics into the cmq
+  sublist.
+- **P1 MQTT 5.0 SUBSCRIBE properties skip** — `mqtt_v5_props_skip` is
+  honored in SUBSCRIBE too. v0.5.4 only did PUBLISH.
+
+### Added
+- **P1 rwlock fairness** — `cmq_rwlock_init` passes
+  `PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP` on Linux/glibc.
+  Writers no longer starve readers.
+- **P2 handle_publish freelist** — per-worker `cmq_worker_msg_t`
+  freelist. Zero per-message malloc/free in steady state.
+- **P2 rate-limit mutex sharded 16-way** — 16 shards replace 1 global
+  mutex in `rate_limit_check`. 16x throughput under high concurrent
+  client count.
+- **P3 log spam clamp** — `cmq_tls_set_crl(NULL)` logs at most 1/sec.
+
+### Documentation
+- `docs/reviews/v0.5.6.enumeration.md` — 14-item gap catalog.
+- `docs/reviews/v0.5.6.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v056final_{1..5}.txt` — 5-run baseline (mean 32 600 msg/s, p99 99 µs).
+
+### Test count
+- 71 tests (no test count change vs v0.5.5; v0.5.6 is mostly refactor).
+- All 71 green; bench gate passes.
+
+### Deferred to v0.6
+- Multi-threaded accept loop
+- WS permessage-deflate
+- Multi-listener runtime (slots[1..3])
+- TLS session_init cache
+- 32-bit cmq_atomic_u64 portability
+- cmq_atomic_u64 close-by-fd verification test
+- 5.0 wildcard PUBACK match
+
 ## [0.5.5] - 2026-08-18
 
 ### Fixed
