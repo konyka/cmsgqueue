@@ -4,6 +4,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_mqtt_server.h"
+#include "cmq_log.h"
 #include <stdatomic.h>
 
 #include <stdio.h>
@@ -778,6 +779,9 @@ static void *mqtt_thread(void *arg) {
     int fd = (int)(intptr_t)arg;
     mqtt_handle_client(fd);
     close(fd);
+    /* P3 v0.5.7: log graceful exit. Helps ops correlate mqtt_thread
+     * lifetime with client disconnects. */
+    cmq_log_info(NULL, "mqtt_thread exit fd=%d", fd);
     return NULL;
 }
 
