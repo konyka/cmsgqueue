@@ -336,7 +336,11 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
         "ECDHE-RSA-AES128-GCM-SHA256:"
         "ECDHE-ECDSA-CHACHA20-POLY1305:"
         "ECDHE-RSA-CHACHA20-POLY1305";
-    SSL_CTX_set_cipher_list(new_ctx, ciphers);
+    if (SSL_CTX_set_cipher_list(new_ctx, ciphers) != 1) {
+        SSL_CTX_free(new_ctx);
+        tls_end_op(cfg);
+        return -1;
+    }
     SSL_CTX_set_options(new_ctx, SSL_OP_NO_COMPRESSION);
     if (cfg->alpn_len > 0) {
         if (SSL_CTX_set_alpn_protos(new_ctx, cfg->alpn_data,
