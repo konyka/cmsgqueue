@@ -63,7 +63,15 @@ static cmq_inline int cmq_cond_broadcast(cmq_cond_t *c) {
 }
 
 static cmq_inline int cmq_rwlock_init(cmq_rwlock_t *rw) {
+    /* P1 v0.5.6: prefer writer fairness on Linux. PLATFORM maps
+     * to PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP when
+     * available; default NULL on other platforms. */
+#ifdef PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP
+    return pthread_rwlock_init(rw,
+        (void *)(uintptr_t)PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+#else
     return pthread_rwlock_init(rw, NULL);
+#endif
 }
 
 static cmq_inline int cmq_rwlock_destroy(cmq_rwlock_t *rw) {
