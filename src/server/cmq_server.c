@@ -760,12 +760,17 @@ static void worker_drain_teardowns(cmq_worker_t *w, int max_n,
         cmq_mutex_unlock(&w->clients_lock);
         if (target && target->conn_gen == msg->target_gen) {
             if (client_state(target) != CMQ_CLIENT_CLOSED &&
-                client_state(target) != CMQ_CLIENT_CLOSING)
+                 client_state(target) != CMQ_CLIENT_CLOSING)
                 client_set_state(target, CMQ_CLIENT_CLOSING);
             client_finish_closing(target);
         }
-        msg->next = w->msg_freelist;
-        w->msg_freelist = msg;
+        if (w->msg_freelist_count < CMQ_WORKER_MSG_FREELIST_MAX) {
+            msg->next = w->msg_freelist;
+            w->msg_freelist = msg;
+            w->msg_freelist_count++;
+        } else {
+            free(msg);
+        }
     }
 }
 
@@ -856,11 +861,16 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                         client_set_state(target, CMQ_CLIENT_CLOSING);
                     client_finish_closing(target);
                 }
-                msg->next = w->msg_freelist;
-                w->msg_freelist = msg;
-                msg = next;
-                continue;
-            }
+                 if (w->msg_freelist_count < CMQ_WORKER_MSG_FREELIST_MAX) {
+                     msg->next = w->msg_freelist;
+                     w->msg_freelist = msg;
+                     w->msg_freelist_count++;
+                 } else {
+                     free(msg);
+                 }
+                 msg = next;
+                 continue;
+             }
             worker_deliver_send_msg(w, msg);
             msg = next;
         }
@@ -924,6 +934,7 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
     cmq_worker_msg_t *msg = w->msg_freelist;
     if (msg) {
         w->msg_freelist = msg->next;
+        if (w->msg_freelist_count > 0) w->msg_freelist_count--;
         memset(msg, 0, sizeof(*msg));
     } else {
         msg = malloc(sizeof(cmq_worker_msg_t));
@@ -966,8 +977,13 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
         msg->buf = malloc(len);
     }
     if (!msg->buf) {
-        msg->next = w->msg_freelist;
-        w->msg_freelist = msg;
+        if (w->msg_freelist_count < CMQ_WORKER_MSG_FREELIST_MAX) {
+            msg->next = w->msg_freelist;
+            w->msg_freelist = msg;
+            w->msg_freelist_count++;
+        } else {
+            free(msg);
+        }
         return -1;
     }
     memcpy(msg->buf, buf, len);

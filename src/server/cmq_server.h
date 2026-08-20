@@ -40,6 +40,7 @@
 #define CMQ_CORO_MAX_PER_WORKER 256
 #define CMQ_WRITE_BUF_LIMIT   (4 * 1024 * 1024)
 #define CMQ_WORKER_MSG_QUEUE_MAX 8192
+#define CMQ_WORKER_MSG_FREELIST_MAX 64   /* P3 v0.5.7: cap freelist growth */
 /* TEARDOWN may exceed SEND cap so closes are not starved; hard ceiling still. */
 #define CMQ_WORKER_TEARDOWN_SLACK 4096
 
@@ -155,6 +156,7 @@ typedef struct cmq_worker {
     /* P2 v0.5.6: per-worker msg freelist (LIFO). Reuses freed
      * cmq_worker_msg_t structs across deliveries. */
     cmq_worker_msg_t *msg_freelist;
+    size_t msg_freelist_count;
 
     cmq_coro_t **coro_pool;
     int coro_count;
