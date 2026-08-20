@@ -7601,6 +7601,10 @@ void cmq_server_stop(cmq_server_t *srv) {
 void cmq_server_destroy(cmq_server_t *srv) {
     if (!srv) return;
 
+    /* P1 v0.5.7: shut down the mqtt bridge relay so its pending
+     * queue is drained before we tear down srv->sublist. */
+    cmq_mqtt_bridge_shutdown();
+
     /* Align stop/drain: dial_gate is acceptor_drain — raise before join so
        in-flight route_connect cannot install egress after handshake. */
     cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
