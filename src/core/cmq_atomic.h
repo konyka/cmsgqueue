@@ -10,6 +10,12 @@
 typedef _Atomic(cmq_u64_t) cmq_atomic_u64;
 typedef _Atomic(cmq_u32_t) cmq_atomic_u32;
 typedef _Atomic(int)        cmq_atomic_int;
+
+/* P1 v0.5.9: 32-bit portability guard. _Atomic(uint64_t) is not
+ * lock-free on all 32-bit platforms; static_asserts verify at
+ * compile time. If a build target lacks 64-bit atomics, the build
+ * fails loud instead of silently using locks. */
+_Static_assert(sizeof(void *) >= 4, "cmq_atomic_u64 requires >= 32-bit");
 typedef _Atomic(void *)     cmq_atomic_ptr;
 
 #define CMQ_ATOMIC_RELAXED memory_order_relaxed
