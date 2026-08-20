@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.5.8] - 2026-08-18
+
+### Fixed
+- **P2 mqtt sub/qos2 disconnect clear** — g_mqtt_sub_topics + g_qos2
+  now cleared on DISCONNECT (previously only on CONNECT). Each session
+  starts fresh.
+
+### Added
+- **P1 mqtt bridge payload freelist** — `g_mqtt_bridge_freelist[64]`
+  reuses freed buffers. Capped at 64 entries; excess freed to heap.
+  Steady state: 0 malloc + 0 free per message.
+- **P1 TLS reload UAF regression test (real)** —
+  `tests/test_tls_reload_safe.c` smoke-tests `cmq_tls_set_ca` +
+  destroy under ASAN. Catches UAF regressions.
+
+### Performance
+- Bench mean 33 169 msg/s (similar to v0.5.7's 33 723, small
+  variance). The freelist reuses buffers in steady state.
+
+### Documentation
+- `docs/reviews/v0.5.8.enumeration.md` — 17-item catalog.
+- `docs/reviews/v0.5.8.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v058final_{1..5}.txt` — 5-run baseline (mean 33 169 msg/s, p99 99 µs).
+
+### Test count
+- 73 tests (was 72 in v0.5.7; +1 for `test_tls_reload_safe`).
+- All 73 green; bench gate passes.
+
+### Deferred to v0.6
+- Multi-threaded accept loop (L)
+- Multi-listener runtime (M)
+- WS permessage-deflate (L)
+- 5.0 wildcard PUBACK (M)
+- cmq_atomic_u64 32-bit portability
+- TLS session cache (real)
+
 ## [0.5.7] - 2026-08-18
 
 ### Fixed
