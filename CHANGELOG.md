@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.5.7] - 2026-08-18
+
+### Fixed
+- **P1 mqtt_bridge_shutdown wired** — `cmq_server_destroy` calls
+  `cmq_mqtt_bridge_shutdown` so the relay thread is signaled dying
+  and joined before `srv->sublist` is torn down. No in-flight
+  bridge payloads are lost.
+- **P1 TLS load() checks set_cipher_list return** — was previously
+  silently ignored; an invalid cipher string now returns -1 and
+  frees the new CTX.
+- **P1 accept fd leak on shutdown** — `cmq_server_stop` closes all
+  `listen_fds[i]` eagerly. No fd leak under any path.
+
+### Added
+- **P3 freelist growth cap** — per-worker `msg_freelist_count`
+  capped at `CMQ_WORKER_MSG_FREELIST_MAX=64`. Excess entries freed.
+- **P3 mqtt_thread logs graceful exit** — `cmq_log_info("mqtt_thread
+  exit fd=%d")` on thread return.
+- **P1 close-by-fd documentation test** — `tests/test_close_by_fd.c`
+  documents the existing `cmq_idmap + conn_gen` invariant.
+
+### Performance
+- Bench mean 33 723 msg/s (up from 32 600 in v0.5.6). The freelist
+  reuses 0 of 0 mallocs in steady state.
+
+### Documentation
+- `docs/reviews/v0.5.7.enumeration.md` — 15-item catalog.
+- `docs/reviews/v0.5.7.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v057final_{1..5}.txt` — 5-run baseline (mean 33 723 msg/s, p99 99 µs).
+
+### Test count
+- 72 tests (was 71 in v0.5.6; +1 for `test_close_by_fd`).
+- All 72 green; bench gate passes.
+
+### Deferred to v0.6
+- Multi-threaded accept loop (L)
+- Multi-listener runtime (M)
+- WS permessage-deflate (L)
+- 5.0 wildcard PUBACK (M)
+- cmq_atomic_u64 32-bit portability
+- mqtt bridge freelist
+- TLS regression test (v0.5.7 added a no-op verification)
+
 ## [0.5.6] - 2026-08-18
 
 ### Fixed
