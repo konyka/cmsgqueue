@@ -593,14 +593,23 @@ size_t got = (size_t)n;
         } else if (type == MQTT_TYPE_DISCONNECT) {
             return 0;
         } else if (type == MQTT_TYPE_SUBSCRIBE && connected) {
-            /* P1: SUBSCRIBE variable header = packet_id (2B).
-             * Payload = list of (topic_filter_len:2B + topic + qos:1B).
-             * We accept, record the topic filter, and grant QoS 0. */
+            /* P1 v0.5.6: 5.0 SUBSCRIBE has a Properties Length
+             * var-byte before the filter list. Skip it. */
             const uint8_t *p = buf + 1 + rl_off;
             size_t plen = rem_len;
             if (plen < 5) continue;
             uint16_t packet_id = ((uint16_t)p[0] << 8) | p[1];
             size_t off = 2;
+            if (mqtt_v5_props_skip) {
+                if (off < plen) {
+                    uint32_t props_len = 0;
+                    int rl = decode_remaining_length(p + off,
+                                                     plen - off,
+                                                     &props_len);
+                    if (rl < 0) continue;
+                    off += (size_t)rl + props_len;
+                }
+            }
             uint8_t granted[8];
             int granted_n = 0;
             char last_topic[128] = {0};
