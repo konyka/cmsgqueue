@@ -7584,6 +7584,13 @@ void cmq_server_stop(cmq_server_t *srv) {
     /* Align drain: reject late accepts still in TLS/handshake before register. */
     cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
+    /* P1 v0.5.7: close all listen_fds to avoid fd leak on shutdown. */
+    for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
+        if (srv->listen_fds[i] >= 0) {
+            close(srv->listen_fds[i]);
+            srv->listen_fds[i] = -1;
+        }
+    }
     if (srv->ev_loop) {
         cmq_ev_stop(srv->ev_loop);
         cmq_ev_wakeup(srv->ev_loop);
