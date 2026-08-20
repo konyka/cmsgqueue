@@ -764,7 +764,8 @@ static void worker_drain_teardowns(cmq_worker_t *w, int max_n,
                 client_set_state(target, CMQ_CLIENT_CLOSING);
             client_finish_closing(target);
         }
-        free(msg);
+        msg->next = w->msg_freelist;
+        w->msg_freelist = msg;
     }
 }
 
@@ -855,7 +856,8 @@ static void worker_wakeup_cb(int fd, int events, void *data) {
                         client_set_state(target, CMQ_CLIENT_CLOSING);
                     client_finish_closing(target);
                 }
-                free(msg);
+                msg->next = w->msg_freelist;
+                w->msg_freelist = msg;
                 msg = next;
                 continue;
             }
@@ -919,9 +921,15 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
     }
     cmq_mutex_unlock(&w->msg_lock);
 
-    cmq_worker_msg_t *msg = malloc(sizeof(cmq_worker_msg_t));
-    if (!msg)
-        return -1;
+    cmq_worker_msg_t *msg = w->msg_freelist;
+    if (msg) {
+        w->msg_freelist = msg->next;
+        memset(msg, 0, sizeof(*msg));
+    } else {
+        msg = malloc(sizeof(cmq_worker_msg_t));
+        if (!msg)
+            return -1;
+    }
     msg->target_id = target_id;
     msg->target_gen = target_gen;
     msg->kind = CMQ_WORKER_MSG_SEND;
@@ -958,7 +966,8 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
         msg->buf = malloc(len);
     }
     if (!msg->buf) {
-        free(msg);
+        msg->next = w->msg_freelist;
+        w->msg_freelist = msg;
         return -1;
     }
     memcpy(msg->buf, buf, len);
@@ -969,7 +978,8 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
     if (w->msg_pending >= CMQ_WORKER_MSG_QUEUE_MAX) {
         cmq_mutex_unlock(&w->msg_lock);
         if (!msg->from_pool) free(msg->buf);
-        free(msg);
+        msg->next = w->msg_freelist;
+        w->msg_freelist = msg;
         return -1;
     }
     if (w->msg_tail) {
@@ -1007,7 +1017,8 @@ static int worker_push_msg(cmq_worker_t *w, uint32_t target_id,
         return 0;
     worker_complete_sync(msg, -1);
     if (!msg->from_pool) free(msg->buf);
-    free(msg);
+    msg->next = w->msg_freelist;
+    w->msg_freelist = msg;
     return -1;
 }
 

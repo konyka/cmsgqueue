@@ -152,6 +152,9 @@ typedef struct cmq_worker {
     cmq_worker_msg_t *msg_tail;
     cmq_mutex_t msg_lock;
     size_t msg_pending;             /* queued SEND+TEARDOWN under msg_lock */
+    /* P2 v0.5.6: per-worker msg freelist (LIFO). Reuses freed
+     * cmq_worker_msg_t structs across deliveries. */
+    cmq_worker_msg_t *msg_freelist;
 
     cmq_coro_t **coro_pool;
     int coro_count;
