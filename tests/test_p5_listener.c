@@ -44,6 +44,23 @@ TEST(p5, server_holds_distinct_tls_slots) {
     cmq_server_destroy(srv);
 }
 
+TEST(p5, multi_listener_data_structure) {
+    /* P2 v0.5.9: cmq_config_t.listeners[4] + listener_count.
+     * The runtime accept loop iterates only slot[0] (multi-listener
+     * runtime is v0.6). v0.5.9 verifies the data structure. */
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 19987;
+    cfg.log_to_stdout = 0;
+    cfg.listener_count = 0;
+    cfg.listeners[0].tls_cert = NULL;
+    cfg.listeners[0].tls_key = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    cmq_server_destroy(srv);
+}
+
 TEST(p5, tls_enabled_populates_slot0) {
     ensure_dir();
     gen_cert(P5_TEST_DIR "/cert.pem", P5_TEST_DIR "/key.pem", "p5server");
