@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.5.9] - 2026-08-18
+
+### Added
+- **P2 multi-listener data-structure test** —
+  `tests/test_p5_listener.c::multi_listener_data_structure`
+  documents the existing `cmq_config_t.listeners[4]` + listener_count
+  fields. Runtime multi-bind is v0.6.
+- **P1 cmq_atomic_u64 32-bit portability guard** —
+  `_Static_assert(sizeof(void *) >= 4)` in cmq_atomic.h. 32-bit
+  builds fail loud instead of silently using locks.
+- **P3 rate-limit log on hit (per-IP per-minute)** — the first hit
+  per IP per minute is logged. Ops can see which IPs are throttled.
+
+### Documentation
+- `docs/reviews/v0.5.9.enumeration.md` — 14-item catalog.
+- `docs/reviews/v0.5.9.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v059final_{1..5}.txt` — 5-run baseline (mean 33 093 msg/s, p99 99 µs).
+
+### Test count
+- 73 tests (no test count change vs v0.5.8; v0.5.9 is mostly docs +
+  safety).
+- All 73 green; bench gate passes.
+
+### Deferred to v0.6
+- Multi-threaded accept loop (L) — second accept thread
+- Multi-listener runtime accept loop (M)
+- WS permessage-deflate (L)
+- 5.0 wildcard PUBACK match (M)
+- TLS session cache (real) (S)
+- TLS regression test (real) (S)
+- mqtt bridge allocation unification (S)
+
 ## [0.5.8] - 2026-08-18
 
 ### Fixed
