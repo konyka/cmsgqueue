@@ -41,13 +41,16 @@ static int mqtt_listener_enabled = 0;
 /* P1 v0.5.5: per-source-IP rate limit on PUBLISH. Token bucket per
  * 32-bit IPv4 address; capacity 100, refill 100/sec, default off. */
 #define MQTT_RATE_BUCKETS 1024
+/* P2 v0.5.6: sharded mutex — 16 shards instead of 1 to reduce
+ * contention under high concurrent client count. */
+#define MQTT_RATE_SHARDS 16
 struct rate_bucket {
     uint32_t ip;
     uint32_t tokens;
     uint64_t last_refill_ms;
 };
 static struct rate_bucket g_rate_buckets[MQTT_RATE_BUCKETS];
-static pthread_mutex_t g_rate_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_rate_locks[MQTT_RATE_SHARDS];
 static uint32_t g_rate_capacity = 0;
 static uint32_t g_rate_refill_per_sec = 0;
 
@@ -59,11 +62,12 @@ void cmq_mqtt_set_rate_limit(uint32_t capacity, uint32_t refill_per_sec) {
 static int rate_limit_check(uint32_t ip) {
     if (g_rate_capacity == 0) return 1;
     uint32_t slot = ip % MQTT_RATE_BUCKETS;
+    uint32_t shard = slot % MQTT_RATE_SHARDS;
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t now_ms = (uint64_t)ts.tv_sec * 1000ULL +
                       (uint64_t)ts.tv_nsec / 1000000ULL;
-    pthread_mutex_lock(&g_rate_lock);
+    pthread_mutex_lock(&g_rate_locks[shard]);
     if (g_rate_buckets[slot].ip != ip) {
         g_rate_buckets[slot].ip = ip;
         g_rate_buckets[slot].tokens = g_rate_capacity;
@@ -85,7 +89,7 @@ static int rate_limit_check(uint32_t ip) {
     } else {
         admit = 0;
     }
-    pthread_mutex_unlock(&g_rate_lock);
+    pthread_mutex_unlock(&g_rate_locks[shard]);
     return admit;
 }
 
