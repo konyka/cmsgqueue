@@ -88,6 +88,19 @@ static int rate_limit_check(uint32_t ip) {
     if (g_rate_buckets[slot].tokens > 0) {
         g_rate_buckets[slot].tokens--;
     } else {
+        /* P3 v0.5.9: log on first rate-limit hit per source IP per
+         * minute. Rate-limited to avoid log spam under hostile load. */
+        static uint32_t last_logged_ip;
+        static uint64_t last_logged_min;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t now_min = (uint64_t)ts.tv_sec / 60;
+        if (ip != last_logged_ip || now_min != last_logged_min) {
+            cmq_log_info(NULL,
+                "mqtt rate-limit hit ip=0x%08x", ip);
+            last_logged_ip = ip;
+            last_logged_min = now_min;
+        }
         admit = 0;
     }
     pthread_mutex_unlock(&g_rate_locks[shard]);
