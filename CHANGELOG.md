@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.5.11] - 2026-08-18
+
+### Added
+- **P2 5.0 wildcard verification test** —
+  `tests/test_mqtt_v5_wildcard.c` documents the gap; the F19b
+  bridge in v0.6 will add `+` single-level wildcard support.
+- **P2 accept throughput verification test** —
+  `tests/test_accept_throughput.c` documents the single-thread
+  accept loop gap.
+
+### Documentation
+- `docs/reviews/v0.5.11.enumeration.md` — 14-item catalog.
+- `docs/reviews/v0.5.11.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v0511final_{1..5}.txt` — 5-run baseline (mean 33 027 msg/s, p99 99 µs).
+
+### Test count
+- 75 tests (was 73 in v0.5.10; +2 for the two verification tests).
+- All 75 green; bench gate passes.
+
+### Deferred to v0.6
+- Multi-threaded accept loop (L)
+- Multi-listener runtime accept loop (M) — v0.5.10 rolled back
+- WS permessage-deflate (L)
+- 5.0 wildcard PUBACK match (M) — verification test only
+- TLS session cache (real) (S)
+- TLS regression test (real) (S)
+- mqtt bridge allocation unification (S)
+
 ## [0.5.10] - 2026-08-18
 
 ### Documentation
