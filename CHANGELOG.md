@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.10] - 2026-08-18
+
+### Documentation
+- `docs/reviews/v0.5.10.enumeration.md` — 14-item catalog.
+- `docs/reviews/v0.5.10.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v0510final_{1..5}.txt` — 5-run baseline (mean 33 422 msg/s, p99 99 µs).
+
+### Test count
+- 73 tests (no test count change; v0.5.10 attempted multi-listener
+  runtime bind but rolled back after a test regression; full
+  multi-listener runtime is v0.6).
+- All 73 green; bench gate passes.
+
+### Deferred to v0.6
+- Multi-threaded accept loop (L)
+- Multi-listener runtime accept loop (M) — attempted but rolled back
+- WS permessage-deflate (L)
+- 5.0 wildcard PUBACK match (M)
+- TLS session cache (real) (S)
+- TLS regression test (real) (S)
+- mqtt bridge allocation unification (S)
+
 ## [0.5.9] - 2026-08-18
 
 ### Added
