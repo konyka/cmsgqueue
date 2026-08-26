@@ -12,6 +12,7 @@
 #include "cmq_test.h"
 #include "cmq_tls.h"
 
+#include <openssl/ssl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,19 @@ TEST(tls, reload_during_session_no_uaf) {
     cmq_tls_set_ca(cfg, "/tmp/nonexistent_ca.pem");
     cmq_tls_config_destroy(cfg);
     ASSERT(1);
+}
+
+TEST(tls, up_ref_and_free_roundtrip) {
+    /* P3 v0.5.12: validate SSL_CTX_up_ref + SSL_CTX_free roundtrip
+     * matches what v0.5.4 uses for the UAF fix. */
+    SSL_CTX *ctx = SSL_CTX_new(TLS_method());
+    ASSERT_NOT_NULL(ctx);
+    /* Bump refcount then free — should not crash. */
+    ASSERT_EQ(SSL_CTX_up_ref(ctx), 1);
+    SSL_CTX_free(ctx);
+    /* First free left refcount=1; second free brings it to 0 and
+     * actually frees the CTX. */
+    SSL_CTX_free(ctx);
 }
 
 TEST_MAIN()
