@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.5.12] - 2026-08-18
+
+### Added
+- **P2 atomic 32-bit portability test** —
+  `tests/test_atomic_32.c` verifies the v0.5.9 _Static_assert
+  on `sizeof(void *) >= 4` stays in place. On real 64-bit Linux
+  it's trivially true; on 32-bit `-m32` targets the compile-time
+  assert fails loud.
+- **P3 TLS up_ref+free roundtrip test** —
+  `tls.up_ref_and_free_roundtrip` validates that `SSL_CTX_up_ref`
+  + `SSL_CTX_free` (the pattern v0.5.4 uses for the TLS reload UAF
+  fix) doesn't double-free.
+
+### Documentation
+- `docs/reviews/v0.5.12.enumeration.md` — 14-item catalog.
+- `docs/reviews/v0.5.12.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v0512final_{1..5}.txt` — 5-run baseline (mean 33 603 msg/s, p99 99 µs).
+
+### Test count
+- 77 tests (was 75 in v0.5.11; +2 for atomic_32 + tls.up_ref).
+- All 77 green; bench gate passes.
+
+### Deferred to v0.6
+- Multi-threaded accept loop (L)
+- Multi-listener runtime accept loop (M) — v0.5.10 + v0.5.12 attempts both rolled back
+- WS permessage-deflate (L)
+- 5.0 wildcard PUBACK match (M)
+- TLS session cache (real) (S)
+- TLS regression test (real) (S)
+- mqtt bridge allocation unification (S)
+- WS deflate test (P2)
+
 ## [0.5.11] - 2026-08-18
 
 ### Added
