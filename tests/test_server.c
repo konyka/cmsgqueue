@@ -105,7 +105,7 @@ TEST(server, bind_accept_info) {
     cmq_config_t config = {0};
     config.num_threads = 1;
     config.host = "127.0.0.1";
-    config.port = 18801;
+    config.port = 28801;
     config.log_to_stdout = 0;
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
@@ -115,7 +115,7 @@ TEST(server, bind_accept_info) {
     struct timespec ts = {0, 100000000};
     nanosleep(&ts, NULL);
 
-    int fd = connect_to(18801);
+    int fd = connect_to(28801);
     ASSERT(fd >= 0);
 
     nanosleep(&ts, NULL);
@@ -139,7 +139,7 @@ TEST(server, connect_pong) {
     cmq_config_t config = {0};
     config.num_threads = 1;
     config.host = "127.0.0.1";
-    config.port = 18802;
+    config.port = 28802;
     config.log_to_stdout = 0;
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
@@ -149,7 +149,7 @@ TEST(server, connect_pong) {
     struct timespec ts = {0, 100000000};
     nanosleep(&ts, NULL);
 
-    int fd = connect_to(18802);
+    int fd = connect_to(28802);
     ASSERT(fd >= 0);
     struct timespec ts2 = {0, 100000000};
     nanosleep(&ts2, NULL);
@@ -177,7 +177,7 @@ TEST(server, pubsub_basic) {
     cmq_config_t config = {0};
     config.num_threads = 1;
     config.host = "127.0.0.1";
-    config.port = 18803;
+    config.port = 28803;
     config.log_to_stdout = 0;
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
@@ -187,7 +187,7 @@ TEST(server, pubsub_basic) {
     struct timespec ts = {0, 100000000};
     nanosleep(&ts, NULL);
 
-    int sub_fd = connect_to(18803);
+    int sub_fd = connect_to(28803);
     ASSERT(sub_fd >= 0);
     struct timespec ts2 = {0, 100000000};
     nanosleep(&ts2, NULL);
@@ -218,7 +218,7 @@ TEST(server, pubsub_basic) {
     ASSERT_EQ(frame.payload[0], 0);
     free_frame_payload(&frame);
 
-    int pub_fd = connect_to(18803);
+    int pub_fd = connect_to(28803);
     ASSERT(pub_fd >= 0);
     cmq_parser_t *pub_parser = cmq_parser_create();
 
