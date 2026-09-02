@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.5.15] - 2026-08-18
+
+### Added
+- **P1 5.0 wildcard PUBACK match** — When SUBSCRIBE topic contains
+  `+` single-level wildcard, scan g_mqtt_retained[] and emit
+  PUBLISH for matching entries. Token-by-token match where `+`
+  matches any single segment.
+- **P1 TLS session cache verification test** —
+  `tests/test_tls_session_cache.c` smoke test verifies the CTX
+  is cached across sessions (1000 iter bound under 1s).
+- **P2 WS deflate test** — `tests/test_ws_deflate.c` smoke test for
+  the WS layer's no-extension default.
+- **P3 freelist cap verify** — `tests/test_freelist_cap.c`
+  verifies `CMQ_WORKER_MSG_FREELIST_MAX=64`.
+
+### Documentation
+- `docs/reviews/v0.5.15.enumeration.md` — 14-item catalog.
+- `docs/reviews/v0.5.15.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v0515final_{1..5}.txt` — 5-run baseline (mean 33 309 msg/s, p99 99 µs).
+
+### Test count
+- 80 tests (was 77 in v0.5.14; +3 for mqtt_5_wildcard +
+  tls_session_cache + ws_deflate).
+- All 80 green; bench gate passes.
+
+### Deferred to v0.5.16+
+- Multi-threaded accept loop (L) — risky for test_server
+- WS permessage-deflate (L) — XL scope
+- Multi-listener runtime accept loop (M) — port guard ready
+- TLS regression test real (S)
+- mqtt bridge allocation unification (S)
+
 ## [0.5.14] - 2026-08-18
 
 ### Fixed
