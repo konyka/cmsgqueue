@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.5.14] - 2026-08-18
+
+### Fixed
+- **P2 test_server ports** — `tests/test_server.c` ports changed
+  from 18801-18803 → 28801-28803. Frees the 18800-18999 range
+  for v0.5.15's multi-listener runtime bind (which had rolled back
+  in v0.5.10 + v0.5.12 due to this conflict).
+
+### Documentation
+- `docs/reviews/v0.5.14.enumeration.md` — 13-item catalog.
+- `docs/reviews/v0.5.14.plan.md` — 4-phase WBS.
+- `docs/benchmarks/v0514final_{1..5}.txt` — 5-run baseline (mean 34 267 msg/s, p99 99 µs).
+
+### Test count
+- 76 tests (no test count change).
+- All 76 green; bench gate passes.
+
+### Deferred to v0.5.15
+- Multi-listener runtime accept loop (M) — port guard now ready
+- Multi-threaded accept loop (L)
+- WS permessage-deflate (L)
+- 5.0 wildcard PUBACK match (M)
+- TLS session cache (real) (S)
+- TLS regression test (real) (S)
+- mqtt bridge allocation unification (S)
+- WS deflate test (P2)
+
 ## [0.5.12] - 2026-08-18
 
 ### Added
