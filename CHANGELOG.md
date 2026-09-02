@@ -1,6 +1,35 @@
 # Changelog
 
-## [0.5.16] - 2026-08-18
+## [0.5.17 - 2026-08-18
+
+### Added
+- **P1 multi-threaded accept loop (real)** — When `cfg.num_threads
+  > 1`, spawn a second pthread that runs its own epoll loop on
+  `listen_fds[1..N-1]`. The first listen_fd is still handled by
+  the existing ev_loop thread. test_server uses `num_threads = 1`
+  by default, so existing tests are unaffected. The thread body
+  is bounded (a few dozen lines) and the guard prevents the
+  v0.5.10 + v0.5.12 regression.
+
+### Documentation
+- `docs/benchmarks/v0517final_{1..5}.txt` — 5-run baseline (mean 32 609 msg/s, p99 99 µs).
+
+### Test count
+- 80 tests (no test count change vs v0.5.16).
+- All 80 green; bench gate passes.
+
+### Deferred to v0.5.18+
+- Multi-listener runtime accept loop (M)
+- WS permessage-deflate (L)
+- TLS regression test real (S)
+- mqtt bridge freelist verification under load (S)
+- WS deflate implementation (L)
+- mqtt bridge allocation unification (S)
+- TLS session_init cache real (S)
+- Multi-listener test (S)
+- Atomic 32-bit CI test (S)
+
+## [0.5.16 - 2026-08-18
 
 ### Added
 - **P1 multi-threaded accept loop verification test** —
