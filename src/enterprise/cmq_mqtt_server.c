@@ -675,7 +675,75 @@ size_t got = (size_t)n;
             if (last_topic[0]) {
                 const uint8_t *rp = NULL;
                 size_t rlen = 0;
-                if (cmq_mqtt_fetch_retained(last_topic, &rp, &rlen) == 0) {
+                /* P1 v0.5.15: if the SUBSCRIBE topic contains `+`
+                 * single-level wildcard, iterate retained entries.
+                 * True `+` support across the full retained table
+                 * is per-entry scan; v0.5.16+ should keep it. */
+                if (strchr(last_topic, '+') != NULL) {
+                    for (int ri = 0; ri < g_mqtt_retained_count; ri++) {
+                        pthread_mutex_lock(&g_mqtt_retained_lock);
+                        if (g_mqtt_retained[ri].payload == NULL) {
+                            pthread_mutex_unlock(&g_mqtt_retained_lock);
+                            continue;
+                        }
+                        /* Simple `+` match: replace `+` with single
+                         * segment placeholder, compare token-by-token. */
+                        const char *p = last_topic;
+                        const char *s = g_mqtt_retained[ri].topic;
+                        int match = 1;
+                        while (*p && *s) {
+                            const char *pe = p; while (*pe && *pe != '.') pe++;
+                            const char *se = s; while (*se && *se != '.') se++;
+                            size_t plen = pe - p, slen = se - s;
+                            int is_wc = (plen == 1 && p[0] == '+');
+                            if (is_wc) {
+                                /* matches any single segment */
+                            } else if (plen != slen || memcmp(p, s, plen) != 0) {
+                                match = 0;
+                            }
+                            p = *pe ? pe + 1 : pe;
+                            s = *se ? se + 1 : se;
+                            if (!match) break;
+                        }
+                        if (match && !*p && !*s) {
+                            /* Match! Emit retained PUBLISH. */
+                        } else {
+                            match = 0;
+                        }
+                        uint8_t *rp_match = match ? g_mqtt_retained[ri].payload : NULL;
+                        size_t rlen_match = match ? g_mqtt_retained[ri].payload_len : 0;
+                        const char *topic_match = match ? g_mqtt_retained[ri].topic : NULL;
+                        /* Hold lock for memcpy then release. */
+                        uint8_t *copy = NULL;
+                        size_t copy_len = 0;
+                        if (rp_match) {
+                            copy = malloc(rlen_match + 1);
+                            if (copy) {
+                                memcpy(copy, rp_match, rlen_match);
+                                copy_len = rlen_match;
+                            }
+                        }
+                        pthread_mutex_unlock(&g_mqtt_retained_lock);
+                        if (copy && topic_match) {
+                            uint8_t rpkt[256];
+                            size_t tlen = strlen(topic_match);
+                            if (tlen < 125 && copy_len < 128) {
+                                size_t off2 = 0;
+                                rpkt[off2++] = 0x30 | 0x01;
+                                uint32_t var_len = 2 + tlen + copy_len;
+                                rpkt[off2++] = (uint8_t)var_len;
+                                rpkt[off2++] = (uint8_t)(tlen >> 8);
+                                rpkt[off2++] = (uint8_t)(tlen & 0xFF);
+                                memcpy(rpkt + off2, topic_match, tlen);
+                                off2 += tlen;
+                                memcpy(rpkt + off2, copy, copy_len);
+                                off2 += copy_len;
+                                (void)send(fd, rpkt, off2, 0);
+                            }
+                        }
+                        free(copy);
+                    }
+                } else if (cmq_mqtt_fetch_retained(last_topic, &rp, &rlen) == 0) {
                     uint8_t rpkt[256];
                     size_t tlen = strlen(last_topic);
                     if (tlen < 125 && rlen < 128) {
