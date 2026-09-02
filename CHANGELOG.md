@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.5.16] - 2026-08-18
+
+### Added
+- **P1 multi-threaded accept loop verification test** —
+  `tests/test_multi_thread_accept.c` documents the single-threaded
+  accept loop as the default behavior. The full multi-thread accept
+  implementation is deferred to v0.5.17 (when num_threads > 1 +
+  port-guard logic are ready).
+
+### Documentation
+- `docs/benchmarks/v0516final_{1..5}.txt` — 5-run baseline (mean 33 255 msg/s, p99 99 µs).
+
+### Test count
+- 81 tests (was 80 in v0.5.15; +1 for multi_thread_accept).
+- All 81 green; bench gate passes.
+
+### Deferred to v0.5.17+
+- Multi-threaded accept loop (L)
+- Multi-listener runtime accept loop (M) — port guard ready
+- WS permessage-deflate (L) — XL scope
+- TLS regression test real (S)
+- mqtt bridge allocation unification (S)
+
 ## [0.5.15] - 2026-08-18
 
 ### Added
