@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.20 - 2026-08-18
+
+### Added
+- **P3 atomic 32-bit CI test (real)** — `tests/test_atomic_64_32bit.c`
+  exercises the cmq_atomic_u64 operations (load, store, fetch_add,
+  fetch_sub) on the current platform. Guarded by `__SIZEOF_POINTER__`
+  so 16-bit or other exotic platforms skip gracefully.
+
+### Documentation
+- `docs/benchmarks/v0520final_{1..5}.txt` — 5-run baseline (mean ~33K msg/s, p99 99 µs).
+
+### Test count
+- 85 tests (was 84 in v0.5.19; +1 for test_atomic_64_32bit).
+- All 85 green; bench gate passes.
+
+### Deferred to v0.6
+- WS permessage-deflate
+- WS deflate implementation
+- TLS session_init cache (real, beyond smoke)
+
+## 0.5.19 - 2026-08-18
 ## 0.5.19 - 2026-08-18
 
 ### Added
