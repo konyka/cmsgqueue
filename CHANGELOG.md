@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.19 - 2026-08-18
+
+### Added
+- **P2 TLS regression test (real)** — `tests/test_tls_regression_real.c` exercises
+  the OpenSSL primitives behind v0.5.4's SSL_CTX_up_ref UAF fix. Verifies
+  the up_ref + free pattern works safely under ASAN.
+- **P2 mqtt bridge freelist verification under load** —
+  `tests/test_mqtt_bridge_freelist_load.c` runs 1000 retained-store
+  + fetch cycles to confirm v0.5.8's 64-entry cap is enforced.
+
+### Documentation
+- `docs/benchmarks/v0519final_{1..5}.txt` — 5-run baseline (mean 32 328 msg/s, p99 99 µs).
+
+### Test count
+- 84 tests (was 82 in v0.5.18; +2 for tls_regression_real + mqtt_bridge_freelist_load).
+- All 84 green; bench gate passes.
+
+### Deferred to v0.6
+- WS permessage-deflate
+- WS deflate implementation
+- Atomic 32-bit CI test
+- TLS session_init cache (real, beyond smoke)
+
+## 0.5.18 - 2026-08-18
 ## [0.5.18 - 2026-08-18]
 
 ### Added
