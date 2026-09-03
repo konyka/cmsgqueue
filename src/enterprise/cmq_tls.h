@@ -54,4 +54,11 @@ ssize_t cmq_tls_read(cmq_tls_session_t *session, uint8_t *buf, size_t len);
 ssize_t cmq_tls_write(cmq_tls_session_t *session, const uint8_t *buf, size_t len);
 int cmq_tls_fd(cmq_tls_session_t *session);
 
+/* v0.5.23: opaque accessors for the session-resumption cache.
+ * The cache owns the slot lifetime; cmq_tls_session_free_slot frees
+ * an SSL_SESSION* (or NULL safely). */
+void *cmq_tls_get_session_cache_state(cmq_tls_config_t *cfg);
+int cmq_tls_set_session_cache_state(cmq_tls_config_t *cfg, void *state);
+void cmq_tls_session_free_slot(void *sess);
+
 #endif

@@ -121,6 +121,7 @@ set(CMQ_ENTERPRISE_SOURCES
     src/enterprise/cmq_quota.c
     src/enterprise/cmq_acl.c
     src/enterprise/cmq_ws.c
+    src/enterprise/cmq_tls_session_cache.c
 )
 
 # Collect all sources

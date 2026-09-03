@@ -48,6 +48,7 @@ struct cmq_tls_config {
     SSL_CTX *ssl_ctx;  /* per-listener context, immutable after init */
     int ssl_ctx_init_done;
 #endif
+    void *session_cache_state;  /* v0.5.23: TLS session resumption cache */
 };
 
 struct cmq_tls_session {
@@ -589,4 +590,24 @@ ssize_t cmq_tls_write(cmq_tls_session_t *session, const uint8_t *buf, size_t len
 
 int cmq_tls_fd(cmq_tls_session_t *session) {
     return session ? session->fd : -1;
+}
+
+/* v0.5.23: opaque accessors used by cmq_tls_session_cache.c. The cache
+ * module needs to store its state on the config without making the
+ * struct layout public. */
+void *cmq_tls_get_session_cache_state(cmq_tls_config_t *cfg) {
+    return cfg ? cfg->session_cache_state : NULL;
+}
+
+int cmq_tls_set_session_cache_state(cmq_tls_config_t *cfg, void *state) {
+    if (!cfg) return -1;
+    cfg->session_cache_state = state;
+    return 0;
+}
+
+void cmq_tls_session_free_slot(void *sess) {
+#ifdef CMQ_TLS_OPENSSL
+    if (sess) SSL_SESSION_free((SSL_SESSION *)sess);
+#endif
+    (void)sess;
 }

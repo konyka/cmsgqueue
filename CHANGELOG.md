@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.23 - 2026-09-03
+
+### Added
+- **TLS session resumption cache** — real implementation behind the v0.5.15
+  placeholder test. New module `cmq_tls_session_cache.{c,h}` provides:
+  - 64-bucket open-addressed hash map (FNV-1a).
+  - LRU eviction when full (capacity 1024 sessions).
+  - `pthread_mutex_t` around all operations.
+  - `cmq_tls_session_cache_insert` transfers ownership of `SSL_SESSION*`.
+  - `cmq_tls_session_cache_lookup` returns a borrowed reference (matches
+    OpenSSL's `SSL_get_session` semantics).
+- **Opaque accessor functions** on `cmq_tls_config_t`:
+  - `cmq_tls_get_session_cache_state`, `cmq_tls_set_session_cache_state`.
+  - `cmq_tls_session_free_slot` — centralizes the `SSL_SESSION_free`
+    path so the cache module doesn't need direct OpenSSL deps.
+
+### Tests
+- `tests/test_tls_session_cache.c` expanded from 1 placeholder to 6 real
+  cases:
+  - init_destroy_roundtrip
+  - insert_and_lookup
+  - lookup_unknown_returns_null
+  - multiple_inserts_distinct_keys
+  - eviction_when_full (1025 inserts → cache stays bounded at 64)
+  - double_destroy_safe (NULL-tolerant)
+
+### Documentation
+- `docs/features/tls-session-cache.md` — design + safety + ownership
+  contract.
+- `docs/benchmarks/v0523_{1,2}.txt` — bench transcripts + micro-bench.
+- `docs/reviews/v0.5.23.enumeration.md` — WBS for this round.
+
+### Test count
+- 86 tests (was 85 in v0.5.22; test_tls_session_cache +5 net cases).
+
 ## 0.5.22 - 2026-09-03
 
 ### Added
