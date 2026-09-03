@@ -1,0 +1,2 @@
+v0.5.22 bench 4: msg_per_sec=33,641 p99=99.0us dropped=2,437 (test_bench_regression)
+v0.5.22 bench 5: msg_per_sec=33,486 p99=99.0us dropped=2,501 (test_bench_regression)

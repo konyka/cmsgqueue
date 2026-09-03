@@ -9,6 +9,7 @@
 #include <poll.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <zlib.h>
 #include <stdint.h>
 #include <limits.h>
 
@@ -321,4 +322,180 @@ int cmq_ws_build_response(const char *accept_key, char *out, size_t out_len) {
         "Sec-WebSocket-Accept: %s\r\n\r\n", accept_key);
     if (n < 0 || (size_t)n >= out_len) return -1;
     return 0;
+}
+
+/* === RFC 7692 permessage-deflate ====================================== */
+
+#define CMQ_WS_DEFLATE_TAIL_SIZE 4
+static const uint8_t CMQ_WS_DEFLATE_TAIL[CMQ_WS_DEFLATE_TAIL_SIZE] =
+    {0x00, 0x00, 0xFF, 0xFF};
+
+int cmq_ws_parse_extensions(const char *req, size_t req_len) {
+    if (!req || req_len == 0) return 0;
+
+    /* Header names are case-insensitive (RFC 7230); match
+     * Sec-WebSocket-Extensions. */
+    static const char name[] = "sec-websocket-extensions";
+    const size_t nlen = sizeof(name) - 1;
+    size_t i = 0;
+    int found_deflate = 0;
+    while (i < req_len) {
+        size_t line = i;
+        while (i < req_len && req[i] != '\r' && req[i] != '\n')
+            i++;
+        size_t llen = i - line;
+        int name_match = 0;
+        if (llen > nlen + 1) {
+            name_match = 1;
+            for (size_t k = 0; k < nlen; k++) {
+                char a = req[line + k];
+                if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                if (a != name[k]) { name_match = 0; break; }
+            }
+            if (name_match && req[line + nlen] != ':') name_match = 0;
+        }
+        if (name_match) {
+            /* Walk comma-separated extension tokens. Within permessage-deflate,
+             * walk semicolon-separated parameters. Accept server_no_context_takeover,
+             * client_no_context_takeover, client_max_window_bits (=15 or absent).
+             * Reject any other parameter name. */
+            size_t v = line + nlen + 1;
+            while (v < line + llen && (req[v] == ' ' || req[v] == '\t')) v++;
+            size_t endv = line + llen;
+            size_t p = v;
+            while (p < endv) {
+                while (p < endv && (req[p] == ' ' || req[p] == '\t')) p++;
+                size_t tok_start = p;
+                while (p < endv && req[p] != ',') p++;
+                size_t tok_end = p;
+                while (tok_end > tok_start &&
+                       (req[tok_end - 1] == ' ' || req[tok_end - 1] == '\t'))
+                    tok_end--;
+                if (tok_end == tok_start) { if (p < endv) p++; continue; }
+
+                /* Compare token against "permessage-deflate" (case-insensitive). */
+                static const char PD[] = "permessage-deflate";
+                const size_t PDLEN = sizeof(PD) - 1;
+                size_t tlen = tok_end - tok_start;
+                int pd_match = (tlen >= PDLEN);
+                if (pd_match) {
+                    for (size_t k = 0; k < PDLEN; k++) {
+                        char a = req[tok_start + k];
+                        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                        if (a != PD[k]) { pd_match = 0; break; }
+                    }
+                }
+                if (pd_match) {
+                    found_deflate = 1;
+                    /* Walk parameters after the first ';' in this token. */
+                    size_t sp = tok_start;
+                    while (sp < tok_end && req[sp] != ';') sp++;
+                    while (sp < tok_end) {
+                        sp++;
+                        while (sp < tok_end && (req[sp] == ' ' || req[sp] == '\t')) sp++;
+                        size_t pp_start = sp;
+                        while (sp < tok_end && req[sp] != ';') sp++;
+                        size_t pp_end = sp;
+                        while (pp_end > pp_start &&
+                               (req[pp_end - 1] == ' ' || req[pp_end - 1] == '\t'))
+                            pp_end--;
+                        if (pp_end == pp_start) continue;
+
+                        /* Find '=' for value, if any. */
+                        size_t eq = pp_start;
+                        while (eq < pp_end && req[eq] != '=') eq++;
+                        size_t pname_end = (eq < pp_end) ? eq : pp_end;
+                        size_t pname_len = pname_end - pp_start;
+
+                        /* Strip whitespace inside name; lowercase for compare. */
+                        char pname[64];
+                        if (pname_len >= sizeof(pname)) return -1;
+                        size_t pi = 0;
+                        for (size_t k = pp_start; k < pname_end; k++) {
+                            char c = req[k];
+                            if (c == ' ' || c == '\t') continue;
+                            if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                            pname[pi++] = c;
+                        }
+                        pname[pi] = '\0';
+
+                        /* Reject server_max_window_bits / client_max_window_bits:
+                         * we always negotiate a fixed 15-bit window. */
+                        int known = (strcmp(pname, "server_no_context_takeover") == 0 ||
+                                     strcmp(pname, "client_no_context_takeover") == 0);
+                        if (!known) return -1;
+                    }
+                }
+                if (p < endv) p++;
+            }
+        }
+        while (i < req_len && (req[i] == '\r' || req[i] == '\n'))
+            i++;
+    }
+    return found_deflate ? 1 : 0;
+}
+
+int cmq_ws_build_extensions_response(char *out, size_t out_len) {
+    if (!out || out_len == 0) return -1;
+    int n = snprintf(out, out_len,
+        "Sec-WebSocket-Extensions: permessage-deflate; "
+        "server_no_context_takeover; client_no_context_takeover\r\n");
+    if (n < 0 || (size_t)n >= out_len) return -1;
+    return n;
+}
+
+int cmq_ws_deflate_message(const uint8_t *in, size_t in_len,
+                            uint8_t *out, size_t out_cap) {
+    if (!out) return -1;
+    if (in_len > 0 && !in) return -1;
+    if (out_cap < CMQ_WS_DEFLATE_TAIL_SIZE) return -1;
+
+    /* RFC 7692 §7.2.1: per-message deflation must use Z_SYNC_FLUSH so the
+     * peer can recover the message boundary. -15 means raw deflate (no zlib
+     * header) per the RFC. */
+    z_stream zs = {0};
+    if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -15, 8,
+                     Z_DEFAULT_STRATEGY) != Z_OK)
+        return -1;
+    zs.next_in = (Bytef *)in;
+    zs.avail_in = (uInt)in_len;
+    zs.next_out = out;
+    zs.avail_out = (uInt)out_cap;
+
+    int rc = deflate(&zs, Z_SYNC_FLUSH);
+    int produced = (int)zs.total_out;
+    int ret = -1;
+    if (rc == Z_OK || rc == Z_BUF_ERROR) {
+        if (zs.avail_out >= CMQ_WS_DEFLATE_TAIL_SIZE) {
+            memcpy(out + zs.total_out, CMQ_WS_DEFLATE_TAIL,
+                   CMQ_WS_DEFLATE_TAIL_SIZE);
+            produced += CMQ_WS_DEFLATE_TAIL_SIZE;
+            ret = produced;
+        }
+    }
+    deflateEnd(&zs);
+    return ret;
+}
+
+int cmq_ws_inflate_message(const uint8_t *in, size_t in_len,
+                            uint8_t *out, size_t out_cap) {
+    if (!out) return -1;
+    if (in_len < CMQ_WS_DEFLATE_TAIL_SIZE) return -1;
+    if (in_len > 0 && !in) return -1;
+
+    z_stream zs = {0};
+    if (inflateInit2(&zs, -15) != Z_OK) return -1;
+    zs.next_in = (Bytef *)in;
+    zs.avail_in = (uInt)in_len;
+    zs.next_out = out;
+    zs.avail_out = (uInt)out_cap;
+
+    int rc = inflate(&zs, Z_SYNC_FLUSH);
+    int produced = (int)zs.total_out;
+    int ret = -1;
+    if (rc == Z_OK || rc == Z_BUF_ERROR || rc == Z_STREAM_END) {
+        ret = produced;
+    }
+    inflateEnd(&zs);
+    return ret;
 }

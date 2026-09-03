@@ -60,4 +60,23 @@ int cmq_ws_parse_http_upgrade(const char *req, size_t req_len,
                                char *ws_key_out, size_t key_len);
 int cmq_ws_build_response(const char *accept_key, char *out, size_t out_len);
 
+/* RFC 7692 permessage-deflate (RFC 7692 §7).
+ *
+ * parse_extensions: scan Sec-WebSocket-Extensions header; returns 1 if the
+ *   client requested permessage-deflate, 0 if absent, -1 on parse error
+ *   (unsupported parameter).
+ * build_extensions_response: write the Sec-WebSocket-Extensions response
+ *   line (with no-context-takeover on both sides). Caller prepends to
+ *   HTTP response headers.
+ * deflate_message: compress one logical message; emits 0x00 0x00 0xFF 0xFF
+ *   trailer per RFC 7692 §7.2.1.
+ * inflate_message: decompress one logical message (input must end with the
+ *   0x00 0x00 0xFF 0xFF trailer). Returns -1 on Z_DATA_ERROR. */
+int cmq_ws_parse_extensions(const char *req, size_t req_len);
+int cmq_ws_build_extensions_response(char *out, size_t out_len);
+int cmq_ws_deflate_message(const uint8_t *in, size_t in_len,
+                            uint8_t *out, size_t out_cap);
+int cmq_ws_inflate_message(const uint8_t *in, size_t in_len,
+                            uint8_t *out, size_t out_cap);
+
 #endif

@@ -186,6 +186,12 @@ pkg_check_modules(ZSTD REQUIRED libzstd)
 target_include_directories(cmsgqueue PRIVATE ${ZSTD_INCLUDE_DIRS})
 target_link_libraries(cmsgqueue PRIVATE ${ZSTD_LIBRARIES})
 
+# v0.5.22: WS permessage-deflate (RFC 7692) needs zlib (system libz).
+find_package(ZLIB)
+if(ZLIB_FOUND)
+    target_link_libraries(cmsgqueue PRIVATE ZLIB::ZLIB)
+endif()
+
 # ---------------------------------------------------------------------------
 # Subdirectories
 # ---------------------------------------------------------------------------

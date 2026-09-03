@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.5.22 - 2026-09-03
+
+### Added
+- **WS permessage-deflate (RFC 7692)** — real implementation, not a
+  placeholder. Four new public API functions:
+  - `cmq_ws_parse_extensions(req, len)` — detects client request for
+    permessage-deflate, rejects unsupported parameters.
+  - `cmq_ws_build_extensions_response(out, len)` — emits the
+    `Sec-WebSocket-Extensions` response line with both
+    `server_no_context_takeover` and `client_no_context_takeover`.
+  - `cmq_ws_deflate_message(in, in_len, out, out_cap)` — compresses one
+    message with `Z_SYNC_FLUSH`, appends the trailing `0x00 0x00 0xFF 0xFF`.
+  - `cmq_ws_inflate_message(in, in_len, out, out_cap)` — decompresses one
+    message, returns -1 on Z_DATA_ERROR.
+  Each connection owns its own zlib stream; no shared dictionary. Window is
+  always 15 bits (`windowBits = -15`, raw deflate per RFC 7692 §7.2.1).
+- **CMake integration** — `find_package(ZLIB)` now links `ZLIB::ZLIB` to
+  `cmsgqueue` when present (system libz is widely available).
+
+### Tests
+- `tests/test_ws_deflate.c` expanded from 18 lines (smoke only) to 8 real
+  roundtrip + negotiation cases:
+  - extensions_detect (server_no_context_takeover accepted)
+  - extensions_reject_unknown_param (`server_max_window_bits=99` rejected)
+  - extensions_absent (no extension header → 0)
+  - roundtrip_compressible (repetitive JSON shrinks)
+  - roundtrip_random_byte_aligned (random data round-trips)
+  - inflate_rejects_garbage (corrupt stream → -1)
+  - two_messages_independent (per-message boundary preserved)
+  - build_response_includes_extension (response line correct)
+
+### Documentation
+- `docs/features/ws-permessage-deflate.md` — RFC 7692 design, safety,
+  reliability.
+- `docs/benchmarks/v0522_{1,2,3}.txt` — 7-run baseline (mean ~33K msg/s,
+  p99 99 µs, matching v0.5.20).
+- `docs/reviews/v0.5.22.enumeration.md` — WBS for this round.
+
+### Test count
+- 86 tests (was 85 in v0.5.20; +1 for the new assertion coverage in
+  test_ws_deflate, total assertions up from 1 to 8 in that file).
+
 ## 0.5.20 - 2026-08-18
 
 ### Added
