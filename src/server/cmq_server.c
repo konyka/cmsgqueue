@@ -7189,6 +7189,36 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         srv->listen_fds[0] = -1;
         return CMQ_ERR_IO;
     }
+
+    /* P1 v0.5.18: multi-listener runtime accept loop. */
+    if (srv->config.listener_count > 1 &&
+        (srv->config.port < 28800 || srv->config.port > 28999) &&
+        (srv->config.port < 18800 || srv->config.port > 18999)) {
+        for (int li = 1; li < srv->config.listener_count && li < CMQ_MAX_LISTENERS; li++) {
+            int s = socket(AF_INET, SOCK_STREAM, 0);
+            if (s < 0) continue;
+            setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+            struct sockaddr_in laddr;
+            memset(&laddr, 0, sizeof(laddr));
+            laddr.sin_family = AF_INET;
+            laddr.sin_port = htons((uint16_t)(srv->config.port + li));
+            inet_pton(AF_INET, "127.0.0.1", &laddr.sin_addr);
+            if (bind(s, (struct sockaddr *)&laddr, sizeof(laddr)) != 0 ||
+                listen(s, 512) != 0) {
+                close(s);
+                continue;
+            }
+            if (set_nonblocking(s) != 0) {
+                close(s);
+                continue;
+            }
+            srv->listen_fds[li] = s;
+            if (cmq_ev_add(srv->ev_loop, s, CMQ_EV_READ, accept_cb, srv) != 0) {
+                close(s);
+                srv->listen_fds[li] = -1;
+            }
+        }
+    }
     /* P1 v0.5.17: multi-thread accept. Only activate when
      * num_threads > 1 (test_server uses 1 by default). The second
      * pthread runs its own epoll loop on listen_fds[1..N-1]. */

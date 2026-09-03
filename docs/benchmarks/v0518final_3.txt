@@ -1,0 +1,12 @@
+CMSGQueue Benchmark
+  port=7654 clients=10 msgs=10000 threads=1
+Publishing 10000 messages across 10 clients...
+  Publish time: 0.008s (1257208 msg/s)
+  Received: 7553/10000
+  Total time: 0.234s
+  End-to-end: 32277 msg/s
+  Avg latency: 0.031 ms
+  p50 inter-arrival: 50.0 us
+  p99 inter-arrival: 99.0 us
+{"msg_per_sec":32277,"p50_us":50.0,"p99_us":99.0,"received":7553,"sent":10000,"dropped":2447,"clients":10,"threads":1,"n":10000}
+Done.

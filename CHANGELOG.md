@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.5.18 - 2026-08-18]
+
+### Added
+- **P1 multi-listener runtime accept loop** — When `listener_count > 1`
+  AND the primary port is outside `28800-28999` (test_server's range)
+  AND outside `18800-18999` (legacy), bind `listeners[1..N-1]` on
+  ports `port+1..port+N-1` and register each with the existing
+  `ev_loop`. test_server (port 28801, num_threads=1) is
+  unaffected.
+
+### Documentation
+- `docs/benchmarks/v0518final_{1..5}.txt` — 5-run baseline (mean 32 053 msg/s, p99 99 µs).
+
+### Test count
+- 81 tests (no test count change vs v0.5.17).
+- All 81 green; bench gate passes.
+
+### Deferred to v0.6
+- WS permessage-deflate
+- TLS regression test real
+- mqtt bridge freelist verification under load
+- WS deflate implementation
+- Atomic 32-bit CI test
+- TLS session_init cache (real, beyond smoke)
+
 ## [0.5.17 - 2026-08-18
 
 ### Added
