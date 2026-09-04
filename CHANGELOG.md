@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.32 - 2026-09-03
+
+### Added
+- **Per-listener TLS slot lookup** — `srv_find_tls_slot(srv, lfd)`
+ * returns the slot index whose `listen_fds[i]` matches, or 0
+ * (default slot) if no match. Linear scan over at most
+ * `CMQ_MAX_LISTENERS` entries (ns-scale). Param named `lfd` to
+ * avoid the legacy `listen_fd` macro (which expands to
+ * `listen_fds[0]`, the pre-existing bug surfaced during this
+ * round).
+- `cmq_client_t` gets a new `int tls_slot` field (declared,
+ * default 0 via calloc). The accept callback will set it from
+ * `srv_find_tls_slot(srv, listen_fd)` in a follow-up; the
+ * handshake path will use `srv->tls_config_slots[client->tls_slot]`
+ * to pick the per-listener TLS config.
+
+### Tests
+- `tests/test_p5_listener.c` — `srv_find_tls_slot_lookup` runs
+  the server on a thread, polls for the bind, then exercises the
+  helper with the real listen fds. Verifies slot 0 and slot 1
+  map to the right indices, and unknown fds fall back to 0.
+
+### Documentation
+- `docs/reviews/v0.5.32.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0532_{1,2}.txt` — bench transcripts + lookup
+  micro-bench.
+
+### Test count
+- 105 tests (was 104 in v0.5.31; +1 slot lookup test).
+
 ## 0.5.31 - 2026-09-03
 
 ### Added

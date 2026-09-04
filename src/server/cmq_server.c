@@ -24,6 +24,20 @@
 
 static __thread int cmq_current_worker_id = -1;
 
+/* v0.5.32: per-listener TLS slot lookup. Returns the slot index whose
+ * listen fd matches, or 0 (the default slot) if no match. Linear
+ * scan over at most CMQ_MAX_LISTENERS entries; ns-scale. The param
+ * name `lfd` avoids the legacy `listen_fd` macro (which expands to
+ * `listen_fds[0]`). */
+int srv_find_tls_slot(cmq_server_t *srv, int lfd) {
+    if (!srv) return 0;
+    if (lfd < 0) return 0;
+    for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
+        if (srv->listen_fds[i] == lfd) return i;
+    }
+    return 0;
+}
+
 /* Non-empty username or password enables auth (empty strdup "" is not). */
 static int auth_configured(const cmq_server_t *srv) {
     if (!srv) return 0;

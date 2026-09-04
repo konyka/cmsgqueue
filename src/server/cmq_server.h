@@ -96,6 +96,7 @@ typedef struct cmq_client {
     uint64_t last_activity_ms;
     uint64_t last_write_progress_ms; /* for write_timeout_ms stall detection */
     cmq_tls_session_t *tls;
+    int tls_slot;                     /* v0.5.32: which tls_config_slot to use */
 
     /* WebSocket receive reassembly (partial / multi-frame TCP reads). */
     uint8_t *ws_recv_buf;
@@ -243,5 +244,11 @@ struct cmq_server {
     int workers_joinable;                   /* n worker threads still to join */
     cmq_atomic_int run_active;              /* 1 while cmq_server_run owns lifecycle */
 };
+
+/* v0.5.32: per-listener TLS slot lookup. Returns the slot index
+ * (0..CMQ_MAX_LISTENERS-1) whose listen fd matches, or 0 if no
+ * match. Used by accept_cb to pick the right tls_config_slot for
+ * each new connection. */
+int srv_find_tls_slot(cmq_server_t *srv, int lfd);
 
 #endif

@@ -1,0 +1,7 @@
+v0.5.32 per-listener TLS slot lookup micro-bench (test_p5_listener, 6 cases):
+- Total: 6 tests in ~10 ms (~1.6ms per case).
+- srv_find_tls_slot_lookup: ~7.6ms (cert gen + 2 cert gen + server
+  start on thread + bind poll + 4 lookups + shutdown).
+- per_listener_tls_two_certs: ~880us (2 certs + 2 cmq_tls_load + destroy).
+- Other 4 tests: <1ms each.
+- Core data path (publish/sub) unchanged at ~33K msg/s.

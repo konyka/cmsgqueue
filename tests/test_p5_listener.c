@@ -144,4 +144,67 @@ TEST(p5, per_listener_tls_two_certs) {
     (void)rc;
 }
 
+/* v0.5.32: per-listener TLS slot lookup. The accept callback must
+ * pick the right tls_config_slot for each listen fd, so a
+ * connection arriving on listen_fds[i] uses tls_config_slots[i].
+ * This test verifies the helper by feeding each listen fd and
+ * asserting the returned slot index. The listen fds are populated
+ * by cmq_server_run, so we run the server on a thread, wait for
+ * the bind, then check. */
+#include <pthread.h>
+static void *p5_server_thread(void *arg) {
+    cmq_server_run((cmq_server_t *)arg);
+    return NULL;
+}
+
+TEST(p5, srv_find_tls_slot_lookup) {
+    ensure_dir();
+    gen_cert(P5_TEST_DIR "/cert0.pem", P5_TEST_DIR "/key0.pem", "p5server0");
+    gen_cert(P5_TEST_DIR "/cert1.pem", P5_TEST_DIR "/key1.pem", "p5server1");
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25002;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = P5_TEST_DIR "/cert0.pem";
+    cfg.tls_key = P5_TEST_DIR "/key0.pem";
+    cfg.listeners[1].tls_cert = P5_TEST_DIR "/cert1.pem";
+    cfg.listeners[1].tls_key = P5_TEST_DIR "/key1.pem";
+    cfg.listener_count = 2;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Spin the server in a background thread; it binds listen_fds
+     * during cmq_server_run. */
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, p5_server_thread, srv), 0);
+    /* Poll for the bind (max 1 second). */
+    for (int i = 0; i < 100; i++) {
+        if (srv->listen_fds[0] >= 0 && srv->listen_fds[1] >= 0) break;
+        struct timespec ts = {0, 10000000};
+        nanosleep(&ts, NULL);
+    }
+
+    int s0 = srv->listen_fds[0];
+    int s1 = srv->listen_fds[1];
+    ASSERT(s0 >= 0);
+    ASSERT(s1 >= 0);
+    ASSERT(s0 != s1);
+
+    /* srv_find_tls_slot is declared in cmq_server.h (v0.5.32). */
+    extern int srv_find_tls_slot(cmq_server_t *srv, int lfd);
+    ASSERT_EQ(srv_find_tls_slot(srv, s0), 0);
+    ASSERT_EQ(srv_find_tls_slot(srv, s1), 1);
+    /* Unknown fd falls back to slot 0. */
+    ASSERT_EQ(srv_find_tls_slot(srv, -1), 0);
+    ASSERT_EQ(srv_find_tls_slot(srv, 99999), 0);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    int rc2 __attribute__((unused)) = system("rm -rf " P5_TEST_DIR);
+    (void)rc2;
+}
+
 TEST_MAIN()
