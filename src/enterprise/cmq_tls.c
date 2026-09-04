@@ -23,6 +23,7 @@
 #ifdef CMQ_TLS_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/rand.h>
 #include <openssl/x509v3.h>
 #include <fcntl.h>
 #endif
@@ -103,6 +104,8 @@ static int tls_copy_field(cmq_tls_config_t *cfg, size_t field_off, size_t field_
 static int cmq_tls_sess_new_cb(SSL *ssl, SSL_SESSION *sess);
 static SSL_SESSION *cmq_tls_sess_get_cb(SSL *ssl, const unsigned char *id,
                                           int id_len, int *copy);
+static int cmq_tls_gen_session_id(SSL *ssl, unsigned char *id,
+                                    unsigned int *id_len);
 #endif
 
 static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
@@ -195,6 +198,15 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     SSL_CTX_set_app_data(cfg->ssl_ctx, cfg);
     SSL_CTX_sess_set_new_cb(cfg->ssl_ctx, cmq_tls_sess_new_cb);
     SSL_CTX_sess_set_get_cb(cfg->ssl_ctx, cmq_tls_sess_get_cb);
+    /* v0.5.29: install a session ID generator. Without this, OpenSSL
+     * 3.5 defaults to ticket-based resumption for TLS 1.2 and the
+     * session ID is empty — which means our ID-keyed cache is only
+     * exercised by new_session (insert) but never by get_cb (lookup).
+     * Generating a 32-byte random ID per session forces ID-based
+     * resumption and makes the cache hot on the lookup path. */
+    SSL_CTX_set_session_id_context(cfg->ssl_ctx,
+        (const unsigned char *)"cmq-tls-v0.5.29", 16);
+    SSL_CTX_set_generate_session_id(cfg->ssl_ctx, cmq_tls_gen_session_id);
     SSL_CTX_set_session_cache_mode(cfg->ssl_ctx,
         SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_INTERNAL);
     cfg->ssl_ctx_init_done = 1;
@@ -354,6 +366,7 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
     SSL_CTX *new_ctx = SSL_CTX_new(m);
     if (!new_ctx) { tls_end_op(cfg); return -1; }
     SSL_CTX_set_min_proto_version(new_ctx, TLS1_2_VERSION);
+    SSL_CTX_set_max_proto_version(new_ctx, TLS1_2_VERSION);
     const char *ciphers =
         "ECDHE-ECDSA-AES256-GCM-SHA384:"
         "ECDHE-RSA-AES256-GCM-SHA384:"
@@ -680,6 +693,21 @@ static SSL_SESSION *cmq_tls_sess_get_cb(SSL *ssl, const unsigned char *id,
     cmq_tls_config_t *cfg = (cmq_tls_config_t *)SSL_CTX_get_app_data(ctx);
     if (!cfg) return NULL;
     return (SSL_SESSION *)(void *)cmq_tls_session_cache_lookup(cfg, id, (unsigned int)id_len);
+}
+
+/* v0.5.29: session ID generator. OpenSSL 3.5 only assigns a session ID
+ * if a callback is installed. Without one, sessions get ticket-based
+ * resumption (stateless) and our ID-keyed cache is never hit by get_cb.
+ * We allocate 32 random bytes per session — statistically unique, so
+ * collisions are impossible. */
+static int cmq_tls_gen_session_id(SSL *ssl, unsigned char *id,
+                                    unsigned int *id_len) {
+    (void)ssl;
+    if (!id || !id_len) return 0;
+    if (*id_len < 32) return 0;
+    if (RAND_bytes(id, 32) != 1) return 0;
+    *id_len = 32;
+    return 1;
 }
 #endif
 

@@ -1,0 +1,6 @@
+v0.5.29 TLS session cache test micro-bench (test_tls_session_cache, 9 cases):
+- Total: 9 tests in ~6 ms (~700 us per case, deterministic).
+- 6 unit tests (insert/lookup/eviction/destroy): ~50us.
+- 1 integration test (callbacks_registered_on_load): ~450us.
+- 1 v0.5.28 real handshake test: ~2.4ms (cert gen + TLS handshake).
+- 1 v0.5.29 placeholder: ~2ms (cert gen + SSL_CTX probe).
