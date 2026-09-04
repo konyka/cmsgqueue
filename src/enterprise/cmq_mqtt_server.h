@@ -69,6 +69,20 @@ void cmq_mqtt_register_sublist_insert(cmq_sublist_insert_fn fn,
  * cmq_server_destroy. */
 void cmq_mqtt_bridge_shutdown(void);
 
+/* v0.5.25: MQTT 5.0 topic matcher.
+ *
+ * pattern: SUBSCRIBE filter string, may contain `+` (single-level)
+ *   and `#` (multi-level, must be last) wildcards.
+ * topic: PUBLISH topic string (no wildcards).
+ *
+ * Returns:
+ *    1  pattern matches topic
+ *    0  no match
+ *   -1  invalid input (NULL, `#` not at end, multiple `#`, length cap)
+ *
+ * Pure function; no allocations, no globals, no locks. */
+int cmq_mqtt_topic_match(const char *pattern, const char *topic);
+
 /* P1 (v0.5.2): record a SUBSCRIBE topic filter. The listener calls
  * this on every accepted SUBSCRIBE. The cmq-sublist bridge (forwarding
  * matching PUBLISH into cmq_sublist) is v0.6 work; today this only

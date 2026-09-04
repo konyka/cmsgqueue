@@ -692,8 +692,8 @@ size_t got = (size_t)n;
                         const char *s = g_mqtt_retained[ri].topic;
                         int match = 1;
                         while (*p && *s) {
-                            const char *pe = p; while (*pe && *pe != '.') pe++;
-                            const char *se = s; while (*se && *se != '.') se++;
+                            const char *pe = p; while (*pe && *pe != '/') pe++;
+                            const char *se = s; while (*se && *se != '/') se++;
                             size_t plen = pe - p, slen = se - s;
                             int is_wc = (plen == 1 && p[0] == '+');
                             if (is_wc) {
@@ -933,4 +933,61 @@ void cmq_mqtt_server_start_listener(struct cmq_server *server) {
         pthread_detach(t);
     }
     close(s);
+}
+
+#define MQTT_TOPIC_MAX 256
+
+/* v0.5.25: extracted from the SUBSCRIBE-dispatch loop. Now also handles
+ * the `#` multi-level wildcard (gap that was missing before v0.5.25).
+ *
+ * Algorithm: tokenize both pattern and topic on `/` (MQTT level separator)
+ * and compare each level. `+` matches any single level. `#` (must be the
+ * last token) matches zero or more remaining levels. */
+int cmq_mqtt_topic_match(const char *pattern, const char *topic) {
+    if (!pattern || !topic) return -1;
+
+    size_t plen = strnlen(pattern, MQTT_TOPIC_MAX + 1);
+    size_t tlen = strnlen(topic, MQTT_TOPIC_MAX + 1);
+    if (plen > MQTT_TOPIC_MAX || tlen > MQTT_TOPIC_MAX) return -1;
+
+    /* Per MQTT 5.0 spec: `#` must be the last char and appear at most once. */
+    const char *hash = strchr(pattern, '#');
+    if (hash) {
+        if (hash != pattern + plen - 1) return -1;
+        if (strchr(hash + 1, '#') != NULL) return -1;
+    }
+
+    const char *p = pattern;
+    const char *t = topic;
+    for (;;) {
+        /* End of pattern. Match iff end of topic too. */
+        if (!*p) return !*t ? 1 : 0;
+
+        /* `#` at end of pattern: matches everything remaining. */
+        if (*p == '#') return 1;
+
+        /* Tokenize one pattern level up to '/' or end. */
+        const char *pe = p;
+        while (*pe && *pe != '/') pe++;
+        size_t ptlen = pe - p;
+
+        /* Tokenize one topic level up to '/' or end. */
+        const char *te = t;
+        while (*te && *te != '/') te++;
+        size_t ttlen = te - t;
+
+        /* End of topic but pattern still has a non-`#` level: no match. */
+        if (!*t) return 0;
+
+        if (ptlen == 1 && *p == '+') {
+            /* matches any single level */
+        } else {
+            if (ptlen != ttlen) return 0;
+            if (memcmp(p, t, ptlen) != 0) return 0;
+        }
+
+        /* Advance past the '/' (or to end). */
+        p = *pe ? pe + 1 : pe;
+        t = *te ? te + 1 : te;
+    }
 }

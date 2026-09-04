@@ -1,0 +1,4 @@
+v0.5.25 MQTT topic match micro-bench (test_mqtt_5_wildcard, 8 cases):
+- Total: 8 tests in ~30 us total (~4 us per case, deterministic).
+- Pure function, no allocations, no locks.
+- Linear scan, O(min(|pattern|, |topic|)).

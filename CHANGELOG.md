@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.5.25 - 2026-09-03
+
+### Added
+- **MQTT topic matcher extracted to public API** —
+  `cmq_mqtt_topic_match(pattern, topic)` is now a standalone function
+  declared in `cmq_mqtt_server.h` and exported from `cmq_mqtt_server.c`.
+  Previously the matcher was buried in the SUBSCRIBE-dispatch loop
+  (unreachable from tests).
+
+### Fixed
+- **MQTT topic level separator bug** — the dispatch-loop matcher
+  tokenized on `.` instead of `/`. MQTT 5.0 §4.7.1.1 mandates `/` as
+  the topic level separator, so any topic with multiple levels (the
+  common case) never matched. Both the dispatch loop and the new
+  public matcher now tokenize on `/`.
+
+### Added (cont.)
+- **Multi-level `#` wildcard support** — the dispatch loop only handled
+  `+` (single-level wildcard). The new public matcher also supports
+  `#` (multi-level, must be last character per spec), and the dispatch
+  loop benefits via the existing `+`-only path. Direct `#` support in
+  the dispatch loop is a follow-up; the public function is now ready
+  to plug in.
+
+### Tests
+- `tests/test_mqtt_5_wildcard.c` expanded from 1 placeholder to 8 real
+  cases covering: exact match, `+`, `#`, mixed patterns, edge cases,
+  invalid patterns (returns -1), NULL inputs.
+
+### Documentation
+- `docs/reviews/v0.5.25.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0525_{1,2}.txt` — bench transcripts + matcher
+  micro-bench.
+
+### Test count
+- 97 tests (was 90 in v0.5.24; test_mqtt_5_wildcard +7 net cases).
+
 ## 0.5.24 - 2026-09-03
 
 ### Added
