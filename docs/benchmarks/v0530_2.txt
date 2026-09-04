@@ -1,0 +1,7 @@
+v0.5.30 TLS cache isolation test micro-bench (test_tls_session_cache, 10 cases):
+- Total: 10 tests in ~6 ms (~600 us per case, deterministic).
+- 7 unit tests (insert/lookup/eviction/destroy): ~50us.
+- 1 integration test (callbacks_registered_on_load): ~450us.
+- 1 v0.5.28 real handshake test: ~3ms.
+- 1 v0.5.29 placeholder: ~440us.
+- 1 v0.5.30 cache_isolation_two_configs: ~2.2ms (2 configs + 4 cache ops).

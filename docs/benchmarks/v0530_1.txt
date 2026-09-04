@@ -1,0 +1,5 @@
+v0.5.30 bench 1: msg_per_sec=33,442 p99=99.0us dropped=2,373 (test_bench_regression)
+v0.5.30 bench 2: msg_per_sec=32,463 p99=99.0us dropped=2,437 (test_bench_regression)
+v0.5.30 bench 3: msg_per_sec=33,589 p99=99.0us dropped=2,437 (test_bench_regression)
+v0.5.30 bench 4: msg_per_sec=32,988 p99=99.0us dropped=2,437 (test_bench_regression)
+v0.5.30 bench 5: msg_per_sec=31,594 p99=99.0us dropped=2,437 (test_bench_regression)

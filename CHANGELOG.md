@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.30 - 2026-09-03
+
+### Added
+- **Per-config cache isolation test** — `cache_isolation_two_configs`
+  in `test_tls_session_cache.c` creates two `cmq_tls_config_t`
+  instances and verifies their session caches do not cross-contaminate.
+  Each SSL_CTX points at its own cfg via `SSL_CTX_set_app_data`; the
+  cache state pointer is per-cfg. The test is a precondition for
+  future per-listener TLS work (the `cmq_server_t` struct reserves
+  `tls_config_slots[0..3]` but currently only `tls_config_slots[0]`
+  is allocated).
+
+### Documentation
+- `docs/reviews/v0.5.30.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0530_{1,2}.txt` — bench transcripts + isolation
+  test micro-bench.
+
+### Test count
+- 103 tests (was 102 in v0.5.29; +1 isolation test).
+
 ## 0.5.29 - 2026-09-03
 
 ### Added

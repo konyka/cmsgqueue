@@ -411,4 +411,79 @@ TEST(tls_session_cache, session_reused_on_reconnect) {
     cmq_tls_config_destroy(cfg);
 }
 
+/* v0.5.30: per-config cache isolation. Two cmq_tls_config_t
+ * instances with independent caches must not cross-contaminate.
+ * Verifies the lower-layer invariant needed for future per-listener
+ * TLS work (cmq_server_t currently only allocates tls_config_slots[0];
+ * slots 1-3 are reserved but unused). */
+TEST(tls_session_cache, cache_isolation_two_configs) {
+    v0527_gen_cert();
+
+    cmq_tls_config_t *cfg_a = cmq_tls_config_create();
+    cmq_tls_config_t *cfg_b = cmq_tls_config_create();
+    ASSERT_NOT_NULL(cfg_a);
+    ASSERT_NOT_NULL(cfg_b);
+    ASSERT_EQ(cmq_tls_set_cert(cfg_a, V0527_CERT), 0);
+    ASSERT_EQ(cmq_tls_set_key(cfg_a, V0527_KEY), 0);
+    ASSERT_EQ(cmq_tls_set_cert(cfg_b, V0527_CERT), 0);
+    ASSERT_EQ(cmq_tls_set_key(cfg_b, V0527_KEY), 0);
+    ASSERT_EQ(cmq_tls_session_cache_init(cfg_a), 0);
+    ASSERT_EQ(cmq_tls_session_cache_init(cfg_b), 0);
+    ASSERT_EQ(cmq_tls_load(cfg_a), 0);
+    ASSERT_EQ(cmq_tls_load(cfg_b), 0);
+
+    /* Sanity: each cache starts empty. */
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg_a), 0);
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg_b), 0);
+
+    /* Each SSL_CTX must point at its own cfg via app_data. */
+    SSL_CTX *ctx_a = cmq_tls_get_ssl_ctx_for_test(cfg_a);
+    SSL_CTX *ctx_b = cmq_tls_get_ssl_ctx_for_test(cfg_b);
+    ASSERT_NOT_NULL(ctx_a);
+    ASSERT_NOT_NULL(ctx_b);
+    ASSERT(SSL_CTX_get_app_data(ctx_a) == cfg_a);
+    ASSERT(SSL_CTX_get_app_data(ctx_b) == cfg_b);
+    ASSERT(ctx_a != ctx_b);
+
+    /* Insert a synthetic session into cfg_a's cache via the public
+     * API. The session is built by SSL_SESSION_new (a stand-in for
+     * a real negotiated session). */
+    unsigned char id_a[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    unsigned char id_b[16] = {0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8,
+                              0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB0};
+    SSL_SESSION *sess_a = make_session();
+    SSL_SESSION *sess_b = make_session();
+    ASSERT_NOT_NULL(sess_a);
+    ASSERT_NOT_NULL(sess_b);
+    ASSERT_EQ(cmq_tls_session_cache_insert(cfg_a, id_a, sizeof(id_a), sess_a), 0);
+    ASSERT_EQ(cmq_tls_session_cache_insert(cfg_b, id_b, sizeof(id_b), sess_b), 0);
+
+    /* Each cache has exactly 1 entry, with its own ID. */
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg_a), 1);
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg_b), 1);
+
+    /* Lookups: each cache finds its own session, not the other's. */
+    SSL_SESSION *got_a = cmq_tls_session_cache_lookup(cfg_a, id_a, sizeof(id_a));
+    SSL_SESSION *got_b = cmq_tls_session_cache_lookup(cfg_b, id_b, sizeof(id_b));
+    ASSERT(got_a == sess_a);
+    ASSERT(got_b == sess_b);
+
+    /* Cross-contamination check: cfg_a does NOT see cfg_b's ID and
+     * vice versa. */
+    ASSERT_NULL(cmq_tls_session_cache_lookup(cfg_a, id_b, sizeof(id_b)));
+    ASSERT_NULL(cmq_tls_session_cache_lookup(cfg_b, id_a, sizeof(id_a)));
+
+    /* Destroy one cache: the other is unaffected. The destroyed
+     * cache owned sess_a; the destroy path freed it. The other cache
+     * still owns sess_b. */
+    cmq_tls_session_cache_destroy(cfg_a);
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg_b), 1);
+
+    /* Destroy the remaining cache. Both cfg_a and cfg_b had caches;
+     * cfg_a's session was freed by its destroy call above. */
+    cmq_tls_session_cache_destroy(cfg_b);
+    cmq_tls_config_destroy(cfg_a);
+    cmq_tls_config_destroy(cfg_b);
+}
+
 TEST_MAIN()
