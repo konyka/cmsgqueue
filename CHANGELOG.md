@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.27 - 2026-09-03
+
+### Added
+- **TLS session cache OpenSSL callback wiring** — the v0.5.23 cache is
+  now wired into the handshake lifecycle. After `cmq_tls_load`, the
+  SSL_CTX has:
+  - `SSL_CTX_sess_set_new_cb` — fires after a successful handshake;
+    the new callback up-refs the session and inserts it into the cache
+    by session ID.
+  - `SSL_CTX_sess_set_get_cb` — fires when a client presents a session
+    ID in the ClientHello; the new callback looks up the cached session
+    (returns borrowed reference; OpenSSL does not take ownership).
+  - `SSL_SESS_CACHE_NO_INTERNAL` — disables OpenSSL's internal cache so
+    we own the only one (no duplicate memory).
+  - `SSL_CTX_set_app_data(cfg->ssl_ctx, cfg)` — stashes the cmq_tls_config_t*
+    so the callbacks can find the per-config cache state.
+- **Test-only accessor** `cmq_tls_get_ssl_ctx_for_test()` — returns
+  the SSL_CTX so tests can verify the cache mode and callback
+  registration. Marked test-only; do not use in production.
+
+### Tests
+- `tests/test_tls_session_cache.c` extended with
+  `callbacks_registered_on_load` — verifies that after `cmq_tls_load`,
+  the SSL_CTX has the expected cache mode (SERVER | NO_INTERNAL). The
+  callback registration itself is verified indirectly: the wiring
+  compiles and links, and the unit tests confirm the cache API works.
+
+### Documentation
+- `docs/reviews/v0.5.27.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0527_{1,2}.txt` — bench transcripts + cache wiring
+  micro-bench.
+
+### Test count
+- 101 tests (was 100 in v0.5.26; +1 integration test).
+
 ## 0.5.26 - 2026-09-03
 
 ### Added

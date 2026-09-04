@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_tls.h"
+#include "cmq_tls_session_cache.h"
 #include "cmq_log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -96,6 +97,14 @@ static int tls_copy_field(cmq_tls_config_t *cfg, size_t field_off, size_t field_
 #ifdef CMQ_TLS_OPENSSL
 /* Build the SSL_CTX for a configured listener. Called once per
  * cmq_tls_config after cert/key are set. Returns 0 on success. */
+/* Forward decls: OpenSSL session-callbacks. Defined below tls_build_ssl_ctx
+ * so the SSL_CTX can be built first and then have these registered. */
+#ifdef CMQ_TLS_OPENSSL
+static int cmq_tls_sess_new_cb(SSL *ssl, SSL_SESSION *sess);
+static SSL_SESSION *cmq_tls_sess_get_cb(SSL *ssl, const unsigned char *id,
+                                          int id_len, int *copy);
+#endif
+
 static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     if (cfg->ssl_ctx_init_done) return 0;
     const SSL_METHOD *method = TLS_server_method();
@@ -173,6 +182,21 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
             SSL_CTX_set_verify_depth(cfg->ssl_ctx, 9);
         }
     }
+    /* v0.5.27: wire the session resumption cache into OpenSSL's
+     * handshake lifecycle. The new_cb fires after a successful
+     * handshake with the freshly-negotiated session; we insert it
+     * into our cache. The get_cb fires when a client presents a
+     * session ID in the ClientHello; we look it up and return the
+     * cached session (or NULL on miss, which falls back to a full
+     * handshake). NO_INTERNAL tells OpenSSL not to maintain its
+     * own parallel session cache. The cfg pointer is stashed on the
+     * SSL_CTX via SSL_CTX_set_app_data so the callbacks can find the
+     * per-config cache. */
+    SSL_CTX_set_app_data(cfg->ssl_ctx, cfg);
+    SSL_CTX_sess_set_new_cb(cfg->ssl_ctx, cmq_tls_sess_new_cb);
+    SSL_CTX_sess_set_get_cb(cfg->ssl_ctx, cmq_tls_sess_get_cb);
+    SSL_CTX_set_session_cache_mode(cfg->ssl_ctx,
+        SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_INTERNAL);
     cfg->ssl_ctx_init_done = 1;
     return 0;
 }
@@ -611,3 +635,60 @@ void cmq_tls_session_free_slot(void *sess) {
 #endif
     (void)sess;
 }
+
+#ifdef CMQ_TLS_OPENSSL
+/* v0.5.27: OpenSSL session-callback wiring.
+ *
+ * `new_cb` is called by OpenSSL after a successful handshake with the
+ * freshly-minted SSL_SESSION*. We extract its session ID and insert into
+ * the per-config cache (which takes ownership of the up-ref'd session).
+ *
+ * `get_cb` is called by OpenSSL when a client presents a session ID in
+ * the ClientHello. We return the cached SSL_SESSION* (or NULL on miss
+ * or invalid params). OpenSSL does NOT take ownership of the returned
+ * pointer; we return a borrowed reference. The cache's lifetime owns
+ * the underlying storage.
+ *
+ * The cmq_tls_config_t* is stashed on the SSL_CTX via SSL_CTX_set_app_data
+ * (set in tls_build_ssl_ctx) so the callbacks can find the per-config
+ * cache. */
+static int cmq_tls_sess_new_cb(SSL *ssl, SSL_SESSION *sess) {
+    if (!ssl || !sess) return 0;
+    SSL_CTX *ctx = SSL_get_SSL_CTX(ssl);
+    if (!ctx) return 0;
+    cmq_tls_config_t *cfg = (cmq_tls_config_t *)SSL_CTX_get_app_data(ctx);
+    if (!cfg) return 0;
+    unsigned int id_len = 0;
+    const unsigned char *id = SSL_SESSION_get_id(sess, &id_len);
+    if (!id || id_len == 0) return 0;
+    /* Up-ref so the cache owns its own reference. */
+    if (SSL_SESSION_up_ref(sess) != 1) return 0;
+    if (cmq_tls_session_cache_insert(cfg, id, id_len, sess) != 0) {
+        /* Insert failed (e.g., id too long) — release the up-ref. */
+        SSL_SESSION_free(sess);
+        return 0;
+    }
+    return 1;
+}
+
+static SSL_SESSION *cmq_tls_sess_get_cb(SSL *ssl, const unsigned char *id,
+                                          int id_len, int *copy) {
+    if (copy) *copy = 0;
+    if (!ssl || !id || id_len <= 0) return NULL;
+    SSL_CTX *ctx = SSL_get_SSL_CTX(ssl);
+    if (!ctx) return NULL;
+    cmq_tls_config_t *cfg = (cmq_tls_config_t *)SSL_CTX_get_app_data(ctx);
+    if (!cfg) return NULL;
+    return (SSL_SESSION *)(void *)cmq_tls_session_cache_lookup(cfg, id, (unsigned int)id_len);
+}
+#endif
+
+#ifdef CMQ_TLS_OPENSSL
+SSL_CTX *cmq_tls_get_ssl_ctx_for_test(cmq_tls_config_t *cfg) {
+    if (!cfg) return NULL;
+    if (!cfg->ssl_ctx_init_done) {
+        if (tls_build_ssl_ctx(cfg) != 0) return NULL;
+    }
+    return cfg->ssl_ctx;
+}
+#endif

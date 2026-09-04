@@ -61,4 +61,12 @@ void *cmq_tls_get_session_cache_state(cmq_tls_config_t *cfg);
 int cmq_tls_set_session_cache_state(cmq_tls_config_t *cfg, void *state);
 void cmq_tls_session_free_slot(void *sess);
 
+#ifdef CMQ_TLS_OPENSSL
+#include <openssl/ssl.h>
+/* v0.5.27: test-only accessor. Returns the SSL_CTX built by
+ * cmq_tls_load so tests can verify the session cache mode and
+ * callback registration. Do NOT use in production code. */
+SSL_CTX *cmq_tls_get_ssl_ctx_for_test(cmq_tls_config_t *cfg);
+#endif
+
 #endif

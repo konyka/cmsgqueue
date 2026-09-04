@@ -1,0 +1,5 @@
+v0.5.27 TLS session cache wiring micro-bench (test_tls_session_cache, 7 cases):
+- 6 unit tests: ~50us total (deterministic).
+- 1 integration test (callbacks_registered_on_load): ~2ms (cert gen
+  + SSL_CTX build). The test verifies the cache mode is set to
+  SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_INTERNAL.
