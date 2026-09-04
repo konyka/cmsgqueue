@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.31 - 2026-09-03
+
+### Added
+- **Per-listener TLS runtime** — `cmq_server_create` now allocates
+  `tls_config_slots[1..3]` when `cfg.listeners[i].tls_cert` and
+  `.tls_key` are both set. Each listener can have its own cert
+  (and CA, and mTLS toggle) and its own session cache (via the
+  v0.5.23 cache + v0.5.30 isolation invariant). Listeners with
+  missing cert/key fall back to slot 0 (or plaintext if slot 0 is
+  also unallocated); a misconfigured listener is logged as a
+  warning and doesn't break the others. Cleanup in
+  `cmq_server_destroy` already iterates all slots (line 7854),
+  so no additional destroy work was needed.
+
+### Tests
+- `tests/test_p5_listener.c` — added `per_listener_tls_two_certs`
+  that configures two distinct certs on listeners[0] and [1] and
+  verifies `srv->tls_config_slots[0]`, `[1]` are both non-NULL,
+  `tls_config_count == 2`, and the two slots are distinct objects.
+
+### Documentation
+- `docs/reviews/v0.5.31.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0531_{1,2}.txt` — bench transcripts + per-listener
+  micro-bench.
+
+### Test count
+- 104 tests (was 103 in v0.5.30; +1 per-listener TLS test).
+
 ## 0.5.30 - 2026-09-03
 
 ### Added

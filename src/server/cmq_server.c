@@ -6933,6 +6933,50 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         srv->tls_config_count = 1;
     }
 
+    /* v0.5.31: per-listener TLS. listeners[1..3] get their own
+     * cmq_tls_config_t if both cert and key are set. A listener with
+     * a missing cert/key falls back to slot 0 (or plaintext if slot 0
+     * is also unallocated). The cache isolation property is verified
+     * by test_tls_session_cache.cache_isolation_two_configs (v0.5.30). */
+    for (int li = 1; li < CMQ_MAX_LISTENERS; li++) {
+        const char *cert = srv->config.listeners[li].tls_cert;
+        const char *key = srv->config.listeners[li].tls_key;
+        if (!cert || !key || cert[0] == '\0' || key[0] == '\0') continue;
+        srv->tls_config_slots[li] = cmq_tls_config_create();
+        if (!srv->tls_config_slots[li]) {
+            cmq_log_warn(srv->log,
+                "v0.5.31: tls slot %d allocation failed; listener falls back to slot 0",
+                li);
+            continue;
+        }
+        if (cmq_tls_set_cert(srv->tls_config_slots[li], cert) != 0 ||
+            cmq_tls_set_key(srv->tls_config_slots[li], key) != 0) {
+            cmq_log_warn(srv->log,
+                "v0.5.31: tls slot %d set_cert/set_key failed", li);
+            cmq_tls_config_destroy(srv->tls_config_slots[li]);
+            srv->tls_config_slots[li] = NULL;
+            continue;
+        }
+        const char *ca = srv->config.listeners[li].tls_ca;
+        if (ca && ca[0] != '\0') {
+            cmq_tls_set_ca(srv->tls_config_slots[li], ca);
+        }
+        if (srv->config.listeners[li].tls_verify_peer) {
+            cmq_tls_set_verify(srv->tls_config_slots[li], 1);
+        }
+        if (cmq_tls_load(srv->tls_config_slots[li]) != 0) {
+            cmq_log_warn(srv->log,
+                "v0.5.31: tls slot %d load failed; listener falls back to slot 0",
+                li);
+            cmq_tls_config_destroy(srv->tls_config_slots[li]);
+            srv->tls_config_slots[li] = NULL;
+            continue;
+        }
+        srv->tls_config_count++;
+        cmq_log_info(srv->log, "v0.5.31: tls slot %d enabled: cert=%s",
+                     li, cert);
+    }
+
     /* F5: persistence WAL. When persist_dir is set, open a filestore
      * and persist every published message. fsync is amortized
      * (cmq_filestore_sync is called by the accept loop tick). */

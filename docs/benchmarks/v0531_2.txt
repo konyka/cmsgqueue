@@ -1,0 +1,5 @@
+v0.5.31 per-listener TLS micro-bench (test_p5_listener, 5 cases):
+- Total: 5 tests in ~4 ms (~800 us per case, deterministic).
+- per_listener_tls_two_certs: ~2.5ms (2 cert gen + 2 cmq_tls_config_create
+  + 2 cmq_tls_load + destroy).
+- Other 4 tests: <1.5ms each.
