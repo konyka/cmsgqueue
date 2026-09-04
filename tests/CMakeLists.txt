@@ -10,6 +10,7 @@ file(GLOB TEST_SOURCES "test_*.c")
 set(CMQ_TCP_TESTS
   test_coro_integration
   test_integration
+  test_multi_listen
   test_phase2
   test_request_reply
   test_server

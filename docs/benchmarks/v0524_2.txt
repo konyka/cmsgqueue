@@ -1,0 +1,5 @@
+v0.5.24 multi-listener micro-bench (test_multi_listen, 4 cases):
+- three_listener_accept_all:      3.4 ms (port-wait + 3 connects)
+- listener_count_one_unchanged:   3.4 ms (port-wait + port-fail check)
+- port_guard_excludes_test_range: 5.4 ms (port-wait + port-fail check)
+- three_listener_concurrent_connects: 8.0 ms (30 connects across 3 listeners)

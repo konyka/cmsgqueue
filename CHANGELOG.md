@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.24 - 2026-09-03
+
+### Added
+- **Multi-listener real concurrent bind + accept test** — replaces the
+  v0.5.18 smoke test (`test_multi_listen`) with 4 real test cases that
+  actually exercise the runtime accept loop on multiple listen sockets:
+  - `three_listener_accept_all` — bind 3 listeners, connect to each, verify
+    the kernel hands each connection to the server (no RST).
+  - `listener_count_one_unchanged` — single-listener config binds only
+    the base port; verifies legacy behavior is unaffected.
+  - `port_guard_excludes_test_range` — confirms the v0.5.18 port guard
+    (28800-28999, 18800-18999) skips the multi-listener branch.
+  - `three_listener_concurrent_connects` — opens 30 connections spread
+    across all 3 listeners in parallel to prove they actually accept
+    concurrently.
+
+### Test infrastructure
+- `tests/CMakeLists.txt` — added `test_multi_listen` to the
+  `CMQ_TCP_TESTS` resource lock list so it serializes with
+  `test_server`, `test_stress`, etc. on TCP ports.
+
+### Documentation
+- `docs/reviews/v0.5.24.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0524_{1,2}.txt` — bench transcripts + multi-listener
+  micro-bench.
+
+### Test count
+- 90 tests (was 86 in v0.5.23; test_multi_listen +3 net cases).
+  - test_multi_listen: 4 (was 1).
+  - No other test count changes.
+
 ## 0.5.23 - 2026-09-03
 
 ### Added
