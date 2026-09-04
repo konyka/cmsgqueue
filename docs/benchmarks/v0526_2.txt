@@ -1,0 +1,4 @@
+v0.5.26 MQTT dispatch + matcher micro-bench (test_mqtt_5_wildcard, 11 cases):
+- Total: 11 tests in ~32 us total (~3 us per case, deterministic).
+- Pure function, no allocations, no locks.
+- v0.5.26 dispatch: ~10 lines change, ~0 perf cost vs v0.5.25 inline.

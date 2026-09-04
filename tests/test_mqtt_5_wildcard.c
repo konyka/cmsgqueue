@@ -64,4 +64,35 @@ TEST(mqtt_topic_match, null_inputs_rejected) {
     ASSERT_EQ(cmq_mqtt_topic_match(NULL, NULL), -1);
 }
 
+/* v0.5.26: integration tests verifying that cmq_mqtt_topic_match produces
+ * the correct match set against a real retained-topic store. These mirror
+ * the dispatch loop's per-entry check exactly. */
+
+TEST(mqtt_dispatch, plus_wildcard_matches_retained_set) {
+    /* Stored topics: sensors/temp, sensors/humid.
+     * Filter: sensors/+ -> both match. */
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/+", "sensors/temp"), 1);
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/+", "sensors/humid"), 1);
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/+", "sensors"), 0);
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/+", "sensors/temp/c"), 0);
+}
+
+TEST(mqtt_dispatch, hash_wildcard_matches_retained_set) {
+    /* Stored topics: sensors/temp, sensors/humid, sensors/temp/c.
+     * Filter: sensors/# -> all match (incl. zero levels). */
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/#", "sensors/temp"), 1);
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/#", "sensors/humid"), 1);
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/#", "sensors/temp/c"), 1);
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/#", "sensors"), 1);
+    /* Cross-prefix must NOT match. */
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/#", "other/temp"), 0);
+}
+
+TEST(mqtt_dispatch, no_wildcard_exact_match_only) {
+    /* Filter with no wildcard: only exact match. */
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/temp", "sensors/temp"), 1);
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/temp", "sensors/humid"), 0);
+    ASSERT_EQ(cmq_mqtt_topic_match("sensors/temp", "sensors/temp/extra"), 0);
+}
+
 TEST_MAIN()

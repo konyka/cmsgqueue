@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.26 - 2026-09-03
+
+### Added
+- **MQTT dispatch loop wired to public matcher** — the SUBSCRIBE → retained
+  dispatch loop in `cmq_mqtt_server.c` now calls `cmq_mqtt_topic_match`
+  (the public function extracted in v0.5.25) instead of an inline
+  `+`-only loop. This gives the dispatch path full MQTT 5.0 spec
+  compliance for both `+` and `#` wildcards, with no behavior change
+  for clients that don't use wildcards.
+
+### Tests
+- `tests/test_mqtt_5_wildcard.c` extended with 3 dispatch integration
+  cases:
+  - `dispatch_plus_wildcard_matches_retained_set`
+  - `dispatch_hash_wildcard_matches_retained_set`
+  - `dispatch_no_wildcard_exact_match_only`
+
+### Documentation
+- `docs/reviews/v0.5.26.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0526_{1,2}.txt` — bench transcripts + dispatch
+  micro-bench.
+
+### Test count
+- 100 tests (was 97 in v0.5.25; +3 dispatch integration cases).
+
 ## 0.5.25 - 2026-09-03
 
 ### Added

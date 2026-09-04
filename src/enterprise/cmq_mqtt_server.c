@@ -675,41 +675,20 @@ size_t got = (size_t)n;
             if (last_topic[0]) {
                 const uint8_t *rp = NULL;
                 size_t rlen = 0;
-                /* P1 v0.5.15: if the SUBSCRIBE topic contains `+`
-                 * single-level wildcard, iterate retained entries.
-                 * True `+` support across the full retained table
-                 * is per-entry scan; v0.5.16+ should keep it. */
-                if (strchr(last_topic, '+') != NULL) {
+                /* P1 v0.5.15: if the SUBSCRIBE topic contains a wildcard
+                 * (`+` or `#`), iterate retained entries. v0.5.26 wired
+                 * the public cmq_mqtt_topic_match for full MQTT 5.0
+                 * spec compliance (handles `+` and `#` correctly). */
+                if (strchr(last_topic, '+') != NULL ||
+                    strchr(last_topic, '#') != NULL) {
                     for (int ri = 0; ri < g_mqtt_retained_count; ri++) {
                         pthread_mutex_lock(&g_mqtt_retained_lock);
                         if (g_mqtt_retained[ri].payload == NULL) {
                             pthread_mutex_unlock(&g_mqtt_retained_lock);
                             continue;
                         }
-                        /* Simple `+` match: replace `+` with single
-                         * segment placeholder, compare token-by-token. */
-                        const char *p = last_topic;
-                        const char *s = g_mqtt_retained[ri].topic;
-                        int match = 1;
-                        while (*p && *s) {
-                            const char *pe = p; while (*pe && *pe != '/') pe++;
-                            const char *se = s; while (*se && *se != '/') se++;
-                            size_t plen = pe - p, slen = se - s;
-                            int is_wc = (plen == 1 && p[0] == '+');
-                            if (is_wc) {
-                                /* matches any single segment */
-                            } else if (plen != slen || memcmp(p, s, plen) != 0) {
-                                match = 0;
-                            }
-                            p = *pe ? pe + 1 : pe;
-                            s = *se ? se + 1 : se;
-                            if (!match) break;
-                        }
-                        if (match && !*p && !*s) {
-                            /* Match! Emit retained PUBLISH. */
-                        } else {
-                            match = 0;
-                        }
+                        int match = (cmq_mqtt_topic_match(
+                            last_topic, g_mqtt_retained[ri].topic) == 1);
                         uint8_t *rp_match = match ? g_mqtt_retained[ri].payload : NULL;
                         size_t rlen_match = match ? g_mqtt_retained[ri].payload_len : 0;
                         const char *topic_match = match ? g_mqtt_retained[ri].topic : NULL;
