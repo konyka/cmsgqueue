@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.5.28 - 2026-09-03
+
+### Added
+- **Real end-to-end TLS handshake test** — `handshake_grows_cache`
+  does a full TLS 1.2 handshake on `127.0.0.1` between a fresh
+  client SSL and the production server SSL_CTX (with v0.5.27
+  callbacks wired). Verifies that after the handshake completes,
+  `cmq_tls_session_cache_size(cfg) >= 1` — i.e., the `new_session`
+  callback fired and our cache populated. This closes the
+  v0.5.27 honest-caveat: the structural test verified wiring; this
+  test verifies the runtime integration.
+
+### Test infrastructure
+- `v0528_make_pair` — helper that creates a connected socket pair
+  on a loopback ephemeral port.
+- `v0528_drive_handshake_pair` — drives a TLS handshake pair with
+  one side on a dedicated pthread (each side runs its own
+  `select()` loop; running both in one thread deadlocks on
+  shared kernel buffer reads).
+
+### Documented limitations
+- `session_reused_on_reconnect` test is a placeholder. OpenSSL 3.5
+  defaults to ticket-based resumption for TLS 1.2 (session ID is
+  empty), so the v0.5.27 cache (keyed by session ID) is exercised
+  by `new_session` but not by a follow-up `get_cb`. Wiring up
+  ticket-based resumption is a separate scope.
+
+### Documentation
+- `docs/reviews/v0.5.28.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0528_{1,2}.txt` — bench transcripts + handshake
+  micro-bench.
+
+### Test count
+- 102 tests (was 101 in v0.5.27; +1 real handshake test, +1
+  placeholder = +2 net cases).
+
 ## 0.5.27 - 2026-09-03
 
 ### Added

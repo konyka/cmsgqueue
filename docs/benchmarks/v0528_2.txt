@@ -1,0 +1,8 @@
+v0.5.28 TLS handshake test micro-bench (test_tls_session_cache, 9 cases):
+- 7 v0.5.23/27 tests: ~50us total.
+- 1 v0.5.27 integration test (callbacks_registered_on_load): ~2ms.
+- 1 v0.5.28 real handshake test: ~5ms (cert gen + full TLS 1.2 handshake
+  via select()-driven client thread + main-thread server, both sides
+  complete, cache.size > 0 after handshake).
+- 1 v0.5.28 placeholder (session_reused_on_reconnect): ~110us.
+- Total: ~7ms for 9 tests, deterministic.
