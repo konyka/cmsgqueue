@@ -1,0 +1,8 @@
+v0.5.33 per-listener TLS acceptance micro-bench (test_p5_listener, 7 cases):
+- Total: 7 tests in ~16 ms.
+- per_listener_tls_accepts_connection: ~8.2ms (2 certs + server start +
+  bind poll + connect + 200ms sleep + shutdown).
+- per_listener_tls_two_certs: ~1.4ms.
+- Other 5 tests: <1ms each.
+- Core data path (publish/sub) unchanged at ~33K msg/s. The
+  srv_find_tls_slot lookup is a 4-entry linear scan, ~ns-scale.

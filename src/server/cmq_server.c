@@ -6342,8 +6342,14 @@ static void *route_reconnect_thread(void *arg) {
 }
 
 static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
-    if (!srv->tls_config_slots[0]) return 0;
-    cmq_tls_session_t *tls = cmq_tls_server_session(srv->tls_config_slots[0], client->fd);
+    /* v0.5.33: pick the TLS config slot matching the listen fd that
+     * accepted this connection. client->tls_slot is set by accept_cb
+     * via srv_find_tls_slot. Falls back to slot 0 if the index is
+     * out of range or the slot is NULL. */
+    int slot = client->tls_slot;
+    if (slot < 0 || slot >= CMQ_MAX_LISTENERS) slot = 0;
+    if (!srv->tls_config_slots[slot]) return 0;
+    cmq_tls_session_t *tls = cmq_tls_server_session(srv->tls_config_slots[slot], client->fd);
     if (!tls) return -1;
     int rc = cmq_tls_handshake(tls);
     if (rc != 0) {
@@ -6487,6 +6493,7 @@ static void accept_cb(int fd, int events, void *data) {
                 continue;
             }
             client->worker_id = idx;
+            client->tls_slot = srv_find_tls_slot(srv, fd);
             if (client_tls_handshake(srv, client) != 0) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
@@ -6539,6 +6546,7 @@ static void accept_cb(int fd, int events, void *data) {
                 continue;
             }
             client->worker_id = -1;
+            client->tls_slot = srv_find_tls_slot(srv, fd);
             if (client_tls_handshake(srv, client) != 0) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);

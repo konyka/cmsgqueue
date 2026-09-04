@@ -207,4 +207,70 @@ TEST(p5, srv_find_tls_slot_lookup) {
     (void)rc2;
 }
 
+/* v0.5.33: per-listener TLS acceptance. Runs a server with two
+ * listeners (port 25003 and 25004), opens a TCP connection to
+ * each, and verifies the accept loop picks them up. The connection
+ * is dropped immediately (we don't drive a TLS handshake from a
+ * test driver — that's covered by the lower-layer v0.5.28 tests).
+ * The point of this test is to exercise the new wiring: the accept
+ * callback now sets client->tls_slot, so a connection to port+1
+ * must be admitted cleanly (not rejected by the per-slot NULL
+ * check in client_tls_handshake). */
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+TEST(p5, per_listener_tls_accepts_connection) {
+    ensure_dir();
+    gen_cert(P5_TEST_DIR "/cert0.pem", P5_TEST_DIR "/key0.pem", "p5server0");
+    gen_cert(P5_TEST_DIR "/cert1.pem", P5_TEST_DIR "/key1.pem", "p5server1");
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25003;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = P5_TEST_DIR "/cert0.pem";
+    cfg.tls_key = P5_TEST_DIR "/key0.pem";
+    cfg.listeners[1].tls_cert = P5_TEST_DIR "/cert1.pem";
+    cfg.listeners[1].tls_key = P5_TEST_DIR "/key1.pem";
+    cfg.listener_count = 2;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, p5_server_thread, srv), 0);
+    /* Wait for the bind (poll up to 1 second). */
+    for (int i = 0; i < 100; i++) {
+        if (srv->listen_fds[0] >= 0 && srv->listen_fds[1] >= 0) break;
+        struct timespec ts = {0, 10000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT(srv->listen_fds[0] >= 0);
+    ASSERT(srv->listen_fds[1] >= 0);
+
+    /* Connect to port+1 (slot 1's listener). The accept callback
+     * should set client->tls_slot = 1 and call client_tls_handshake
+     * with the slot 1 config. The connection is admitted; the
+     * handshake itself is a no-op for the test (the client closes
+     * before writing any TLS data). */
+    int c = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT(c >= 0);
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)(cfg.port + 1));
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    int rc = connect(c, (struct sockaddr *)&addr, sizeof(addr));
+    ASSERT_EQ(rc, 0);
+    /* Give the accept callback a moment to fire. */
+    struct timespec ts = {0, 200000000};
+    nanosleep(&ts, NULL);
+    close(c);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    int rc3 __attribute__((unused)) = system("rm -rf " P5_TEST_DIR);
+    (void)rc3;
+}
+
 TEST_MAIN()

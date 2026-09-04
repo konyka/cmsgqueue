@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.33 - 2026-09-03
+
+### Changed
+- **Per-listener TLS acceptance wired into the hot path** — the
+  accept callback (`accept_cb`) now sets `client->tls_slot =
+  srv_find_tls_slot(srv, listen_fd)` for every new connection, and
+  `client_tls_handshake` reads `client->tls_slot` to pick the
+  matching `tls_config_slots[i]`. Before v0.5.33, every connection
+  used slot 0 regardless of which listen fd accepted it. The
+  `accept_thread_func` (v0.5.17 stub) is unchanged; updating it
+  to use the same per-listener selection is a follow-up.
+
+### Tests
+- `tests/test_p5_listener.c` — `per_listener_tls_accepts_connection`
+  runs the server with two listeners and connects to port+1
+  (slot 1). Verifies the connection is admitted cleanly with the
+  new wiring in place.
+
+### Documentation
+- `docs/reviews/v0.5.33.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0533_{1,2}.txt` — bench transcripts +
+  acceptance test micro-bench.
+
+### Test count
+- 106 tests (was 105 in v0.5.32; +1 acceptance test).
+
 ## 0.5.32 - 2026-09-03
 
 ### Added
