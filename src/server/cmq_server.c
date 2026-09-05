@@ -6863,9 +6863,16 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     /* P1 v0.5.6: wire the F19b mqtt bridge. The relay thread calls
      * cmq_sublist_insert via the function pointer registered here.
      * Without this, the relay is a no-op (relay_insert_cb default)
-     * and mqtt PUBLISH topics never reach cmq subscribers. */
-    cmq_mqtt_register_sublist_insert((cmq_sublist_insert_fn)cmq_sublist_insert,
-                                       srv->sublist);
+     * and mqtt PUBLISH topics never reach cmq subscribers.
+     *
+     * v0.5.35: REVERTED. cmq_sublist_insert is the subscription
+     * registry API (it stores the data pointer in a trie node's
+     * subs[] array), not a publish API. The relay's payload pointer
+     * landed in subs[] where it was never reachable as a message.
+     * The proper publish fanout is v0.6 work; until then, the
+     * relay's no-op default correctly recycles buffers via the
+     * v0.5.34 freelist fix without polluting the sublist. */
+    (void)srv;
 
     /* 0=TRACE is valid (cmq.h). Only out-of-range falls back to INFO. */
     int log_level = srv->config.log_level;

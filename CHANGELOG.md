@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.35 - 2026-09-03
+
+### Changed
+- **MQTT bridge wiring reverted** — `cmq_server_create` no longer
+  registers `cmq_sublist_insert` as the relay's insert callback.
+  v0.5.6 had wired the relay to call `cmq_sublist_insert(srv->sublist,
+  topic, payload)`, but that's the **subscription registry** API
+  (it stores the data pointer in a trie node's `subs[]` array),
+  not a publish API. The relay's payload pointer landed in
+  `subs[]` where it was never reachable as a message to subscribers.
+  The proper publish fanout is v0.6 scope; until then, the
+  relay's no-op default correctly recycles buffers via the
+  v0.5.34 freelist fix without polluting the sublist.
+
+### Tests
+- `tests/test_mqtt_bridge.c` — `relay_does_not_create_subscriptions`
+  verifies that pushing 200 payloads through the bridge relay does
+  NOT increase `cmq_sublist_count(srv->sublist)`. Catches the
+  wiring-revert regression.
+
+### Documentation
+- `docs/reviews/v0.5.35.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0535_{1,2}.txt` — bench transcripts + bridge
+  test micro-bench.
+
+### Test count
+- 108 tests (was 107 in v0.5.34; +1 sublist-pollution test).
+
 ## 0.5.34 - 2026-09-03
 
 ### Fixed

@@ -1,0 +1,8 @@
+v0.5.35 bridge sublist-pollution test micro-bench
+(tests/test_mqtt_bridge, 2 cases):
+- Total: 2 tests in ~0.3 ms.
+- relay_does_not_create_subscriptions: ~170us (cmq_server_create +
+  relay start + 1 enqueue + 200ms sleep + count check).
+- set_bridge_server_keeps_pointer: ~3us.
+- Core data path unchanged at ~33K msg/s. The wiring revert removes
+  one function call per cmq_server_create; ns cost.
