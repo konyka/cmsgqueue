@@ -1,0 +1,10 @@
+v0.5.34 MQTT bridge freelist load test micro-bench
+(tests/test_mqtt_bridge_freelist_load, 2 cases):
+- Total: 2 tests in ~3 ms.
+- real_load_drains_to_freelist: ~1ms (200 enqueues + 500ms sleep +
+  freelist_count check).
+- cap_enforced_under_load: ~2.1ms (1000 retained publishes).
+
+The relay path bug fix adds one `if (inserted) continue;` branch in
+cmq_mqtt_bridge_relay; ~ns cost per message. Core data path
+unchanged at ~33K msg/s.

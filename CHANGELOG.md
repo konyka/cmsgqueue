@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.34 - 2026-09-03
+
+### Fixed
+- **MQTT bridge relay double-free bug** — `cmq_mqtt_bridge_relay`
+  was unconditionally pushing the payload to the freelist (or
+  `free()`ing it when the cap was reached) AFTER calling
+  `g_relay_insert_fn` which takes ownership of the payload. In
+  production, `g_relay_insert_fn` is wired to `cmq_sublist_insert`
+  which stores the pointer in a trie node; `cmq_sublist_free_data`
+  (called on server destroy) would then free the same pointer that
+  the relay just freed — a classic double-free. The fix: when the
+  insert function ran (returned 0), the relay MUST NOT touch the
+  payload. The freelist path now only runs on the no-op insert
+  path (e.g., `cmq_mqtt_register_sublist_insert(NULL, NULL)`).
+
+  This bug has been latent since v0.5.8 (when the freelist was
+  introduced). The v0.5.34 load test exposed it via ASAN.
+
+### Added
+- **MQTT bridge freelist real load test** — `real_load_drains_to_freelist`
+  in `tests/test_mqtt_bridge_freelist_load.c`. The existing v0.5.19
+  test exercised `cmq_mqtt_store_retained` (separate table), which
+  does NOT touch the freelist. The new test pushes 200 messages
+  directly to the bridge queue via `cmq_mqtt_test_enqueue_bridge`
+  (test-only helper), waits for the relay to drain, and asserts
+  the freelist count is bounded by 64 and > 0.
+- Two test-only helpers in `cmq_mqtt_server.{c,h}`:
+  `cmq_mqtt_test_enqueue_bridge` and `cmq_mqtt_test_freelist_count`.
+  Documented as test-only in the header.
+
+### Documentation
+- `docs/reviews/v0.5.34.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0534_{1,2}.txt` — bench transcripts + freelist
+  test micro-bench.
+
+### Test count
+- 107 tests (was 106 in v0.5.33; +1 real load test).
+
 ## 0.5.33 - 2026-09-03
 
 ### Changed

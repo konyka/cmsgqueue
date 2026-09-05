@@ -178,10 +178,20 @@ static void *cmq_mqtt_bridge_relay(void *arg) {
 
         /* P1 v0.5.4: insert into cmq sublist via the function pointer
          * registered at cmq_mqtt_set_bridge_server time. */
+        int inserted = 0;
         if (g_relay_sublist && g_relay_insert_fn != relay_insert_cb) {
-            (void)g_relay_insert_fn(g_relay_sublist, topic, payload);
+            inserted = (g_relay_insert_fn(g_relay_sublist, topic, payload)
+                        == 0);
         }
-        /* P1 v0.5.8: return to freelist (capped) instead of free. */
+        /* v0.5.34: only the no-op insert path lets the relay own the
+         * payload. When the sublist insert ran (took ownership), the
+         * relay MUST NOT touch `payload` — pushing to the freelist or
+         * freeing here causes a double-free at server destroy time
+         * (the sublist frees on cleanup). */
+        if (inserted) continue;
+
+        /* P1 v0.5.8: return to freelist (capped) instead of free.
+         * Only reached on the no-op insert path. */
         pthread_mutex_lock(&g_mqtt_bridge_lock);
         if (g_mqtt_bridge_freelist_count < 64) {
             g_mqtt_bridge_freelist[g_mqtt_bridge_freelist_count++] =
@@ -229,6 +239,50 @@ void cmq_mqtt_bridge_shutdown(void) {
     pthread_join(g_mqtt_bridge_thread, NULL);
     g_mqtt_bridge_thread_started = 0;
     g_mqtt_bridge_head = g_mqtt_bridge_tail = g_mqtt_bridge_count = 0;
+}
+
+/* v0.5.34: test-only helpers. These bypass the MQTT wire protocol
+ * and push directly to the bridge queue, mimicking what
+ * mqtt_handle_client does on a real PUBLISH. Used by
+ * tests/test_mqtt_bridge_freelist_load.c to exercise the relay path
+ * where the freelist actually gets used (the v0.5.19
+ * cap_enforced_under_load test exercises cmq_mqtt_store_retained,
+ * which is a separate table that does NOT touch the freelist). */
+
+int cmq_mqtt_test_enqueue_bridge(const char *topic, const uint8_t *payload,
+                                    size_t len) {
+    if (!topic) return -1;
+    if (!payload && len > 0) return -1;
+    pthread_mutex_lock(&g_mqtt_bridge_lock);
+    int rc = -1;
+    if (g_mqtt_bridge_count < 256) {
+        strcpy(g_mqtt_bridge_topics[g_mqtt_bridge_head], topic);
+        if (len > 0) {
+            uint8_t *copy = malloc(len);
+            if (!copy) {
+                pthread_mutex_unlock(&g_mqtt_bridge_lock);
+                return -1;
+            }
+            memcpy(copy, payload, len);
+            g_mqtt_bridge_payloads[g_mqtt_bridge_head] = copy;
+        } else {
+            g_mqtt_bridge_payloads[g_mqtt_bridge_head] = NULL;
+        }
+        g_mqtt_bridge_lens[g_mqtt_bridge_head] = len;
+        g_mqtt_bridge_head = (g_mqtt_bridge_head + 1) % 256;
+        g_mqtt_bridge_count++;
+        pthread_cond_signal(&g_mqtt_bridge_not_empty);
+        rc = 0;
+    }
+    pthread_mutex_unlock(&g_mqtt_bridge_lock);
+    return rc;
+}
+
+int cmq_mqtt_test_freelist_count(void) {
+    pthread_mutex_lock(&g_mqtt_bridge_lock);
+    int n = g_mqtt_bridge_freelist_count;
+    pthread_mutex_unlock(&g_mqtt_bridge_lock);
+    return n;
 }
 
 #define MQTT_TYPE_DISCONNECT  0xE0

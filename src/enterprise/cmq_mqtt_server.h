@@ -69,6 +69,13 @@ void cmq_mqtt_register_sublist_insert(cmq_sublist_insert_fn fn,
  * cmq_server_destroy. */
 void cmq_mqtt_bridge_shutdown(void);
 
+/* v0.5.34: test-only helpers. These bypass the MQTT wire protocol
+ * and push directly to the bridge queue. Documented as
+ * test-only; production code must not call these. */
+int cmq_mqtt_test_enqueue_bridge(const char *topic, const uint8_t *payload,
+                                    size_t len);
+int cmq_mqtt_test_freelist_count(void);
+
 /* v0.5.25: MQTT 5.0 topic matcher.
  *
  * pattern: SUBSCRIBE filter string, may contain `+` (single-level)
