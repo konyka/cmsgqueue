@@ -103,6 +103,62 @@ TEST(mqtt_bridge_freelist, bridge_publish_writes_to_wal) {
     system("rm -rf /tmp/cmq-test-v0539-bridge");
 }
 
+/* v0.5.40: bridge WAL recovery. The cmq_server_create replay loop
+ * detects CMQB records (set by cmq_filestore_append_bridge) and
+ * dispatches them via cmq_server_publish. After destroy + recreate,
+ * the bridge record should land in the recovery path and
+ * stat_messages_replayed should increment. */
+TEST(mqtt_bridge_freelist, bridge_record_survives_restart) {
+    system("rm -rf /tmp/cmq-test-v0540-bridge && mkdir -p /tmp/cmq-test-v0540-bridge");
+
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25032;
+    cfg.persist_dir = "/tmp/cmq-test-v0540-bridge";
+    cfg.log_to_stdout = 0;
+    cmq_server_t *srv_a = NULL;
+    ASSERT_EQ(cmq_server_create(&srv_a, &cfg), CMQ_OK);
+    ASSERT_NOT_NULL(srv_a->filestore);
+
+    cmq_mqtt_set_bridge_server(srv_a);
+
+    uint8_t payload[32] = {1, 2, 3, 4};
+    ASSERT_EQ(cmq_mqtt_test_enqueue_bridge("v0.5.40/sentinel",
+                                            payload, sizeof(payload)), 0);
+    struct timespec ts = {0, 200000000};
+    nanosleep(&ts, NULL);
+
+    /* Confirm the WAL has 1 record (the bridge enqueue). */
+    ASSERT_EQ(cmq_filestore_last_seq(srv_a->filestore), 1);
+
+    /* Destroy server A. The WAL persists. */
+    cmq_mqtt_bridge_shutdown();
+    cmq_server_destroy(srv_a);
+
+    /* Recreate server B with same persist_dir. cmq_server_create's
+     * replay loop reads the WAL and dispatches CMQB records via
+     * cmq_server_publish. */
+    cmq_server_t *srv_b = NULL;
+    ASSERT_EQ(cmq_server_create(&srv_b, &cfg), CMQ_OK);
+
+    /* The replay dispatcher may run on a worker thread (parallel
+     * chunked replay). Give it a moment to complete before checking
+     * the stat. We poll up to 1 second for stat_messages_replayed > 0. */
+    uint64_t replayed = 0;
+    for (int i = 0; i < 100; i++) {
+        replayed = cmq_atomic_load_u64(&srv_b->stat_messages_replayed,
+                                          CMQ_ATOMIC_RELAXED);
+        if (replayed > 0) break;
+        ts = (struct timespec){0, 10000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT(replayed >= 1);
+
+    cmq_server_destroy(srv_b);
+    system("rm -rf /tmp/cmq-test-v0540-bridge");
+}
+
 TEST(mqtt_bridge_freelist, real_load_drains_to_freelist) {
     /* Construct a minimal server so the relay thread can be
      * spawned. Use a high port outside the test_server port guard

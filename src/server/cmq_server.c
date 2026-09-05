@@ -6677,7 +6677,43 @@ static int cmq_sublist_recover_cb(void *ctx, int is_sub,
  * without duplication. */
 static void replay_one_record(cmq_server_t *srv, uint8_t *data,
                                 size_t data_len) {
-    if (!data || data_len < 9) return;
+    if (!data || data_len == 0) return;
+
+    /* v0.5.40: bridge WAL records are tagged with a 4-byte magic
+     * ("CMQB") followed by a 1-byte version. The cmq client publish
+     * path uses a 2-byte magic ("CF") for its header, so the two
+     * formats never collide. Bridge records skip the cmq wire
+     * parsing (handle_publish) and go directly through
+     * cmq_server_publish (the v0.5.36 fanout helper). */
+    if (data_len >= 7 && memcmp(data, "CMQB", 4) == 0) {
+        const uint8_t version = data[4];
+        if (version != 0x01) {
+            /* Unknown version — drop silently. Forward-compat:
+             * future versions can decide how to interpret older
+             * records. */
+            return;
+        }
+        uint16_t topic_len = ((uint16_t)data[5] << 8) | data[6];
+        if (topic_len == 0 || (size_t)(7 + topic_len) > data_len) {
+            /* Malformed record — drop. */
+            cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            return;
+        }
+        const char *topic = (const char *)data + 7;
+        const uint8_t *payload = data + 7 + topic_len;
+        size_t payload_len = data_len - 7 - topic_len;
+        /* v0.5.39 frame format (recap):
+         *   [magic 4B 'CMQB'] [version 1B 0x01] [topic_len 2B BE]
+         *   [topic] [payload] */
+        (void)cmq_server_publish(srv, topic, payload, payload_len,
+                                  "mqtt_bridge_replay");
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_replayed, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        return;
+    }
+
+    if (data_len < 9) return;
     cmq_frame_t rf;
     rf.hdr.magic[0] = CMQ_PROTO_MAGIC_0;
     rf.hdr.magic[1] = CMQ_PROTO_MAGIC_1;

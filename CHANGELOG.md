@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.40 - 2026-09-03
+
+### Changed
+- **MQTT bridge WAL recovery** — `replay_one_record` in
+  `cmq_server.c` now detects `CMQB` records (written by the v0.5.39
+  bridge adapter) and dispatches them via `cmq_server_publish`
+  instead of `handle_publish`. The cmq client-publish path is
+  unchanged. On `cmq_server_create`, the existing replay loop
+  automatically picks up bridge records and fans them out to
+  matching live subscribers.
+
+### Tests
+- `tests/test_mqtt_bridge_freelist_load.c` — new
+  `bridge_record_survives_restart` builds a server with
+  `persist_dir`, enqueues a bridge record via the test-only
+  helper, destroys, recreates, and polls
+  `stat_messages_replayed` until the replay loop has processed
+  the bridge record. Catches any regression in the
+  detection/dispatch path.
+
+### Documentation
+- `docs/reviews/v0.5.40.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0540_{1,2}.txt` — bench transcripts + recovery
+  micro-bench.
+
+### Test count
+- 114 tests (was 113 in v0.5.39; +1 bridge-record-survives-restart).
+
 ## 0.5.39 - 2026-09-03
 
 ### Added

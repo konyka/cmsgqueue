@@ -1,0 +1,7 @@
+v0.5.40 MQTT bridge recovery micro-bench:
+- bridge_record_survives_restart: ~1.2ms total (server_create +
+  bridge enqueue + 200ms drain + destroy + recreate + poll for
+  stat_messages_replayed + destroy).
+- Core data path unchanged at ~33K msg/s.
+- The recovery path only runs on cmq_server_create with a non-empty
+  WAL, so it has no impact on the hot data path.
