@@ -251,4 +251,13 @@ struct cmq_server {
  * each new connection. */
 int srv_find_tls_slot(cmq_server_t *srv, int lfd);
 
+/* v0.5.36: publish a message from a non-client context (e.g., the
+ * MQTT bridge relay). subject: validated against cmq_sublist rules.
+ * payload/payload_len: raw message bytes (NOT owned by the helper
+ * — caller must free after return). account_name: synthetic owner
+ * for delivery ACL. Returns 0 on success, -1 on sublist-match OOM. */
+int cmq_server_publish(cmq_server_t *srv, const char *subject,
+                       const uint8_t *payload, size_t payload_len,
+                       const char *account_name);
+
 #endif

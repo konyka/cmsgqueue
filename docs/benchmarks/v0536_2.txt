@@ -1,0 +1,7 @@
+v0.5.36 cmq_server_publish + bridge fanout micro-bench:
+- test_mqtt_bridge (3 cases): ~450us total.
+- test_mqtt_bridge_freelist_load (2 cases): ~500us total.
+- test_mqtt_bridge_insert (1 case): ~18us.
+
+The new cmq_server_publish helper is on the MQTT bridge path (low
+rate, not in the TCP data path). Core bench unchanged at ~33K msg/s.

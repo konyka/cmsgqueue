@@ -90,11 +90,18 @@ TEST(mqtt_bridge_freelist, real_load_drains_to_freelist) {
      * is well under 1 second. */
     sleep_ms(500);
     int count = cmq_mqtt_test_freelist_count();
-    /* The cap is enforced; the count never exceeds 64. */
+    /* v0.5.36: with the v0.5.34 fix + v0.5.36 bridge adapter, the
+     * adapter calls cmq_server_publish which frees the buffer
+     * (deliver_targets_sync borrows, doesn't take ownership, and
+     * the v0.5.8 freelist-recycle path was removed since the buffer
+     * ends up in subscribers' write queues anyway). The freelist
+     * stays at 0 on this code path; it's only populated when the
+     * relay takes the no-op default (g_relay_insert_fn == relay_insert_cb).
+     *
+     * The cap assertion still holds: count <= 64 (and is now == 0). */
     ASSERT(count >= 0);
     ASSERT(count <= 64);
-    /* Under sustained load, the freelist should hold some entries. */
-    ASSERT(count > 0);
+    ASSERT_EQ(count, 0);
 
     cmq_mqtt_bridge_shutdown();
     cmq_server_destroy(srv);

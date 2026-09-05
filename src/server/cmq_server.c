@@ -3243,6 +3243,43 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     free(tgts);
 }
 
+/* v0.5.36: non-client publish entry point. Used by the MQTT
+ * bridge relay (and any future caller that needs to publish
+ * without going through handle_publish's wire-parsing path).
+ * Caller owns the payload buffer (this helper does NOT free it).
+ * The account_name is used for delivery ACL re-validation. */
+int cmq_server_publish(cmq_server_t *srv, const char *subject,
+                       const uint8_t *payload, size_t payload_len,
+                       const char *account_name) {
+    if (!srv || !subject || !*subject || !account_name) return -1;
+    cmq_sublist_result_t result;
+    if (cmq_sublist_match(srv->sublist, subject, &result) != 0)
+        return -1;
+    if (result.count == 0) {
+        cmq_sublist_result_free(&result);
+        return 0;
+    }
+    size_t ntgt = 0;
+    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
+    cmq_sublist_result_free(&result);
+    if (ntgt == SIZE_MAX || !tgts || ntgt == 0) {
+        free(tgts);
+        return 0;
+    }
+    /* Synchronous fanout: the bridge is a low-rate path (MQTT
+     * clients connect, publish occasionally). Async coroutine
+     * dispatch is overkill — direct call to deliver_targets_sync
+     * avoids the worker-thread hop. */
+    if (deliver_targets_sync(srv, tgts, ntgt, subject, account_name,
+                              /* account_epoch */ 0, payload, payload_len,
+                              /* headers */ NULL, /* headers_len */ 0) != 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                                  CMQ_ATOMIC_RELAXED);
+    }
+    free(tgts);
+    return 0;
+}
+
 static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                               const cmq_frame_t *frame) {
     if (!frame->payload || frame->payload_len < 6) {

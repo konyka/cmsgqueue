@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.36 - 2026-09-03
+
+### Added
+- **`cmq_server_publish` helper** — a non-client publish entry point
+  that does sublist match + fanout. Used by the MQTT bridge relay
+  (and any future caller that needs to publish without going through
+  `handle_publish`'s wire-parsing path). Declared in `cmq_server.h`.
+- **`cmq_bridge_publish_adapter`** — bridge-side callback that
+  invokes `cmq_server_publish` with the relay's payload + length,
+  then frees the buffer. Wired as the default insert callback by
+  `cmq_mqtt_set_bridge_server`. This makes the bridge ACTUALLY
+  DELIVER messages to cmq subscribers (v0.5.6-v0.5.34 stored
+  payloads in unreachable trie nodes; v0.5.35 made the bridge a
+  safe no-op; v0.5.36 completes the design).
+- **`cmq_sublist_insert_fn` signature change** — now carries
+  `(const uint8_t *payload, size_t payload_len)` instead of
+  `(void *data)`. Required for binary MQTT payloads (the old
+  signature used `strlen` semantics which is UB on binary data).
+
+### Tests
+- `tests/test_mqtt_bridge.c` — `end_to_end_fanout_to_subscriber`
+  builds a server, starts the relay, pushes a payload, drains, and
+  asserts `stat_messages_dropped == 0`. Catches regressions in the
+  new wiring.
+- `tests/test_mqtt_bridge_insert.c` — updated `test_insert_fn` to
+  match the new signature.
+- `tests/test_mqtt_bridge_freelist_load.c` — updated to expect
+  `count == 0` since the v0.5.36 adapter frees the buffer
+  instead of recycling to the freelist (the freelist is now only
+  populated on the no-op insert path).
+
+### Documentation
+- `docs/reviews/v0.5.36.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0536_{1,2}.txt` — bench transcripts + bridge
+  micro-bench.
+
+### Test count
+- 109 tests (was 108 in v0.5.35; +1 end-to-end fanout test).
+
 ## 0.5.35 - 2026-09-03
 
 ### Changed

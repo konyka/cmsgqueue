@@ -61,7 +61,8 @@ void cmq_mqtt_set_rate_limit(uint32_t capacity, uint32_t refill_per_sec);
  * pointer so the relay thread can call into cmq_sublist_insert
  * without circular include deps. Called once during cmq_server_create. */
 typedef int (*cmq_sublist_insert_fn)(void *sublist, const char *subject,
-                                     void *data);
+                                     const uint8_t *payload,
+                                     size_t payload_len);
 void cmq_mqtt_register_sublist_insert(cmq_sublist_insert_fn fn,
                                        void *sublist);
 

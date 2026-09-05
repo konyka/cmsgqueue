@@ -136,19 +136,46 @@ static atomic_int g_mqtt_bridge_dying;
 
 /* Forward decls: we can't include cmq_sublist.h / cmq_server.h
  * here because of circular deps. The relay thread calls
- * cmq_sublist_insert via a function pointer resolved at
- * cmq_mqtt_set_bridge_server time. */
+ * cmq_server_publish via a function pointer resolved at
+ * cmq_mqtt_set_bridge_server time (v0.5.36: signature carries the
+ * payload length so binary MQTT payloads are handled correctly). */
 typedef int (*cmq_sublist_insert_fn)(void *sublist, const char *topic_str,
-                                     void *data);
+                                     const uint8_t *payload,
+                                     size_t payload_len);
+struct cmq_server;
+typedef struct cmq_server cmq_server_t;
+int cmq_server_publish(cmq_server_t *srv, const char *subject,
+                       const uint8_t *payload, size_t payload_len,
+                       const char *account_name);
 
 /* Forward decls of the cmq_sub_ref_t struct (defined in
  * cmq_server.c). We don't need to know its layout — we just
  * hold a pointer and let cmq_sublist_match/remove handle it. */
 struct cmq_sub_ref;
 
-static int relay_insert_cb(void *sublist, const char *subject, void *data) {
-    (void)sublist; (void)subject; (void)data;
+static int relay_insert_cb(void *sublist, const char *subject,
+                            const uint8_t *payload, size_t payload_len) {
+    (void)sublist; (void)subject; (void)payload; (void)payload_len;
     return 0;
+}
+
+/* v0.5.36: bridge adapter that calls cmq_server_publish. The relay
+ * thread passes the MQTT PUBLISH payload as `data` and its length
+ * in `payload_len`. The relay allocated the buffer with malloc; we
+ * own it for the duration of this call. cmq_server_publish does
+ * NOT take ownership (it borrows for fanout), so we free after. */
+static int cmq_bridge_publish_adapter(void *sublist, const char *topic,
+                                       const uint8_t *payload,
+                                       size_t payload_len) {
+    (void)sublist;
+    if (!g_mqtt_bridge_srv || !topic || !payload) {
+        free((void *)payload);
+        return 0;
+    }
+    int rc = cmq_server_publish(g_mqtt_bridge_srv, topic, payload,
+                                  payload_len, "mqtt_bridge");
+    free((void *)payload);
+    return rc == 0 ? 0 : -1;
 }
 
 static cmq_sublist_insert_fn g_relay_insert_fn = relay_insert_cb;
@@ -177,11 +204,15 @@ static void *cmq_mqtt_bridge_relay(void *arg) {
         pthread_mutex_unlock(&g_mqtt_bridge_lock);
 
         /* P1 v0.5.4: insert into cmq sublist via the function pointer
-         * registered at cmq_mqtt_set_bridge_server time. */
+         * registered at cmq_mqtt_set_bridge_server time.
+         *
+         * v0.5.34: the condition was `g_relay_sublist && ...`. The new
+         * v0.5.36 bridge adapter doesn't use the sublist arg (it
+         * derives the cmq_server_t from g_mqtt_bridge_srv instead),
+         * so we drop the sublist check. */
         int inserted = 0;
-        if (g_relay_sublist && g_relay_insert_fn != relay_insert_cb) {
-            inserted = (g_relay_insert_fn(g_relay_sublist, topic, payload)
-                        == 0);
+        if (g_relay_insert_fn != relay_insert_cb) {
+            inserted = (g_relay_insert_fn(NULL, topic, payload, plen) == 0);
         }
         /* v0.5.34: only the no-op insert path lets the relay own the
          * payload. When the sublist insert ran (took ownership), the
@@ -207,6 +238,13 @@ static void *cmq_mqtt_bridge_relay(void *arg) {
 
 void cmq_mqtt_set_bridge_server(struct cmq_server *server) {
     g_mqtt_bridge_srv = server;
+    /* v0.5.36: wire the bridge adapter as the default insert fn
+     * when a server is set. The adapter calls cmq_server_publish
+     * (the proper fanout path) and frees the buffer. */
+    if (server) {
+        g_relay_insert_fn = cmq_bridge_publish_adapter;
+        g_relay_sublist = NULL;  /* not used by the new adapter */
+    }
     if (server && !g_mqtt_bridge_thread_started) {
         atomic_init(&g_mqtt_bridge_dying, 0);
         if (pthread_create(&g_mqtt_bridge_thread, NULL,
