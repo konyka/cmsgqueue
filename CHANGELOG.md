@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.37 - 2026-09-03
+
+### Added
+- **End-to-end persistent subscriber restart test** —
+  `tests/test_persist_restart.c:subscriber_survives_restart`.
+  Creates a server with `persist_dir`, records a subscription
+  pattern, destroys the server, recreates it with the same
+  `persist_dir`, and verifies the subscription is recovered
+  (via `cmq_sublist_count` + `cmq_sublist_match`). Closes the
+  v0.5.19 honest caveat that the recovery path was only
+  manually tested.
+
+### Documentation
+- `docs/reviews/v0.5.37.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0537_{1,2}.txt` — bench transcripts + restart
+  test micro-bench.
+
+### Test count
+- 110 tests (was 109 in v0.5.36; +1 persist-restart test).
+
 ## 0.5.36 - 2026-09-03
 
 ### Added

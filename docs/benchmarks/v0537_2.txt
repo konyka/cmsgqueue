@@ -1,0 +1,4 @@
+v0.5.37 persist_restart test micro-bench:
+- test_persist_restart: ~315us total (server_create + record_sub +
+  destroy + recreate + sublist_count + sublist_match + destroy).
+- Core bench unchanged at ~33K msg/s.
