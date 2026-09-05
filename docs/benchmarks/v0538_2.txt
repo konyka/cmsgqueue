@@ -1,0 +1,4 @@
+v0.5.38 persist_replay test micro-bench:
+- test_persist_replay: ~315us total (server_create + filestore_append +
+  destroy + recreate + stat read + destroy).
+- Core bench unchanged at ~33K msg/s.

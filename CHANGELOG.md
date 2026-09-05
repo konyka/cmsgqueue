@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.38 - 2026-09-03
+
+### Added
+- **handle_publish persistence integration smoke test** —
+  `tests/test_persist_replay.c:handle_publish_writes_to_wal`.
+  Writes a record to the WAL via `cmq_filestore_append`, restarts
+  the server, verifies the second `cmq_server_create` doesn't crash
+  and exposes the `stat_messages_replayed` field. Closes the gap
+  between `test_persist_unit.c` (file format) and `test_recover.c`
+  (replay loop in isolation).
+
+### Documentation
+- `docs/reviews/v0.5.38.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0538_{1,2}.txt` — bench transcripts + replay
+  test micro-bench.
+
+### Test count
+- 111 tests (was 110 in v0.5.37; +1 persist-replay test).
+
 ## 0.5.37 - 2026-09-03
 
 ### Added
