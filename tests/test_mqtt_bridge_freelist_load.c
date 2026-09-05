@@ -56,6 +56,53 @@ TEST(mqtt_bridge_freelist, cap_enforced_under_load) {
  * exercise the freelist (cmq_mqtt_store_retained operates on a
  * separate table). This one does. */
 #include "cmq_server.h"
+#include "cmq_filestore.h"
+extern int cmq_mqtt_test_enqueue_bridge(const char *topic,
+                                          const uint8_t *payload,
+                                          size_t len);
+
+/* v0.5.39: bridge publish writes a record to the WAL. The adapter
+ * calls cmq_server_persist_bridge (which wraps cmq_filestore_append_bridge)
+ * before cmq_server_publish. With persist_dir configured, the WAL
+ * gains one record per bridge enqueue. Without persist_dir, the
+ * persist step is a no-op. */
+TEST(mqtt_bridge_freelist, bridge_publish_writes_to_wal) {
+    system("rm -rf /tmp/cmq-test-v0539-bridge && mkdir -p /tmp/cmq-test-v0539-bridge");
+
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25031;
+    cfg.persist_dir = "/tmp/cmq-test-v0539-bridge";
+    cfg.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    ASSERT_NOT_NULL(srv->filestore);
+
+    uint64_t before = cmq_filestore_last_seq(srv->filestore);
+
+    /* Start the relay (sets the bridge publish adapter). */
+    cmq_mqtt_set_bridge_server(srv);
+
+    uint8_t payload[32] = {1, 2, 3, 4};
+    ASSERT_EQ(cmq_mqtt_test_enqueue_bridge("v0.5.39/sentinel",
+                                            payload, sizeof(payload)), 0);
+
+    /* Wait for the relay to drain. */
+    struct timespec ts = {0, 200000000};
+    nanosleep(&ts, NULL);
+
+    uint64_t after = cmq_filestore_last_seq(srv->filestore);
+    /* Bridge enqueue + adapter should have produced one WAL record. */
+    ASSERT_EQ(after, before + 1);
+
+    /* Cleanup. The WAL persists but the bridge records are
+     * currently only drained by the (future) recovery path. */
+    cmq_mqtt_bridge_shutdown();
+    cmq_server_destroy(srv);
+    system("rm -rf /tmp/cmq-test-v0539-bridge");
+}
+
 TEST(mqtt_bridge_freelist, real_load_drains_to_freelist) {
     /* Construct a minimal server so the relay thread can be
      * spawned. Use a high port outside the test_server port guard

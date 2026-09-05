@@ -3280,6 +3280,20 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
     return 0;
 }
 
+/* v0.5.39: bridge-specific WAL persist. Routes through
+ * cmq_filestore_append_bridge where the server has a filestore; no-op
+ * otherwise. The matching recovery path that dispatches via
+ * cmq_server_publish on startup is a future round. */
+int cmq_server_persist_bridge(cmq_server_t *srv, const char *topic,
+                                const uint8_t *payload,
+                                size_t payload_len) {
+    if (!srv || !topic || !srv->filestore) return -1;
+    uint64_t seq = 0;
+    return cmq_filestore_append_bridge(srv->filestore, topic,
+                                          strlen(topic),
+                                          payload, payload_len, &seq);
+}
+
 static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                               const cmq_frame_t *frame) {
     if (!frame->payload || frame->payload_len < 6) {

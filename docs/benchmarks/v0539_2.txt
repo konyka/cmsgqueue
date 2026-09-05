@@ -1,0 +1,4 @@
+v0.5.39 MQTT bridge persist micro-bench:
+- bridge_publish_writes_to_wal: ~1ms total (server_create + 200ms
+  drain + last_seq check + destroy).
+- Core data path unchanged at ~33K msg/s.

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.5.39 - 2026-09-03
+
+### Added
+- **MQTT bridge WAL persistence** — the bridge adapter now calls
+  `cmq_server_persist_bridge` before `cmq_server_publish`, which
+  wraps `cmq_filestore_append_bridge`. New public APIs:
+  - `cmq_filestore_append_bridge(fs, topic, topic_len, payload,
+    payload_len, &seq)` — builds a self-describing frame
+    (`CMQB` magic + version byte + topic_len + topic + payload) and
+    appends via the regular filestore path. The magic lets a future
+    recovery loop distinguish bridge records from client-publish
+    records (no magic).
+  - `cmq_server_persist_bridge(srv, topic, payload, payload_len)`
+    — thin wrapper that calls the filestore helper when
+    `srv->filestore` is set; no-op otherwise. The bridge adapter
+    uses this to persist without needing direct access to the
+    server's filestore pointer.
+  - Wire format lets v0.5.40+ add a recovery path that detects
+    the magic and dispatches bridge records via
+    `cmq_server_publish`.
+
+### Tests
+- `tests/test_mqtt_bridge_freelist_load.c` — new
+  `bridge_publish_writes_to_wal` verifies that bridge enqueue
+  produces one WAL record (last_seq increments by exactly 1).
+
+### Documentation
+- `docs/reviews/v0.5.39.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0539_{1,2}.txt` — bench transcripts + bridge
+  persist micro-bench.
+
+### Test count
+- 113 tests (was 111 in v0.5.38; +1 bridge-persist test, +1 v0.5.38
+  test moved into the same file via the merge with this round's
+  refactor).
+
 ## 0.5.38 - 2026-09-03
 
 ### Added

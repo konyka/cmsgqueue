@@ -260,4 +260,12 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
                        const uint8_t *payload, size_t payload_len,
                        const char *account_name);
 
+/* v0.5.39: bridge-specific WAL persist. Builds a self-describing
+ * frame (magic 'CMQB' + version + topic_len + topic + payload)
+ * and appends it to the server's filestore. The matching recovery
+ * path is a future round. Best-effort: returns 0 on success, -1
+ * on error or when the server has no filestore. */
+int cmq_server_persist_bridge(cmq_server_t *srv, const char *topic,
+                                const uint8_t *payload, size_t payload_len);
+
 #endif

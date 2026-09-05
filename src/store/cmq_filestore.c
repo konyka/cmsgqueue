@@ -772,7 +772,7 @@ static int filestore_sync_impl(cmq_filestore_t *fs) {
 static int filestore_maybe_fsync(cmq_filestore_t *fs);
 
 int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
-                          uint64_t *out_seq) {
+                           uint64_t *out_seq) {
     if (!fs || !data || len == 0) return -1;
     if (fs_begin_op(fs) != 0) return -1;
     int rc = filestore_append_impl(fs, data, len, out_seq);
@@ -784,6 +784,33 @@ int cmq_filestore_append(cmq_filestore_t *fs, const uint8_t *data, size_t len,
         }
     }
     fs_end_op(fs);
+    return rc;
+}
+
+/* v0.5.39: bridge-specific append. Frame format:
+ *   [magic 4B 'CMQB'] [version 1B 0x01] [topic_len 2B BE] [topic] [payload]
+ * The magic lets the recovery loop distinguish bridge records from
+ * client-publish records (no magic). Topic_len is uint16_t BE. */
+int cmq_filestore_append_bridge(cmq_filestore_t *fs,
+                                  const char *topic, size_t topic_len,
+                                  const uint8_t *payload, size_t payload_len,
+                                  uint64_t *out_seq) {
+    if (!fs || !topic || topic_len == 0 || topic_len > 0xFFFF) return -1;
+    if (!payload && payload_len > 0) return -1;
+
+    /* v0.5.39 frame: 4B magic + 1B version + 2B topic_len + topic + payload. */
+    size_t frame_len = 4 + 1 + 2 + topic_len + payload_len;
+    uint8_t *frame = malloc(frame_len);
+    if (!frame) return -1;
+    memcpy(frame, "CMQB", 4);
+    frame[4] = 0x01;
+    frame[5] = (uint8_t)(topic_len >> 8);
+    frame[6] = (uint8_t)(topic_len & 0xFF);
+    memcpy(frame + 7, topic, topic_len);
+    if (payload_len > 0) memcpy(frame + 7 + topic_len, payload, payload_len);
+
+    int rc = cmq_filestore_append(fs, frame, frame_len, out_seq);
+    free(frame);
     return rc;
 }
 

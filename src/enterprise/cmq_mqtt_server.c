@@ -147,6 +147,11 @@ typedef struct cmq_server cmq_server_t;
 int cmq_server_publish(cmq_server_t *srv, const char *subject,
                        const uint8_t *payload, size_t payload_len,
                        const char *account_name);
+/* v0.5.39: bridge WAL persist. Declared here to avoid pulling in
+ * cmq_server.h (circular dep). Implementation lives in cmq_server.c. */
+int cmq_server_persist_bridge(cmq_server_t *srv, const char *topic,
+                                const uint8_t *payload,
+                                size_t payload_len);
 
 /* Forward decls of the cmq_sub_ref_t struct (defined in
  * cmq_server.c). We don't need to know its layout — we just
@@ -159,11 +164,13 @@ static int relay_insert_cb(void *sublist, const char *subject,
     return 0;
 }
 
-/* v0.5.36: bridge adapter that calls cmq_server_publish. The relay
- * thread passes the MQTT PUBLISH payload as `data` and its length
- * in `payload_len`. The relay allocated the buffer with malloc; we
- * own it for the duration of this call. cmq_server_publish does
- * NOT take ownership (it borrows for fanout), so we free after. */
+/* v0.5.36: bridge adapter. Calls cmq_server_publish (fanout) and
+ * v0.5.39: cmq_server_persist_bridge (persist to WAL when one is
+ * configured). The relay thread passes the MQTT PUBLISH payload as
+ * `data` and its length in `payload_len`. The relay allocated the
+ * buffer with malloc; we own it for the duration of this call.
+ * cmq_server_publish does NOT take ownership (it borrows for
+ * fanout), so we free after. */
 static int cmq_bridge_publish_adapter(void *sublist, const char *topic,
                                        const uint8_t *payload,
                                        size_t payload_len) {
@@ -172,6 +179,10 @@ static int cmq_bridge_publish_adapter(void *sublist, const char *topic,
         free((void *)payload);
         return 0;
     }
+    /* v0.5.39: persist to WAL before fanout. Best-effort: silent
+     * on error. v0.5.40+ adds the recovery path. */
+    cmq_server_persist_bridge(g_mqtt_bridge_srv, topic, payload,
+                                payload_len);
     int rc = cmq_server_publish(g_mqtt_bridge_srv, topic, payload,
                                   payload_len, "mqtt_bridge");
     free((void *)payload);

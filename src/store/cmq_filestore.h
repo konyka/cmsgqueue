@@ -46,6 +46,19 @@ void cmq_filestore_set_sync_interval(cmq_filestore_t *fs,
  * Returns 0 on success, -1 on failure (worker thread spawn). */
 int cmq_filestore_set_async(cmq_filestore_t *fs, unsigned queue_capacity);
 
+/* v0.5.39: bridge-specific append. Builds a self-describing frame
+ * (magic 'CMQB' + version byte + topic_len + topic + payload)
+ * and writes it to the FILESTORE via the regular append path. The
+ * recovery path (future round) detects this format by the magic and
+ * dispatches via cmq_server_publish instead of handle_publish.
+ *
+ * Returns 0 on success, -1 on error (mirrors cmq_filestore_append).
+ * On success, *out_seq is the WAL sequence number. */
+int cmq_filestore_append_bridge(cmq_filestore_t *fs,
+                                  const char *topic, size_t topic_len,
+                                  const uint8_t *payload, size_t payload_len,
+                                  uint64_t *out_seq);
+
 /* P1 v0.5.5: cap the per-record payload size accepted by the async
  * enqueue. Default 1 MiB. 0 disables the cap (NOT recommended). */
 void cmq_filestore_set_max_payload_size(cmq_filestore_t *fs, size_t bytes);
