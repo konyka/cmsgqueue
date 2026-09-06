@@ -571,6 +571,14 @@ int cmq_js_set_msgs_rotate_bytes(cmq_js_t *j, uint64_t cap) {
     return 0;
 }
 
+uint64_t cmq_js_msgs_rotate_bytes(cmq_js_t *j) {
+    if (!j) return 0;
+    cmq_mutex_lock(&j->lock);
+    uint64_t n = j->rotate_bytes;
+    cmq_mutex_unlock(&j->lock);
+    return n;
+}
+
 int cmq_js_publish(cmq_js_t *j, const char *subject,
                    const uint8_t *val, size_t len) {
     if (!j) return -1;
@@ -720,6 +728,34 @@ int cmq_js_set_default_partitions(cmq_js_t *j, unsigned n) {
     cmq_mutex_lock(&j->lock);
     j->def_parts = n;
     cmq_mutex_unlock(&j->lock);
+    return 0;
+}
+
+unsigned cmq_js_default_partitions(cmq_js_t *j) {
+    if (!j) return 0;
+    cmq_mutex_lock(&j->lock);
+    unsigned n = j->def_parts;
+    cmq_mutex_unlock(&j->lock);
+    return n;
+}
+
+int cmq_js_reload(cmq_js_t *j, int *live_parts, int *live_rotate,
+                  int fresh_parts, int fresh_rotate) {
+    if (!live_parts || !live_rotate) return -1;
+    if (fresh_parts < 0 || fresh_parts > (int)CMQ_STREAM_MAX_PARTS)
+        return -1;
+    if (fresh_rotate < 0 || fresh_rotate > 1073741824)
+        return -1;
+    if (fresh_parts > 0) {
+        if (j && cmq_js_set_default_partitions(j, (unsigned)fresh_parts) != 0)
+            return -1;
+        *live_parts = fresh_parts;
+    }
+    if (fresh_rotate > 0) {
+        if (j && cmq_js_set_msgs_rotate_bytes(j, (uint64_t)fresh_rotate) != 0)
+            return -1;
+        *live_rotate = fresh_rotate;
+    }
     return 0;
 }
 

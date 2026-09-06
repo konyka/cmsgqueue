@@ -8863,6 +8863,14 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (cmq_js_reload(server->js,
+                      &server->config.js_partitions,
+                      &server->config.js_msgs_rotate_bytes,
+                      fresh.js_partitions,
+                      fresh.js_msgs_rotate_bytes) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_reload_apply_limits(&server->config, &fresh) != 0) {
         cmq_config_free(&fresh);
         return -1;

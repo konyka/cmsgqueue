@@ -66,6 +66,8 @@ open so pull consume survives reopen.
 `js_msgs_rotate_bytes` (v0.5.108, 0 = off) rewrites
 `.msgs` to a tail that fits the cap (at most 1024
 records) after an append that crosses the size.
+v0.5.130: reload applies a non-zero cap; omitted / 0
+keeps the current cap.
 
 ## Partitions (v0.5.105)
 
@@ -81,7 +83,9 @@ Default `n=1` keeps the unpartitioned append path.
 `cmq_js_set_default_partitions(n)` (1–16) applies to new
 streams that have no `{name}.parts` file. A present
 `.parts` file wins. Config `js_partitions` (0–16; 0/1 =
-unpartitioned) is wired at `cmq_js_create`. Persist +
+unpartitioned) is wired at `cmq_js_create`. v0.5.130:
+reload applies a non-zero value to the default for new
+streams; omitted / 0 keeps the current default. Persist +
 default writes `.parts` so reopen does not rematch keys.
 
 REQUEST `$JS.<name>` (v0.5.94) returns the last payload

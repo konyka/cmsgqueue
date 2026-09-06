@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.130 - 2026-09-06
+
+### Added
+- **Reload `$JS` partitions / rotate** —
+  `cmq_server_reload` applies non-zero `js_partitions`
+  (1–16) and `js_msgs_rotate_bytes` (1–1 GiB) to the live
+  table. New streams inherit the new default. Existing
+  `.parts` files stay. 0 / omitted keeps the current
+  values.
+
+### Tests
+- `tests/test_jrl.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.130.enumeration.md`, `v0.5.130.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v05130_{1,2}.txt`.
+
+### Test count
+- 511 tests (was 507 in v0.5.129; +4).
+
 ## 0.5.129 - 2026-09-06
 
 ### Added

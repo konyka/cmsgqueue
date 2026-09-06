@@ -25,9 +25,15 @@ int cmq_js_set_partitions(cmq_js_t *j, const char *name, unsigned n);
 unsigned cmq_js_partitions(cmq_js_t *j, const char *name);
 /* Default n for new streams without a .parts file. 1–16. */
 int cmq_js_set_default_partitions(cmq_js_t *j, unsigned n);
+unsigned cmq_js_default_partitions(cmq_js_t *j);
 /* 0 = off. After append, rewrite .msgs to a tail that fits cap
  * (and at most the 1024-record ring). */
 int cmq_js_set_msgs_rotate_bytes(cmq_js_t *j, uint64_t cap);
+uint64_t cmq_js_msgs_rotate_bytes(cmq_js_t *j);
+/* v0.5.130: 0 / omitted keeps. parts 1–16; rotate 1–1 GiB.
+ * Existing streams keep their .parts file. */
+int cmq_js_reload(cmq_js_t *j, int *live_parts, int *live_rotate,
+                  int fresh_parts, int fresh_rotate);
 
 /* 0 parsed; -1 not $JS; -2 malformed. */
 int cmq_js_parse(const char *subject, char *name, size_t ncap);
