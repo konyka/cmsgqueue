@@ -8922,6 +8922,16 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
     if (fresh.account_max_bytes_live > 0)
         server->config.account_max_bytes_live =
             fresh.account_max_bytes_live;
+    if (!server->mqtt_bridge) {
+        if (cmq_mqtt_reload_attach(&server->mqtt_bridge,
+                                   &server->config.mqtt_bridge_addr,
+                                   &server->config.mqtt_bridge_port,
+                                   fresh.mqtt_bridge_addr,
+                                   fresh.mqtt_bridge_port) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+    }
     if (server->mqtt_bridge) {
         cmq_mqtt_mapping_t maps[8];
         memset(maps, 0, sizeof(maps));

@@ -56,6 +56,12 @@ int cmq_mqtt_reload_maps(cmq_mqtt_bridge_t *br,
 int cmq_mqtt_reload_endpoint(cmq_mqtt_bridge_t *br,
                              const char **live_addr, int *live_port,
                              const char *fresh_addr, int fresh_port);
+/* v0.5.142: empty/omitted addr and port 0 keep off. Non-IPv4 /
+ * bad port fail closed. Creates and dials when *br is NULL.
+ * Existing bridge is left to reload_endpoint. */
+int cmq_mqtt_reload_attach(cmq_mqtt_bridge_t **br,
+                           const char **live_addr, int *live_port,
+                           const char *fresh_addr, int fresh_port);
 /* 1 forwarded; 0 no mapping; -1 not connected / bad args / I/O. */
 int cmq_mqtt_bridge_publish(cmq_mqtt_bridge_t *br, const char *subject,
                             const uint8_t *payload, size_t len);

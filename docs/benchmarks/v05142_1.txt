@@ -1,0 +1,3 @@
+v0.5.142 bench 1:
+- Attach apply: create + CONNECT + CONNACK (2 s dial budget).
+- Existing bridge: one pointer check, no dial.

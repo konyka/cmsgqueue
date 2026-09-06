@@ -35,6 +35,9 @@ and/or non-zero `mqtt_bridge_port` via
 `cmq_mqtt_bridge_connect` (same-endpoint live peer is a
 no-op). Omitted / empty keeps the current endpoint.
 Non-IPv4 and out-of-range port fail closed.
+v0.5.142: reload creates and dials the bridge when create
+had none. Omitted / empty keeps off. An existing bridge is
+left to v0.5.136.
 
 ## Files touched
 

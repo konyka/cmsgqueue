@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.142 - 2026-09-06
+
+### Added
+- **Attach MQTT bridge on reload** — when create had no
+  outbound bridge, SIGHUP creates `"cmsgbridge"` and dials
+  `mqtt_bridge_addr`:`mqtt_bridge_port`. Omitted / empty
+  keeps off. Non-IPv4 and bad port fail closed. An existing
+  bridge is left to v0.5.136.
+
+### Tests
+- `tests/test_mqa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.142.enumeration.md`, `v0.5.142.plan.md`.
+- `docs/features/mqtt-bridge.md`.
+- `docs/benchmarks/v05142_{1,2}.txt`.
+
+### Test count
+- 559 tests (was 555 in v0.5.141; +4).
+
 ## 0.5.141 - 2026-09-06
 
 ### Added

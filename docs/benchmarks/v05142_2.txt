@@ -1,0 +1,3 @@
+v0.5.142 bench 2:
+- Reload omitted/empty: no create.
+- Reject localhost: no create; live addr stays.
