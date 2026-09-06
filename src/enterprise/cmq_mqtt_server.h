@@ -3,26 +3,57 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* F19: Server-side MQTT 5.0 listener.
+/* F19: Server-side MQTT 3.1.1 / 5.0 listener.
  *
- * STUB. The full server-side MQTT listener (CONNECT/CONNACK/
- * SUBSCRIBE/SUBACK/PUBLISH/PUBACK/PINGREQ/PINGRESP/DISCONNECT
- * state machine) is deferred to v0.4.0. The MQTT bridge (F6)
- * ships a client-side library only; this server-side listener
- * would re-implement mosquitto/NanoMQ at the protocol level.
+ * CONNECT/CONNACK, PUBLISH (QoS 0/1/2 handshake), SUBSCRIBE/SUBACK,
+ * PINGREQ/PINGRESP, DISCONNECT, retain, topic match, optional
+ * bridge into cmq_sublist. MQTT 5.0 property lists are decoded
+ * (v0.5.43). Will messages and persistent sessions are still
+ * deferred (R6).
  *
- * Estimate: XL (2-4 weeks for one engineer to land a protocol-
- * compliant broker, including auth, topic wildcards, retain,
- * QoS 1/2, session state, will-message).
- *
- * The stub returns ENOSYS so callers can detect and document
- * the gap.
+ * cmq_mqtt_server_listen probes 127.0.0.1:1883 bind; the real
+ * accept loop starts via cmq_mqtt_server_start_listener after
+ * cmq_mqtt_set_listener_enabled(1).
  */
+
+#define CMQ_MQTT_USER_PROPS_MAX 4
+
+typedef struct cmq_mqtt_props {
+    uint8_t payload_format;   /* 0 or 1; 0xFF = unset */
+    uint32_t expiry_interval; /* 0 = unset */
+    uint16_t topic_alias;     /* 0 = unset */
+    uint32_t sub_id;          /* 0 = unset */
+    const uint8_t *content_type;
+    uint16_t content_type_len;
+    const uint8_t *response_topic;
+    uint16_t response_topic_len;
+    const uint8_t *corr_data;
+    uint16_t corr_data_len;
+    int user_count;
+    struct {
+        const uint8_t *key;
+        uint16_t key_len;
+        const uint8_t *val;
+        uint16_t val_len;
+    } user[CMQ_MQTT_USER_PROPS_MAX];
+    size_t consumed;          /* VBI + property bytes */
+} cmq_mqtt_props_t;
+
+/* Decode an MQTT 5 Property Length + Properties region.
+ * Strings/binary point into buf (borrowed). Returns 0 or -1. */
+int cmq_mqtt_props_decode(const uint8_t *buf, size_t len,
+                           cmq_mqtt_props_t *props);
+
+/* Payload offset in a PUBLISH variable header. v5=0 skips properties. */
+ssize_t cmq_mqtt_publish_payload_off(const uint8_t *vh, size_t vh_len,
+                                      int qos, int v5,
+                                      cmq_mqtt_props_t *props);
 
 int cmq_mqtt_server_listen(const char *bind_addr, int port);
 
@@ -91,10 +122,8 @@ int cmq_mqtt_test_freelist_count(void);
  * Pure function; no allocations, no globals, no locks. */
 int cmq_mqtt_topic_match(const char *pattern, const char *topic);
 
-/* P1 (v0.5.2): record a SUBSCRIBE topic filter. The listener calls
- * this on every accepted SUBSCRIBE. The cmq-sublist bridge (forwarding
- * matching PUBLISH into cmq_sublist) is v0.6 work; today this only
- * maintains an internal record. */
+/* Record a SUBSCRIBE topic filter. The listener calls this on every
+ * accepted SUBSCRIBE. The live bridge uses cmq_mqtt_set_bridge_server. */
 int cmq_mqtt_record_subscriber(const char *topic_filter);
 int cmq_mqtt_subscriber_count(void);
 int cmq_mqtt_get_subscribed_topic(int index, char *out, size_t out_len);
@@ -107,13 +136,8 @@ void cmq_mqtt_store_retained(const char *topic, const uint8_t *payload,
 int cmq_mqtt_fetch_retained(const char *topic, const uint8_t **out,
                              size_t *out_len);
 
-/* P1 (v0.5.3): bridge surface. v0.5.2 only stored retained messages
- * and recorded subscriptions; it never actually routed PUBLISH into
- * cmq_sublist. The full bridge requires server_t* plumbing across
- * the listener pthread — deferred to v0.6 per the WBS. For now
- * this API surface returns the most recent retained payload as a
- * primitive bridge: cmq callers can poll cmq_mqtt_fetch_retained
- * for topics they care about. */
+/* Bridge: cmq_mqtt_set_bridge_server wires PUBLISH into
+ * cmq_server_publish. cmq_mqtt_fetch_retained remains for retain. */
 
 #ifdef __cplusplus
 }

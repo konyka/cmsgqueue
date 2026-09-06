@@ -18,7 +18,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Persistence** ring buffer memstore, durable streams with consumers, file-based with CRC32 (library APIs; optional server wiring)
   Note: durable streams and file-based persistence are library APIs only — not wired into the server process.
 - **Clustering** node membership and outbound route broadcast (gateway/leaf APIs available as libraries)
-- **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired, F1 pending), MQTT bridge library, WebSocket transport with frame reassembly
+- **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired, F1 pending), MQTT bridge library with **5.0 property decode (v0.5.43)**, WebSocket transport with frame reassembly
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
 - **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability

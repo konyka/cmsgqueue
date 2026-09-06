@@ -1,6 +1,4 @@
-/* P4: minimal MQTT 3.1.1 server (CONNECT / CONNACK / PING / PINGRESP /
- * DISCONNECT). PUBLISH / SUBSCRIBE / SUBACK / PUBACK are deferred to
- * v0.6 (see v0.5.1.plan.md P8). */
+/* MQTT 3.1.1 / 5.0 listener. v0.5.43 decodes 5.0 property lists. */
 
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_mqtt_server.h"
@@ -29,11 +27,7 @@
 #define MQTT_TYPE_PINGREQ     0xC0
 #define MQTT_TYPE_PINGRESP    0xD0
 
-/* P1 v0.5.4: 5.0 property skip flag. When set, PUBLISH and
- * SUBSCRIBE variable headers are scanned for the 5.0 Properties
- * region (var-byte length) and skipped. Future work decodes
- * individual property tags. */
-static int mqtt_v5_props_skip = 1;
+/* v0.5.43: property lists are decoded by cmq_mqtt_props_decode. */
 
 /* P3 v0.5.4: listener opt-in. Default off (anyone-on-host risk).
  * Call cmq_mqtt_set_listener_enabled(1) to bind 127.0.0.1:1883. */
@@ -370,6 +364,138 @@ static int decode_remaining_length(const uint8_t *buf, size_t buf_len,
     return n;
 }
 
+static int mqtt_read_str(const uint8_t *p, size_t left,
+                          const uint8_t **out, uint16_t *out_len,
+                          size_t *used) {
+    if (left < 2) return -1;
+    uint16_t n = (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
+    if ((size_t)2 + n > left) return -1;
+    *out = p + 2;
+    *out_len = n;
+    *used = (size_t)2 + n;
+    return 0;
+}
+
+int cmq_mqtt_props_decode(const uint8_t *buf, size_t len,
+                           cmq_mqtt_props_t *props) {
+    if (!buf || len == 0) return -1;
+    uint32_t props_len = 0;
+    int rl = decode_remaining_length(buf, len, &props_len);
+    if (rl < 0) return -1;
+    if ((size_t)rl + props_len > len) return -1;
+    if (props) {
+        memset(props, 0, sizeof(*props));
+        props->payload_format = 0xFF;
+        props->consumed = (size_t)rl + props_len;
+    }
+    const uint8_t *p = buf + rl;
+    size_t left = props_len;
+    while (left > 0) {
+        uint8_t id = p[0];
+        p++;
+        left--;
+        size_t used = 0;
+        switch (id) {
+        case 0x01: /* Payload Format Indicator */
+        case 0x17: case 0x19: case 0x24: case 0x25:
+        case 0x28: case 0x29: case 0x2A:
+            if (left < 1) return -1;
+            if (props && id == 0x01) props->payload_format = p[0];
+            p += 1; left -= 1;
+            break;
+        case 0x21: case 0x22: case 0x23:
+            if (left < 2) return -1;
+            if (props && id == 0x23)
+                props->topic_alias = (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
+            p += 2; left -= 2;
+            break;
+        case 0x02: case 0x11: case 0x18: case 0x27:
+            if (left < 4) return -1;
+            if (props && id == 0x02)
+                props->expiry_interval =
+                    ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+                    ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+            p += 4; left -= 4;
+            break;
+        case 0x0B: {
+            uint32_t v = 0;
+            int n = decode_remaining_length(p, left, &v);
+            if (n < 0) return -1;
+            if (props) props->sub_id = v;
+            p += (size_t)n; left -= (size_t)n;
+            break;
+        }
+        case 0x03: case 0x08: case 0x1A: case 0x1C: case 0x1F:
+        case 0x12: case 0x15: {
+            const uint8_t *s; uint16_t slen;
+            if (mqtt_read_str(p, left, &s, &slen, &used) != 0) return -1;
+            if (props && id == 0x03) {
+                props->content_type = s;
+                props->content_type_len = slen;
+            } else if (props && id == 0x08) {
+                props->response_topic = s;
+                props->response_topic_len = slen;
+            }
+            p += used; left -= used;
+            break;
+        }
+        case 0x09: case 0x16: {
+            const uint8_t *s; uint16_t slen;
+            if (mqtt_read_str(p, left, &s, &slen, &used) != 0) return -1;
+            if (props && id == 0x09) {
+                props->corr_data = s;
+                props->corr_data_len = slen;
+            }
+            p += used; left -= used;
+            break;
+        }
+        case 0x26: {
+            const uint8_t *k, *v; uint16_t klen, vlen; size_t u2;
+            if (mqtt_read_str(p, left, &k, &klen, &used) != 0) return -1;
+            if (mqtt_read_str(p + used, left - used, &v, &vlen, &u2) != 0)
+                return -1;
+            if (props && props->user_count < CMQ_MQTT_USER_PROPS_MAX) {
+                int i = props->user_count++;
+                props->user[i].key = k;
+                props->user[i].key_len = klen;
+                props->user[i].val = v;
+                props->user[i].val_len = vlen;
+            }
+            p += used + u2; left -= used + u2;
+            break;
+        }
+        default:
+            return -1;
+        }
+    }
+    return 0;
+}
+
+ssize_t cmq_mqtt_publish_payload_off(const uint8_t *vh, size_t vh_len,
+                                      int qos, int v5,
+                                      cmq_mqtt_props_t *props) {
+    if (!vh || vh_len < 2 || qos < 0 || qos > 2) return -1;
+    uint16_t tlen = (uint16_t)(((uint16_t)vh[0] << 8) | vh[1]);
+    size_t off = 2 + (size_t)tlen;
+    if (off > vh_len) return -1;
+    if (qos > 0) {
+        if (off + 2 > vh_len) return -1;
+        off += 2;
+    }
+    if (v5) {
+        cmq_mqtt_props_t tmp;
+        cmq_mqtt_props_t *out = props ? props : &tmp;
+        if (cmq_mqtt_props_decode(vh + off, vh_len - off, out) != 0)
+            return -1;
+        off += out->consumed;
+    } else if (props) {
+        memset(props, 0, sizeof(*props));
+        props->payload_format = 0xFF;
+        props->consumed = 0;
+    }
+    return (ssize_t)off;
+}
+
 static int send_connack(int fd, uint8_t return_code) {
     uint8_t pkt[4];
     pkt[0] = MQTT_TYPE_CONNACK;
@@ -622,25 +748,23 @@ static int parse_connect(const uint8_t *buf, size_t len,
                           char *client_id_out, size_t client_id_max,
                           uint8_t *flags_out,
                           char *user_out, size_t user_max,
-                          char *pass_out, size_t pass_max) {
+                          char *pass_out, size_t pass_max,
+                          int *is_v5_out) {
     if (len < 8) return -1;
     if (buf[0] != 0 || buf[1] != 4) return -1;
     if (memcmp(buf + 2, "MQTT", 4) != 0) return -1;
     uint8_t proto_level = buf[6];
     if (proto_level != 0x04 && proto_level != 0x05) return -1;
-    /* P3 (v0.5.2): MQTT 5.0 (proto_level=0x05) is accepted at the
-     * CONNECT level; 5.0 properties (variable-length region) are
-     * skipped over for now (we don't decode them). */
     int is_v5 = (proto_level == 0x05);
+    if (is_v5_out) *is_v5_out = is_v5;
     uint8_t flags = buf[7];
     if (flags_out) *flags_out = flags;
     size_t off = 10;
     if (is_v5) {
-        if (off + 1 > len) return -1;
-        uint32_t props_len = 0;
-        int rl = decode_remaining_length(buf + off, len - off, &props_len);
-        if (rl < 0) return -1;
-        off += (size_t)rl + props_len;
+        cmq_mqtt_props_t cp;
+        if (cmq_mqtt_props_decode(buf + off, len - off, &cp) != 0)
+            return -1;
+        off += cp.consumed;
     }
     if (off + 2 > len) return -1;
     uint16_t cid_len = ((uint16_t)buf[off] << 8) | buf[off + 1];
@@ -679,6 +803,7 @@ static int mqtt_handle_client(int fd) {
     char user[64] = {0};
     char pass[64] = {0};
     int connected = 0;
+    int session_v5 = 0;
 
     for (;;) {
         ssize_t n = recv(fd, buf, sizeof(buf), 0);
@@ -703,7 +828,7 @@ size_t got = (size_t)n;
             if (parse_connect(buf + 1 + rl_off, rem_len,
                                 client_id, sizeof(client_id), NULL,
                                 user, sizeof(user), pass,
-                                sizeof(pass)) == 0) {
+                                sizeof(pass), &session_v5) == 0) {
                 int auth_ok = 1;
                 if (g_mqtt_user[0] || g_mqtt_pass[0]) {
                     if (strcmp(user, g_mqtt_user) != 0 ||
@@ -731,22 +856,17 @@ size_t got = (size_t)n;
             g_qos2_count = 0;
             return 0;
         } else if (type == MQTT_TYPE_SUBSCRIBE && connected) {
-            /* P1 v0.5.6: 5.0 SUBSCRIBE has a Properties Length
-             * var-byte before the filter list. Skip it. */
+            /* v0.5.43: 5.0 SUBSCRIBE is packet_id | properties | filters. */
             const uint8_t *p = buf + 1 + rl_off;
             size_t plen = rem_len;
             if (plen < 5) continue;
             uint16_t packet_id = ((uint16_t)p[0] << 8) | p[1];
             size_t off = 2;
-            if (mqtt_v5_props_skip) {
-                if (off < plen) {
-                    uint32_t props_len = 0;
-                    int rl = decode_remaining_length(p + off,
-                                                     plen - off,
-                                                     &props_len);
-                    if (rl < 0) continue;
-                    off += (size_t)rl + props_len;
-                }
+            if (session_v5) {
+                cmq_mqtt_props_t sp;
+                if (cmq_mqtt_props_decode(p + off, plen - off, &sp) != 0)
+                    continue;
+                off += sp.consumed;
             }
             uint8_t granted[8];
             int granted_n = 0;
@@ -857,11 +977,7 @@ size_t got = (size_t)n;
                 (void)send(fd, rpkt, sizeof(rpkt), 0);
                 return -1;
             }
-            /* P1 v0.5.4: 5.0 PUBLISH variable header has an extra
-             * Properties region between topic and packet_id. Read
-             * the var-byte Property Length and skip those bytes. We
-             * don't decode individual properties — just advance the
-             * offset. */
+            /* v0.5.43: topic | [pid if QoS>0] | [props if v5] | payload */
             const uint8_t *p = buf + 1 + rl_off;
             size_t plen = rem_len;
             if (plen < 2) continue;
@@ -869,22 +985,12 @@ size_t got = (size_t)n;
             if ((size_t)(2 + topic_len) > plen) continue;
             uint8_t qos = (buf[0] >> 1) & 0x03;
             int retain = (buf[0] & 0x08) != 0;
-            size_t off = 2 + topic_len;
-            if (mqtt_v5_props_skip) {
-                /* 5.0 properties region: var-byte length + bytes.
-                 * For v0.5.4 we just skip; full decode is v0.6. */
-                if (off < plen) {
-                    uint32_t props_len = 0;
-                    int rl = decode_remaining_length(p + off,
-                                                     plen - off,
-                                                     &props_len);
-                    if (rl < 0) continue;
-                    off += (size_t)rl + props_len;
-                }
-            }
-            /* P4: PUBLISH payload starts after topic + packet_id (if QoS>0). */
-            size_t payload_off = 2 + topic_len;
-            if (qos > 0) payload_off += 2;
+            cmq_mqtt_props_t pub_props;
+            ssize_t poff = cmq_mqtt_publish_payload_off(p, plen, (int)qos,
+                                                         session_v5,
+                                                         &pub_props);
+            if (poff < 0) continue;
+            size_t payload_off = (size_t)poff;
             size_t payload_len = 0;
             if (payload_off <= plen) payload_len = plen - payload_off;
             if (retain && topic_len > 0 && topic_len < 128) {

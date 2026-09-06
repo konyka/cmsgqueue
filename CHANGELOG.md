@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.43 - 2026-09-06
+
+### Added
+- **MQTT 5.0 property decode** — `cmq_mqtt_props_decode` walks the
+  Property Length + Properties region with no allocation. Unknown
+  identifiers fail closed. `cmq_mqtt_publish_payload_off` uses the
+  spec layout (topic, optional packet_id, optional properties).
+  3.1.1 sessions no longer treat payload bytes as a property VBI.
+
+### Changed
+- MQTT public header no longer documents STUB/ENOSYS (R4).
+- CONNECT / PUBLISH / SUBSCRIBE decode properties only on MQTT 5.0
+  sessions; 3.1.1 never reads a property VBI.
+
+### Tests
+- `tests/test_mqtt_props.c` — 7 cases (empty, content-type,
+  truncated, unknown id, qos0 3.1.1, qos0 v5, qos1 v5).
+
+### Documentation
+- `docs/reviews/v0.5.43.enumeration.md`, `v0.5.43.plan.md`.
+- `docs/features/mqtt-server-stub.md` rewritten for current status.
+- `docs/benchmarks/v0543_{1,2}.txt`.
+
+### Test count
+- 128 tests (was 121 in v0.5.42; +7 mqtt_props).
+
 ## 0.5.42 - 2026-09-06
 
 ### Changed

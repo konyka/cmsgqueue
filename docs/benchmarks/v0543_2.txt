@@ -1,0 +1,4 @@
+v0.5.43 property-decode micro-note:
+- cmq_mqtt_props_decode is allocation-free; strings are borrowed.
+- Fail-closed on unknown tags prevents payload desync.
+- Decoder is not on the cmq PUBLISH path (MQTT listener only).
