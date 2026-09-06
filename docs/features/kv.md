@@ -30,12 +30,14 @@ one byte compare. At most 8 buckets. Fanout still runs so
 watchers see the write. Optional persist is
 `{persist_dir}/kv_<bucket>` when `persist_dir` is set.
 
-Bucket names: `[A-Za-z0-9_-]`, max 32. Object-store
-subjects and REQUEST-get stay deferred.
+Bucket names: `[A-Za-z0-9_-]`, max 32.
+
+REQUEST `$KV.<bucket>.<key>` (v0.5.70) returns the value to
+reply-to, or an empty body on miss.
 
 ## Tests
 
-`tests/test_kv.c`, `tests/test_kvb.c`
+`tests/test_kv.c`, `tests/test_kvb.c`, `tests/test_kvreq.c`
 
 ## See also
 

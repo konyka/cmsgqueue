@@ -23,6 +23,7 @@
 #include "cmq_jwt.h"
 #include "cmq_otlp.h"
 #include "cmq_kvb.h"
+#include "cmq_kv.h"
 #include "cmq_obj.h"
 #include <sys/stat.h>
 #include <poll.h>
@@ -4092,6 +4093,60 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "subject map failed");
         return;
+    }
+
+    /* v0.5.70: $KV / $OBJ REQUEST-get. Answer locally; drop inbox. */
+    if (subject[0] == '$' && (srv->kvb || srv->obj)) {
+        uint8_t vbuf[CMQ_KV_VAL_MAX];
+        uint8_t *obuf = vbuf;
+        uint8_t *big = NULL;
+        size_t vn = 0;
+        int hit = -1;
+        if (srv->kvb)
+            hit = cmq_kvb_request(srv->kvb, subject, vbuf, sizeof(vbuf), &vn);
+        if (hit < 0 && srv->obj) {
+            big = malloc(CMQ_OBJ_VAL_MAX);
+            if (!big) {
+                cmq_send_error(c, "obj get");
+                if (cmq_atomic_load_int(&c->inbox_pending, CMQ_ATOMIC_RELAXED) > 0)
+                    cmq_atomic_fetch_sub_int(&c->inbox_pending, 1,
+                                             CMQ_ATOMIC_RELAXED);
+                return;
+            }
+            hit = cmq_obj_request(srv->obj, subject, big, CMQ_OBJ_VAL_MAX, &vn);
+            obuf = big;
+        }
+        if (hit >= 0) {
+            if (!reply_to[0]) {
+                free(big);
+                cmq_send_error(c, "no reply-to");
+                if (cmq_atomic_load_int(&c->inbox_pending, CMQ_ATOMIC_RELAXED) > 0)
+                    cmq_atomic_fetch_sub_int(&c->inbox_pending, 1,
+                                             CMQ_ATOMIC_RELAXED);
+                return;
+            }
+            size_t flen = 0;
+            uint8_t *fr = cmq_build_request_message_frame(
+                0, reply_to, "", (vn && hit) ? obuf : NULL, hit ? vn : 0,
+                &flen);
+            free(big);
+            if (!fr) {
+                cmq_send_error(c, "kv get");
+            } else {
+                cmq_client_send(c, fr, flen);
+                free(fr);
+                credit_msgs_in(srv, c, frame);
+                uint8_t ack[8];
+                size_t alen = cmq_frame_encode(ack, sizeof(ack),
+                                               CMQ_OP_PUBACK, 0, NULL, 0);
+                if (alen > 0) cmq_client_send(c, ack, alen);
+            }
+            if (cmq_atomic_load_int(&c->inbox_pending, CMQ_ATOMIC_RELAXED) > 0)
+                cmq_atomic_fetch_sub_int(&c->inbox_pending, 1,
+                                         CMQ_ATOMIC_RELAXED);
+            return;
+        }
+        free(big);
     }
 
     int live_held = 0;

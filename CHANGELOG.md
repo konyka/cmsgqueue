@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.70 - 2026-09-06
+
+### Added
+- **KV/object REQUEST-get (D4 phase 6)** — REQUEST on
+  `$KV.` / `$OBJ.` answers from the store (empty on miss).
+  Non-`$` REQUEST unchanged.
+
+### Tests
+- `tests/test_kvreq.c` — kv hit/miss, not-kv, obj hit/miss,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.70.enumeration.md`, `v0.5.70.plan.md`.
+- `docs/features/kv.md`, `object-store.md`.
+- `docs/benchmarks/v0570_{1,2}.txt`.
+
+### Test count
+- 271 tests (was 267 in v0.5.69; +4).
+
 ## 0.5.69 - 2026-09-06
 
 ### Added

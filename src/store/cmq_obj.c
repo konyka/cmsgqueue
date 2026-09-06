@@ -163,6 +163,20 @@ int cmq_obj_publish(cmq_obj_t *obj, const char *subject,
     return -1;
 }
 
+int cmq_obj_request(cmq_obj_t *obj, const char *subject, uint8_t *out,
+                    size_t out_sz, size_t *out_len) {
+    if (!out_len) return -1;
+    *out_len = 0;
+    if (!obj || !subject || !out) return -1;
+    char name[CMQ_OBJ_NAME_MAX];
+    int pr = cmq_obj_parse(subject, name, sizeof(name));
+    if (pr != 0) return -1;
+    if (cmq_obj_get(obj, name, out, out_sz, out_len) == 0)
+        return 1;
+    *out_len = 0;
+    return 0;
+}
+
 int cmq_obj_del(cmq_obj_t *obj, const char *name) {
     if (!obj || !obj_name_safe(name)) return -1;
     char path[640];

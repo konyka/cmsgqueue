@@ -32,8 +32,8 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Idempotent publish (v0.5.55)**: `CMQI`+pid+seq sliding window drops retries before WAL (D5 phase 1)
 - **Durable stream cursors (v0.5.56)**: opt-in `{dir}/{name}.cursors` ack watermarks (D4 phase 1; append path unchanged)
 - **MQTT QoS 2 outbound (v0.5.57)**: grant 2; PUBLISH/PUBREC/PUBREL/PUBCOMP on the 16-slot window
-- **KV store (v0.5.58–67)**: last-value put/get/del; `$KV.<bucket>.<key>` on PUBLISH (D4 phases 2 and 4)
-- **Object store (v0.5.59–68)**: named blobs; `$OBJ.<name>` on PUBLISH when persist_dir is set (D4 phases 3 and 5)
+- **KV store (v0.5.58–70)**: last-value put/get/del; `$KV.<bucket>.<key>` PUBLISH + REQUEST-get
+- **Object store (v0.5.59–70)**: named blobs; `$OBJ.<name>` PUBLISH + REQUEST-get when persist_dir is set
 - **Transactions (v0.5.60)**: `CMQT` begin/add/commit/abort coordinator (D5 phase 2)
 - **OTel / OTLP (v0.5.61–64)**: lock-free 256-slot sidecar; OTLP/HTTP JSON POST when `otlp_endpoint` is set (D1 phases 1–2)
 - **JWT / NKEY / JWKS (v0.5.62–65)**: HS256 JWT on CONNECT; Ed25519 nkey of `CMQNK1|<user>`; JWKS oct-key `kid` cache (D3 phases 1–3)

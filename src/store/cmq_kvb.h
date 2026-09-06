@@ -27,6 +27,9 @@ int cmq_kvb_publish(cmq_kvb_t *b, const char *subject,
                     const uint8_t *val, size_t len);
 int cmq_kvb_get(cmq_kvb_t *b, const char *subject, uint8_t *out,
                 size_t out_sz, size_t *out_len);
+/* 1 hit; 0 miss (out_len=0); -1 not KV / bad args. */
+int cmq_kvb_request(cmq_kvb_t *b, const char *subject, uint8_t *out,
+                    size_t out_sz, size_t *out_len);
 
 #ifdef __cplusplus
 }

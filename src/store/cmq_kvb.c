@@ -137,6 +137,20 @@ int cmq_kvb_publish(cmq_kvb_t *b, const char *subject,
     return rc;
 }
 
+int cmq_kvb_request(cmq_kvb_t *b, const char *subject, uint8_t *out,
+                    size_t out_sz, size_t *out_len) {
+    if (!out_len) return -1;
+    *out_len = 0;
+    if (!b || !subject || !out) return -1;
+    int pr = cmq_kvb_parse(subject, NULL, 0, NULL, 0);
+    if (pr == -1) return -1;
+    if (pr != 0) return -1;
+    if (cmq_kvb_get(b, subject, out, out_sz, out_len) == 0)
+        return 1;
+    *out_len = 0;
+    return 0;
+}
+
 int cmq_kvb_get(cmq_kvb_t *b, const char *subject, uint8_t *out,
                 size_t out_sz, size_t *out_len) {
     if (!b || !out || !out_len) return -1;

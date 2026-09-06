@@ -25,5 +25,8 @@ int cmq_obj_parse(const char *subject, char *name, size_t ncap);
 /* 1 applied; 0 not $OBJ; -1 malformed; -2 too large; -3 I/O. */
 int cmq_obj_publish(cmq_obj_t *obj, const char *subject,
                     const uint8_t *val, size_t len);
+/* 1 hit; 0 miss (out_len=0); -1 not $OBJ / bad args. */
+int cmq_obj_request(cmq_obj_t *obj, const char *subject, uint8_t *out,
+                    size_t out_sz, size_t *out_len);
 
 #endif

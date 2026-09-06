@@ -17,12 +17,14 @@ file.
 When `persist_dir` is set, the server opens `{persist_dir}/obj`
 and applies `$OBJ.<name>` on PUBLISH: non-empty payload puts,
 empty payload deletes. Fanout still runs. Without
-`persist_dir`, `$OBJ.` is a normal subject. REQUEST-get stays
-deferred.
+`persist_dir`, `$OBJ.` is a normal subject.
+
+REQUEST `$OBJ.<name>` (v0.5.70) returns the blob to reply-to,
+or an empty body on miss.
 
 ## Tests
 
-`tests/test_obj.c`, `tests/test_objp.c`
+`tests/test_obj.c`, `tests/test_objp.c`, `tests/test_kvreq.c`
 
 ## See also
 
