@@ -1,0 +1,4 @@
+v0.5.47 monitor micro-note:
+- Formatters are allocation-free and lock-free.
+- JSON escape rejects oversize (fail closed, empty {}).
+- Route snapshot does not poll peer fds.

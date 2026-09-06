@@ -19,6 +19,7 @@ set(CMQ_TCP_TESTS
   test_worker
   test_compress_wire
   test_multi_thread_accept
+  test_health_metrics
 )
 
 foreach(TEST_SRC ${TEST_SOURCES})

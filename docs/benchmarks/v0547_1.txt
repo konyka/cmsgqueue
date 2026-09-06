@@ -1,0 +1,4 @@
+v0.5.47 bench 1:
+- PUBLISH path unchanged.
+- Scrape: bounded copy under client/route locks, then stack JSON.
+- Caps: 64 conns, 256 subs, 32 routes, 8 KiB body.

@@ -16,6 +16,7 @@
 #include "cmq_subject_rl.h"
 #include "cmq_sublist_persist.h"
 #include "cmq_mqtt_server.h"
+#include "cmq_monitor.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -5251,6 +5252,114 @@ static int http_host_from_value(const char *val, char *out, size_t out_sz) {
     return out[0] ? 0 : -1;
 }
 
+static void monitor_snap_clients(cmq_client_t **arr, int count,
+                                  cmq_monitor_conn_t *conns, int *nconn,
+                                  cmq_monitor_sub_t *subs, int *nsub) {
+    if (!arr) return;
+    for (int i = 0; i < count; i++) {
+        cmq_client_t *cl = arr[i];
+        if (!cl) continue;
+        if (*nconn < CMQ_MONITOR_CONN_MAX) {
+            cmq_monitor_conn_t *o = &conns[*nconn];
+            memset(o, 0, sizeof(*o));
+            o->cid = cl->id;
+            o->state = (int)client_state(cl);
+            snprintf(o->account, sizeof(o->account), "%s", cl->account_name);
+            if (cl->username)
+                snprintf(o->user, sizeof(o->user), "%s", cl->username);
+            o->nsubs = cl->sub_count;
+            o->ws = cl->is_websocket;
+            o->route = cl->is_route;
+            memcpy(o->tid, cl->trace_hex, sizeof(o->tid));
+            (*nconn)++;
+        }
+        for (cmq_sub_entry_t *s = cl->subs;
+             s && *nsub < CMQ_MONITOR_SUB_MAX; s = s->next) {
+            cmq_monitor_sub_t *so = &subs[*nsub];
+            memset(so, 0, sizeof(*so));
+            so->cid = cl->id;
+            so->sid = s->sub_id;
+            snprintf(so->subject, sizeof(so->subject), "%s", s->subject);
+            snprintf(so->queue, sizeof(so->queue), "%s", s->queue_group);
+            (*nsub)++;
+        }
+    }
+}
+
+static void http_send_json(cmq_client_t *c, const char *body, size_t blen) {
+    char hdr[256];
+    int hl = snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Connection: close\r\n\r\n",
+        blen);
+    if (hl > 0)
+        (void)client_sock_write(c, (const uint8_t *)hdr, (size_t)hl);
+    if (blen)
+        (void)client_sock_write(c, (const uint8_t *)body, blen);
+    client_set_state(c, CMQ_CLIENT_CLOSING);
+}
+
+static void http_serve_monitor(cmq_client_t *c, int which) {
+    cmq_server_t *srv = c ? c->server : NULL;
+    cmq_monitor_conn_t conns[CMQ_MONITOR_CONN_MAX];
+    cmq_monitor_sub_t subs[CMQ_MONITOR_SUB_MAX];
+    int nconn = 0, nsub = 0;
+    if (srv) {
+        if (srv->workers) {
+            for (int w = 0; w < srv->num_workers; w++) {
+                cmq_mutex_lock(&srv->workers[w].clients_lock);
+                monitor_snap_clients(srv->workers[w].clients,
+                                     srv->workers[w].clients_count,
+                                     conns, &nconn, subs, &nsub);
+                cmq_mutex_unlock(&srv->workers[w].clients_lock);
+            }
+        }
+        cmq_mutex_lock(&srv->clients_lock);
+        monitor_snap_clients(srv->clients, srv->clients_count,
+                             conns, &nconn, subs, &nsub);
+        cmq_mutex_unlock(&srv->clients_lock);
+    }
+    char body[CMQ_MONITOR_JSON_MAX];
+    int bl = 0;
+    if (which == 0) {
+        bl = cmq_monitor_format_connz(body, sizeof(body), conns, nconn);
+    } else if (which == 1) {
+        bl = cmq_monitor_format_subz(body, sizeof(body), subs, nsub);
+    } else {
+        cmq_monitor_route_t rts[CMQ_MONITOR_ROUTE_MAX];
+        int nr = 0, live = 0, held = 0, targets = 0;
+        if (srv && srv->routes) {
+            cmq_route_conn_t snap[CMQ_MONITOR_ROUTE_MAX];
+            size_t ns = 0;
+            live = (int)cmq_route_live_count(srv->routes);
+            held = (int)cmq_route_held_count(srv->routes);
+            targets = (int)cmq_route_target_count(srv->routes);
+            if (cmq_route_snapshot(srv->routes, snap,
+                                    CMQ_MONITOR_ROUTE_MAX, &ns) == 0) {
+                for (size_t i = 0; i < ns; i++) {
+                    snprintf(rts[nr].id, sizeof(rts[nr].id), "%s",
+                              snap[i].remote_id);
+                    snprintf(rts[nr].addr, sizeof(rts[nr].addr), "%s",
+                              snap[i].remote_addr);
+                    rts[nr].port = snap[i].remote_port;
+                    rts[nr].connected = snap[i].connected;
+                    rts[nr].fd = snap[i].fd;
+                    nr++;
+                }
+            }
+        }
+        bl = cmq_monitor_format_routez(body, sizeof(body), live, held,
+                                        targets, rts, nr);
+    }
+    if (bl < 0) {
+        memcpy(body, "{}\n", 4);
+        bl = 3;
+    }
+    http_send_json(c, body, (size_t)bl);
+}
+
 static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                               size_t *consumed) {
     if (consumed) *consumed = 0;
@@ -5277,9 +5386,8 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
 
     if (strncmp(req, "GET ", 4) != 0) { free(req); return -1; }
 
-    /* F12/F13: HTTP GET dispatcher for /healthz, /readyz, /metrics.
-     * Extracts the path and dispatches BEFORE the WS upgrade path so
-     * health/metrics endpoints serve plain HTTP responses. */
+    /* F12/F13/v0.5.47: HTTP GET dispatcher for health, metrics, and
+     * connz/subz/routez. Runs BEFORE the WS upgrade path. */
     {
         const char *path_start = req + 4;
         const char *path_end = strchr(path_start, ' ');
@@ -5378,6 +5486,16 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                 if (rl > 0) (void)client_sock_write(c, (const uint8_t *)resp, (size_t)rl);
                 (void)client_sock_write(c, (const uint8_t *)body, (size_t)bl);
                 client_set_state(c, CMQ_CLIENT_CLOSING);
+                if (consumed) *consumed = hdr_end;
+                return 0;
+            }
+            if ((plen == 6 && memcmp(path_start, "/connz", 6) == 0) ||
+                (plen == 5 && memcmp(path_start, "/subz", 5) == 0) ||
+                (plen == 7 && memcmp(path_start, "/routez", 7) == 0)) {
+                int which = path_start[1] == 'c' ? 0 :
+                            path_start[1] == 's' ? 1 : 2;
+                free(req);
+                http_serve_monitor(c, which);
                 if (consumed) *consumed = hdr_end;
                 return 0;
             }

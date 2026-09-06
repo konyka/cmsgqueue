@@ -1739,6 +1739,26 @@ int cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id,
     return rc;
 }
 
+int cmq_route_snapshot(cmq_route_pool_t *pool, cmq_route_conn_t *out,
+                        size_t max, size_t *out_n) {
+    if (!pool || !out || !out_n || max == 0) return -1;
+    if (route_begin_op(pool) != 0) return -1;
+    size_t nslots;
+    cmq_mutex_lock(&pool->lock);
+    nslots = pool->conn_count;
+    cmq_mutex_unlock(&pool->lock);
+    size_t n = 0;
+    for (size_t i = 0; i < nslots && n < max; i++) {
+        cmq_mutex_lock(&pool->io_locks[i]);
+        if (pool->conns[i].remote_id[0] || pool->conns[i].fd >= 0)
+            out[n++] = pool->conns[i];
+        cmq_mutex_unlock(&pool->io_locks[i]);
+    }
+    *out_n = n;
+    route_end_op(pool);
+    return 0;
+}
+
 int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id) {
     if (!pool || !node_id) return 0;
     if (route_begin_op(pool) != 0) return 0;

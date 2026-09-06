@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.47 - 2026-09-06
+
+### Added
+- **connz / subz / routez** — JSON introspection on the existing
+  HTTP dispatcher. Snapshot is bounded (64 conns, 256 subs, 32
+  routes). User/account/subject strings are JSON-escaped. Overflow
+  sets `"truncated":1`. `cmq_route_snapshot` copies route slots
+  without a liveness probe.
+
+### Tests
+- `tests/test_monitor.c` — escape, empty connz, escaped user,
+  subz, routez.
+- `tests/test_health_metrics.c` — HTTP GET for the three paths
+  (Linux CI).
+
+### Documentation
+- `docs/reviews/v0.5.47.enumeration.md`, `v0.5.47.plan.md`.
+- `docs/features/health-metrics.md`.
+- `docs/benchmarks/v0547_{1,2}.txt`.
+
+### Test count
+- 151 tests (was 143 in v0.5.46; +8).
+
 ## 0.5.46 - 2026-09-06
 
 ### Added
