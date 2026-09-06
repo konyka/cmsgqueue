@@ -1,0 +1,3 @@
+v0.5.74 bench 1:
+- HS256 CONNECT path is unchanged (one alg compare).
+- ES256 runs only when alg is ES256.

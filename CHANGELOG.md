@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.74 - 2026-09-06
+
+### Added
+- **JWT ES256 (D3 phase 4)** — compact ES256 (P-256) verify;
+  JWKS `kty=EC` / `crv=P-256`; `jwt_ec_pub` is 128 hex X||Y.
+  HS256 / nkey paths unchanged. Still verify-only.
+
+### Tests
+- `tests/test_es256.c` — ok, bad sig, JWKS EC, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.74.enumeration.md`, `v0.5.74.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v0574_{1,2}.txt`.
+
+### Test count
+- 287 tests (was 283 in v0.5.73; +4).
+
 ## 0.5.73 - 2026-09-06
 
 ### Added

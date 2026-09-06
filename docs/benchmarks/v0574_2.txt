@@ -1,0 +1,3 @@
+v0.5.74 bench 2:
+- JWKS still parsed once at create; ≤8 kid compares.
+- EC verify is one EVP DigestVerify; no extra heap on miss.
