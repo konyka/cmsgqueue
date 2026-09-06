@@ -49,8 +49,9 @@ static int auth_configured(const cmq_server_t *srv) {
     const char *u = srv->config.auth_username;
     const char *p = srv->config.auth_password;
     const char *j = srv->config.jwt_hmac_secret;
+    const char *nk = srv->config.nkey_pub;
     return (u && u[0] != '\0') || (p && p[0] != '\0') ||
-           (j && j[0] != '\0');
+           (j && j[0] != '\0') || (nk && nk[0] != '\0');
 }
 
 /* v0.5.49: remap subject in place. No-op when map_total is 0. */
@@ -4916,7 +4917,10 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                             srv->config.jwt_hmac_secret[0] &&
                             srv->config.jwt_issuer &&
                             srv->config.jwt_issuer[0]);
-            size_t pass_max = jwt_mode ? (size_t)CMQ_JWT_TOKEN_MAX : 255;
+            int nkey_mode = !jwt_mode && srv->config.nkey_pub &&
+                            srv->config.nkey_pub[0];
+            size_t pass_max = jwt_mode ? (size_t)CMQ_JWT_TOKEN_MAX
+                                       : (nkey_mode ? 128u : 255u);
             int malformed = 0;
             if (!frame->payload || frame->payload_len < 4) {
                 malformed = 1;
@@ -4937,6 +4941,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 strncpy(expect_u, srv->config.auth_username, sizeof(expect_u) - 1);
             int f8_hashed_fail = 0;
             int jwt_fail = 0;
+            int nkey_fail = 0;
             if (jwt_mode && !malformed) {
                 struct timespec tsj;
                 clock_gettime(CLOCK_REALTIME, &tsj);
@@ -4954,7 +4959,14 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                     snprintf(uname, sizeof(uname), "%s", sub);
                 }
             }
-            if (!jwt_mode && srv->config.auth_password &&
+            if (nkey_mode && !malformed) {
+                uint8_t npub[CMQ_NKEY_PUB_LEN];
+                if (cmq_nkey_hex_decode(srv->config.nkey_pub, npub,
+                                        CMQ_NKEY_PUB_LEN) != 0 ||
+                    cmq_nkey_verify_user(npub, uname, passwd) != 0)
+                    nkey_fail = 1;
+            }
+            if (!jwt_mode && !nkey_mode && srv->config.auth_password &&
                 srv->config.auth_password[0]) {
                 if (srv->config.auth_password[0] == '$') {
                     /* F8: hashed password. Verify with cmq_password_verify. */
@@ -4974,9 +4986,10 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             /* Always run padded compares so early rejects share timing with auth. */
             int need_user = (srv->config.auth_username &&
                              srv->config.auth_username[0]);
-            int need_pass = !jwt_mode && srv->config.auth_password &&
+            int need_pass = !jwt_mode && !nkey_mode &&
+                            srv->config.auth_password &&
                             srv->config.auth_password[0];
-            int bad = malformed | f8_hashed_fail | jwt_fail;
+            int bad = malformed | f8_hashed_fail | jwt_fail | nkey_fail;
             if (need_user)
                 bad |= !ct_memeq(uname, expect_u, sizeof(uname));
             else
@@ -7261,6 +7274,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.auth_password = NULL;
     srv->config.jwt_issuer = NULL;
     srv->config.jwt_hmac_secret = NULL;
+    srv->config.nkey_pub = NULL;
     srv->config.cluster_name = NULL;
     srv->config.cluster_node_id = NULL;
     srv->config.tls_cert = NULL;
@@ -7288,6 +7302,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.auth_password, src.auth_password);
     OWN(srv->config.jwt_issuer, src.jwt_issuer);
     OWN(srv->config.jwt_hmac_secret, src.jwt_hmac_secret);
+    OWN(srv->config.nkey_pub, src.nkey_pub);
     OWN(srv->config.cluster_name, src.cluster_name);
     OWN(srv->config.cluster_node_id, src.cluster_node_id);
     OWN(srv->config.tls_cert, src.tls_cert);

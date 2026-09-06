@@ -174,3 +174,37 @@ int cmq_nkey_verify(const uint8_t pub[CMQ_NKEY_PUB_LEN],
     EVP_PKEY_free(pkey);
     return rc;
 }
+
+static int hex_nibble(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+int cmq_nkey_hex_decode(const char *hex, uint8_t *out, size_t out_len) {
+    if (!hex || !out || out_len == 0) return -1;
+    size_t n = strnlen(hex, out_len * 2 + 1);
+    if (n != out_len * 2) return -1;
+    for (size_t i = 0; i < out_len; i++) {
+        int hi = hex_nibble((unsigned char)hex[i * 2]);
+        int lo = hex_nibble((unsigned char)hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return 0;
+}
+
+int cmq_nkey_verify_user(const uint8_t pub[CMQ_NKEY_PUB_LEN],
+                         const char *user, const char *sig_hex) {
+    if (!pub || !user || !user[0] || !sig_hex) return -1;
+    size_t ulen = strnlen(user, 256);
+    if (ulen == 0 || ulen >= 256) return -1;
+    uint8_t sig[CMQ_NKEY_SIG_LEN];
+    if (cmq_nkey_hex_decode(sig_hex, sig, CMQ_NKEY_SIG_LEN) != 0)
+        return -1;
+    char msg[8 + 256];
+    int n = snprintf(msg, sizeof(msg), "CMQNK1|%s", user);
+    if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
+    return cmq_nkey_verify(pub, (const uint8_t *)msg, (size_t)n, sig);
+}

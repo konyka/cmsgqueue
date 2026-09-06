@@ -1,4 +1,4 @@
-# JWT / NKEY verify (v0.5.62, D3 phase 1)
+# JWT / NKEY (v0.5.62–63, D3 phases 1–2)
 
 CONNECT may present a compact HS256 JWT in the password
 field when `jwt_hmac_secret` and `jwt_issuer` are set.
@@ -16,21 +16,27 @@ Verify uses OpenSSL HMAC. Tokens are never issued here.
 JWT mode raises the CONNECT password cap to 2048. Without
 a secret the 256-byte cap is unchanged.
 
-## NKEY
+## NKEY on CONNECT (v0.5.63)
 
-`cmq_nkey_verify` is raw Ed25519 (32-byte pub, 64-byte
-sig). Seed / base32 nkey codec and CONNECT wiring stay
-deferred.
+When `nkey_pub` is set (64 hex chars) and JWT is not,
+CONNECT username is required and the password is 128 hex
+chars: Ed25519 signature of `CMQNK1|<username>`.
+
+`cmq_nkey_verify` remains raw Ed25519 (32-byte pub, 64-byte
+sig). JWT wins if both JWT and nkey are configured.
+
+Seed / base32 nkey codec, JWKS, and ES256 stay deferred.
 
 ## Performance
 
-No secret: one pointer check on CONNECT. HMAC runs only
-on the worker CONNECT path.
+No secret and no `nkey_pub`: one pointer check on CONNECT.
+HMAC / Ed25519 run only on the worker CONNECT path.
 
 ## Tests
 
-`tests/test_jwt.c`
+`tests/test_jwt.c`, `tests/test_nkey_auth.c`
 
 ## See also
 
 - `docs/reviews/v0.5.62.enumeration.md`
+- `docs/reviews/v0.5.63.enumeration.md`

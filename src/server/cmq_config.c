@@ -2,6 +2,7 @@
 #include "cmq_config.h"
 #include "cmq_cluster.h"
 #include "cmq_account.h"
+#include "cmq_jwt.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -164,6 +165,8 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->jwt_hmac_secret, value);
     } else if (strcmp(key, "jwt_leeway_sec") == 0) {
         return parse_int_range(value, 0, 3600, &config->jwt_leeway_sec);
+    } else if (strcmp(key, "nkey_pub") == 0) {
+        return cfg_set_str(&config->nkey_pub, value);
     } else if (strcmp(key, "cluster_name") == 0) {
         return cfg_set_str(&config->cluster_name, value);
     } else if (strcmp(key, "cluster_node_id") == 0) {
@@ -207,6 +210,7 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->auth_password);
     cfg_free_owned(config->jwt_issuer);
     cfg_free_owned(config->jwt_hmac_secret);
+    cfg_free_owned(config->nkey_pub);
     cfg_free_owned(config->cluster_name);
     cfg_free_owned(config->cluster_node_id);
     cfg_free_owned(config->tls_cert);
@@ -219,6 +223,7 @@ void cmq_config_free(cmq_config_t *config) {
     config->auth_password = NULL;
     config->jwt_issuer = NULL;
     config->jwt_hmac_secret = NULL;
+    config->nkey_pub = NULL;
     config->cluster_name = NULL;
     config->cluster_node_id = NULL;
     config->tls_cert = NULL;
@@ -345,9 +350,15 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->jwt_hmac_secret &&
         strnlen(config->jwt_hmac_secret, 129) >= 129)
         return CMQ_ERR_INVALID_ARG;
+    if (config->nkey_pub && config->nkey_pub[0]) {
+        uint8_t pub[32];
+        if (cmq_nkey_hex_decode(config->nkey_pub, pub, 32) != 0)
+            return CMQ_ERR_INVALID_ARG;
+    }
     if (config->auth_username && config->auth_username[0] &&
         (!config->auth_password || !config->auth_password[0]) &&
-        !(config->jwt_hmac_secret && config->jwt_hmac_secret[0]))
+        !(config->jwt_hmac_secret && config->jwt_hmac_secret[0]) &&
+        !(config->nkey_pub && config->nkey_pub[0]))
         return CMQ_ERR_INVALID_ARG;
     /* Username becomes account name — must fit CMQ_ACCOUNT_NAME_SIZE.
        Password still compared in 256-byte CONNECT pads. */

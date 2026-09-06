@@ -1,0 +1,3 @@
+v0.5.63 bench 2:
+- nkey CONNECT: one Ed25519 verify of CMQNK1|<user>.
+- Hex decode of nkey_pub is 64 nibbles on the worker path.

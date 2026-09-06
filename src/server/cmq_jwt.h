@@ -25,6 +25,11 @@ int cmq_nkey_verify(const uint8_t pub[CMQ_NKEY_PUB_LEN],
                     const uint8_t *msg, size_t msg_len,
                     const uint8_t sig[CMQ_NKEY_SIG_LEN]);
 
+int cmq_nkey_hex_decode(const char *hex, uint8_t *out, size_t out_len);
+/* Password is 128 hex chars over message CMQNK1|<user>. */
+int cmq_nkey_verify_user(const uint8_t pub[CMQ_NKEY_PUB_LEN],
+                         const char *user, const char *sig_hex);
+
 #ifdef __cplusplus
 }
 #endif

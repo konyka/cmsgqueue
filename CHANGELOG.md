@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.63 - 2026-09-06
+
+### Added
+- **NKEY on CONNECT (D3 phase 2)** — `nkey_pub` (64 hex
+  chars) admits an Ed25519 signature of `CMQNK1|<user>` in
+  the CONNECT password (128 hex). JWT still wins if both
+  are set. Verify-only; OpenSSL.
+
+### Tests
+- `tests/test_nkey_auth.c` — hex parse, user verify, empty
+  reject (+3).
+
+### Documentation
+- `docs/reviews/v0.5.63.enumeration.md`, `v0.5.63.plan.md`.
+- `docs/features/jwt.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0563_{1,2}.txt`.
+
+### Test count
+- 243 tests (was 240 in v0.5.62; +3).
+
 ## 0.5.62 - 2026-09-06
 
 ### Added
