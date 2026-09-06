@@ -81,6 +81,7 @@ typedef struct cmq_config {
     int jwt_leeway_sec;            /* v0.5.62: exp/nbf skew; 0 = 60 */
     const char *nkey_pub;          /* v0.5.63/75: 64 hex or NATS U… pub */
     const char *jwks_json;         /* v0.5.65: JWKS oct/HS256 or EC/ES256 */
+    const char *jwks_url;          /* v0.5.76: http:// JWKS GET (not both) */
     const char *jwt_ec_pub;        /* v0.5.74: 128 hex P-256 X||Y */
     const char *otlp_endpoint;     /* v0.5.64: http://host[:port][/path] */
     const char *cluster_name;

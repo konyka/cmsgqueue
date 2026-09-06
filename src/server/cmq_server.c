@@ -21,6 +21,7 @@
 #include "cmq_txn.h"
 #include "cmq_otel.h"
 #include "cmq_jwt.h"
+#include "cmq_jwksf.h"
 #include "cmq_otlp.h"
 #include "cmq_kvb.h"
 #include "cmq_kv.h"
@@ -56,10 +57,12 @@ static int auth_configured(const cmq_server_t *srv) {
     const char *j = srv->config.jwt_hmac_secret;
     const char *nk = srv->config.nkey_pub;
     const char *jw = srv->config.jwks_json;
+    const char *ju = srv->config.jwks_url;
     const char *ec = srv->config.jwt_ec_pub;
     return (u && u[0] != '\0') || (p && p[0] != '\0') ||
            (j && j[0] != '\0') || (nk && nk[0] != '\0') ||
-           (jw && jw[0] != '\0') || (ec && ec[0] != '\0');
+           (jw && jw[0] != '\0') || (ju && ju[0] != '\0') ||
+           (ec && ec[0] != '\0');
 }
 
 /* v0.5.49: remap subject in place. No-op when map_total is 0. */
@@ -7414,6 +7417,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.jwt_hmac_secret = NULL;
     srv->config.nkey_pub = NULL;
     srv->config.jwks_json = NULL;
+    srv->config.jwks_url = NULL;
     srv->config.jwt_ec_pub = NULL;
     srv->config.otlp_endpoint = NULL;
     srv->config.cluster_name = NULL;
@@ -7445,6 +7449,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.jwt_hmac_secret, src.jwt_hmac_secret);
     OWN(srv->config.nkey_pub, src.nkey_pub);
     OWN(srv->config.jwks_json, src.jwks_json);
+    OWN(srv->config.jwks_url, src.jwks_url);
     OWN(srv->config.jwt_ec_pub, src.jwt_ec_pub);
     OWN(srv->config.otlp_endpoint, src.otlp_endpoint);
     OWN(srv->config.cluster_name, src.cluster_name);
@@ -7782,6 +7787,14 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     if (src.jwks_json && src.jwks_json[0]) {
         cmq_jwks_t *j = calloc(1, sizeof(*j));
         if (j && cmq_jwks_parse(src.jwks_json, j) == 0)
+            srv->jwks = j;
+        else
+            free(j);
+    } else if (src.jwks_url && src.jwks_url[0]) {
+        cmq_jwks_url_t u;
+        cmq_jwks_t *j = calloc(1, sizeof(*j));
+        if (j && cmq_jwks_parse_url(src.jwks_url, &u) == 0 &&
+            cmq_jwks_http_get(&u, j) == 0)
             srv->jwks = j;
         else
             free(j);

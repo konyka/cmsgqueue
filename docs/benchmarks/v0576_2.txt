@@ -1,0 +1,3 @@
+v0.5.76 bench 2:
+- Body cap 4 KiB; 200 ms poll. Oversize responses fail closed.
+- No URL configured: one pointer check (existing path).

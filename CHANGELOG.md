@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.76 - 2026-09-06
+
+### Added
+- **Remote JWKS fetch (D3 phase 6)** — `jwks_url` GETs
+  `http://host[:port][/path]` once at create into the 8-key
+  cache. `http://` only; 4 KiB body; exclusive with
+  `jwks_json`. HTTPS refresh deferred.
+
+### Tests
+- `tests/test_jwksf.c` — parse URL, build GET, loopback
+  fetch, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.76.enumeration.md`, `v0.5.76.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v0576_{1,2}.txt`.
+
+### Test count
+- 295 tests (was 291 in v0.5.75; +4).
+
 ## 0.5.75 - 2026-09-06
 
 ### Added

@@ -102,6 +102,7 @@ set(CMQ_SERVER_SOURCES
     src/server/cmq_hpack.c
     src/server/cmq_h2.c
     src/server/cmq_jwt.c
+    src/server/cmq_jwksf.c
 )
 
 set(CMQ_STORE_SOURCES
