@@ -1,8 +1,9 @@
-# Remaining unimplemented work (HEAD after v0.5.52)
+# Remaining unimplemented work (HEAD after v0.5.53)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. F14 connect-rate is v0.5.50. Audit events
-are v0.5.51. Outstanding-byte caps are v0.5.52. Next cut: D6.
+are v0.5.51. Outstanding-byte caps are v0.5.52. D6 key
+compaction is v0.5.53. Next cuts: MQTT QoS inflight or D1–D5.
 
 ## Shipped (do not re-open)
 
@@ -14,6 +15,7 @@ are v0.5.51. Outstanding-byte caps are v0.5.52. Next cut: D6.
 | v0.5.50 | F14 connect-rate on CONNECT |
 | v0.5.51 | Audit auth / persist / TLS events |
 | v0.5.52 | Per-account outstanding-byte (`bytes_live`) cap |
+| v0.5.53 | D6 Kafka-style key compact on sealed `.1` |
 
 ## Deferred — detailed designs
 
@@ -55,13 +57,11 @@ No PID+seq, no txn coordinator. **Design:** idempotent publish
 first (client PID + seq in a header, server sliding window per
 PID). Transactions need a coordinator log — after D4.
 
-### D6 Kafka-style key compaction (L)
+### D6 Kafka-style key compaction — shipped v0.5.53
 
-v0.5.45 compact is **tail retain**, not per-key. **Design:**
-optional record key (first header `K`). Background cleaner
-walks sealed `.1` segments only (never the live append path).
-Keep last value per key; tombstone TTL. Trigger on dirty ratio.
-Live PUBLISH path unchanged.
+Sealed `.1` last-value-per-key + tombstone drop. Live append
+unchanged. Tombstone TTL / dirty-ratio auto-trigger remain
+optional follow-ups.
 
 ### Other known gaps (not P3 IDs)
 

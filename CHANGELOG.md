@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.53 - 2026-09-06
+
+### Added
+- **Key compaction on sealed WAL segments (D6)** —
+  `cmq_filestore_compact_keys` keeps the last `CMQK` value per
+  key on `prefix.data.1` / `.idx.1`, drops empty-value
+  tombstones, and leaves unkeyed records and the live WAL
+  untouched.
+
+### Tests
+- `tests/test_filestore_keycompact.c` — noop, last-wins,
+  unkeyed, tombstone, live untouched, isolated, idempotent
+  (+7).
+
+### Documentation
+- `docs/reviews/v0.5.53.enumeration.md`, `v0.5.53.plan.md`.
+- `docs/features/persistence.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0553_{1,2}.txt`.
+
+### Test count
+- 184 tests (was 177 in v0.5.52; +7).
+
 ## 0.5.52 - 2026-09-06
 
 ### Added

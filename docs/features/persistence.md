@@ -119,7 +119,17 @@ Threats NOT closed:
   and opens empty live files. Default cap is 0 (off). Hot path is
   one compare.
 
-Kafka-style key compaction is still deferred (D6).
+## Key compaction (v0.5.53)
+
+`cmq_filestore_compact_keys(fs)` rewrites sealed
+`prefix.data.1` / `.idx.1` only. The live append path is
+unchanged.
+
+A record is keyed when its payload starts with `CMQK` +
+little-endian u16 key length + key + value
+(`cmq_filestore_key_encode` / `key_decode`). Last value wins.
+An empty value is a tombstone and drops that key. Records
+without the envelope are kept. No archive file is a no-op.
 
 ## Limitations
 

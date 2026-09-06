@@ -723,6 +723,261 @@ void cmq_filestore_set_rotate_bytes(cmq_filestore_t *fs, uint64_t cap) {
     fs->rotate_bytes = cap;
 }
 
+#define CMQ_FS_KEY_MAGIC "CMQK"
+#define CMQ_FS_KEYCOMPACT_MAX_RECS 262144u
+
+int cmq_filestore_key_encode(uint8_t *out, size_t out_sz,
+                             const char *key, size_t key_len,
+                             const uint8_t *val, size_t val_len,
+                             size_t *out_len) {
+    if (!out || !out_len || !key || key_len == 0 || key_len > CMQ_FS_KEY_MAX)
+        return -1;
+    if (val_len > 0 && !val) return -1;
+    if (out_sz < 6 || key_len > out_sz - 6) return -1;
+    if (val_len > out_sz - 6 - key_len) return -1;
+    memcpy(out, CMQ_FS_KEY_MAGIC, 4);
+    put_le16(out + 4, (uint16_t)key_len);
+    memcpy(out + 6, key, key_len);
+    if (val_len > 0)
+        memcpy(out + 6 + key_len, val, val_len);
+    *out_len = 6 + key_len + val_len;
+    return 0;
+}
+
+int cmq_filestore_key_decode(const uint8_t *p, size_t n,
+                             const uint8_t **key, size_t *key_len,
+                             const uint8_t **val, size_t *val_len) {
+    if (!p || n < 6) return -1;
+    if (memcmp(p, CMQ_FS_KEY_MAGIC, 4) != 0) return -1;
+    uint16_t klen = get_le16(p + 4);
+    if (klen == 0 || klen > CMQ_FS_KEY_MAX || (size_t)klen > n - 6)
+        return -1;
+    if (key) *key = p + 6;
+    if (key_len) *key_len = klen;
+    if (val) *val = p + 6 + klen;
+    if (val_len) *val_len = n - 6 - klen;
+    return 0;
+}
+
+typedef struct {
+    uint64_t off;
+    uint32_t len;
+    uint32_t crc;
+    uint16_t klen;
+    uint8_t keyed;
+    uint8_t tombstone;
+    uint8_t keep;
+    char key[CMQ_FS_KEY_MAX];
+} kc_rec_t;
+
+static int keycompact_load(FILE *df, FILE *idf, kc_rec_t **out, size_t *out_n) {
+    if (fs_seek_end(idf) != 0) return -1;
+    uint64_t idx_sz = 0;
+    if (fs_tell(idf, &idx_sz) != 0) return -1;
+    if ((idx_sz % 8u) != 0) return -1;
+    uint64_t n = idx_sz / 8u;
+    if (n > CMQ_FS_KEYCOMPACT_MAX_RECS) return -1;
+    kc_rec_t *recs = NULL;
+    if (n > 0) {
+        recs = calloc((size_t)n, sizeof(*recs));
+        if (!recs) return -1;
+    }
+    for (uint64_t i = 0; i < n; i++) {
+        if (fs_seek(idf, i * 8u) != 0) {
+            free(recs);
+            return -1;
+        }
+        uint8_t ib[8];
+        if (fread(ib, sizeof(ib), 1, idf) != 1) {
+            free(recs);
+            return -1;
+        }
+        uint64_t off = get_le64(ib);
+        if (fs_seek(df, off) != 0) {
+            free(recs);
+            return -1;
+        }
+        uint8_t hdr[CMQ_FS_HDR_SIZE];
+        if (fread(hdr, sizeof(hdr), 1, df) != 1) {
+            free(recs);
+            return -1;
+        }
+        if (get_le32(hdr + 0) != CMQ_FS_MAGIC ||
+            get_le16(hdr + 4) != (uint16_t)CMQ_FS_VERSION) {
+            free(recs);
+            return -1;
+        }
+        uint32_t hlen = get_le32(hdr + 14);
+        uint32_t hcrc = get_le32(hdr + 18);
+        if (hlen == 0 || hlen > (16u * 1024 * 1024)) {
+            free(recs);
+            return -1;
+        }
+        uint8_t *buf = malloc(hlen);
+        if (!buf) {
+            free(recs);
+            return -1;
+        }
+        if (fread(buf, 1, hlen, df) != hlen ||
+            crc32_compute(buf, hlen) != hcrc) {
+            free(buf);
+            free(recs);
+            return -1;
+        }
+        recs[i].off = off;
+        recs[i].len = hlen;
+        recs[i].crc = hcrc;
+        const uint8_t *k = NULL, *v = NULL;
+        size_t klen = 0, vlen = 0;
+        if (cmq_filestore_key_decode(buf, hlen, &k, &klen, &v, &vlen) == 0) {
+            recs[i].keyed = 1;
+            recs[i].tombstone = (vlen == 0) ? 1 : 0;
+            recs[i].klen = (uint16_t)klen;
+            memcpy(recs[i].key, k, klen);
+        }
+        free(buf);
+    }
+    *out = recs;
+    *out_n = (size_t)n;
+    return 0;
+}
+
+static void keycompact_mark(kc_rec_t *recs, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (!recs[i].keyed) {
+            recs[i].keep = 1;
+            continue;
+        }
+        size_t last = i;
+        for (size_t j = i + 1; j < n; j++) {
+            if (recs[j].keyed && recs[j].klen == recs[i].klen &&
+                memcmp(recs[j].key, recs[i].key, recs[i].klen) == 0)
+                last = j;
+        }
+        if (last == i && !recs[i].tombstone)
+            recs[i].keep = 1;
+    }
+}
+
+static int keycompact_write(FILE *src, const kc_rec_t *recs, size_t n,
+                            FILE *df, FILE *idf, uint64_t *out_off) {
+    uint64_t off = 0;
+    uint64_t seq = 1;
+    for (size_t i = 0; i < n; i++) {
+        if (!recs[i].keep) continue;
+        if (fs_seek(src, recs[i].off) != 0) return -1;
+        uint8_t hdr[CMQ_FS_HDR_SIZE];
+        if (fread(hdr, sizeof(hdr), 1, src) != 1) return -1;
+        uint8_t *buf = malloc(recs[i].len);
+        if (!buf) return -1;
+        if (fread(buf, 1, recs[i].len, src) != recs[i].len) {
+            free(buf);
+            return -1;
+        }
+        put_le64(hdr + 6, seq);
+        if (fwrite(hdr, sizeof(hdr), 1, df) != 1 ||
+            fwrite(buf, 1, recs[i].len, df) != recs[i].len) {
+            free(buf);
+            return -1;
+        }
+        uint8_t ib[8];
+        put_le64(ib, off);
+        if (fwrite(ib, sizeof(ib), 1, idf) != 1) {
+            free(buf);
+            return -1;
+        }
+        off += (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)recs[i].len;
+        seq++;
+        free(buf);
+    }
+    *out_off = off;
+    return 0;
+}
+
+static int filestore_compact_keys_impl(cmq_filestore_t *fs) {
+    if (!fs) return -1;
+    cmq_mutex_lock(&fs->lock);
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    if (fs_lock_pair(fs, LOCK_EX) != 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    char d1[616], i1[616], dtmp[624], itmp[624];
+    if (snprintf(d1, sizeof(d1), "%s.1", fs->data_path) >= (int)sizeof(d1) ||
+        snprintf(i1, sizeof(i1), "%s.1", fs->idx_path) >= (int)sizeof(i1) ||
+        snprintf(dtmp, sizeof(dtmp), "%s.tmp", d1) >= (int)sizeof(dtmp) ||
+        snprintf(itmp, sizeof(itmp), "%s.tmp", i1) >= (int)sizeof(itmp)) {
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    FILE *src = fopen(d1, "rb");
+    FILE *sidx = fopen(i1, "rb");
+    if (!src || !sidx) {
+        if (src) fclose(src);
+        if (sidx) fclose(sidx);
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return 0;
+    }
+    kc_rec_t *recs = NULL;
+    size_t n = 0;
+    int rc = -1;
+    if (keycompact_load(src, sidx, &recs, &n) != 0)
+        goto out_src;
+    keycompact_mark(recs, n);
+    FILE *df = fopen(dtmp, "wb");
+    FILE *idf = fopen(itmp, "wb");
+    if (!df || !idf) {
+        if (df) fclose(df);
+        if (idf) fclose(idf);
+        unlink(dtmp);
+        unlink(itmp);
+        goto out_recs;
+    }
+    uint64_t off = 0;
+    int ok = (keycompact_write(src, recs, n, df, idf, &off) == 0);
+    if (ok)
+        ok = (fflush(df) == 0 && fflush(idf) == 0 &&
+              fsync(fileno(df)) == 0 && fsync(fileno(idf)) == 0);
+    fclose(df);
+    fclose(idf);
+    if (!ok) {
+        unlink(dtmp);
+        unlink(itmp);
+        goto out_recs;
+    }
+    if (rename(dtmp, d1) != 0 || rename(itmp, i1) != 0) {
+        unlink(dtmp);
+        unlink(itmp);
+        goto out_recs;
+    }
+    rc = 0;
+out_recs:
+    free(recs);
+out_src:
+    fclose(src);
+    fclose(sidx);
+    if (rc != 0) {
+        if (fs->idx_fp) clearerr(fs->idx_fp);
+        if (fs->data_fp) clearerr(fs->data_fp);
+    }
+    fs_unlock_pair(fs);
+    cmq_mutex_unlock(&fs->lock);
+    return rc;
+}
+
+int cmq_filestore_compact_keys(cmq_filestore_t *fs) {
+    if (!fs) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_compact_keys_impl(fs);
+    fs_end_op(fs);
+    return rc;
+}
+
 static int filestore_append_impl(cmq_filestore_t *fs, const uint8_t *data, size_t len,
                           uint64_t *out_seq) {
     if (!fs || !data || len == 0 || len > (16u * 1024 * 1024)) return -1;

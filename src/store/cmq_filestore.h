@@ -71,6 +71,22 @@ int cmq_filestore_compact(cmq_filestore_t *fs, uint64_t retain);
  * archive to prefix.data.1 / .idx.1 and start empty. 0 = off. */
 void cmq_filestore_set_rotate_bytes(cmq_filestore_t *fs, uint64_t cap);
 
+/* v0.5.53: optional compact key. Payload prefix CMQK + u16le
+ * key_len + key + value. Empty value is a tombstone. */
+#define CMQ_FS_KEY_MAX 256
+int cmq_filestore_key_encode(uint8_t *out, size_t out_sz,
+                             const char *key, size_t key_len,
+                             const uint8_t *val, size_t val_len,
+                             size_t *out_len);
+/* 0 if the payload is keyed; -1 otherwise. */
+int cmq_filestore_key_decode(const uint8_t *p, size_t n,
+                             const uint8_t **key, size_t *key_len,
+                             const uint8_t **val, size_t *val_len);
+/* Rewrite sealed prefix.data.1 / .idx.1: last value per key,
+ * drop tombstones, keep unkeyed. No-op if no archive. Live WAL
+ * is not rewritten. */
+int cmq_filestore_compact_keys(cmq_filestore_t *fs);
+
 /* P1: enqueue a record for async write. Returns 0 if queued, -1 if
  * queue full / dying / async not enabled. The worker will fwrite +
  * fflush the record; durability follows the fsync policy. */
