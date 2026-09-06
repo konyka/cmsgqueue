@@ -50,6 +50,26 @@ int cmq_otlp_set_ca(cmq_otlp_url_t *url, const char *ca_path) {
     return 0;
 }
 
+int cmq_otlp_reload_ca(cmq_otlp_url_t *url, const char **live_ca,
+                       const char *fresh_ca) {
+    if (!fresh_ca || !fresh_ca[0])
+        return 0;
+    cmq_otlp_url_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    if (cmq_otlp_set_ca(&tmp, fresh_ca) != 0)
+        return -1;
+    if (url && cmq_otlp_set_ca(url, fresh_ca) != 0)
+        return -1;
+    if (live_ca) {
+        char *owned = strdup(fresh_ca);
+        if (!owned)
+            return -1;
+        free((void *)*live_ca);
+        *live_ca = owned;
+    }
+    return 0;
+}
+
 int cmq_otlp_parse_url(const char *url, cmq_otlp_url_t *out) {
     if (!url || !out) return -1;
     memset(out, 0, sizeof(*out));

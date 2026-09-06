@@ -41,6 +41,9 @@ picks JSON or gRPC from the URL scheme.
 `https://` uses TLS with peer verify. `otlp_ca` is an
 optional PEM; otherwise the system CA store is used.
 HTTP endpoints skip the handshake.
+v0.5.135: reload applies a non-empty `otlp_ca` to the live
+exporter URL. Omitted / empty keeps the current path.
+`..` fails closed. The endpoint URL stays create-time.
 
 HTTP/TLS failures are ignored. The ring never waits on I/O.
 No endpoint: the export hook stays NULL.

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.135 - 2026-09-06
+
+### Added
+- **Reload `otlp_ca`** — `cmq_server_reload` copies a
+  non-empty CA path onto the live OTLP exporter URL.
+  Omitted / empty keeps the current path. `..` fails
+  closed. The endpoint URL stays create-time.
+
+### Tests
+- `tests/test_oca.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.135.enumeration.md`, `v0.5.135.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v05135_{1,2}.txt`.
+
+### Test count
+- 531 tests (was 527 in v0.5.134; +4).
+
 ## 0.5.134 - 2026-09-06
 
 ### Added
