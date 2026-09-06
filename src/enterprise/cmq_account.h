@@ -8,6 +8,8 @@
 #define CMQ_ACCOUNT_NAME_SIZE   64
 #define CMQ_ACCOUNT_MAX_EXPORTS 32
 #define CMQ_ACCOUNT_MAX_IMPORTS 32
+#define CMQ_ACCOUNT_MAX_MAPS    16
+#define CMQ_ACCOUNT_SUBJECT_SIZE 256
 
 typedef struct cmq_account_manager cmq_account_manager_t;
 
@@ -39,6 +41,12 @@ typedef struct {
     char source_account[CMQ_ACCOUNT_NAME_SIZE];
     int active;
 } cmq_account_import_t;
+
+/* v0.5.49: publish-side rewrite. dest tokens: literal, *, $1..$9, final >. */
+typedef struct {
+    char src[CMQ_ACCOUNT_SUBJECT_SIZE];
+    char dest[CMQ_ACCOUNT_SUBJECT_SIZE];
+} cmq_account_map_t;
 
 cmq_account_manager_t *cmq_account_manager_create(void);
 void cmq_account_manager_destroy(cmq_account_manager_t *mgr);
@@ -95,5 +103,16 @@ int cmq_account_can_export(cmq_account_manager_t *mgr, const char *account,
    lists are non-empty, dest/source account must match (or "*"). */
 int cmq_account_may_deliver(cmq_account_manager_t *mgr, const char *pub_account,
                              const char *sub_account, const char *subject);
+
+int cmq_account_add_map(cmq_account_manager_t *mgr, const char *account,
+                        const char *src, const char *dest);
+int cmq_account_remove_map(cmq_account_manager_t *mgr, const char *account,
+                           const char *src);
+size_t cmq_account_map_count(cmq_account_manager_t *mgr, const char *account);
+/* Sum of all maps — 0 means rewrite is a no-op (one atomic load). */
+uint32_t cmq_account_map_total(const cmq_account_manager_t *mgr);
+/* Identity if no map matches. -1 on NULL / overflow / empty result. */
+int cmq_account_rewrite_subject(cmq_account_manager_t *mgr, const char *account,
+                                const char *in, char *out, size_t out_sz);
 
 #endif

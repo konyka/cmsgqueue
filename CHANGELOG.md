@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.49 - 2026-09-06
+
+### Added
+- **Publish-side subject rewrite** — per-account maps
+  (`foo.*` → `bar.*`, `$1`..`$9`, final `>`). First match wins;
+  same `src` upserts. Export ACL stays on the wire subject;
+  sublist match uses the rewrite. No maps: one atomic load of
+  `map_total`. REQUEST and BATCH honor the table; `_INBOX.` /
+  RESPONSE do not.
+
+### Tests
+- `tests/test_account_map.c` — identity, star, `>`, `$1`,
+  upsert/first-match, isolation, reject/remove/overflow.
+
+### Documentation
+- `docs/reviews/v0.5.49.enumeration.md`, `v0.5.49.plan.md`.
+- `docs/features/accounts.md`.
+- `docs/benchmarks/v0549_{1,2}.txt`.
+
+### Test count
+- 165 tests (was 158 in v0.5.48; +7).
+
 ## 0.5.48 - 2026-09-06
 
 ### Added

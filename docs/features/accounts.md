@@ -44,7 +44,25 @@ Unlimited CONNECT/SUBSCRIBE: one atomic load + compare, then the
 same `fetch_add` as before. PUBLISH: one extra integer compare
 when the cached `account_max_payload` is 0.
 
+## Subject rewrite (v0.5.49)
+
+Publish-side mapping, first match wins, 16 rows per account:
+
+```c
+cmq_account_add_map(mgr, "acme", "foo.*", "bar.*");
+cmq_account_add_map(mgr, "acme", "in.*.x", "out.$1.y");
+cmq_account_add_map(mgr, "acme", "src.>", "dst.>");
+```
+
+`dest` tokens are literals, `*` (next `*` capture), `$1`..`$9`, or a
+final `>` (the src remainder). Export ACL / F16 see the **wire**
+subject. Match and delivery use the rewritten name.
+
+`cmq_account_map_total` is 0 when nothing is mapped — the publish
+path skips the rewrite lock (one atomic load).
+
 ## See also
 
 - `docs/features/quota.md` — rate windows, not concurrent caps
 - `docs/reviews/v0.5.48.enumeration.md`
+- `docs/reviews/v0.5.49.enumeration.md`

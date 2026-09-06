@@ -47,6 +47,24 @@ static int auth_configured(const cmq_server_t *srv) {
     return (u && u[0] != '\0') || (p && p[0] != '\0');
 }
 
+/* v0.5.49: remap subject in place. No-op when map_total is 0. */
+static int account_apply_rewrite(cmq_server_t *srv, const char *account,
+                                 char *subject, size_t subject_sz) {
+    if (!srv || !srv->accounts || !account || !subject || subject_sz == 0)
+        return 0;
+    if (cmq_account_map_total(srv->accounts) == 0)
+        return 0;
+    char mapped[CMQ_MAX_SUBJECT];
+    if (cmq_account_rewrite_subject(srv->accounts, account, subject,
+                                    mapped, sizeof(mapped)) != 0)
+        return -1;
+    size_t n = strlen(mapped);
+    if (n == 0 || n >= subject_sz) return -1;
+    if (cmq_sublist_publish_subject_valid(mapped) != 0) return -1;
+    memcpy(subject, mapped, n + 1);
+    return 0;
+}
+
 /* Global max_payload_size and the CONNECT-cached account cap. */
 static int payload_exceeds_caps(const cmq_server_t *srv, const cmq_client_t *c,
                                 size_t msg_len) {
@@ -3090,6 +3108,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "subject rate limit");
         return;
     }
+    if (account_apply_rewrite(srv, c->account_name, subject, sizeof(subject)) != 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "subject map failed");
+        return;
+    }
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
         cmq_send_error(c, "delivery failed");
         return; /* OOM after validation — surface error, no silent drop */
@@ -3265,6 +3289,13 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
                        const uint8_t *payload, size_t payload_len,
                        const char *account_name) {
     if (!srv || !subject || !*subject || !account_name) return -1;
+    char mapped[CMQ_MAX_SUBJECT];
+    size_t slen = strnlen(subject, CMQ_MAX_SUBJECT);
+    if (slen == 0 || slen >= CMQ_MAX_SUBJECT) return -1;
+    memcpy(mapped, subject, slen + 1);
+    if (account_apply_rewrite(srv, account_name, mapped, sizeof(mapped)) != 0)
+        return -1;
+    subject = mapped;
     cmq_sublist_result_t result;
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0)
         return -1;
@@ -3887,6 +3918,13 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    if (account_apply_rewrite(srv, c->account_name, subject, sizeof(subject)) != 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "subject map failed");
+        return;
+    }
+
     size_t route_sent = 0;
     int route_rc = 0;
 
@@ -4393,7 +4431,16 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         offset += 2;
         memcpy(prep[msg].subject, frame->payload + offset, subject_len);
         prep[msg].subject[subject_len] = '\0';
-        prep[msg].subject_len = subject_len;
+        if (account_apply_rewrite(srv, c->account_name, prep[msg].subject,
+                                 sizeof(prep[msg].subject)) != 0) {
+            for (uint16_t k = 0; k < msg; k++) free(prep[k].tgts);
+            free(prep);
+            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_error(c, "subject map failed");
+            return;
+        }
+        prep[msg].subject_len = (uint16_t)strlen(prep[msg].subject);
         offset += subject_len;
 
         uint16_t reply_len = ((uint16_t)frame->payload[offset] << 8) |
