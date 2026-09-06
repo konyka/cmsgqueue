@@ -20,10 +20,10 @@ TEST(msgc, accept_message) {
     cmq_parser_destroy(p);
 }
 
-TEST(msgc, reject_request) {
+TEST(msgc, reject_response) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
-    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_REQUEST,
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_RESPONSE,
                                 CMQ_FLAG_COMPRESSED, NULL, 0);
     ASSERT(n > 0);
     (void)cmq_parser_feed(p, buf, n);

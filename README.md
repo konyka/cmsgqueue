@@ -42,7 +42,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
 - **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability
 - **Capability Negotiation (F4)**: extended INFO frame advertises server_id, max_payload, auth, tls, compression, checksum, headers, batch
-- **Wire flags**: CMQ_FLAG_HEADERS, CMQ_FLAG_BATCH, CMQ_FLAG_ROUTE are implemented; **CMQ_FLAG_CHECKSUM is now implemented (F3)** with CRC32C verification (RFC 3309 / SSE4.2 HW-accelerated); **CMQ_FLAG_COMPRESSED is implemented for BATCH, PUBLISH, and inbound MESSAGE (F2, v0.5.41 / v0.5.96–97)** — zstd, dest size from the frame content-size header, 16 MiB bomb cap. COMPRESSED on REQUEST is still rejected (F11 interop).
+- **Wire flags**: CMQ_FLAG_HEADERS, CMQ_FLAG_BATCH, CMQ_FLAG_ROUTE are implemented; **CMQ_FLAG_CHECKSUM is now implemented (F3)** with CRC32C verification (RFC 3309 / SSE4.2 HW-accelerated); **CMQ_FLAG_COMPRESSED is implemented for BATCH, PUBLISH, MESSAGE, and REQUEST (F2, v0.5.41 / v0.5.96–98)** — zstd, dest size from the frame content-size header, 16 MiB bomb cap. COMPRESSED on RESPONSE is still rejected (F11 interop).
 - **v0.5.0 hot path**:
   - **F1** test_stress flake fix: subscribe-publish barrier + deterministic drain.
   - **F2** audit log rotation at 100 MiB (`cmq-audit.log` → `cmq-audit.log.1`).

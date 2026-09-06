@@ -1,0 +1,3 @@
+v0.5.98 bench 1:
+- Uncompressed REQUEST: one flags-bit compare.
+- Compressed REQUEST: inflate + recurse, then inbox/subject parse.

@@ -1,0 +1,3 @@
+v0.5.98 bench 2:
+- RESPONSE+COMPRESSED still pending_error.
+- Corrupt zstd REQUEST is rejected before inbox increment.

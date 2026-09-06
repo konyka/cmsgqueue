@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.98 - 2026-09-06
+
+### Added
+- **COMPRESSED on REQUEST (F2 follow-up)** — zstd REQUEST
+  inflates before inbox/subject parse (16 MiB cap).
+  RESPONSE still rejected (F11).
+
+### Tests
+- `tests/test_reqc.c` — accept REQUEST, reject RESPONSE,
+  inflate, reject CONNECT (+4).
+
+### Documentation
+- `docs/reviews/v0.5.98.enumeration.md`, `v0.5.98.plan.md`.
+- `docs/features/wire-compression.md`, `flag-rejection.md`.
+- `docs/benchmarks/v0598_{1,2}.txt`.
+
+### Test count
+- 383 tests (was 379 in v0.5.97; +4).
+
 ## 0.5.97 - 2026-09-06
 
 ### Added

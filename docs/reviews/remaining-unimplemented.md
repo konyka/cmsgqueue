@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.97)
+# Remaining unimplemented work (HEAD after v0.5.98)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -59,6 +59,7 @@ Required next cuts: none.
 | v0.5.95 | D4 `$JS.<name>.<consumer>` consume / ack |
 | v0.5.96 | F2 COMPRESSED on PUBLISH |
 | v0.5.97 | F2 COMPRESSED on MESSAGE |
+| v0.5.98 | F2 COMPRESSED on REQUEST |
 
 ## Deferred — detailed designs
 
@@ -122,7 +123,8 @@ are live (v0.5.88).
 | `$JS.<name>.<consumer>` consume / ack | shipped v0.5.95 | — |
 | COMPRESSED on PUBLISH | shipped v0.5.96 | — |
 | COMPRESSED on MESSAGE | shipped v0.5.97 | — |
-| COMPRESSED on REQUEST | still rejected (F11) | Optional |
+| COMPRESSED on REQUEST | shipped v0.5.98 | — |
+| COMPRESSED on RESPONSE | still rejected (F11) | Optional |
 
 ## Optional follow-ups (not required next cuts)
 

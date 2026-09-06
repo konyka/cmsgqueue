@@ -430,13 +430,13 @@ TEST(parser, hard_cap_keeps_queued) {
     cmq_parser_destroy(p);
 }
 
-/* F11 + F2 / v0.5.97: COMPRESSED is BATCH, PUBLISH, or MESSAGE.
- * REQUEST still fails closed.
+/* F11 + F2 / v0.5.98: COMPRESSED is BATCH, PUBLISH, MESSAGE, or
+ * REQUEST. RESPONSE still fails closed.
  */
 TEST(parser, reject_flag_compressed) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
-    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_REQUEST,
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_RESPONSE,
                                 CMQ_FLAG_COMPRESSED, NULL, 0);
     ASSERT(n > 0);
     (void)cmq_parser_feed(p, buf, n);
@@ -479,8 +479,8 @@ TEST(parser, reject_flag_checksum) {
 TEST(parser, reject_flag_combined_reserved) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
-    /* flags = 0x03 on REQUEST — still rejected (no REQUEST inflate). */
-    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_REQUEST,
+    /* flags = 0x03 on RESPONSE — still rejected (no RESPONSE inflate). */
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_RESPONSE,
                                 0x03, NULL, 0);
     ASSERT(n > 0);
     (void)cmq_parser_feed(p, buf, n);
