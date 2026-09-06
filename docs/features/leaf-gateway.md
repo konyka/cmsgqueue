@@ -26,6 +26,10 @@ gateway connect, bad CONNACK, reject.
 
 `tests/test_cluster.c` remains bookkeeping
 (`add_conn(-1)` is not e2e).
+`tests/test_cra.c` covers SIGHUP attach of
+`cluster_name` / `cluster_node_id` when create had none
+(v0.5.143). Existing cluster / route peers are not
+recreated.
 
 ## See also
 

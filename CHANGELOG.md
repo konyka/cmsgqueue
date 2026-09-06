@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.143 - 2026-09-06
+
+### Added
+- **Attach cluster on reload** — when create had no
+  `cluster_name` / `cluster_node_id`, SIGHUP creates the
+  live cluster and an empty route pool. Omitted / empty
+  keeps off. Oversize names fail closed. Existing cluster
+  and route peers are not remounted or redialed.
+
+### Tests
+- `tests/test_cra.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.143.enumeration.md`, `v0.5.143.plan.md`.
+- `docs/features/leaf-gateway.md`.
+- `docs/benchmarks/v05143_{1,2}.txt`.
+
+### Test count
+- 563 tests (was 559 in v0.5.142; +4).
+
 ## 0.5.142 - 2026-09-06
 
 ### Added

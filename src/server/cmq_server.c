@@ -9030,6 +9030,22 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (!server->cluster) {
+        if (cmq_cluster_reload_attach(&server->cluster,
+                                      &server->config.cluster_name,
+                                      &server->config.cluster_node_id,
+                                      fresh.cluster_name,
+                                      fresh.cluster_node_id) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+        if (server->cluster && !server->routes) {
+            server->routes = cmq_route_pool_create(server->cluster);
+            if (server->routes)
+                cmq_route_pool_set_dial_gate(server->routes,
+                                             &server->acceptor_drain);
+        }
+    }
     if (cmq_reload_apply_dynamic(server->log, &server->config.log_level,
                                  &server->acl_h, &fresh) != 0) {
         cmq_config_free(&fresh);
