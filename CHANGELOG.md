@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.105 - 2026-09-06
+
+### Added
+- **`$JS` hash partitions (D4 follow-up)** —
+  `cmq_js_set_partitions` (1–16, empty stream only).
+  `{persist_dir}/js/{name}.parts` (`CMQP`) restores `n`.
+  PUBLISH / replay use `append_key` on the payload when
+  `n>1`. `cmq_js_consume_part` isolates one partition.
+
+### Tests
+- `tests/test_jsp.c` — isolate, reopen, n1 compat,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.105.enumeration.md`, `v0.5.105.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v05105_{1,2}.txt`.
+
+### Test count
+- 411 tests (was 407 in v0.5.104; +4).
+
 ## 0.5.104 - 2026-09-06
 
 ### Added

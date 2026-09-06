@@ -63,6 +63,15 @@ is appended to `{persist_dir}/js/{name}.msgs`
 (`CMQM`, v0.5.104) and replayed onto the ring on
 open so pull consume survives reopen.
 
+## Partitions (v0.5.105)
+
+`cmq_js_set_partitions(name, n)` (1–16) is allowed only
+while the stream is empty. `{persist_dir}/js/{name}.parts`
+(`CMQP`) restores `n` on open. PUBLISH / replay use
+`append_key` with the payload as the key when `n>1`.
+`cmq_js_consume_part` isolates one hash partition.
+Default `n=1` keeps the unpartitioned append path.
+
 REQUEST `$JS.<name>` (v0.5.94) returns the last payload
 to reply-to, or an empty body on miss. Oversized last
 message is an empty miss.
@@ -83,7 +92,7 @@ or consumer fails closed (does not append).
 
 `tests/test_stream_cursors.c`, `tests/test_spart.c`,
 `tests/test_js.c`, `tests/test_jsr.c`, `tests/test_jsc.c`,
-`tests/test_jsl.c`, `tests/test_jsh.c`
+`tests/test_jsl.c`, `tests/test_jsh.c`, `tests/test_jsp.c`
 
 ## See also
 
@@ -94,3 +103,4 @@ or consumer fails closed (does not append).
 - `docs/reviews/v0.5.95.enumeration.md`
 - `docs/reviews/v0.5.103.enumeration.md`
 - `docs/reviews/v0.5.104.enumeration.md`
+- `docs/reviews/v0.5.105.enumeration.md`

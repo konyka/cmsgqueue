@@ -1,0 +1,4 @@
+v0.5.105 bench 1:
+- n=1 PUBLISH: one extra partitions() compare.
+- n>1 PUBLISH: append_key instead of append.
+- Reopen: one .parts read before WAL replay.
