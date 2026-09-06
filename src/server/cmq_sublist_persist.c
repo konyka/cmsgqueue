@@ -88,6 +88,21 @@ int cmq_sublist_persist_record_unsub(cmq_sublist_persist_t *p,
     return rc;
 }
 
+int cmq_sublist_persist_reload_load(cmq_sublist_persist_t *p,
+                                    int *loaded,
+                                    cmq_sublist_persist_cb cb, void *ctx) {
+    if (!loaded) return -1;
+    if (!p)
+        return 0;
+    if (*loaded)
+        return 0;
+    if (!cb) return -1;
+    if (cmq_sublist_persist_load(p, cb, ctx) < 0)
+        return -1;
+    *loaded = 1;
+    return 0;
+}
+
 int cmq_sublist_persist_load(cmq_sublist_persist_t *p,
                               cmq_sublist_persist_cb cb, void *ctx) {
     if (!p || !p->path || !cb) return -1;

@@ -1,0 +1,4 @@
+v0.5.150 bench 2:
+- Reload omitted: no file.
+- Empty WAL: load count 0, loaded=1.
+- Reject missing cb: loaded stays 0.

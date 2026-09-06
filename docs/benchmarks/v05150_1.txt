@@ -1,0 +1,3 @@
+v0.5.150 bench 1:
+- Load apply: one sequential read of cmq-subs.wal.
+- Already loaded: one integer compare, no reopen.

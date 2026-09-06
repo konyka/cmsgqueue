@@ -27,6 +27,9 @@ v0.5.144: reload opens the WAL and persist sidecars
 when create had no `persist_dir`. Omitted / empty keeps
 off. Unsafe paths fail closed. An existing filestore is
 not remounted and WAL replay stays create-time.
+v0.5.150: the just-opened `cmq-subs.wal` is loaded
+once into ghost SUB refs. A second load is skipped.
+WAL message replay stays create-time.
 
 The wiring is **best-effort**: a failed append increments
 `stat_persist_fail` but does not block delivery. This matches

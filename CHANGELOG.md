@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.150 - 2026-09-07
+
+### Added
+- **Load persisted subscriptions on reload** — when
+  persist attach just opened `cmq-subs.wal`, SIGHUP
+  runs `cmq_sublist_persist_load` once. Omitted persist
+  keeps off. An already-loaded handle is left alone.
+  WAL message replay stays create-time.
+
+### Tests
+- `tests/test_spl.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.150.enumeration.md`, `v0.5.150.plan.md`.
+- `docs/features/persistence.md`.
+- `docs/benchmarks/v05150_{1,2}.txt`.
+
+### Test count
+- 591 tests (was 587 in v0.5.149; +4).
+
 ## 0.5.149 - 2026-09-07
 
 ### Added

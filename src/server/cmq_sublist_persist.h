@@ -52,6 +52,12 @@ typedef int (*cmq_sublist_persist_cb)(void *ctx, int is_sub,
                                        const char *account);
 int cmq_sublist_persist_load(cmq_sublist_persist_t *p,
                               cmq_sublist_persist_cb cb, void *ctx);
+/* v0.5.150: NULL persist keeps off. Loads once when *loaded is 0.
+ * A second call leaves the sublist alone (no remount / replay).
+ * Missing cb on a first load fails closed. */
+int cmq_sublist_persist_reload_load(cmq_sublist_persist_t *p,
+                                    int *loaded,
+                                    cmq_sublist_persist_cb cb, void *ctx);
 
 #ifdef __cplusplus
 }

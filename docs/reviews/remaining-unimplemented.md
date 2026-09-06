@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.149)
+# Remaining unimplemented work (HEAD after v0.5.150)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -35,7 +35,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `js_partitions` / `js_msgs_rotate_bytes` | yes | `$JS` | `cmq_js_reload` |
 | `tls_*` / `listener*_tls_*` | yes | SSL_CTX slots | `apply_tls` + attach |
 | `listener{1,2,3}_host/port` / count | yes | extra bind | bind empty slots (no rebind) |
-| `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync (no remount / replay) |
+| `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync + F18 load (no remount / WAL replay) |
 | `mqtt_bridge_*` | yes | outbound bridge | attach + maps + endpoint |
 
 Intentional / out of scope (not unused create/conf paths):
@@ -156,6 +156,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.147 | attach routes on reload |
 | v0.5.148 | attach TLS on reload |
 | v0.5.149 | attach blocklist on reload |
+| v0.5.150 | load persisted subscriptions on reload |
 
 ## Deferred — detailed designs
 
@@ -287,6 +288,7 @@ are live (v0.5.88).
 | attach routes on reload | shipped v0.5.147 | — |
 | attach TLS on reload | shipped v0.5.148 | — |
 | attach blocklist on reload | shipped v0.5.149 | — |
+| load persisted subscriptions on reload | shipped v0.5.150 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -324,9 +326,11 @@ are live (v0.5.88).
   left a slot empty shipped v0.5.146. Route attach when
   create had no peers shipped v0.5.147. TLS attach when
   create left a slot empty shipped v0.5.148. Blocklist
-  attach when create had none shipped v0.5.149. Create-time
-  only: `persist_dir` remount, WAL replay, `h2_port` /
-  slot-0 rebind, route redial, extra-listener rebind.
+  attach when create had none shipped v0.5.149. F18
+  persist_load when persist was just attached shipped
+  v0.5.150. Create-time only: `persist_dir` remount,
+  WAL replay, `h2_port` / slot-0 rebind, route redial,
+  extra-listener rebind.
 
 ## TDD rule for every increment
 

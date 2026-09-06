@@ -8887,8 +8887,19 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
             if (server->config.persist_sync_interval_ms > 0)
                 cmq_filestore_set_sync_interval(server->filestore,
                     server->config.persist_sync_interval_ms);
-            if (!server->persist)
+            if (!server->persist) {
                 server->persist = cmq_sublist_persist_open(dir);
+                if (server->persist) {
+                    int loaded = 0;
+                    if (cmq_sublist_persist_reload_load(server->persist,
+                                                        &loaded,
+                                                        cmq_sublist_recover_cb,
+                                                        server) != 0) {
+                        cmq_config_free(&fresh);
+                        return -1;
+                    }
+                }
+            }
             if (server->txn)
                 (void)cmq_txn_set_log(server->txn, dir);
             if (server->kvb)
