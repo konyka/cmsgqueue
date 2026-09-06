@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.46 - 2026-09-06
+
+### Added
+- **MQTT last-will and durable sessions** — CONNECT is parsed
+  per spec (Will / Clean / Username / Password flags). A stored
+  will fires on abnormal close only. Clean Session=0 keeps up
+  to 8 topic filters per client id (32 slots). Will payload
+  capped at 4 KiB.
+
+### Fixed
+- CONNECT treated Will (`0x04`) as username and Clean Session
+  (`0x02`) as password.
+
+### Tests
+- `tests/test_mqtt_will.c` — 7 cases (parse, will take/fire,
+  session save/load/drop).
+
+### Documentation
+- `docs/reviews/v0.5.46.enumeration.md`, `v0.5.46.plan.md`.
+- `docs/features/mqtt-server-stub.md`.
+- `docs/benchmarks/v0546_{1,2}.txt`.
+
+### Test count
+- 143 tests (was 136 in v0.5.45; +7).
+
 ## 0.5.45 - 2026-09-06
 
 ### Added

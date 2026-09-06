@@ -14,8 +14,8 @@ extern "C" {
  * CONNECT/CONNACK, PUBLISH (QoS 0/1/2 handshake), SUBSCRIBE/SUBACK,
  * PINGREQ/PINGRESP, DISCONNECT, retain, topic match, optional
  * bridge into cmq_sublist. MQTT 5.0 property lists are decoded
- * (v0.5.43). Will messages and persistent sessions are still
- * deferred (R6).
+ * (v0.5.43). Last-will and Clean Session durable filters ship
+ * in v0.5.46.
  *
  * cmq_mqtt_server_listen probes 127.0.0.1:1883 bind; the real
  * accept loop starts via cmq_mqtt_server_start_listener after
@@ -54,6 +54,39 @@ int cmq_mqtt_props_decode(const uint8_t *buf, size_t len,
 ssize_t cmq_mqtt_publish_payload_off(const uint8_t *vh, size_t vh_len,
                                       int qos, int v5,
                                       cmq_mqtt_props_t *props);
+
+#define CMQ_MQTT_WILL_PAYLOAD_MAX 4096
+#define CMQ_MQTT_SESSIONS_MAX 32
+#define CMQ_MQTT_SESSION_SUBS 8
+
+typedef struct cmq_mqtt_connect_info {
+    int is_v5;
+    int clean_session;
+    int will_flag;
+    uint8_t will_qos;
+    int will_retain;
+    char client_id[64];
+    char username[64];
+    char password[64];
+    char will_topic[128];
+    const uint8_t *will_payload; /* borrowed from CONNECT buffer */
+    uint16_t will_payload_len;
+} cmq_mqtt_connect_info_t;
+
+int cmq_mqtt_parse_connect(const uint8_t *buf, size_t len,
+                            cmq_mqtt_connect_info_t *out);
+
+int cmq_mqtt_will_store(const char *client_id,
+                         const cmq_mqtt_connect_info_t *ci);
+int cmq_mqtt_will_take(const char *client_id, char *topic, size_t topic_cap,
+                        uint8_t **payload, size_t *len, int *retain);
+void cmq_mqtt_will_clear(const char *client_id);
+int cmq_mqtt_will_fire(const char *client_id);
+
+int cmq_mqtt_session_save(const char *client_id,
+                           const char *const *filters, int n);
+int cmq_mqtt_session_load(const char *client_id, char out[][128], int max);
+void cmq_mqtt_session_drop(const char *client_id);
 
 int cmq_mqtt_server_listen(const char *bind_addr, int port);
 
