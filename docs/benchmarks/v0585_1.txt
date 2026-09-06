@@ -1,0 +1,3 @@
+v0.5.85 bench 1:
+- Writable peers: one write_full, no retry copy.
+- EAGAIN: memcpy into a fixed slot (no malloc).

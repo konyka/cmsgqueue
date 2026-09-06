@@ -2970,13 +2970,14 @@ static int cmq_route_forward_op(cmq_server_t *srv, cmq_op_t op, uint8_t flags,
     }
     size_t eagain = 0;
     size_t sent = cmq_route_broadcast(srv->routes, fwd, fwd_len, NULL, &eagain);
+    (void)cmq_route_retry_drain(srv->routes);
     free(fwd);
     if (out_sent) *out_sent = sent;
     if (eagain > 0) {
         cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, (uint64_t)eagain,
                                   CMQ_ATOMIC_RELAXED);
     }
-    /* Any live peer deferred = incomplete fan-out (no retry queue yet). */
+    /* EAGAIN is queued (v0.5.85). Hard misses still fail the fan-out. */
     if (eagain > 0)
         return -1;
     return 0;
@@ -7157,6 +7158,8 @@ static void *route_reconnect_thread(void *arg) {
                 }
                 /* Continue — retry every dead peer each interval. */
             }
+            if (srv->routes)
+                (void)cmq_route_retry_drain(srv->routes);
         }
         for (int s = 0; s < 10; s++) {
             if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||

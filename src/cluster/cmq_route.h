@@ -71,10 +71,23 @@ int cmq_route_disconnect_if_owned_fd(cmq_route_pool_t *pool, const char *node_id
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject,
                        const uint8_t *data, size_t len,
                        const char *exclude_id);
-/* out_eagain: peers not fully written (EAGAIN or hard-write failure). */
+/* out_eagain: peers not fully written (hard fail / vanished / queue full).
+   EAGAIN is queued (v0.5.85) and is not counted here. */
 size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
                              size_t len, const char *exclude_id,
                              size_t *out_eagain);
+
+#define CMQ_ROUTE_RETRY_MAX   32
+#define CMQ_ROUTE_RETRY_BYTES 2048
+
+/* 0 queued; 1 dropped (full); -1 bad args. */
+int cmq_route_retry_offer(cmq_route_pool_t *pool, const char *node_id,
+                          const uint8_t *data, size_t len);
+/* Writes queued frames. Returns sent count; -1 on bad args. */
+int cmq_route_retry_drain(cmq_route_pool_t *pool);
+size_t cmq_route_retry_pending(cmq_route_pool_t *pool);
+uint64_t cmq_route_retry_dropped(cmq_route_pool_t *pool);
+uint64_t cmq_route_retry_sent(cmq_route_pool_t *pool);
 
 size_t cmq_route_pool_count(cmq_route_pool_t *pool);
 /* Connected peers with a live fd (excludes placeholders / staged / dead). */

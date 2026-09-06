@@ -31,6 +31,13 @@ static ssize_t read_one(int fd, void *buf, size_t len,
 /* Bound worker-thread stalls on partial route writes (was HANDSHAKE_MS). */
 #define CMQ_ROUTE_WRITE_POLL_MS 50
 
+typedef struct {
+    char node_id[CMQ_NODE_ID_SIZE];
+    uint16_t len;
+    uint8_t used;
+    uint8_t data[CMQ_ROUTE_RETRY_BYTES];
+} cmq_route_retry_slot_t;
+
 static void set_nonblock(int fd) {
     int fl = fcntl(fd, F_GETFL, 0);
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
@@ -259,6 +266,10 @@ struct cmq_route_pool {
     atomic_int in_flight; /* connect/add_conn unlocked dial/handshake */
     atomic_int dying;
     cmq_atomic_int *dial_gate; /* optional; non-zero aborts post-dial install */
+    cmq_route_retry_slot_t retry[CMQ_ROUTE_RETRY_MAX];
+    cmq_mutex_t retry_lock;
+    uint64_t retry_dropped;
+    uint64_t retry_sent;
 };
 
 
@@ -533,6 +544,7 @@ cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
     atomic_init(&p->in_flight, 0);
     atomic_init(&p->dying, 0);
     cmq_mutex_init(&p->lock);
+    cmq_mutex_init(&p->retry_lock);
     for (size_t i = 0; i < CMQ_ROUTE_MAX_CONNS; i++)
         cmq_mutex_init(&p->io_locks[i]);
     return p;
@@ -564,8 +576,131 @@ void cmq_route_pool_destroy(cmq_route_pool_t *pool) {
     cmq_mutex_unlock(&pool->lock);
     for (size_t i = 0; i < CMQ_ROUTE_MAX_CONNS; i++)
         cmq_mutex_destroy(&pool->io_locks[i]);
+    cmq_mutex_destroy(&pool->retry_lock);
     cmq_mutex_destroy(&pool->lock);
     free(pool);
+}
+
+int cmq_route_retry_offer(cmq_route_pool_t *pool, const char *node_id,
+                          const uint8_t *data, size_t len) {
+    if (!pool || !node_id || !data || len == 0 || len > CMQ_ROUTE_RETRY_BYTES)
+        return -1;
+    if (strnlen(node_id, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE) return -1;
+    if (route_begin_op(pool) != 0) return -1;
+    cmq_mutex_lock(&pool->retry_lock);
+    int slot = -1;
+    for (int i = 0; i < CMQ_ROUTE_RETRY_MAX; i++) {
+        if (!pool->retry[i].used) {
+            slot = i;
+            break;
+        }
+    }
+    int rc;
+    if (slot < 0) {
+        pool->retry_dropped++;
+        rc = 1;
+    } else {
+        memset(pool->retry[slot].node_id, 0, sizeof(pool->retry[slot].node_id));
+        memcpy(pool->retry[slot].node_id, node_id, strlen(node_id));
+        memcpy(pool->retry[slot].data, data, len);
+        pool->retry[slot].len = (uint16_t)len;
+        pool->retry[slot].used = 1;
+        rc = 0;
+    }
+    cmq_mutex_unlock(&pool->retry_lock);
+    route_end_op(pool);
+    return rc;
+}
+
+static int route_write_named(cmq_route_pool_t *pool, const char *node_id,
+                             const uint8_t *data, size_t len) {
+    if (route_begin_op(pool) != 0) return -1;
+    int idx = -1;
+    int fd = -1;
+    cmq_mutex_lock(&pool->lock);
+    size_t nslots = pool->conn_count;
+    for (size_t i = 0; i < nslots; i++) {
+        cmq_mutex_lock(&pool->io_locks[i]);
+        if (pool->conns[i].connected && pool->conns[i].fd >= 0 &&
+            strcmp(pool->conns[i].remote_id, node_id) == 0) {
+            idx = (int)i;
+            fd = pool->conns[i].fd;
+            break;
+        }
+        cmq_mutex_unlock(&pool->io_locks[i]);
+    }
+    cmq_mutex_unlock(&pool->lock);
+    if (idx < 0) {
+        route_end_op(pool);
+        return -1;
+    }
+    int wr = write_full(fd, data, len);
+    if (wr == 0 && pool->conns[idx].fd == fd) {
+        pool->conns[idx].bytes_sent += (uint64_t)len;
+        pool->conns[idx].msgs_sent++;
+    }
+    cmq_mutex_unlock(&pool->io_locks[idx]);
+    route_end_op(pool);
+    return wr;
+}
+
+int cmq_route_retry_drain(cmq_route_pool_t *pool) {
+    if (!pool) return -1;
+    if (route_begin_op(pool) != 0) return -1;
+    int sent = 0;
+    for (int i = 0; i < CMQ_ROUTE_RETRY_MAX; i++) {
+        char nid[CMQ_NODE_ID_SIZE];
+        uint8_t buf[CMQ_ROUTE_RETRY_BYTES];
+        size_t len = 0;
+        cmq_mutex_lock(&pool->retry_lock);
+        if (!pool->retry[i].used) {
+            cmq_mutex_unlock(&pool->retry_lock);
+            continue;
+        }
+        memcpy(nid, pool->retry[i].node_id, CMQ_NODE_ID_SIZE);
+        len = pool->retry[i].len;
+        memcpy(buf, pool->retry[i].data, len);
+        pool->retry[i].used = 0;
+        cmq_mutex_unlock(&pool->retry_lock);
+        int wr = route_write_named(pool, nid, buf, len);
+        if (wr == 0) {
+            cmq_mutex_lock(&pool->retry_lock);
+            pool->retry_sent++;
+            cmq_mutex_unlock(&pool->retry_lock);
+            sent++;
+        } else if (wr == 1) {
+            (void)cmq_route_retry_offer(pool, nid, buf, len);
+        }
+    }
+    route_end_op(pool);
+    return sent;
+}
+
+size_t cmq_route_retry_pending(cmq_route_pool_t *pool) {
+    if (!pool) return 0;
+    cmq_mutex_lock(&pool->retry_lock);
+    size_t n = 0;
+    for (int i = 0; i < CMQ_ROUTE_RETRY_MAX; i++) {
+        if (pool->retry[i].used) n++;
+    }
+    cmq_mutex_unlock(&pool->retry_lock);
+    return n;
+}
+
+uint64_t cmq_route_retry_dropped(cmq_route_pool_t *pool) {
+    if (!pool) return 0;
+    cmq_mutex_lock(&pool->retry_lock);
+    uint64_t n = pool->retry_dropped;
+    cmq_mutex_unlock(&pool->retry_lock);
+    return n;
+}
+
+uint64_t cmq_route_retry_sent(cmq_route_pool_t *pool) {
+    if (!pool) return 0;
+    cmq_mutex_lock(&pool->retry_lock);
+    uint64_t n = pool->retry_sent;
+    cmq_mutex_unlock(&pool->retry_lock);
+    return n;
 }
 
 static int route_connect_impl(cmq_route_pool_t *pool, const char *node_id,
@@ -1389,7 +1524,8 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
             sent++;
         } else if (wr == 1) {
             cmq_mutex_unlock(&pool->io_locks[idx]);
-            deferred++;
+            if (cmq_route_retry_offer(pool, ids[j], data, len) != 0)
+                deferred++;
         } else {
             /* Drop under io_lock so other writers cannot race close/shutdown.
                Inbound (borrowed): SHUT_RDWR + fd=-1 + clear remote_id so the

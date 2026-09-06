@@ -1,9 +1,8 @@
-# Remaining unimplemented work (HEAD after v0.5.84)
+# Remaining unimplemented work (HEAD after v0.5.85)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
-cuts. Next cuts: leaf/gateway e2e, or optional retry of
-deferred route writes.
+cuts. Next cut: leaf/gateway CONNECT/CONNACK e2e.
 
 ## Shipped (do not re-open)
 
@@ -47,6 +46,7 @@ deferred route writes.
 | v0.5.82 | D3 phase 9: JWKS refresh |
 | v0.5.83 | D2 phase 7: TLS-wrapped h2 I/O |
 | v0.5.84 | D1 phase 4: OTLP/gRPC |
+| v0.5.85 | D5 phase 4: route write retry |
 
 ## Deferred — detailed designs
 
@@ -78,13 +78,13 @@ Durable cursors, KV last-value, named objects,
 are live. Partitioned consume cursors beyond the library API
 remain optional follow-ups.
 
-### D5 Exactly-once / transactions — phases 1–3 shipped
+### D5 Exactly-once / transactions — phases 1–4 shipped
 
 Idempotent publish is v0.5.55. The coordinator (`CMQT`
 begin/add/commit/abort + `{persist_dir}/cmq.txn`) is
 v0.5.60. Multi-node 2PC (PREPARE / VOTE / COMMIT across
-live routes, 200 ms) is v0.5.80.
-**Remaining:** optional retry of deferred route writes.
+live routes, 200 ms) is v0.5.80. EAGAIN route writes
+retry from a 32-slot queue (v0.5.85).
 
 ### D6 Kafka-style key compaction — shipped v0.5.53
 

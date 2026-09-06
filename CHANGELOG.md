@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.85 - 2026-09-06
+
+### Added
+- **Route write retry (D5 phase 4)** — EAGAIN on a live
+  route peer is queued (32×2048) and drained after
+  broadcast / reconnect. Hard fails still drop. Newest
+  drop when full.
+
+### Tests
+- `tests/test_rtry.c` — offer+drain, full drop, dead skip,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.85.enumeration.md`, `v0.5.85.plan.md`.
+- `docs/features/txn.md`.
+- `docs/benchmarks/v0585_{1,2}.txt`.
+
+### Test count
+- 331 tests (was 327 in v0.5.84; +4).
+
 ## 0.5.84 - 2026-09-06
 
 ### Added
