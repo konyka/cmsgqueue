@@ -96,10 +96,12 @@ static int json_u64_claim(const char *json, size_t n, const char *key,
     return -1;
 }
 
-int cmq_jwt_verify_hs256(const char *token, const char *secret,
-                         const char *issuer, uint64_t now_sec,
-                         unsigned leeway_sec, char *sub_out, size_t sub_len) {
-    if (!token || !secret || !secret[0] || !issuer || !issuer[0])
+int cmq_jwt_verify_hs256_bin(const char *token, const uint8_t *secret,
+                             size_t slen, const char *issuer,
+                             uint64_t now_sec, unsigned leeway_sec,
+                             char *sub_out, size_t sub_len) {
+    if (!token || !secret || slen == 0 || slen > 128 ||
+        !issuer || !issuer[0])
         return -1;
     size_t tlen = strnlen(token, CMQ_JWT_TOKEN_MAX + 1);
     if (tlen == 0 || tlen > CMQ_JWT_TOKEN_MAX) return -1;
@@ -109,8 +111,8 @@ int cmq_jwt_verify_hs256(const char *token, const char *secret,
     if (!d2 || strchr(d2 + 1, '.')) return -1;
     size_t hlen = (size_t)(d1 - token);
     size_t plen = (size_t)(d2 - d1 - 1);
-    size_t slen = strlen(d2 + 1);
-    if (hlen == 0 || plen == 0 || slen == 0) return -1;
+    size_t sigl = strlen(d2 + 1);
+    if (hlen == 0 || plen == 0 || sigl == 0) return -1;
 
     uint8_t hdr[256], pay[1024], sig[64], mac[EVP_MAX_MD_SIZE];
     size_t hdr_n = 0, pay_n = 0, sig_n = 0;
@@ -118,7 +120,7 @@ int cmq_jwt_verify_hs256(const char *token, const char *secret,
         return -1;
     if (b64url_decode(d1 + 1, plen, pay, sizeof(pay) - 1, &pay_n) != 0)
         return -1;
-    if (b64url_decode(d2 + 1, slen, sig, sizeof(sig), &sig_n) != 0)
+    if (b64url_decode(d2 + 1, sigl, sig, sizeof(sig), &sig_n) != 0)
         return -1;
     hdr[hdr_n] = '\0';
     pay[pay_n] = '\0';
@@ -130,7 +132,7 @@ int cmq_jwt_verify_hs256(const char *token, const char *secret,
 
     unsigned int mac_n = 0;
     size_t signing_len = hlen + 1 + plen;
-    if (!HMAC(EVP_sha256(), secret, (int)strlen(secret),
+    if (!HMAC(EVP_sha256(), secret, (int)slen,
               (const unsigned char *)token, signing_len, mac, &mac_n))
         return -1;
     if (mac_n != sig_n || mac_n == 0) return -1;
@@ -155,6 +157,91 @@ int cmq_jwt_verify_hs256(const char *token, const char *secret,
         (void)json_str_claim((char *)pay, pay_n, "sub", sub_out, sub_len);
     }
     return 0;
+}
+
+int cmq_jwt_verify_hs256(const char *token, const char *secret,
+                         const char *issuer, uint64_t now_sec,
+                         unsigned leeway_sec, char *sub_out, size_t sub_len) {
+    if (!secret || !secret[0]) return -1;
+    return cmq_jwt_verify_hs256_bin(token, (const uint8_t *)secret,
+                                    strlen(secret), issuer, now_sec,
+                                    leeway_sec, sub_out, sub_len);
+}
+
+int cmq_jwt_header_kid(const char *token, char *out, size_t out_len) {
+    if (!token || !out || out_len == 0) return -1;
+    const char *d1 = strchr(token, '.');
+    if (!d1) return -1;
+    size_t hlen = (size_t)(d1 - token);
+    if (hlen == 0 || hlen > CMQ_JWT_TOKEN_MAX) return -1;
+    uint8_t hdr[256];
+    size_t hdr_n = 0;
+    if (b64url_decode(token, hlen, hdr, sizeof(hdr) - 1, &hdr_n) != 0)
+        return -1;
+    hdr[hdr_n] = '\0';
+    return json_str_claim((char *)hdr, hdr_n, "kid", out, out_len);
+}
+
+int cmq_jwks_parse(const char *json, cmq_jwks_t *out) {
+    if (!json || !out) return -1;
+    memset(out, 0, sizeof(*out));
+    size_t n = strnlen(json, CMQ_JWKS_JSON_MAX + 1);
+    if (n == 0 || n > CMQ_JWKS_JSON_MAX) return -1;
+    const char *keys = strstr(json, "\"keys\"");
+    if (!keys) return -1;
+    const char *arr = strchr(keys, '[');
+    if (!arr) return -1;
+    const char *p = arr + 1;
+    const char *end = json + n;
+    while (p < end && out->n < CMQ_JWKS_MAX_KEYS) {
+        const char *ob = strchr(p, '{');
+        if (!ob || ob >= end) break;
+        const char *oe = strchr(ob, '}');
+        if (!oe || oe >= end) return -1;
+        size_t on = (size_t)(oe - ob + 1);
+        char kty[8] = {0}, alg[12] = {0}, kid[64] = {0}, k[172] = {0};
+        if (json_str_claim(ob, on, "kid", kid, sizeof(kid)) != 0)
+            return -1;
+        if (json_str_claim(ob, on, "k", k, sizeof(k)) != 0)
+            return -1;
+        if (json_str_claim(ob, on, "kty", kty, sizeof(kty)) != 0 ||
+            strcmp(kty, "oct") != 0)
+            return -1;
+        if (json_str_claim(ob, on, "alg", alg, sizeof(alg)) == 0 &&
+            strcmp(alg, "HS256") != 0)
+            return -1;
+        if (!kid[0] || !k[0]) return -1;
+        uint8_t raw[128];
+        size_t rn = 0;
+        if (b64url_decode(k, strlen(k), raw, sizeof(raw), &rn) != 0 ||
+            rn == 0 || rn >= sizeof(out->keys[0].secret))
+            return -1;
+        for (int i = 0; i < out->n; i++) {
+            if (strcmp(out->keys[i].kid, kid) == 0)
+                return -1;
+        }
+        snprintf(out->keys[out->n].kid, sizeof(out->keys[out->n].kid),
+                 "%s", kid);
+        memcpy(out->keys[out->n].secret, raw, rn);
+        out->keys[out->n].slen = rn;
+        out->n++;
+        p = oe + 1;
+    }
+    if (out->n == 0) return -1;
+    return 0;
+}
+
+int cmq_jwks_lookup(const cmq_jwks_t *j, const char *kid,
+                    const uint8_t **secret, size_t *slen) {
+    if (!j || !kid || !kid[0] || !secret || !slen) return -1;
+    for (int i = 0; i < j->n; i++) {
+        if (strcmp(j->keys[i].kid, kid) == 0) {
+            *secret = j->keys[i].secret;
+            *slen = j->keys[i].slen;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 int cmq_nkey_verify(const uint8_t pub[CMQ_NKEY_PUB_LEN],

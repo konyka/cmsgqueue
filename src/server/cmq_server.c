@@ -51,8 +51,10 @@ static int auth_configured(const cmq_server_t *srv) {
     const char *p = srv->config.auth_password;
     const char *j = srv->config.jwt_hmac_secret;
     const char *nk = srv->config.nkey_pub;
+    const char *jw = srv->config.jwks_json;
     return (u && u[0] != '\0') || (p && p[0] != '\0') ||
-           (j && j[0] != '\0') || (nk && nk[0] != '\0');
+           (j && j[0] != '\0') || (nk && nk[0] != '\0') ||
+           (jw && jw[0] != '\0');
 }
 
 /* v0.5.49: remap subject in place. No-op when map_total is 0. */
@@ -4914,10 +4916,11 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             char passwd[CMQ_JWT_TOKEN_MAX + 1] = {0};
             char expect_u[256] = {0};
             char expect_p[256] = {0};
-            int jwt_mode = (srv->config.jwt_hmac_secret &&
-                            srv->config.jwt_hmac_secret[0] &&
-                            srv->config.jwt_issuer &&
-                            srv->config.jwt_issuer[0]);
+            int jwt_mode = (srv->config.jwt_issuer &&
+                            srv->config.jwt_issuer[0] &&
+                            ((srv->config.jwt_hmac_secret &&
+                              srv->config.jwt_hmac_secret[0]) ||
+                             srv->jwks));
             int nkey_mode = !jwt_mode && srv->config.nkey_pub &&
                             srv->config.nkey_pub[0];
             size_t pass_max = jwt_mode ? (size_t)CMQ_JWT_TOKEN_MAX
@@ -4950,14 +4953,35 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 unsigned leeway = srv->config.jwt_leeway_sec > 0
                     ? (unsigned)srv->config.jwt_leeway_sec
                     : (unsigned)CMQ_JWT_LEEWAY_SEC;
-                if (cmq_jwt_verify_hs256(passwd, srv->config.jwt_hmac_secret,
-                                         srv->config.jwt_issuer,
-                                         (uint64_t)tsj.tv_sec, leeway, sub,
-                                         sizeof(sub)) != 0)
-                    jwt_fail = 1;
-                else if (sub[0]) {
-                    memset(uname, 0, sizeof(uname));
-                    snprintf(uname, sizeof(uname), "%s", sub);
+                const uint8_t *jsec = NULL;
+                size_t jslen = 0;
+                const char *sstr = srv->config.jwt_hmac_secret;
+                if (srv->jwks) {
+                    char kid[64] = {0};
+                    if (cmq_jwt_header_kid(passwd, kid, sizeof(kid)) == 0) {
+                        if (cmq_jwks_lookup((const cmq_jwks_t *)srv->jwks,
+                                            kid, &jsec, &jslen) != 0)
+                            jwt_fail = 1;
+                    } else if (!sstr || !sstr[0]) {
+                        jwt_fail = 1;
+                    }
+                }
+                if (!jwt_fail) {
+                    int vr;
+                    if (jsec)
+                        vr = cmq_jwt_verify_hs256_bin(
+                            passwd, jsec, jslen, srv->config.jwt_issuer,
+                            (uint64_t)tsj.tv_sec, leeway, sub, sizeof(sub));
+                    else
+                        vr = cmq_jwt_verify_hs256(
+                            passwd, sstr, srv->config.jwt_issuer,
+                            (uint64_t)tsj.tv_sec, leeway, sub, sizeof(sub));
+                    if (vr != 0)
+                        jwt_fail = 1;
+                    else if (sub[0]) {
+                        memset(uname, 0, sizeof(uname));
+                        snprintf(uname, sizeof(uname), "%s", sub);
+                    }
                 }
             }
             if (nkey_mode && !malformed) {
@@ -7276,6 +7300,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.jwt_issuer = NULL;
     srv->config.jwt_hmac_secret = NULL;
     srv->config.nkey_pub = NULL;
+    srv->config.jwks_json = NULL;
     srv->config.otlp_endpoint = NULL;
     srv->config.cluster_name = NULL;
     srv->config.cluster_node_id = NULL;
@@ -7305,6 +7330,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.jwt_issuer, src.jwt_issuer);
     OWN(srv->config.jwt_hmac_secret, src.jwt_hmac_secret);
     OWN(srv->config.nkey_pub, src.nkey_pub);
+    OWN(srv->config.jwks_json, src.jwks_json);
     OWN(srv->config.otlp_endpoint, src.otlp_endpoint);
     OWN(srv->config.cluster_name, src.cluster_name);
     OWN(srv->config.cluster_node_id, src.cluster_node_id);
@@ -7627,6 +7653,13 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->txn = cmq_txn_create();
     if (srv->txn && srv->config.persist_dir && srv->config.persist_dir[0])
         (void)cmq_txn_set_log(srv->txn, srv->config.persist_dir);
+    if (src.jwks_json && src.jwks_json[0]) {
+        cmq_jwks_t *j = calloc(1, sizeof(*j));
+        if (j && cmq_jwks_parse(src.jwks_json, j) == 0)
+            srv->jwks = j;
+        else
+            free(j);
+    }
     srv->otel = cmq_otel_create();
     if (srv->otel && src.otlp_endpoint && src.otlp_endpoint[0]) {
         cmq_otlp_url_t *u = calloc(1, sizeof(*u));
@@ -8445,6 +8478,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->otlp) {
         free(srv->otlp);
         srv->otlp = NULL;
+    }
+    if (srv->jwks) {
+        free(srv->jwks);
+        srv->jwks = NULL;
     }
     if (srv->acl_h) {
         cmq_rch_release_owner(srv->acl_h);

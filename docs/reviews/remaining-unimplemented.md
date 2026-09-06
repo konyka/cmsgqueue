@@ -1,8 +1,8 @@
-# Remaining unimplemented work (HEAD after v0.5.64)
+# Remaining unimplemented work (HEAD after v0.5.65)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D1/D3/D4/D5 have library or phase
-cuts. Next cuts: D2 HTTP/2, D3 JWKS / base32 / ES256,
+cuts. Next cuts: D2 HTTP/2, D3 RSA/EC / base32 / ES256,
 D4 partition/bucket server path, D5 multi-node 2PC, or
 leaf/gateway e2e.
 
@@ -28,6 +28,7 @@ leaf/gateway e2e.
 | v0.5.62 | D3 phase 1: JWT HS256 + Ed25519 nkey verify |
 | v0.5.63 | D3 phase 2: nkey signature on CONNECT |
 | v0.5.64 | D1 phase 2: OTLP/HTTP JSON exporter |
+| v0.5.65 | D3 phase 3: JWKS oct-key cache |
 
 ## Deferred — detailed designs
 
@@ -45,11 +46,11 @@ monitor on a dedicated listener. Do not put h2 on the message
 port. HPACK table capped (4 KiB); max 32 streams. Do not
 advertise `h2` until that exists.
 
-### D3 JWT / NKEY — phases 1–2 shipped v0.5.62–63
+### D3 JWT / NKEY / JWKS — phases 1–3 shipped v0.5.62–65
 
-HS256 JWT and Ed25519 nkey (`nkey_pub` + `CMQNK1|<user>`)
-on CONNECT use OpenSSL only. **Remaining:** JWKS cache,
-nkey seed/base32, ES256. Still verify-only.
+HS256 JWT, Ed25519 nkey on CONNECT, and a static JWKS
+oct-key cache are live. **Remaining:** remote JWKS fetch,
+nkey seed/base32, RSA/EC, ES256. Still verify-only.
 
 ### D4 JetStream / KV / Object Store — library shipped v0.5.56–59
 

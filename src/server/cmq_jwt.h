@@ -8,6 +8,19 @@
 #define CMQ_JWT_TOKEN_MAX  2048
 #define CMQ_NKEY_PUB_LEN   32
 #define CMQ_NKEY_SIG_LEN   64
+#define CMQ_JWKS_MAX_KEYS  8
+#define CMQ_JWKS_JSON_MAX  4096
+
+typedef struct {
+    char kid[64];
+    uint8_t secret[128];
+    size_t slen;
+} cmq_jwks_key_t;
+
+typedef struct {
+    cmq_jwks_key_t keys[CMQ_JWKS_MAX_KEYS];
+    int n;
+} cmq_jwks_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,6 +32,14 @@ extern "C" {
 int cmq_jwt_verify_hs256(const char *token, const char *secret,
                          const char *issuer, uint64_t now_sec,
                          unsigned leeway_sec, char *sub_out, size_t sub_len);
+int cmq_jwt_verify_hs256_bin(const char *token, const uint8_t *secret,
+                             size_t slen, const char *issuer,
+                             uint64_t now_sec, unsigned leeway_sec,
+                             char *sub_out, size_t sub_len);
+int cmq_jwt_header_kid(const char *token, char *out, size_t out_len);
+int cmq_jwks_parse(const char *json, cmq_jwks_t *out);
+int cmq_jwks_lookup(const cmq_jwks_t *j, const char *kid,
+                    const uint8_t **secret, size_t *slen);
 
 /* Ed25519 verify. pub[32], sig[64]. 0 ok; -1 fail. */
 int cmq_nkey_verify(const uint8_t pub[CMQ_NKEY_PUB_LEN],

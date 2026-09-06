@@ -1,0 +1,3 @@
+v0.5.65 bench 2:
+- kid lookup is a linear scan of at most 8 keys.
+- HMAC still runs once on the worker CONNECT path.

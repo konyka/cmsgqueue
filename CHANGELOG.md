@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.65 - 2026-09-06
+
+### Added
+- **JWKS oct-key cache (D3 phase 3)** — `jwks_json` holds
+  up to 8 HS256 oct keys. CONNECT `kid` selects the key.
+  Unknown kid fails. No remote fetch.
+
+### Tests
+- `tests/test_jwks.c` — parse/lookup, kid verify, unknown
+  kid, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.65.enumeration.md`, `v0.5.65.plan.md`.
+- `docs/features/jwt.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0565_{1,2}.txt`.
+
+### Test count
+- 251 tests (was 247 in v0.5.64; +4).
+
 ## 0.5.64 - 2026-09-06
 
 ### Added
