@@ -14,7 +14,7 @@ Huffman, static indexed headers, and a 4 KiB dynamic table
 - Dynamic table: 4 KiB RFC size, 128 slots, no heap.
   Incremental literals insert; indexed static fields do not.
   Size updates and `set_max` reject above 4096.
-- The h2 listener stays deferred.
+- The h2 listener is v0.5.73 (prior-knowledge, no ALPN).
 
 The server still does not call `cmq_tls_set_alpn` and does
 not advertise `h2`.

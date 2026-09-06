@@ -1,9 +1,9 @@
-# Remaining unimplemented work (HEAD after v0.5.72)
+# Remaining unimplemented work (HEAD after v0.5.73)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
-cuts. Next cuts: D2 h2 listener, D3 RSA/EC / base32 / ES256,
-D5 multi-node 2PC, or leaf/gateway e2e.
+cuts. Next cuts: D3 RSA/EC / base32 / ES256, D5 multi-node
+2PC, OTLP HTTPS, or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -35,6 +35,7 @@ D5 multi-node 2PC, or leaf/gateway e2e.
 | v0.5.70 | D4 phase 6: KV/object REQUEST-get |
 | v0.5.71 | D2 phase 3: HPACK Huffman |
 | v0.5.72 | D2 phase 4: HPACK 4 KiB dynamic table |
+| v0.5.73 | D2 phase 5: HTTP/2 dedicated listener |
 
 ## Deferred — detailed designs
 
@@ -44,13 +45,13 @@ Span ring, sidecar, and OTLP/HTTP JSON POST are live.
 **Remaining:** OTLP/gRPC or HTTPS collectors. Consume
 spans are queued only when a caller offers `KIND_CONSUME`.
 
-### D2 HTTP/2 listener — phases 1–4 shipped v0.5.66–72
+### D2 HTTP/2 listener — phases 1–5 shipped v0.5.66–73
 
-HPACK static codec, Huffman, the 4 KiB dynamic table, and
-the preface/SETTINGS/32-stream machine are live.
-**Remaining:** a dedicated h2 listener. Do not advertise
-`h2` until that exists. Server still never calls
-`cmq_tls_set_alpn`.
+HPACK static codec, Huffman, the 4 KiB dynamic table, the
+preface/SETTINGS/32-stream machine, and a loopback
+prior-knowledge listener are live. **Remaining:** ALPN `h2`
+on TLS (server still never calls `cmq_tls_set_alpn`) and
+server `h2_port` wiring.
 
 ### D3 JWT / NKEY / JWKS — phases 1–3 shipped v0.5.62–65
 
@@ -83,7 +84,7 @@ optional follow-ups.
 | Item | Evidence | Next cut |
 |---|---|---|
 | MQTT outbound QoS 2 | shipped v0.5.57 | — |
-| ALPN `h2` | Comment example only; server never calls `set_alpn` | Ship D2 listener or leave unset |
+| ALPN `h2` | Listener is prior-knowledge; server never calls `set_alpn` | Advertise only after TLS h2 slot |
 | Leaf/gateway e2e | Library exists, no multi-process test | Test-only increment |
 
 ## TDD rule for every increment

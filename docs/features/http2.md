@@ -1,7 +1,7 @@
-# HTTP/2 (v0.5.66–72, D2 phases 1–4)
+# HTTP/2 (v0.5.66–73, D2 phases 1–5)
 
 HPACK static + Huffman + 4 KiB dynamic table plus an
-HTTP/2 connection state machine.
+HTTP/2 connection state machine and a loopback listener.
 
 ## Frame layer (v0.5.69)
 
@@ -11,14 +11,18 @@ HTTP/2 connection state machine.
 - Max 32 concurrent streams. Client stream ids must be odd.
 - A 33rd stream or a protocol error moves the conn to GOAWAY.
 
-Huffman is v0.5.71. The 4 KiB dynamic table is v0.5.72. A
-listener stays deferred. The server still does not call
-`cmq_tls_set_alpn` and does not advertise `h2`.
+Huffman is v0.5.71. The 4 KiB dynamic table is v0.5.72. The
+loopback prior-knowledge listener is v0.5.73 (`cmq_h2_listen`
+/ `cmq_h2_session` / `cmq_h2_accept`). Bind is 127.0.0.1 only.
+POST `:path` `/subject` plus DATA becomes subject + payload.
+
+The server still does not call `cmq_tls_set_alpn` and does
+not advertise `h2`.
 
 ## Tests
 
 `tests/test_hpack.c`, `tests/test_huff.c`, `tests/test_hdyn.c`,
-`tests/test_h2.c`
+`tests/test_h2.c`, `tests/test_h2l.c`
 
 ## See also
 
@@ -26,3 +30,4 @@ listener stays deferred. The server still does not call
 - `docs/reviews/v0.5.69.enumeration.md`
 - `docs/reviews/v0.5.71.enumeration.md`
 - `docs/reviews/v0.5.72.enumeration.md`
+- `docs/reviews/v0.5.73.enumeration.md`

@@ -13,7 +13,11 @@
 #define CMQ_H2_TYPE_SETTINGS 4
 #define CMQ_H2_TYPE_GOAWAY  7
 #define CMQ_H2_FLAG_ACK     0x01
+#define CMQ_H2_FLAG_END_STREAM 0x01
+#define CMQ_H2_FLAG_END_HEADERS 0x04
 #define CMQ_H2_SETTINGS_MAX_CONCURRENT_STREAMS 0x3
+#define CMQ_H2_IO_MS        200
+#define CMQ_H2_SUBJECT_MAX  128
 
 #define CMQ_H2_ST_PREFACE  0
 #define CMQ_H2_ST_SETTINGS 1
@@ -44,6 +48,14 @@ int cmq_h2_settings_decode(const uint8_t *in, size_t n, uint32_t *max_streams);
 int cmq_h2_feed(cmq_h2_t *h, const uint8_t *data, size_t n, size_t *used);
 int cmq_h2_state(const cmq_h2_t *h);
 int cmq_h2_stream_count(const cmq_h2_t *h);
+
+/* Loopback-only prior-knowledge listener. Port 0 picks an ephemeral. */
+int cmq_h2_listen(const char *bind_addr, int port);
+int cmq_h2_listen_port(int lfd);
+int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
+                   size_t pcap, size_t *plen);
+int cmq_h2_accept(int lfd, char *subject, size_t scap, uint8_t *payload,
+                  size_t pcap, size_t *plen);
 
 #ifdef __cplusplus
 }

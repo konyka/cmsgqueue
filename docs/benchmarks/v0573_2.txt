@@ -1,0 +1,3 @@
+v0.5.73 bench 2:
+- Session uses one 16 KiB recv buffer and the existing HPACK table.
+- SETTINGS ACK is two small writes after the first client SETTINGS.

@@ -1,0 +1,3 @@
+v0.5.73 bench 1:
+- Listen is one loopback bind; accept is poll 200 ms + session.
+- Message port and ALPN unchanged (no h2 advertise).

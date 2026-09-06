@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.73 - 2026-09-06
+
+### Added
+- **HTTP/2 dedicated listener (D2 phase 5)** — loopback
+  prior-knowledge bind/accept. Preface + SETTINGS, then
+  POST `:path` + DATA → subject/payload. No ALPN `h2`.
+
+### Tests
+- `tests/test_h2l.c` — listen POST, bad preface, bad path,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.73.enumeration.md`, `v0.5.73.plan.md`.
+- `docs/features/http2.md`.
+- `docs/benchmarks/v0573_{1,2}.txt`.
+
+### Test count
+- 283 tests (was 279 in v0.5.72; +4).
+
 ## 0.5.72 - 2026-09-06
 
 ### Added
