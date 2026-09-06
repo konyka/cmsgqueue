@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.86 - 2026-09-06
+
+### Added
+- **Leaf/gateway CONNECT/CONNACK e2e** — loopback
+  tests drive `cmq_leaf_connect` and
+  `cmq_gateway_connect_remote` through a real TCP
+  handshake. Non-zero CONNACK fails closed.
+
+### Tests
+- `tests/test_leafe.c` — leaf connect, gateway
+  connect, bad CONNACK, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.86.enumeration.md`, `v0.5.86.plan.md`.
+- `docs/features/leaf-gateway.md`.
+- `docs/benchmarks/v0586_{1,2}.txt`.
+
+### Test count
+- 335 tests (was 331 in v0.5.85; +4).
+
 ## 0.5.85 - 2026-09-06
 
 ### Added

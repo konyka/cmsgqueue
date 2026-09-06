@@ -1,8 +1,8 @@
-# Remaining unimplemented work (HEAD after v0.5.85)
+# Remaining unimplemented work (HEAD after v0.5.86)
 
-Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
-P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
-cuts. Next cut: leaf/gateway CONNECT/CONNACK e2e.
+Evidence-checked against source on 2026-09-06. P2 (R1–R7)
+and P3 D1–D8 phase cuts in this catalog are shipped.
+Required next cuts: none.
 
 ## Shipped (do not re-open)
 
@@ -47,6 +47,7 @@ cuts. Next cut: leaf/gateway CONNECT/CONNACK e2e.
 | v0.5.83 | D2 phase 7: TLS-wrapped h2 I/O |
 | v0.5.84 | D1 phase 4: OTLP/gRPC |
 | v0.5.85 | D5 phase 4: route write retry |
+| v0.5.86 | Leaf/gateway CONNECT/CONNACK e2e |
 
 ## Deferred — detailed designs
 
@@ -98,7 +99,16 @@ optional follow-ups.
 |---|---|---|
 | MQTT outbound QoS 2 | shipped v0.5.57 | — |
 | ALPN `h2` | shipped v0.5.81 / TLS wrap v0.5.83 | — |
-| Leaf/gateway e2e | Library exists, no multi-process test | Test-only increment |
+| Leaf/gateway e2e | shipped v0.5.86 (`test_leafe.c`) | — |
+
+## Optional follow-ups (not required next cuts)
+
+| Item | Notes |
+|---|---|
+| D4 partitioned consume cursors | Library cursors exist; no partitioned consumer API |
+| D6 tombstone TTL / dirty-ratio auto-trigger | Compact is explicit; no TTL sidecar |
+| D3 token issuing | Intentionally verify-only |
+| D1 consume spans | Only when caller offers `KIND_CONSUME` |
 
 ## TDD rule for every increment
 
