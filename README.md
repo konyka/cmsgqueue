@@ -47,7 +47,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
   - **F1** test_stress flake fix: subscribe-publish barrier + deterministic drain.
   - **F2** audit log rotation at 100 MiB (`cmq-audit.log` → `cmq-audit.log.1`).
   - **F3** N1 per-subject rate limit enforced in `handle_publish`.
-  - **F4** N2 hot config reload (`cmq_server_reload` re-reads blocklist/audit/log levels).
+  - **F4** N2 hot config reload (SIGHUP → `cmq_server_reload` of `config_file`: blocklist, log_level, ACL, TLS certs).
   - **F5** F14/F15/F16 wire-up: blocklist in `accept_cb`, ACL + quota in `handle_publish`.
   - **F6** N3 audit log file creation test.
   - **F7** mTLS API surface tests.
