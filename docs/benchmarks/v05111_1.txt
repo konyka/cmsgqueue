@@ -1,0 +1,3 @@
+v0.5.111 bench 1:
+- Keys omitted: two extra strcmps at parse; create path unchanged.
+- Addr set: one strdup at create, one free at destroy.

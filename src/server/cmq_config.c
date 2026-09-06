@@ -115,6 +115,18 @@ static int persist_dir_ok(const char *dir) {
     return 1;
 }
 
+static int mqtt_bridge_addr_ok(const char *addr) {
+    if (!addr || !addr[0]) return 0;
+    size_t n = strnlen(addr, 256);
+    if (n == 0 || n >= 256) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)addr[i];
+        if (c < 0x21 || c > 0x7e || c == '/' || c == '\\')
+            return 0;
+    }
+    return 1;
+}
+
 static int parse_int_range(const char *value, int min, int max, int *out) {
     if (!value || !out || min > max) return -1;
     char *end = NULL;
@@ -150,6 +162,16 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         if (parse_int_range(value, 0, 86400000, &v) != 0) return -1;
         config->persist_sync_interval_ms = (unsigned)v;
         return 0;
+    } else if (strcmp(key, "mqtt_bridge_addr") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->mqtt_bridge_addr);
+            config->mqtt_bridge_addr = NULL;
+            return 0;
+        }
+        if (!mqtt_bridge_addr_ok(value)) return -1;
+        return cfg_set_str(&config->mqtt_bridge_addr, value);
+    } else if (strcmp(key, "mqtt_bridge_port") == 0) {
+        return parse_int_range(value, 0, 65535, &config->mqtt_bridge_port);
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
         return parse_int_range(value, 0, 64, &config->num_threads);
     } else if (strcmp(key, "max_clients") == 0) {
@@ -293,6 +315,7 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->tls_cert);
     cfg_free_owned(config->tls_key);
     cfg_free_owned(config->persist_dir);
+    cfg_free_owned(config->mqtt_bridge_addr);
     for (int i = 0; i < config->route_count && i < 8; i++)
         cfg_free_owned(config->routes[i].addr);
     config->host = NULL;
@@ -315,6 +338,7 @@ void cmq_config_free(cmq_config_t *config) {
     config->tls_cert = NULL;
     config->tls_key = NULL;
     config->persist_dir = NULL;
+    config->mqtt_bridge_addr = NULL;
     for (int i = 0; i < 8; i++) {
         config->routes[i].addr = NULL;
         config->routes[i].port = 0;
@@ -394,6 +418,8 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         config->js_msgs_rotate_bytes > 1073741824)
         return CMQ_ERR_INVALID_ARG;
     if (config->persist_sync_interval_ms > 86400000u)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->mqtt_bridge_port < 0 || config->mqtt_bridge_port > 65535)
         return CMQ_ERR_INVALID_ARG;
     if (config->max_payload_size < 0) return CMQ_ERR_INVALID_ARG;
     /* Must fit CMQ_WRITE_BUF_LIMIT after framing — else deliver force-closes. */

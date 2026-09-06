@@ -107,6 +107,10 @@ max_payload_size = 1048576
 # Persistence (omit or empty = disabled)
 persist_dir = /var/lib/cmsgqueue
 persist_sync_interval_ms = 1000
+
+# MQTT bridge (omit or empty addr = disabled)
+mqtt_bridge_addr = 127.0.0.1
+mqtt_bridge_port = 1883
 ```
 
 ## Binary Protocol

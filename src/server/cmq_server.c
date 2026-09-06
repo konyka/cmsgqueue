@@ -7809,6 +7809,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.tls_cert = NULL;
     srv->config.tls_key = NULL;
     srv->config.persist_dir = NULL;
+    srv->config.mqtt_bridge_addr = NULL;
     srv->config.route_count = 0;
     for (int i = 0; i < 8; i++) {
         srv->config.routes[i].addr = NULL;
@@ -7846,6 +7847,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.tls_cert, src.tls_cert);
     OWN(srv->config.tls_key, src.tls_key);
     OWN(srv->config.persist_dir, src.persist_dir);
+    OWN(srv->config.mqtt_bridge_addr, src.mqtt_bridge_addr);
 #undef OWN
     /* Fail closed before copy — truncating/skipping would hide invalid
        programmatic configs from cmq_config_validate. */

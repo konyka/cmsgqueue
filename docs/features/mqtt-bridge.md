@@ -10,7 +10,9 @@ bridge CMQ → MQTT had to run a separate client process.
 ## Design
 
 A new config field pair `mqtt_bridge_addr` / `mqtt_bridge_port`
-(default NULL/0 = disabled). When set, `cmq_server_create`:
+(default NULL/0 = disabled). The config file keys are the same
+(v0.5.111). Empty addr disables. `/` `\` controls and spaces
+are rejected. When set, `cmq_server_create`:
 
 1. Creates an `cmq_mqtt_bridge_t` with a fixed client_id
    `"cmsgbridge"`.

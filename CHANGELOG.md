@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.111 - 2026-09-06
+
+### Added
+- **MQTT bridge config-file keys (F6 follow-up)** —
+  `mqtt_bridge_addr` / `mqtt_bridge_port` in `cmq.conf`
+  enable the outbound bridge. Empty addr disables. `/`
+  `\` controls and spaces fail closed. The server
+  `strdup`s the addr so destroy owns it.
+
+### Tests
+- `tests/test_mqb.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.111.enumeration.md`, `v0.5.111.plan.md`.
+- `docs/features/mqtt-bridge.md`.
+- `docs/benchmarks/v05111_{1,2}.txt`.
+
+### Test count
+- 435 tests (was 431 in v0.5.110; +4).
+
 ## 0.5.110 - 2026-09-06
 
 ### Added

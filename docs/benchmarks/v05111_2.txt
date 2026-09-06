@@ -1,0 +1,3 @@
+v0.5.111 bench 2:
+- Addr check is a single scan (no DNS, no connect).
+- Unreachable broker still fails at create (existing best-effort).
