@@ -106,6 +106,7 @@ max_payload_size = 1048576
 
 # Persistence (omit or empty = disabled)
 persist_dir = /var/lib/cmsgqueue
+persist_sync_interval_ms = 1000
 ```
 
 ## Binary Protocol

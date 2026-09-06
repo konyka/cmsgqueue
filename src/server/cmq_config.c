@@ -145,6 +145,11 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         }
         if (!persist_dir_ok(value)) return -1;
         return cfg_set_str(&config->persist_dir, value);
+    } else if (strcmp(key, "persist_sync_interval_ms") == 0) {
+        int v = 0;
+        if (parse_int_range(value, 0, 86400000, &v) != 0) return -1;
+        config->persist_sync_interval_ms = (unsigned)v;
+        return 0;
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
         return parse_int_range(value, 0, 64, &config->num_threads);
     } else if (strcmp(key, "max_clients") == 0) {
@@ -387,6 +392,8 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         return CMQ_ERR_INVALID_ARG;
     if (config->js_msgs_rotate_bytes < 0 ||
         config->js_msgs_rotate_bytes > 1073741824)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->persist_sync_interval_ms > 86400000u)
         return CMQ_ERR_INVALID_ARG;
     if (config->max_payload_size < 0) return CMQ_ERR_INVALID_ARG;
     /* Must fit CMQ_WRITE_BUF_LIMIT after framing — else deliver force-closes. */

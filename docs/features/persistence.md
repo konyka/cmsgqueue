@@ -17,6 +17,9 @@ and appends every **validated publish** to it via
 **after** subject validation and ACL check, **before** the sublist
 match — so a publish with no subscribers is still persisted.
 
+`persist_sync_interval_ms` (v0.5.110, 0 = off, max 86400000)
+installs `cmq_filestore_set_sync_interval` at create.
+
 The wiring is **best-effort**: a failed append increments
 `stat_persist_fail` but does not block delivery. This matches
 NATS JetStream's "ack on persist" model — durability is a

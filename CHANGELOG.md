@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.110 - 2026-09-06
+
+### Added
+- **`persist_sync_interval_ms` config-file key (P3 follow-up)** —
+  `persist_sync_interval_ms = N` in `cmq.conf` (0 = off,
+  max 86400000) installs periodic WAL fsync at create.
+  The server path was already wired.
+
+### Tests
+- `tests/test_psyn.c` — apply, omitted, zero, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.110.enumeration.md`, `v0.5.110.plan.md`.
+- `docs/features/persistence.md`.
+- `docs/benchmarks/v05110_{1,2}.txt`.
+
+### Test count
+- 431 tests (was 427 in v0.5.109; +4).
+
 ## 0.5.109 - 2026-09-06
 
 ### Added
