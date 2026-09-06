@@ -24,6 +24,11 @@ int cmq_reload_apply_tls(cmq_tls_config_t **slots, int nslots,
  * copies; 0 keeps. Same string is a no-op. */
 int cmq_reload_apply_tls_live(cmq_config_t *live, const cmq_config_t *fresh);
 
+/* Copy non-empty acl_allow / acl_deny onto the live config.
+ * Empty/omitted keeps the current strings. `..` / `\` fail
+ * closed. Same string is a no-op. */
+int cmq_reload_apply_acl_live(cmq_config_t *live, const cmq_config_t *fresh);
+
 /* Copy non-empty auth / JWT / nkey fields onto the live config.
  * Empty/omitted strings and jwt_leeway_sec 0 keep the current
  * values. jwt_leeway_sec must be 0–3600. All-or-nothing. */

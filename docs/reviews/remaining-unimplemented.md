@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.154)
+# Remaining unimplemented work (HEAD after v0.5.155)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -29,7 +29,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `cluster_name` / `cluster_node_id` | yes | cluster + empty pool | attach |
 | `route=` | IPv4 `addr:port` | run dial | attach empty slots (no redial) |
 | quota / subject RL / `account_max_*` | yes | objects / defaults | reload (creates if none) |
-| `acl_allow` / `acl_deny` | yes | `acl_h` | `apply_dynamic` (creates if none) |
+| `acl_allow` / `acl_deny` | yes | `acl_h` | `apply_dynamic` + live CSVs |
 | `blocklist_file` | yes | `blocklist_h` | swap (fail-closed + live path) + attach |
 | `h2_port` | yes | listen | bind when none (no rebind) |
 | `js_partitions` / `js_msgs_rotate_bytes` | yes | `$JS` | `cmq_js_reload` |
@@ -161,6 +161,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.152 | apply config_file on reload |
 | v0.5.153 | apply TLS paths on reload |
 | v0.5.154 | apply blocklist path on reload |
+| v0.5.155 | apply ACL strings on reload |
 
 ## Deferred — detailed designs
 
@@ -297,6 +298,7 @@ are live (v0.5.88).
 | apply config_file on reload | shipped v0.5.152 | — |
 | apply TLS paths on reload | shipped v0.5.153 | — |
 | apply blocklist path on reload | shipped v0.5.154 | — |
+| apply ACL strings on reload | shipped v0.5.155 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -340,7 +342,8 @@ are live (v0.5.88).
   v0.5.151. `config_file` apply for the next SIGHUP
   shipped v0.5.152. TLS live path apply + fail-closed
   `..` shipped v0.5.153. Blocklist swap fail-closed + live
-  path shipped v0.5.154. Create-time only: `persist_dir` remount,
+  path shipped v0.5.154. ACL live CSV apply shipped
+  v0.5.155. Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.
 

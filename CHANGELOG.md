@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.155 - 2026-09-07
+
+### Added
+- **Apply ACL strings on reload** — SIGHUP copies
+  non-empty `acl_allow` / `acl_deny` onto the live
+  config. Omitted / empty keeps the current CSVs.
+  `..` / `\` fail closed. The ACL handle is not
+  remounted (still rebuilt by `apply_dynamic`).
+
+### Tests
+- `tests/test_ala.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.155.enumeration.md`, `v0.5.155.plan.md`.
+- `docs/features/acl.md`.
+- `docs/benchmarks/v05155_{1,2}.txt`.
+
+### Test count
+- 611 tests (was 607 in v0.5.154; +4).
+
 ## 0.5.154 - 2026-09-07
 
 ### Added

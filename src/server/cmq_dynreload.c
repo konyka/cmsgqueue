@@ -190,6 +190,20 @@ int cmq_reload_apply_tls_live(cmq_config_t *live, const cmq_config_t *fresh) {
     return 0;
 }
 
+int cmq_reload_apply_acl_live(cmq_config_t *live, const cmq_config_t *fresh) {
+    if (!live || !fresh) return -1;
+    char *allow = NULL, *deny = NULL;
+    if (tls_live_dup(fresh->acl_allow, &allow) != 0 ||
+        tls_live_dup(fresh->acl_deny, &deny) != 0) {
+        free(allow);
+        free(deny);
+        return -1;
+    }
+    tls_live_take(&live->acl_allow, allow);
+    tls_live_take(&live->acl_deny, deny);
+    return 0;
+}
+
 static int auth_dup(const char *fresh, char **out) {
     if (!fresh || !fresh[0]) {
         *out = NULL;

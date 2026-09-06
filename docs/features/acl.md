@@ -30,6 +30,9 @@ empty disables; `cmq_config_free` releases them; create
 `cmq_server_reload` applies `log_level` and rebuilds the
 ACL from `acl_allow` / `acl_deny` (v0.5.116). Deny-only
 files work. A server started without ACL can gain one.
+v0.5.155: SIGHUP also copies those CSVs onto the live
+config. Omitted / empty keeps the current strings.
+`..` / `\` fail closed.
 
 ## Files touched
 

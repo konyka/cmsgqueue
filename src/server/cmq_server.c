@@ -9266,6 +9266,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (cmq_reload_apply_acl_live(&server->config, &fresh) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_log_reload_sinks(server->log, fresh.log_to_stdout,
                              fresh.log_file, fresh.log_to_file) != 0) {
         cmq_config_free(&fresh);
