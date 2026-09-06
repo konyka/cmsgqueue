@@ -21,6 +21,7 @@
 #include "cmq_txn.h"
 #include "cmq_otel.h"
 #include "cmq_jwt.h"
+#include "cmq_otlp.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -7275,6 +7276,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.jwt_issuer = NULL;
     srv->config.jwt_hmac_secret = NULL;
     srv->config.nkey_pub = NULL;
+    srv->config.otlp_endpoint = NULL;
     srv->config.cluster_name = NULL;
     srv->config.cluster_node_id = NULL;
     srv->config.tls_cert = NULL;
@@ -7303,6 +7305,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.jwt_issuer, src.jwt_issuer);
     OWN(srv->config.jwt_hmac_secret, src.jwt_hmac_secret);
     OWN(srv->config.nkey_pub, src.nkey_pub);
+    OWN(srv->config.otlp_endpoint, src.otlp_endpoint);
     OWN(srv->config.cluster_name, src.cluster_name);
     OWN(srv->config.cluster_node_id, src.cluster_node_id);
     OWN(srv->config.tls_cert, src.tls_cert);
@@ -7625,6 +7628,15 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     if (srv->txn && srv->config.persist_dir && srv->config.persist_dir[0])
         (void)cmq_txn_set_log(srv->txn, srv->config.persist_dir);
     srv->otel = cmq_otel_create();
+    if (srv->otel && src.otlp_endpoint && src.otlp_endpoint[0]) {
+        cmq_otlp_url_t *u = calloc(1, sizeof(*u));
+        if (u && cmq_otlp_parse_url(src.otlp_endpoint, u) == 0) {
+            srv->otlp = u;
+            cmq_otel_set_export(srv->otel, cmq_otlp_export, u);
+        } else {
+            free(u);
+        }
+    }
     if (srv->otel)
         (void)cmq_otel_start(srv->otel);
 
@@ -8429,6 +8441,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->otel) {
         cmq_otel_destroy(srv->otel);
         srv->otel = NULL;
+    }
+    if (srv->otlp) {
+        free(srv->otlp);
+        srv->otlp = NULL;
     }
     if (srv->acl_h) {
         cmq_rch_release_owner(srv->acl_h);

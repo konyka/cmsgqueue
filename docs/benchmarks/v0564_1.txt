@@ -1,0 +1,3 @@
+v0.5.64 bench 1:
+- otlp_endpoint unset: export hook NULL; offer unchanged.
+- Existing ring drop-newest path unchanged.

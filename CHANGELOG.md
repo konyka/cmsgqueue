@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.64 - 2026-09-06
+
+### Added
+- **OTLP/HTTP JSON exporter (D1 phase 2)** — sidecar POSTs
+  spans to `otlp_endpoint` (`http://` only). Encode and I/O
+  stay off the offer path. gRPC / TLS collectors deferred.
+
+### Tests
+- `tests/test_otlp.c` — encode, parse URL, build POST,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.64.enumeration.md`, `v0.5.64.plan.md`.
+- `docs/features/otel.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0564_{1,2}.txt`.
+
+### Test count
+- 247 tests (was 243 in v0.5.63; +4).
+
 ## 0.5.63 - 2026-09-06
 
 ### Added

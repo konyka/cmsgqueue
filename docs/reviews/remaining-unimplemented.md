@@ -1,9 +1,10 @@
-# Remaining unimplemented work (HEAD after v0.5.63)
+# Remaining unimplemented work (HEAD after v0.5.64)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
-P3 D7/D8 are shipped. D1/D3/D4/D5 have library or phase-1
-cuts. Next cuts: D1 OTLP, D2 HTTP/2, D3 JWKS / base32 /
-ES256, D5 multi-node 2PC, or leaf/gateway e2e.
+P3 D7/D8 are shipped. D1/D3/D4/D5 have library or phase
+cuts. Next cuts: D2 HTTP/2, D3 JWKS / base32 / ES256,
+D4 partition/bucket server path, D5 multi-node 2PC, or
+leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -26,14 +27,15 @@ ES256, D5 multi-node 2PC, or leaf/gateway e2e.
 | v0.5.61 | D1 phase 1: OTel span ring + sidecar |
 | v0.5.62 | D3 phase 1: JWT HS256 + Ed25519 nkey verify |
 | v0.5.63 | D3 phase 2: nkey signature on CONNECT |
+| v0.5.64 | D1 phase 2: OTLP/HTTP JSON exporter |
 
 ## Deferred — detailed designs
 
-### D1 OpenTelemetry exporter — phase 1 shipped v0.5.61
+### D1 OpenTelemetry exporter — phases 1–2 shipped v0.5.61–64
 
-Span ring + sidecar are live. **Remaining:** OTLP/gRPC or
-HTTP exporter behind a compile flag. Consume spans are
-queued only when a caller offers `KIND_CONSUME`.
+Span ring, sidecar, and OTLP/HTTP JSON POST are live.
+**Remaining:** OTLP/gRPC or HTTPS collectors. Consume
+spans are queued only when a caller offers `KIND_CONSUME`.
 
 ### D2 HTTP/2 listener (L)
 

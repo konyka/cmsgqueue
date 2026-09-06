@@ -215,6 +215,7 @@ struct cmq_server {
     struct cmq_idempo *idempo; /* v0.5.55: D5 pid+seq window; always on */
     struct cmq_txn *txn;       /* v0.5.60: D5 coordinator; always on */
     struct cmq_otel *otel;     /* v0.5.61: D1 span ring; always on */
+    void *otlp;                /* v0.5.64: cmq_otlp_url_t*; NULL = off */
     /* F16: ACL. NULL handle = no ACL. Refcounted for reload safety (P1). */
     struct cmq_rch *acl_h;
     /* F15: blocklist. NULL handle = no blocklist. Refcounted for reload. */
