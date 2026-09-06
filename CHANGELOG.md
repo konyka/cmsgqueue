@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.83 - 2026-09-06
+
+### Added
+- **TLS-wrapped h2 I/O (D2 phase 7)** — `cmq_h2_accept_tls`
+  / `cmq_h2_session_tls` handshake then run the POST
+  machine over `cmq_tls_read`/`write`. No TLS config:
+  plaintext accept unchanged. Server accept uses slot 0
+  when configured.
+
+### Tests
+- `tests/test_h2t.c` — TLS POST, plaintext-to-TLS fail,
+  plaintext still works, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.83.enumeration.md`, `v0.5.83.plan.md`.
+- `docs/features/http2.md`.
+- `docs/benchmarks/v0583_{1,2}.txt`.
+
+### Test count
+- 323 tests (was 319 in v0.5.82; +4).
+
 ## 0.5.82 - 2026-09-06
 
 ### Added

@@ -1,4 +1,4 @@
-# HTTP/2 (v0.5.66–73, 0.5.81, D2 phases 1–6)
+# HTTP/2 (v0.5.66–73, 0.5.81, 0.5.83, D2 phases 1–7)
 
 HPACK static + Huffman + 4 KiB dynamic table plus an
 HTTP/2 connection state machine and a loopback listener.
@@ -21,10 +21,16 @@ POST `:path` `/subject` plus DATA becomes subject + payload.
 `cmq_tls_set_alpn("h2")` before `cmq_tls_load` so the CTX
 advertises `h2`. `h2_port` 0 leaves both off.
 
+`cmq_h2_accept_tls` / `cmq_h2_session_tls` (v0.5.83) wrap
+that same POST machine in a TLS handshake. Without a TLS
+config, plaintext prior-knowledge accept is unchanged.
+`cmq_server_h2_accept` uses TLS when slot 0 is configured.
+
 ## Tests
 
 `tests/test_hpack.c`, `tests/test_huff.c`, `tests/test_hdyn.c`,
-`tests/test_h2.c`, `tests/test_h2l.c`, `tests/test_h2p.c`
+`tests/test_h2.c`, `tests/test_h2l.c`, `tests/test_h2p.c`,
+`tests/test_h2t.c`
 
 ## See also
 
@@ -34,3 +40,4 @@ advertises `h2`. `h2_port` 0 leaves both off.
 - `docs/reviews/v0.5.72.enumeration.md`
 - `docs/reviews/v0.5.73.enumeration.md`
 - `docs/reviews/v0.5.81.enumeration.md`
+- `docs/reviews/v0.5.83.enumeration.md`

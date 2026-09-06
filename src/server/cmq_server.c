@@ -3664,9 +3664,16 @@ int cmq_server_h2_accept(cmq_server_t *srv, const char *account) {
     char subject[CMQ_H2_SUBJECT_MAX];
     uint8_t payload[CMQ_H2_MAX_FRAME];
     size_t plen = 0;
-    if (cmq_h2_accept(srv->h2_lfd, subject, sizeof(subject), payload,
-                      sizeof(payload), &plen) != 0)
-        return -1;
+    int rc;
+    if (srv->tls_config_slots[0] &&
+        cmq_tls_configured(srv->tls_config_slots[0]))
+        rc = cmq_h2_accept_tls(srv->h2_lfd, srv->tls_config_slots[0],
+                               subject, sizeof(subject), payload,
+                               sizeof(payload), &plen);
+    else
+        rc = cmq_h2_accept(srv->h2_lfd, subject, sizeof(subject), payload,
+                           sizeof(payload), &plen);
+    if (rc != 0) return -1;
     const char *acc = (account && account[0]) ? account : "$default";
     return cmq_server_publish(srv, subject, payload, plen, acc);
 }

@@ -57,6 +57,16 @@ int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
 int cmq_h2_accept(int lfd, char *subject, size_t scap, uint8_t *payload,
                   size_t pcap, size_t *plen);
 
+/* v0.5.83: same session over a TLS handshake. */
+struct cmq_tls_session;
+struct cmq_tls_config;
+int cmq_h2_session_tls(struct cmq_tls_session *tls, char *subject,
+                       size_t scap, uint8_t *payload, size_t pcap,
+                       size_t *plen);
+int cmq_h2_accept_tls(int lfd, struct cmq_tls_config *cfg, char *subject,
+                      size_t scap, uint8_t *payload, size_t pcap,
+                      size_t *plen);
+
 #ifdef __cplusplus
 }
 #endif

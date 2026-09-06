@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_h2.h"
 #include "cmq_hpack.h"
+#include "cmq_tls.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -195,14 +196,21 @@ int cmq_h2_listen_port(int lfd) {
     return (int)ntohs(addr.sin_port);
 }
 
-static int h2_write_all(int fd, const uint8_t *p, size_t n) {
+typedef struct {
+    ssize_t (*rd)(void *ctx, uint8_t *buf, size_t n);
+    ssize_t (*wr)(void *ctx, const uint8_t *buf, size_t n);
+    int (*wait)(void *ctx, int want_write);
+    void *ctx;
+} h2_io_t;
+
+static int h2_write_all(const h2_io_t *io, const uint8_t *p, size_t n) {
     size_t off = 0;
     while (off < n) {
-        struct pollfd pfd = {.fd = fd, .events = POLLOUT};
-        if (poll(&pfd, 1, CMQ_H2_IO_MS) <= 0) return -1;
-        ssize_t w = send(fd, p + off, n - off, 0);
+        if (io->wait(io->ctx, 1) != 0) return -1;
+        ssize_t w = io->wr(io->ctx, p + off, n - off);
         if (w < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+                continue;
             return -1;
         }
         if (w == 0) return -1;
@@ -211,26 +219,26 @@ static int h2_write_all(int fd, const uint8_t *p, size_t n) {
     return 0;
 }
 
-static void h2_write_goaway(int fd) {
+static void h2_write_goaway(const h2_io_t *io) {
     uint8_t f[17];
     memset(f, 0, sizeof(f));
     f[2] = 8;
     f[3] = CMQ_H2_TYPE_GOAWAY;
-    (void)h2_write_all(fd, f, sizeof(f));
+    (void)h2_write_all(io, f, sizeof(f));
 }
 
-static int h2_write_settings_ok(int fd) {
+static int h2_write_settings_ok(const h2_io_t *io) {
     uint8_t ack[9];
     memset(ack, 0, sizeof(ack));
     ack[3] = CMQ_H2_TYPE_SETTINGS;
     ack[4] = CMQ_H2_FLAG_ACK;
-    if (h2_write_all(fd, ack, sizeof(ack)) != 0) return -1;
+    if (h2_write_all(io, ack, sizeof(ack)) != 0) return -1;
     uint8_t fr[15];
     memset(fr, 0, sizeof(fr));
     fr[2] = 6;
     fr[3] = CMQ_H2_TYPE_SETTINGS;
     if (cmq_h2_settings_encode(CMQ_H2_MAX_STREAMS, fr + 9, 6) != 6) return -1;
-    return h2_write_all(fd, fr, sizeof(fr));
+    return h2_write_all(io, fr, sizeof(fr));
 }
 
 static int h2_path_subject(const char *path, char *out, size_t cap) {
@@ -275,9 +283,22 @@ static int h2_headers_take(cmq_hpack_dyn_t *dyn, const uint8_t *pl, size_t len,
     return 0;
 }
 
-int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
-                   size_t pcap, size_t *plen) {
-    if (fd < 0 || !subject || scap == 0 || !payload || pcap == 0 || !plen)
+static int h2_io_read(const h2_io_t *io, uint8_t *buf, size_t cap) {
+    if (io->wait(io->ctx, 0) != 0) return -1;
+    ssize_t n = io->rd(io->ctx, buf, cap);
+    if (n < 0) {
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+            return 0;
+        return -1;
+    }
+    if (n == 0) return -1;
+    return (int)n;
+}
+
+static int h2_session_io(const h2_io_t *io, char *subject, size_t scap,
+                         uint8_t *payload, size_t pcap, size_t *plen) {
+    if (!io || !io->rd || !io->wr || !io->wait || !subject || scap == 0 ||
+        !payload || pcap == 0 || !plen)
         return -1;
     *plen = 0;
     subject[0] = '\0';
@@ -292,18 +313,13 @@ int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
     int steps = 0;
     while (steps++ < 64) {
         if (blen < 9) {
-            struct pollfd pfd = {.fd = fd, .events = POLLIN};
-            if (poll(&pfd, 1, CMQ_H2_IO_MS) <= 0) {
-                h2_write_goaway(fd);
+            int n = h2_io_read(io, buf + blen, sizeof(buf) - blen);
+            if (n < 0) {
+                h2_write_goaway(io);
                 cmq_h2_destroy(h);
                 return -1;
             }
-            ssize_t n = recv(fd, buf + blen, sizeof(buf) - blen, 0);
-            if (n <= 0) {
-                h2_write_goaway(fd);
-                cmq_h2_destroy(h);
-                return -1;
-            }
+            if (n == 0) continue;
             blen += (size_t)n;
             continue;
         }
@@ -311,28 +327,23 @@ int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
         int before = cmq_h2_state(h);
         int r = cmq_h2_feed(h, buf, blen, &used);
         if (r < 0) {
-            h2_write_goaway(fd);
+            h2_write_goaway(io);
             cmq_h2_destroy(h);
             return -1;
         }
         if (r == 0) {
             if (blen >= sizeof(buf)) {
-                h2_write_goaway(fd);
+                h2_write_goaway(io);
                 cmq_h2_destroy(h);
                 return -1;
             }
-            struct pollfd pfd = {.fd = fd, .events = POLLIN};
-            if (poll(&pfd, 1, CMQ_H2_IO_MS) <= 0) {
-                h2_write_goaway(fd);
+            int n = h2_io_read(io, buf + blen, sizeof(buf) - blen);
+            if (n < 0) {
+                h2_write_goaway(io);
                 cmq_h2_destroy(h);
                 return -1;
             }
-            ssize_t n = recv(fd, buf + blen, sizeof(buf) - blen, 0);
-            if (n <= 0) {
-                h2_write_goaway(fd);
-                cmq_h2_destroy(h);
-                return -1;
-            }
+            if (n == 0) continue;
             blen += (size_t)n;
             continue;
         }
@@ -349,8 +360,8 @@ int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
         }
         if (type == CMQ_H2_TYPE_SETTINGS && !sent_set &&
             (buf[4] & CMQ_H2_FLAG_ACK) == 0) {
-            if (h2_write_settings_ok(fd) != 0) {
-                h2_write_goaway(fd);
+            if (h2_write_settings_ok(io) != 0) {
+                h2_write_goaway(io);
                 cmq_h2_destroy(h);
                 return -1;
             }
@@ -363,7 +374,7 @@ int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
                                 sizeof(method), path, sizeof(path)) != 0 ||
                 strcmp(method, "POST") != 0 ||
                 h2_path_subject(path, subject, scap) != 0) {
-                h2_write_goaway(fd);
+                h2_write_goaway(io);
                 cmq_h2_destroy(h);
                 return -1;
             }
@@ -378,7 +389,7 @@ int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
         }
         if (type == CMQ_H2_TYPE_DATA && got_path && used >= CMQ_H2_HDR_LEN) {
             if (flen > pcap) {
-                h2_write_goaway(fd);
+                h2_write_goaway(io);
                 cmq_h2_destroy(h);
                 return -1;
             }
@@ -390,9 +401,70 @@ int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
         memmove(buf, buf + used, blen - used);
         blen -= used;
     }
-    h2_write_goaway(fd);
+    h2_write_goaway(io);
     cmq_h2_destroy(h);
     return -1;
+}
+
+static ssize_t h2_fd_rd(void *ctx, uint8_t *buf, size_t n) {
+    return recv(*(int *)ctx, buf, n, 0);
+}
+
+static ssize_t h2_fd_wr(void *ctx, const uint8_t *buf, size_t n) {
+    return send(*(int *)ctx, buf, n, 0);
+}
+
+static int h2_fd_wait(void *ctx, int want_write) {
+    struct pollfd pfd = {
+        .fd = *(int *)ctx,
+        .events = want_write ? POLLOUT : POLLIN
+    };
+    return poll(&pfd, 1, CMQ_H2_IO_MS) <= 0 ? -1 : 0;
+}
+
+int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
+                   size_t pcap, size_t *plen) {
+    if (fd < 0) return -1;
+    h2_io_t io = {h2_fd_rd, h2_fd_wr, h2_fd_wait, &fd};
+    return h2_session_io(&io, subject, scap, payload, pcap, plen);
+}
+
+static ssize_t h2_tls_rd(void *ctx, uint8_t *buf, size_t n) {
+    return cmq_tls_read((cmq_tls_session_t *)ctx, buf, n);
+}
+
+static ssize_t h2_tls_wr(void *ctx, const uint8_t *buf, size_t n) {
+    return cmq_tls_write((cmq_tls_session_t *)ctx, buf, n);
+}
+
+static int h2_tls_wait(void *ctx, int want_write) {
+    int fd = cmq_tls_fd((cmq_tls_session_t *)ctx);
+    if (fd < 0) return -1;
+    struct pollfd pfd = {.fd = fd, .events = want_write ? POLLOUT : POLLIN};
+    return poll(&pfd, 1, CMQ_H2_IO_MS) <= 0 ? -1 : 0;
+}
+
+static int h2_tls_ready(cmq_tls_session_t *tls) {
+    if (!tls) return -1;
+    int fd = cmq_tls_fd(tls);
+    if (fd < 0) return -1;
+    for (int i = 0; i < 64; i++) {
+        int rc = cmq_tls_handshake(tls);
+        if (rc == 1) return 0;
+        if (rc < 0) return -1;
+        /* POLLOUT is almost always ready; wait for the peer. */
+        struct pollfd pfd = {.fd = fd, .events = POLLIN};
+        int pr = poll(&pfd, 1, CMQ_H2_IO_MS);
+        if (pr < 0 && errno != EINTR) return -1;
+    }
+    return -1;
+}
+
+int cmq_h2_session_tls(cmq_tls_session_t *tls, char *subject, size_t scap,
+                       uint8_t *payload, size_t pcap, size_t *plen) {
+    if (h2_tls_ready(tls) != 0) return -1;
+    h2_io_t io = {h2_tls_rd, h2_tls_wr, h2_tls_wait, tls};
+    return h2_session_io(&io, subject, scap, payload, pcap, plen);
 }
 
 int cmq_h2_accept(int lfd, char *subject, size_t scap, uint8_t *payload,
@@ -403,6 +475,25 @@ int cmq_h2_accept(int lfd, char *subject, size_t scap, uint8_t *payload,
     int c = accept(lfd, NULL, NULL);
     if (c < 0) return -1;
     int r = cmq_h2_session(c, subject, scap, payload, pcap, plen);
+    close(c);
+    return r;
+}
+
+int cmq_h2_accept_tls(int lfd, cmq_tls_config_t *cfg, char *subject,
+                      size_t scap, uint8_t *payload, size_t pcap,
+                      size_t *plen) {
+    if (lfd < 0 || !cfg || !subject || !payload || !plen) return -1;
+    struct pollfd pfd = {.fd = lfd, .events = POLLIN};
+    if (poll(&pfd, 1, CMQ_H2_IO_MS) <= 0) return -1;
+    int c = accept(lfd, NULL, NULL);
+    if (c < 0) return -1;
+    cmq_tls_session_t *tls = cmq_tls_server_session(cfg, c);
+    if (!tls) {
+        close(c);
+        return -1;
+    }
+    int r = cmq_h2_session_tls(tls, subject, scap, payload, pcap, plen);
+    cmq_tls_session_destroy(tls);
     close(c);
     return r;
 }
