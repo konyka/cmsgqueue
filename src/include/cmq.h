@@ -76,6 +76,9 @@ typedef struct cmq_config {
     int log_to_file;               /* Log to file (default: 0) */
     const char *auth_username;
     const char *auth_password;
+    const char *jwt_issuer;        /* v0.5.62: required with jwt_hmac_secret */
+    const char *jwt_hmac_secret;   /* v0.5.62: HS256; CONNECT password is JWT */
+    int jwt_leeway_sec;            /* v0.5.62: exp/nbf skew; 0 = 60 */
     const char *cluster_name;
     const char *cluster_node_id;
     struct { const char *addr; int port; } routes[8];

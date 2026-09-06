@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.62 - 2026-09-06
+
+### Added
+- **JWT / NKEY verify (D3 phase 1)** — HS256 compact JWT
+  on CONNECT when `jwt_hmac_secret` + `jwt_issuer` are set.
+  Rejects wrong alg / iss / exp / nbf (60s leeway).
+  `cmq_nkey_verify` is raw Ed25519. Verify-only; OpenSSL.
+
+### Tests
+- `tests/test_jwt.c` — HS256 ok/bad/iss/exp/nbf/alg,
+  Ed25519 nkey (+7).
+
+### Documentation
+- `docs/reviews/v0.5.62.enumeration.md`, `v0.5.62.plan.md`.
+- `docs/features/jwt.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0562_{1,2}.txt`.
+
+### Test count
+- 240 tests (was 233 in v0.5.61; +7).
+
 ## 0.5.61 - 2026-09-06
 
 ### Added

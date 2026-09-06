@@ -1,10 +1,9 @@
-# Remaining unimplemented work (HEAD after v0.5.61)
+# Remaining unimplemented work (HEAD after v0.5.62)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
-P3 D7/D8 are shipped. D4 library pieces are v0.5.56–59. D5
-phases 1–2 are v0.5.55/60. D1 phase 1 is v0.5.61. Next cuts:
-D1 OTLP, D2 HTTP/2, D3 JWT/NKEY, D5 multi-node 2PC, or
-leaf/gateway e2e.
+P3 D7/D8 are shipped. D1/D3/D4/D5 have library or phase-1
+cuts. Next cuts: D1 OTLP, D2 HTTP/2, D3 nkey CONNECT /
+JWKS, D5 multi-node 2PC, or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -25,6 +24,7 @@ leaf/gateway e2e.
 | v0.5.59 | D4 phase 3: named object store |
 | v0.5.60 | D5 phase 2: transaction coordinator |
 | v0.5.61 | D1 phase 1: OTel span ring + sidecar |
+| v0.5.62 | D3 phase 1: JWT HS256 + Ed25519 nkey verify |
 
 ## Deferred — detailed designs
 
@@ -42,13 +42,11 @@ monitor on a dedicated listener. Do not put h2 on the message
 port. HPACK table capped (4 KiB); max 32 streams. Do not
 advertise `h2` until that exists.
 
-### D3 JWT / NKEY (XL)
+### D3 JWT / NKEY — phase 1 shipped v0.5.62
 
-No Ed25519/JWT in `src/`. **Design:** verify-only (no issue) using
-the existing TLS/OpenSSL dependency. Cached JWKS, nkey public
-keys in config. CONNECT presents a token; verify off the accept
-hot path (worker). Reject on clock skew / issuer mismatch.
-Do not add a second crypto library.
+HS256 JWT on CONNECT and raw Ed25519 `cmq_nkey_verify`
+use OpenSSL only. **Remaining:** JWKS cache, nkey seed/base32
+on CONNECT, ES256. Still verify-only.
 
 ### D4 JetStream / KV / Object Store — library shipped v0.5.56–59
 

@@ -36,6 +36,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Object store (v0.5.59)**: named blobs, tmp+fsync+rename (D4 phase 3; 64 KiB)
 - **Transactions (v0.5.60)**: `CMQT` begin/add/commit/abort coordinator (D5 phase 2)
 - **OTel span ring (v0.5.61)**: lock-free 256-slot sidecar export (D1 phase 1; no payload bodies)
+- **JWT / NKEY (v0.5.62)**: HS256 JWT on CONNECT; Ed25519 nkey verify (D3 phase 1)
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
 - **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability
