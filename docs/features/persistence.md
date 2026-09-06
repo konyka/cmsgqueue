@@ -158,3 +158,4 @@ one compare after rotate.
 - `docs/reviews/round2_deep_attack.md` C2 (WAL design).
 - Plan reference: `docs/reviews/hyperplan-final-plan.md` Part 2, F5.
 - `src/store/cmq_filestore.{c,h}` — library.
+- `docs/reviews/v0.5.88.enumeration.md`
