@@ -1,0 +1,3 @@
+v0.5.52 bench 1:
+- Unlimited (default): one cached compare on PUBLISH; no get()/CAS.
+- Capped: one get + CAS credit after rewrite; matching debit on return.

@@ -26,6 +26,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Subject rewrite (v0.5.49)**: per-account publish maps (`foo.*` → `bar.$1`); skipped when `map_total` is 0
 - **Connect-rate (v0.5.50)**: `max_connections_per_account` is live on CONNECT (per-second window; distinct from concurrent `account_max_connections`)
 - **Audit trail (v0.5.51)**: `auth_ok` / `auth_fail` / `persist_*` / `tls_handshake_fail` on their real paths (not only `rate_limit_reject`)
+- **Outstanding-byte cap (v0.5.52)**: `account_max_bytes_live` bounds concurrent in-flight ingress per account (`0` = unlimited)
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
 - **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability

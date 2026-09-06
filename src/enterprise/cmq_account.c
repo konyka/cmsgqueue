@@ -31,6 +31,7 @@ struct cmq_account_manager {
     uint32_t default_max_connections;
     uint32_t default_max_subscriptions;
     uint64_t default_max_payload;
+    uint64_t default_max_bytes_live;
     uint32_t map_total; /* v0.5.49: sum of per-account maps */
 };
 
@@ -73,6 +74,10 @@ static void account_apply_defaults(cmq_account_manager_t *mgr, cmq_account_t *a)
                      __atomic_load_n(&mgr->default_max_payload,
                                      __ATOMIC_ACQUIRE),
                      __ATOMIC_RELEASE);
+    __atomic_store_n(&a->max_bytes_live,
+                     __atomic_load_n(&mgr->default_max_bytes_live,
+                                     __ATOMIC_ACQUIRE),
+                     __ATOMIC_RELEASE);
 }
 
 static void account_bump_epoch(cmq_account_t *a) {
@@ -90,6 +95,7 @@ static void account_clear_counters(cmq_account_t *a) {
     __atomic_store_n(&a->messages_out, 0, __ATOMIC_RELAXED);
     __atomic_store_n(&a->bytes_in, 0, __ATOMIC_RELAXED);
     __atomic_store_n(&a->bytes_out, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&a->bytes_live, 0, __ATOMIC_RELAXED);
 }
 
 /* Undo stale fetch_add only while clear_gen still equals g0.
@@ -144,6 +150,70 @@ int cmq_account_check_payload(const cmq_account_t *acc, uint64_t bytes) {
     uint64_t maxp = __atomic_load_n(&acc->max_payload, __ATOMIC_ACQUIRE);
     if (maxp > 0 && bytes > maxp) return -1;
     return 0;
+}
+
+void cmq_account_manager_set_default_bytes_live(cmq_account_manager_t *mgr,
+                                                uint64_t max_bytes) {
+    if (!mgr) return;
+    __atomic_store_n(&mgr->default_max_bytes_live, max_bytes, __ATOMIC_RELEASE);
+}
+
+void cmq_account_set_max_bytes_live(cmq_account_t *acc, uint64_t max_bytes) {
+    if (!acc) return;
+    __atomic_store_n(&acc->max_bytes_live, max_bytes, __ATOMIC_RELEASE);
+}
+
+int cmq_account_credit_bytes_live(cmq_account_t *acc, uint32_t epoch,
+                                  uint64_t n) {
+    if (!acc) return -1;
+    if (n == 0) return 0;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return -1;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return -1;
+    uint64_t maxb = __atomic_load_n(&acc->max_bytes_live, __ATOMIC_ACQUIRE);
+    if (maxb == 0) return 0;
+    uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
+    uint64_t cur = __atomic_load_n(&acc->bytes_live, __ATOMIC_RELAXED);
+    for (;;) {
+        if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+            !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+            __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0)
+            return -1;
+        maxb = __atomic_load_n(&acc->max_bytes_live, __ATOMIC_ACQUIRE);
+        if (maxb == 0) return 0;
+        if (cur > (uint64_t)-1 - n || cur + n > maxb)
+            return -2;
+        if (__atomic_compare_exchange_n(&acc->bytes_live, &cur, cur + n,
+                                         0, __ATOMIC_RELAXED,
+                                         __ATOMIC_RELAXED))
+            break;
+    }
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) {
+        account_undo_stale_inc(&acc->bytes_live, n, cur, g0, acc);
+        return -1;
+    }
+    return 0;
+}
+
+void cmq_account_debit_bytes_live(cmq_account_t *acc, uint32_t epoch,
+                                  uint64_t n) {
+    if (!acc || n == 0) return;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    if (__atomic_load_n(&acc->max_bytes_live, __ATOMIC_ACQUIRE) == 0)
+        return;
+    uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
+    uint64_t cur = __atomic_load_n(&acc->bytes_live, __ATOMIC_RELAXED);
+    while (cur > 0) {
+        if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+        if (__atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) return;
+        uint64_t next = (cur > n) ? cur - n : 0;
+        if (__atomic_compare_exchange_n(&acc->bytes_live, &cur, next,
+                                         0, __ATOMIC_RELAXED,
+                                         __ATOMIC_RELAXED))
+            return;
+    }
 }
 
 void cmq_account_manager_destroy(cmq_account_manager_t *mgr) {

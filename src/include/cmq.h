@@ -90,6 +90,7 @@ typedef struct cmq_config {
     int account_max_connections;
     int account_max_subscriptions;
     int account_max_payload;
+    int account_max_bytes_live;    /* v0.5.52: in-flight bytes; 0=unlimited */
     /* F16 ACL: CSV patterns. NULL disables. */
     const char *acl_allow;
     const char *acl_deny;

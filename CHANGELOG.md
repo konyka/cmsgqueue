@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.52 - 2026-09-06
+
+### Added
+- **Per-account outstanding-byte cap** — `bytes_live` /
+  `max_bytes_live` credit after rewrite and debit when that
+  publish returns. Config `account_max_bytes_live` (`0` =
+  unlimited: one cached compare, no extra `get()` / CAS).
+  Rejects with `"account memory"`. Does not cap subscriber
+  write-buffer copies.
+
+### Tests
+- `tests/test_account_bytes.c` — unlimited, cap, debit,
+  isolate, stale epoch, default, saturate (+7).
+
+### Documentation
+- `docs/reviews/v0.5.52.enumeration.md`, `v0.5.52.plan.md`.
+- `docs/features/accounts.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0552_{1,2}.txt`.
+
+### Test count
+- 177 tests (was 170 in v0.5.51; +7).
+
 ## 0.5.51 - 2026-09-06
 
 ### Added

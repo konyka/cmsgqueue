@@ -89,6 +89,7 @@ typedef struct cmq_client {
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
     uint32_t account_epoch;         /* must match account->epoch after CONNECT */
     uint64_t account_max_payload;   /* v0.5.48: cached at CONNECT; 0=unlimited */
+    uint64_t account_max_bytes_live; /* v0.5.52: cached; 0=unlimited */
     int session_accounted;          /* 1 after CONNECT inc; teardown must dec */
     int is_websocket;
     int is_route;                   /* 1 = cluster route peer (no re-forward) */

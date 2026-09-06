@@ -21,6 +21,8 @@ typedef struct {
     uint64_t messages_out;
     uint64_t bytes_in;
     uint64_t bytes_out;
+    uint64_t bytes_live;     /* v0.5.52: in-flight publish bytes */
+    uint64_t max_bytes_live; /* 0 = unlimited */
     int active;
     uint32_t epoch; /* bumps on soft-delete reactivate; stale clients must not revive */
     uint32_t clear_gen; /* bumps on clear_counters; pairs with stale-inc undo */
@@ -72,6 +74,14 @@ void cmq_account_set_limits(cmq_account_t *acc, uint32_t max_conn,
                             uint32_t max_sub, uint64_t max_payload);
 /* 0 if admitted; -1 if acc is NULL or bytes exceed max_payload. */
 int cmq_account_check_payload(const cmq_account_t *acc, uint64_t bytes);
+void cmq_account_manager_set_default_bytes_live(cmq_account_manager_t *mgr,
+                                                uint64_t max_bytes);
+void cmq_account_set_max_bytes_live(cmq_account_t *acc, uint64_t max_bytes);
+/* 0 credited; -1 stale; -2 over max_bytes_live. n==0 or max==0 is a no-op. */
+int cmq_account_credit_bytes_live(cmq_account_t *acc, uint32_t epoch,
+                                  uint64_t n);
+void cmq_account_debit_bytes_live(cmq_account_t *acc, uint32_t epoch,
+                                  uint64_t n);
 /* Returns 0 if the connection credit stuck on this epoch; -1 if
    inactive/raced; -2 if at max_connections. */
 int cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch);

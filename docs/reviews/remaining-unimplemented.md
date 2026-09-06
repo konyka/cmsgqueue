@@ -1,8 +1,8 @@
-# Remaining unimplemented work (HEAD after v0.5.51)
+# Remaining unimplemented work (HEAD after v0.5.52)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. F14 connect-rate is v0.5.50. Audit events
-are v0.5.51. Next cuts: outstanding-byte caps, then D6.
+are v0.5.51. Outstanding-byte caps are v0.5.52. Next cut: D6.
 
 ## Shipped (do not re-open)
 
@@ -13,6 +13,7 @@ are v0.5.51. Next cuts: outstanding-byte caps, then D6.
 | v0.5.49 | D7 publish-side subject rewrite |
 | v0.5.50 | F14 connect-rate on CONNECT |
 | v0.5.51 | Audit auth / persist / TLS events |
+| v0.5.52 | Per-account outstanding-byte (`bytes_live`) cap |
 
 ## Deferred — detailed designs
 
@@ -66,7 +67,6 @@ Live PUBLISH path unchanged.
 
 | Item | Evidence | Next cut |
 |---|---|---|
-| Outstanding-byte memory cap | D8 did payload, not live bytes | Account `bytes_live` + credit/debit |
 | MQTT QoS 1/2 inflight | Listener is QoS 0 + will | Inflight mqueue |
 | ALPN `h2` | Comment example only; server never calls `set_alpn` | Ship D2 or leave unset |
 | Leaf/gateway e2e | Library exists, no multi-process test | Test-only increment |

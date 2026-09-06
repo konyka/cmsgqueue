@@ -65,6 +65,54 @@ static int account_apply_rewrite(cmq_server_t *srv, const char *account,
     return 0;
 }
 
+/* v0.5.52: hold in-flight bytes. No-op when the CONNECT cache is 0. */
+static int account_live_hold(cmq_server_t *srv, cmq_client_t *c, uint64_t n,
+                             int *held) {
+    if (held) *held = 0;
+    if (!srv || !c || n == 0 || c->account_max_bytes_live == 0)
+        return 0;
+    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
+    if (!acc) return -1;
+    int rc = cmq_account_credit_bytes_live(acc, c->account_epoch, n);
+    cmq_account_release(srv->accounts, acc);
+    if (rc == 0 && held) *held = 1;
+    return rc;
+}
+
+static void account_live_drop(cmq_server_t *srv, cmq_client_t *c, uint64_t n,
+                              int held) {
+    if (!held || !srv || !c || n == 0) return;
+    cmq_account_t *acc = cmq_account_get(srv->accounts, c->account_name, NULL);
+    if (!acc) return;
+    cmq_account_debit_bytes_live(acc, c->account_epoch, n);
+    cmq_account_release(srv->accounts, acc);
+}
+
+static int account_live_hold_name(cmq_server_t *srv, const char *account,
+                                  uint32_t epoch, uint64_t n, int *held) {
+    if (held) *held = 0;
+    if (!srv || !srv->accounts || !account || n == 0) return 0;
+    cmq_account_t *acc = cmq_account_get(srv->accounts, account, NULL);
+    if (!acc) return 0;
+    if (__atomic_load_n(&acc->max_bytes_live, __ATOMIC_ACQUIRE) == 0) {
+        cmq_account_release(srv->accounts, acc);
+        return 0;
+    }
+    int rc = cmq_account_credit_bytes_live(acc, epoch ? epoch : acc->epoch, n);
+    cmq_account_release(srv->accounts, acc);
+    if (rc == 0 && held) *held = 1;
+    return rc;
+}
+
+static void account_live_drop_name(cmq_server_t *srv, const char *account,
+                                   uint32_t epoch, uint64_t n, int held) {
+    if (!held || !srv || !account || n == 0) return;
+    cmq_account_t *acc = cmq_account_get(srv->accounts, account, NULL);
+    if (!acc) return;
+    cmq_account_debit_bytes_live(acc, epoch ? epoch : acc->epoch, n);
+    cmq_account_release(srv->accounts, acc);
+}
+
 /* Global max_payload_size and the CONNECT-cached account cap. */
 static int payload_exceeds_caps(const cmq_server_t *srv, const cmq_client_t *c,
                                 size_t msg_len) {
@@ -3116,9 +3164,19 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "subject map failed");
         return;
     }
+    /* v0.5.52: hold after rewrite so ACL/quota/map rejects skip the budget. */
+    int live_held = 0;
+    if (account_live_hold(srv, c, (uint64_t)msg_len, &live_held) != 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "account memory");
+        return;
+    }
+    size_t ntgt = 0;
+    cmq_deliver_tgt_t *tgts = NULL;
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
         cmq_send_error(c, "delivery failed");
-        return; /* OOM after validation — surface error, no silent drop */
+        goto pub_done; /* OOM after validation — surface error, no silent drop */
     }
 
     if (result.count == 0) {
@@ -3127,7 +3185,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
             client_set_state(c, CMQ_CLIENT_CLOSING);
-            return;
+            goto pub_done;
         }
         /* Remote-only: forward after local match succeeded (no OOM ghost). */
         if (!c->is_route) {
@@ -3137,39 +3195,38 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             if (route_rc == -2) {
                 cmq_send_error(c, "account inactive");
                 client_set_state(c, CMQ_CLIENT_CLOSING);
-                return;
+                goto pub_done;
             }
             if (cmq_route_forward_missed(srv, route_rc, route_sent)) {
                 cmq_send_error(c, "route failed");
-                return;
+                goto pub_done;
             }
         }
         /* Align BATCH — credit only after remote-only ingress succeeds. */
         credit_msgs_in(srv, c, frame);
-        return;
+        goto pub_done;
     }
 
     /* Always snapshot under the read lock, then unlock before any I/O. */
-    size_t ntgt = 0;
-    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
+    tgts = snapshot_deliver_targets(srv, &result, &ntgt);
     cmq_sublist_result_free(&result);
     if (ntgt == SIZE_MAX) {
         cmq_send_error(c, "delivery failed");
-        return;
+        goto pub_done;
     }
     /* Soft-delete may race during match/snapshot — stop before fan-out. */
     if (!client_account_live(srv, c)) {
         free(tgts);
         cmq_send_error(c, "account inactive");
         client_set_state(c, CMQ_CLIENT_CLOSING);
-        return;
+        goto pub_done;
     }
     if (!tgts || ntgt == 0) {
         free(tgts);
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
             client_set_state(c, CMQ_CLIENT_CLOSING);
-            return;
+            goto pub_done;
         }
         if (!c->is_route) {
             route_rc = route_forward_if_live(srv, c, CMQ_OP_PUBLISH,
@@ -3178,15 +3235,15 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             if (route_rc == -2) {
                 cmq_send_error(c, "account inactive");
                 client_set_state(c, CMQ_CLIENT_CLOSING);
-                return;
+                goto pub_done;
             }
             if (cmq_route_forward_missed(srv, route_rc, route_sent)) {
                 cmq_send_error(c, "route failed");
-                return;
+                goto pub_done;
             }
         }
         credit_msgs_in(srv, c, frame);
-        return;
+        goto pub_done;
     }
 
     /* Soft-delete may race after snapshot — stop before cluster forward. */
@@ -3194,7 +3251,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         free(tgts);
         cmq_send_error(c, "account inactive");
         client_set_state(c, CMQ_CLIENT_CLOSING);
-        return;
+        goto pub_done;
     }
 
     /* Cluster forward only after local snapshot succeeded. */
@@ -3206,7 +3263,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             free(tgts);
             cmq_send_error(c, "account inactive");
             client_set_state(c, CMQ_CLIENT_CLOSING);
-            return;
+            goto pub_done;
         }
     }
 
@@ -3215,7 +3272,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         free(tgts);
         cmq_send_error(c, "account inactive");
         client_set_state(c, CMQ_CLIENT_CLOSING);
-        return;
+        goto pub_done;
     }
 
     if (ntgt > CMQ_CORO_DELIVER_BATCH && srv->num_workers > 0) {
@@ -3230,7 +3287,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                 credit_msgs_in(srv, c, frame);
             else
                 cmq_send_error(c, "delivery failed");
-            return;
+            goto pub_done;
         }
         if (msg_len > 0) memcpy(coro_payload, msg_payload, msg_len);
         if (headers_len > 0 && headers) {
@@ -3242,7 +3299,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                     credit_msgs_in(srv, c, frame);
                 else
                     cmq_send_error(c, "delivery failed");
-                return;
+                goto pub_done;
             }
             memcpy(coro_headers, headers, headers_len);
         }
@@ -3263,7 +3320,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             /* Async accepted or sync-fallback delivered — align BATCH. */
             credit_msgs_in(srv, c, frame);
         }
-        return;
+        goto pub_done;
     }
 
     if (deliver_targets_sync(srv, tgts, ntgt, subject, c->account_name,
@@ -3280,6 +3337,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         credit_msgs_in(srv, c, frame);
     }
     free(tgts);
+pub_done:
+    account_live_drop(srv, c, (uint64_t)msg_len, live_held);
 }
 
 /* v0.5.36: non-client publish entry point. Used by the MQTT
@@ -3298,11 +3357,20 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
     if (account_apply_rewrite(srv, account_name, mapped, sizeof(mapped)) != 0)
         return -1;
     subject = mapped;
-    cmq_sublist_result_t result;
-    if (cmq_sublist_match(srv->sublist, subject, &result) != 0)
+    int live_held = 0;
+    if (account_live_hold_name(srv, account_name, 0, (uint64_t)payload_len,
+                               &live_held) != 0)
         return -1;
+    cmq_sublist_result_t result;
+    if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
+        account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
+                               live_held);
+        return -1;
+    }
     if (result.count == 0) {
         cmq_sublist_result_free(&result);
+        account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
+                               live_held);
         return 0;
     }
     size_t ntgt = 0;
@@ -3310,6 +3378,8 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
     cmq_sublist_result_free(&result);
     if (ntgt == SIZE_MAX || !tgts || ntgt == 0) {
         free(tgts);
+        account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
+                               live_held);
         return 0;
     }
     /* Synchronous fanout: the bridge is a low-rate path (MQTT
@@ -3323,6 +3393,8 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
                                   CMQ_ATOMIC_RELAXED);
     }
     free(tgts);
+    account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
+                           live_held);
     return 0;
 }
 
@@ -3927,28 +3999,37 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
+    int live_held = 0;
+    if (account_live_hold(srv, c, (uint64_t)msg_len, &live_held) != 0) {
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
+        cmq_send_error(c, "account memory");
+        return;
+    }
+
     size_t route_sent = 0;
     int route_rc = 0;
+    size_t ntgt = 0;
+    cmq_deliver_tgt_t *tgts = NULL;
 
     cmq_sublist_result_t result;
     if (cmq_sublist_match(srv->sublist, subject, &result) != 0) {
         cmq_send_error(c, "delivery failed");
-        return;
+        goto req_done;
     }
-    size_t ntgt = 0;
-    cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
+    tgts = snapshot_deliver_targets(srv, &result, &ntgt);
     cmq_sublist_result_free(&result);
 
     if (ntgt == SIZE_MAX) {
         cmq_send_error(c, "delivery failed");
-        return;
+        goto req_done;
     }
     /* Soft-delete may race during match/snapshot — align with PUBLISH. */
     if (!client_account_live(srv, c)) {
         free(tgts);
         cmq_send_error(c, "account inactive");
         client_set_state(c, CMQ_CLIENT_CLOSING);
-        return;
+        goto req_done;
     }
     /* Only forward REQUEST when no local responders — otherwise peers
        also answer the same _INBOX and the client sees duplicate replies. */
@@ -3960,7 +4041,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             free(tgts);
             cmq_send_error(c, "account inactive");
             client_set_state(c, CMQ_CLIENT_CLOSING);
-            return;
+            goto req_done;
         }
     }
 
@@ -3975,7 +4056,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
             client_set_state(c, CMQ_CLIENT_CLOSING);
-            return;
+            goto req_done;
         }
         if (n > 0) {
             credit_msgs_in(srv, c, frame);
@@ -3994,7 +4075,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             if (route_rc == -2) {
                 cmq_send_error(c, "account inactive");
                 client_set_state(c, CMQ_CLIENT_CLOSING);
-                return;
+                goto req_done;
             }
             if (route_sent > 0) {
                 credit_msgs_in(srv, c, frame);
@@ -4015,7 +4096,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         if (!client_account_live(srv, c)) {
             cmq_send_error(c, "account inactive");
             client_set_state(c, CMQ_CLIENT_CLOSING);
-            return;
+            goto req_done;
         }
         if (!c->is_route && route_sent > 0) {
             credit_msgs_in(srv, c, frame);
@@ -4029,6 +4110,8 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_error(c, "no responders");
         }
     }
+req_done:
+    account_live_drop(srv, c, (uint64_t)msg_len, live_held);
 }
 
 static void handle_response(cmq_server_t *srv, cmq_client_t *c,
@@ -4417,6 +4500,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         uint32_t payload_len;
         cmq_deliver_tgt_t *tgts;
         size_t ntgt;
+        int live_held; /* v0.5.52: bytes_live credit for this entry */
         int cluster_ok; /* 1 = remote-only ingress OK / no cluster miss */
     } batch_prep_t;
 
@@ -4425,6 +4509,15 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "delivery failed");
         return;
     }
+#define BATCH_RELEASE() do { \
+        for (uint16_t _k = 0; _k < count; _k++) { \
+            account_live_drop(srv, c, (uint64_t)prep[_k].payload_len, \
+                              prep[_k].live_held); \
+            free(prep[_k].tgts); \
+            prep[_k].tgts = NULL; \
+        } \
+        free(prep); \
+    } while (0)
 
     offset = 2;
     for (uint16_t msg = 0; msg < count; msg++) {
@@ -4435,8 +4528,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         prep[msg].subject[subject_len] = '\0';
         if (account_apply_rewrite(srv, c->account_name, prep[msg].subject,
                                  sizeof(prep[msg].subject)) != 0) {
-            for (uint16_t k = 0; k < msg; k++) free(prep[k].tgts);
-            free(prep);
+            BATCH_RELEASE();
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
             cmq_send_error(c, "subject map failed");
@@ -4459,11 +4551,18 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         prep[msg].msg_payload = frame->payload + offset;
         prep[msg].payload_len = payload_len;
         offset += payload_len;
+        if (account_live_hold(srv, c, (uint64_t)payload_len,
+                              &prep[msg].live_held) != 0) {
+            BATCH_RELEASE();
+            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_error(c, "account memory");
+            return;
+        }
 
         cmq_sublist_result_t result;
         if (cmq_sublist_match(srv->sublist, prep[msg].subject, &result) != 0) {
-            for (uint16_t k = 0; k <= msg; k++) free(prep[k].tgts);
-            free(prep);
+            BATCH_RELEASE();
             cmq_send_error(c, "delivery failed");
             return;
         }
@@ -4471,8 +4570,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
         cmq_sublist_result_free(&result);
         if (ntgt == SIZE_MAX) {
-            for (uint16_t k = 0; k < msg; k++) free(prep[k].tgts);
-            free(prep);
+            BATCH_RELEASE();
             cmq_send_error(c, "delivery failed");
             return;
         }
@@ -4498,8 +4596,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             }
         }
         if (!any_local) {
-            for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
-            free(prep);
+            BATCH_RELEASE();
             cmq_send_error(c, "route failed");
             return;
         }
@@ -4507,8 +4604,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
 
     /* Soft-delete may race during pass 2a snapshots — stop before fan-out. */
     if (!client_account_live(srv, c)) {
-        for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
-        free(prep);
+        BATCH_RELEASE();
         cmq_send_error(c, "account inactive");
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
@@ -4521,8 +4617,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
     int any_delivered = 0;
     for (uint16_t msg = 0; msg < count; msg++) {
         if (!client_account_live(srv, c)) {
-            for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
-            free(prep);
+            BATCH_RELEASE();
             cmq_send_error(c, "account inactive");
             client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
@@ -4561,8 +4656,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                                                       pub, pub_len, &route_sent);
                 free(pub);
                 if (route_rc == -2) {
-                    for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
-                    free(prep);
+                    BATCH_RELEASE();
                     cmq_send_error(c, "account inactive");
                     client_set_state(c, CMQ_CLIENT_CLOSING);
                     return;
@@ -4591,16 +4685,14 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
        failure — so subscribers are not starved when earlier entries already
        reached the cluster (align with single-PUBLISH local-after-route). */
     if (!client_account_live(srv, c)) {
-        for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
-        free(prep);
+        BATCH_RELEASE();
         cmq_send_error(c, "account inactive");
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
     for (uint16_t msg = 0; msg < count; msg++) {
         if (!client_account_live(srv, c)) {
-            for (uint16_t k = 0; k < count; k++) free(prep[k].tgts);
-            free(prep);
+            BATCH_RELEASE();
             cmq_send_error(c, "account inactive");
             client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
@@ -4639,7 +4731,8 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         free(prep[msg].tgts);
         prep[msg].tgts = NULL;
     }
-    free(prep);
+    BATCH_RELEASE();
+#undef BATCH_RELEASE
     /* Avoid ERROR after partial local/remote success (retry would duplicate). */
     if (batch_fail && !any_delivered)
         cmq_send_error(c, "batch delivery failed");
@@ -4897,6 +4990,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         }
         c->account_max_payload =
             __atomic_load_n(&acc->max_payload, __ATOMIC_ACQUIRE);
+        c->account_max_bytes_live =
+            __atomic_load_n(&acc->max_bytes_live, __ATOMIC_ACQUIRE);
         if (!client_account_live(srv, c)) {
             cmq_account_dec_connections(acc, aep);
             cmq_account_release(srv->accounts, acc);
@@ -6444,6 +6539,8 @@ static int route_bind_egress_reader(cmq_server_t *srv, const char *nid) {
     client->account_epoch = aep;
     client->account_max_payload =
         __atomic_load_n(&acc->max_payload, __ATOMIC_ACQUIRE);
+    client->account_max_bytes_live =
+        __atomic_load_n(&acc->max_bytes_live, __ATOMIC_ACQUIRE);
     cmq_account_release(srv->accounts, acc);
 
     if (cmq_route_adopt_fd(srv->routes, fd, nid) != 0) {
@@ -7209,6 +7306,10 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                            ? srv->config.account_max_subscriptions : 0),
             (uint64_t)(srv->config.account_max_payload > 0
                            ? srv->config.account_max_payload : 0));
+        cmq_account_manager_set_default_bytes_live(
+            srv->accounts,
+            (uint64_t)(srv->config.account_max_bytes_live > 0
+                           ? srv->config.account_max_bytes_live : 0));
     }
     if (!srv->accounts ||
         cmq_account_create(srv->accounts, "$default") != 0) {

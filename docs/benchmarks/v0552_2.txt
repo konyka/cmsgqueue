@@ -1,0 +1,3 @@
+v0.5.52 bench 2:
+- Hold is after ACL/quota/rate/rewrite so rejects do not consume budget.
+- BATCH holds per entry; abort paths release every credited entry.

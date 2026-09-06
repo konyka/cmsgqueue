@@ -11,9 +11,16 @@ live counters.
 | `account_max_connections` | Concurrent connections per account | `0` (unlimited) |
 | `account_max_subscriptions` | Concurrent subscriptions per account | `0` (unlimited) |
 | `account_max_payload` | Per-message payload bytes | `0` (unlimited) |
+| `account_max_bytes_live` | Concurrent in-flight ingress bytes | `0` (unlimited) |
 
 `0` disables the individual cap. The publish path still honours
 the global `max_payload_size`; the account cap cannot raise it.
+
+`account_max_bytes_live` credits payload bytes after rewrite and
+debits them when that PUBLISH / REQUEST / BATCH entry / 
+`cmq_server_publish` returns. It is not a subscriber write-buffer
+cap. `set_limits` is unchanged; use
+`cmq_account_set_max_bytes_live` / `set_default_bytes_live`.
 
 These are **not** the F14 quota knobs. `max_connections_per_account`
 remains a per-second connect-rate window inside `cmq_quota`.
@@ -42,7 +49,8 @@ SUBACK 1 and stays up on `-2`.
 
 Unlimited CONNECT/SUBSCRIBE: one atomic load + compare, then the
 same `fetch_add` as before. PUBLISH: one extra integer compare
-when the cached `account_max_payload` is 0.
+when the cached `account_max_payload` is 0. Unlimited
+`bytes_live`: one cached compare; no extra `get()` / CAS.
 
 ## Subject rewrite (v0.5.49)
 
@@ -66,3 +74,4 @@ path skips the rewrite lock (one atomic load).
 - `docs/features/quota.md` — rate windows, not concurrent caps
 - `docs/reviews/v0.5.48.enumeration.md`
 - `docs/reviews/v0.5.49.enumeration.md`
+- `docs/reviews/v0.5.52.enumeration.md`
