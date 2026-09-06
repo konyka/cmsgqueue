@@ -55,6 +55,11 @@ cmq_jwks_refresher_t *cmq_jwks_refresh_start(const cmq_jwks_url_t *url,
                                              cmq_jwks_cache_t *cache,
                                              unsigned interval_sec);
 void cmq_jwks_refresh_stop(cmq_jwks_refresher_t *r);
+unsigned cmq_jwks_refresh_interval(cmq_jwks_refresher_t *r);
+/* v0.5.131: 0 / omitted keeps. 5–86400 applies. URL fetch
+ * stays create-time. */
+int cmq_jwks_refresh_reload(cmq_jwks_refresher_t *r, int *live_sec,
+                            int fresh_sec);
 
 #ifdef __cplusplus
 }

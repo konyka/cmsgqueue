@@ -52,6 +52,9 @@ Mutually exclusive with `jwks_json`.
 
 `jwks_refresh_sec` (v0.5.82) re-GETs that URL on a sidecar.
 `0` is one GET at create. Config allows 5–86400 seconds.
+v0.5.131: reload applies a non-zero interval to a live
+sidecar. Omitted / 0 keeps the current interval. The URL
+itself stays create-time.
 A failed GET keeps the previous ping-pong slot. CONNECT
 copies key bytes out of the live slot so a later refresh
 cannot overwrite material mid-verify.

@@ -306,7 +306,7 @@ struct cmq_jwks_cache {
 struct cmq_jwks_refresher {
     cmq_jwks_url_t url;
     cmq_jwks_cache_t *cache;
-    unsigned interval_sec;
+    atomic_uint interval_sec;
     uint64_t last_ms;
     atomic_int run;
     cmq_thread_t thr;
@@ -417,8 +417,9 @@ static void *jwks_refresh_thr(void *arg) {
     cmq_jwks_refresher_t *r = arg;
     while (atomic_load_explicit(&r->run, memory_order_acquire)) {
         uint64_t now = jwks_now_ms();
-        (void)cmq_jwks_refresh_step(&r->url, r->cache, &r->last_ms, now,
-                                    r->interval_sec);
+        unsigned iv = atomic_load_explicit(&r->interval_sec,
+                                           memory_order_acquire);
+        (void)cmq_jwks_refresh_step(&r->url, r->cache, &r->last_ms, now, iv);
         for (int i = 0; i < 10 &&
              atomic_load_explicit(&r->run, memory_order_acquire); i++) {
             struct timespec ts = {0, 100000000L};
@@ -437,7 +438,7 @@ cmq_jwks_refresher_t *cmq_jwks_refresh_start(const cmq_jwks_url_t *url,
     if (!r) return NULL;
     r->url = *url;
     r->cache = cache;
-    r->interval_sec = interval_sec;
+    atomic_init(&r->interval_sec, interval_sec);
     r->last_ms = jwks_now_ms();
     atomic_init(&r->run, 1);
     if (cmq_thread_create(&r->thr, jwks_refresh_thr, r) != 0) {
@@ -456,4 +457,25 @@ void cmq_jwks_refresh_stop(cmq_jwks_refresher_t *r) {
         r->started = 0;
     }
     free(r);
+}
+
+unsigned cmq_jwks_refresh_interval(cmq_jwks_refresher_t *r) {
+    if (!r) return 0;
+    return atomic_load_explicit(&r->interval_sec, memory_order_acquire);
+}
+
+int cmq_jwks_refresh_reload(cmq_jwks_refresher_t *r, int *live_sec,
+                            int fresh_sec) {
+    if (!live_sec) return -1;
+    if (fresh_sec < 0 || fresh_sec > CMQ_JWKS_REFRESH_MAX)
+        return -1;
+    if (fresh_sec != 0 && fresh_sec < CMQ_JWKS_REFRESH_MIN)
+        return -1;
+    if (fresh_sec == 0)
+        return 0;
+    if (r)
+        atomic_store_explicit(&r->interval_sec, (unsigned)fresh_sec,
+                              memory_order_release);
+    *live_sec = fresh_sec;
+    return 0;
 }

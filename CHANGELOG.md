@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.131 - 2026-09-06
+
+### Added
+- **Reload `jwks_refresh_sec`** — `cmq_server_reload`
+  applies 5–86400 to a live JWKS sidecar interval.
+  0 / omitted keeps the current value. `jwks_url` fetch
+  stays create-time.
+
+### Tests
+- `tests/test_jrf.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.131.enumeration.md`, `v0.5.131.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v05131_{1,2}.txt`.
+
+### Test count
+- 515 tests (was 511 in v0.5.130; +4).
+
 ## 0.5.130 - 2026-09-06
 
 ### Added

@@ -8959,6 +8959,12 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (cmq_jwks_refresh_reload((cmq_jwks_refresher_t *)server->jwks_refresh,
+                                &server->config.jwks_refresh_sec,
+                                fresh.jwks_refresh_sec) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_reload_apply_dynamic(server->log, &server->config.log_level,
                                  &server->acl_h, &fresh) != 0) {
         cmq_config_free(&fresh);

@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.130)
+# Remaining unimplemented work (HEAD after v0.5.131)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -92,6 +92,7 @@ Required next cuts: none.
 | v0.5.128 | omitted log_to_stdout defaults to 1 |
 | v0.5.129 | audit file from persist_dir |
 | v0.5.130 | reload $JS partitions / rotate |
+| v0.5.131 | reload jwks_refresh_sec |
 
 ## Deferred — detailed designs
 
@@ -204,6 +205,7 @@ are live (v0.5.88).
 | omitted log_to_stdout defaults to 1 | shipped v0.5.128 | — |
 | audit file from persist_dir | shipped v0.5.129 | — |
 | reload $JS partitions / rotate | shipped v0.5.130 | — |
+| reload jwks_refresh_sec | shipped v0.5.131 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -222,7 +224,11 @@ are live (v0.5.88).
   Log sink reload shipped v0.5.127. Omitted
   `log_to_stdout` defaults to 1 (v0.5.128). Audit file
   from `persist_dir` shipped v0.5.129. `$JS` partitions /
-  rotate reload shipped v0.5.130.
+  rotate reload shipped v0.5.130. `jwks_refresh_sec`
+  interval reload shipped v0.5.131 (`jwks_url` fetch
+  stays create-time). Create-time only: MQTT addr/port
+  reconnect, `jwks_url` sidecar, OTLP endpoint,
+  `persist_dir` remount, `h2_port` rebind.
 
 ## TDD rule for every increment
 
