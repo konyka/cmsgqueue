@@ -186,6 +186,36 @@ static int parse_mqtt_bridge_map(const char *value, cmq_config_t *config) {
     return 0;
 }
 
+static int cfg_set_str_empty(const char **dst, const char *value) {
+    if (!value[0]) {
+        cfg_free_owned(*dst);
+        *dst = NULL;
+        return 0;
+    }
+    return cfg_set_str(dst, value);
+}
+
+static int parse_listener_key(const char *key, const char *value,
+                              cmq_config_t *config) {
+    if (strcmp(key, "listener_count") == 0)
+        return parse_int_range(value, 0, 4, &config->listener_count);
+    if (strncmp(key, "listener", 8) != 0 || key[8] < '1' || key[8] > '3' ||
+        key[9] != '_')
+        return 1;
+    int idx = key[8] - '0';
+    const char *rest = key + 9;
+    if (strcmp(rest, "_tls_cert") == 0)
+        return cfg_set_str_empty(&config->listeners[idx].tls_cert, value);
+    if (strcmp(rest, "_tls_key") == 0)
+        return cfg_set_str_empty(&config->listeners[idx].tls_key, value);
+    if (strcmp(rest, "_tls_ca") == 0)
+        return cfg_set_str_empty(&config->listeners[idx].tls_ca, value);
+    if (strcmp(rest, "_tls_verify_peer") == 0)
+        return parse_int_range(value, 0, 1,
+                               &config->listeners[idx].tls_verify_peer);
+    return -1;
+}
+
 static int parse_int_range(const char *value, int min, int max, int *out) {
     if (!value || !out || min > max) return -1;
     char *end = NULL;
@@ -370,6 +400,9 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         config->routes[config->route_count].addr = addr;
         config->routes[config->route_count].port = port;
         config->route_count++;
+    } else {
+        int lr = parse_listener_key(key, value, config);
+        if (lr < 0) return -1;
     }
     return 0;
 }
@@ -401,6 +434,15 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->blocklist_file);
     cfg_free_owned(config->persist_dir);
     cfg_free_owned(config->mqtt_bridge_addr);
+    for (int i = 0; i < 4; i++) {
+        cfg_free_owned(config->listeners[i].tls_cert);
+        cfg_free_owned(config->listeners[i].tls_key);
+        cfg_free_owned(config->listeners[i].tls_ca);
+        config->listeners[i].tls_cert = NULL;
+        config->listeners[i].tls_key = NULL;
+        config->listeners[i].tls_ca = NULL;
+        config->listeners[i].tls_verify_peer = 0;
+    }
     for (int i = 0; i < config->mqtt_bridge_map_count && i < 8; i++) {
         cfg_free_owned(config->mqtt_bridge_maps[i].cmq_subject);
         cfg_free_owned(config->mqtt_bridge_maps[i].mqtt_topic);
@@ -521,6 +563,13 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->mqtt_bridge_map_count < 0 ||
         config->mqtt_bridge_map_count > 8)
         return CMQ_ERR_INVALID_ARG;
+    if (config->listener_count < 0 || config->listener_count > 4)
+        return CMQ_ERR_INVALID_ARG;
+    for (int i = 0; i < 4; i++) {
+        if (config->listeners[i].tls_verify_peer < 0 ||
+            config->listeners[i].tls_verify_peer > 1)
+            return CMQ_ERR_INVALID_ARG;
+    }
     if (config->max_payload_size < 0) return CMQ_ERR_INVALID_ARG;
     /* Must fit CMQ_WRITE_BUF_LIMIT after framing — else deliver force-closes. */
     if (config->max_payload_size > CMQ_MAX_PAYLOAD_LIMIT)

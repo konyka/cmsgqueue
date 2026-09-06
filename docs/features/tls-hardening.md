@@ -36,6 +36,15 @@ The TLS backend in v0.3.0 (`src/enterprise/cmq_tls.c`) had a single SSL_CTX per 
 - 46/46 tests pass.
 - Existing `test_enterprise` tls tests continue to pass.
 
+## Config file (v0.5.114)
+
+`listener_count` (0–4; 0/1 = single listener) and
+`listener{1,2,3}_tls_cert`, `_tls_key`, `_tls_ca`,
+`_tls_verify_peer` load into `cfg.listeners[1..3]`. Empty
+path disables that string. Slot 0 remains `tls_cert` /
+`tls_key` / `tls_ca` / `tls_verify_peer`. Create `strdup`s
+every listener string so destroy owns them.
+
 ## Limitations
 
 - mTLS verify chain (issuer validation, CRL, OCSP) is the OpenSSL default; custom CRL paths are out of scope.

@@ -119,7 +119,8 @@ typedef struct cmq_config {
     int tls_verify_peer;     /* P1: 1 = require + verify client certs. */
     /* P2 (v0.5.2): per-listener config slots. Slot 0 mirrors the
      * legacy tls_cert/tls_key/tls_ca fields above for back-compat.
-     * Slots 1..3 are reserved for future multi-listener support. */
+     * Slots 1..3: listener{1,2,3}_tls_{cert,key,ca,verify_peer}
+     * and listener_count (v0.5.114). */
     struct cmq_listener {
         const char *tls_cert;
         const char *tls_key;

@@ -7828,6 +7828,11 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         srv->config.mqtt_bridge_maps[i].mqtt_topic = NULL;
         srv->config.mqtt_bridge_maps[i].qos = 0;
     }
+    for (int i = 0; i < 4; i++) {
+        srv->config.listeners[i].tls_cert = NULL;
+        srv->config.listeners[i].tls_key = NULL;
+        srv->config.listeners[i].tls_ca = NULL;
+    }
     srv->config.route_count = 0;
     for (int i = 0; i < 8; i++) {
         srv->config.routes[i].addr = NULL;
@@ -7883,6 +7888,11 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             src.mqtt_bridge_maps[i].mqtt_topic);
         srv->config.mqtt_bridge_maps[i].qos = src.mqtt_bridge_maps[i].qos;
         srv->config.mqtt_bridge_map_count++;
+    }
+    for (int i = 0; i < 4; i++) {
+        OWN(srv->config.listeners[i].tls_cert, src.listeners[i].tls_cert);
+        OWN(srv->config.listeners[i].tls_key, src.listeners[i].tls_key);
+        OWN(srv->config.listeners[i].tls_ca, src.listeners[i].tls_ca);
     }
 #undef OWN
     /* Fail closed before copy — truncating/skipping would hide invalid

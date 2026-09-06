@@ -1,0 +1,3 @@
+v0.5.114 bench 2:
+- Empty listener{1,2,3}_tls_* is parse-time NULL; no empty-string heap.
+- listener_count 5 and verify_peer 2 fail closed at load.

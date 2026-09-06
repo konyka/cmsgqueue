@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.113)
+# Remaining unimplemented work (HEAD after v0.5.114)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -75,6 +75,7 @@ Required next cuts: none.
 | v0.5.111 | F6 MQTT bridge config-file keys |
 | v0.5.112 | F6 MQTT bridge outbound PUBLISH |
 | v0.5.113 | config string ownership (tls_ca / ACL / blocklist) |
+| v0.5.114 | listener TLS config keys |
 
 ## Deferred — detailed designs
 
@@ -170,11 +171,14 @@ are live (v0.5.88).
 | MQTT bridge config keys | shipped v0.5.111 | — |
 | MQTT bridge outbound PUBLISH | shipped v0.5.112 | — |
 | config string ownership | shipped v0.5.113 | — |
+| listener TLS config keys | shipped v0.5.114 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
 
-None.
+- Extra listeners still bind `127.0.0.1:port+li` (test-port
+  guards). No per-listener host/port keys. Slot 0 TLS stays
+  the legacy `tls_*` keys. `config_file` is unused meta.
 
 ## TDD rule for every increment
 

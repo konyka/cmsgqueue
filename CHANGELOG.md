@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.114 - 2026-09-06
+
+### Added
+- **Listener TLS config keys** — `listener_count` (0–4)
+  and `listener{1,2,3}_tls_cert|key|ca|verify_peer` in
+  `cmq.conf`. Empty cert/key/ca means disabled. Create
+  `strdup`s all `listeners[0..3]` strings so destroy owns
+  them. Slot 0 stays the legacy `tls_*` keys.
+
+### Tests
+- `tests/test_lstn.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.114.enumeration.md`, `v0.5.114.plan.md`.
+- `docs/features/tls-hardening.md`.
+- `docs/benchmarks/v05114_{1,2}.txt`.
+
+### Test count
+- 447 tests (was 443 in v0.5.113; +4).
+
 ## 0.5.113 - 2026-09-06
 
 ### Added
