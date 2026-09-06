@@ -1,0 +1,3 @@
+v0.5.68 bench 1:
+- No persist_dir: $OBJ is a normal subject (no store).
+- Non-$ subjects still one byte compare.

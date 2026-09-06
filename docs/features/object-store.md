@@ -1,4 +1,4 @@
-# Object store (v0.5.59, D4 phase 3)
+# Object store (v0.5.59–68, D4 phases 3 and 5)
 
 `cmq_obj` stores one file per name under a directory. Put is
 tmp + fsync + rename. Get is a single read. Delete unlinks.
@@ -12,12 +12,19 @@ tmp + fsync + rename. Get is a single read. Delete unlinks.
 Missing names are a miss. A failed put leaves the previous
 file.
 
-Library API only — not wired into the server process.
+## PUBLISH path (v0.5.68)
+
+When `persist_dir` is set, the server opens `{persist_dir}/obj`
+and applies `$OBJ.<name>` on PUBLISH: non-empty payload puts,
+empty payload deletes. Fanout still runs. Without
+`persist_dir`, `$OBJ.` is a normal subject. REQUEST-get stays
+deferred.
 
 ## Tests
 
-`tests/test_obj.c`
+`tests/test_obj.c`, `tests/test_objp.c`
 
 ## See also
 
 - `docs/reviews/v0.5.59.enumeration.md`
+- `docs/reviews/v0.5.68.enumeration.md`

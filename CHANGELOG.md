@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.68 - 2026-09-06
+
+### Added
+- **Object-store PUBLISH path (D4 phase 5)** — `$OBJ.<name>`
+  put/del when `persist_dir` is set. Fanout unchanged.
+  REQUEST-get deferred.
+
+### Tests
+- `tests/test_objp.c` — parse, put/get/del, isolate, reject
+  (+4).
+
+### Documentation
+- `docs/reviews/v0.5.68.enumeration.md`, `v0.5.68.plan.md`.
+- `docs/features/object-store.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0568_{1,2}.txt`.
+
+### Test count
+- 263 tests (was 259 in v0.5.67; +4).
+
 ## 0.5.67 - 2026-09-06
 
 ### Added

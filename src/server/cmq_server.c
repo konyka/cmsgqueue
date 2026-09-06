@@ -23,6 +23,8 @@
 #include "cmq_jwt.h"
 #include "cmq_otlp.h"
 #include "cmq_kvb.h"
+#include "cmq_obj.h"
+#include <sys/stat.h>
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -3236,14 +3238,25 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "subject map failed");
         return;
     }
-    /* v0.5.67: $KV.<bucket>.<key> last-value. One '$' check. */
-    if (srv->kvb && subject[0] == '$') {
-        int krc = cmq_kvb_publish(srv->kvb, subject, msg_payload, msg_len);
-        if (krc < 0) {
-            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
-                                      CMQ_ATOMIC_RELAXED);
-            cmq_send_error(c, "kv");
-            return;
+    /* v0.5.67–68: $KV / $OBJ. One '$' check. */
+    if (subject[0] == '$') {
+        if (srv->kvb) {
+            int krc = cmq_kvb_publish(srv->kvb, subject, msg_payload, msg_len);
+            if (krc < 0) {
+                cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_send_error(c, "kv");
+                return;
+            }
+        }
+        if (srv->obj) {
+            int orc = cmq_obj_publish(srv->obj, subject, msg_payload, msg_len);
+            if (orc < 0) {
+                cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_send_error(c, "obj");
+                return;
+            }
         }
     }
     /* v0.5.52: hold after rewrite so ACL/quota/map rejects skip the budget. */
@@ -7667,6 +7680,14 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->kvb = cmq_kvb_create();
     if (srv->kvb && srv->config.persist_dir && srv->config.persist_dir[0])
         (void)cmq_kvb_set_persist(srv->kvb, srv->config.persist_dir);
+    if (srv->config.persist_dir && srv->config.persist_dir[0]) {
+        char odir[600];
+        int n = snprintf(odir, sizeof(odir), "%s/obj", srv->config.persist_dir);
+        if (n > 0 && (size_t)n < sizeof(odir)) {
+            (void)mkdir(odir, 0755);
+            srv->obj = cmq_obj_create(odir);
+        }
+    }
     if (src.jwks_json && src.jwks_json[0]) {
         cmq_jwks_t *j = calloc(1, sizeof(*j));
         if (j && cmq_jwks_parse(src.jwks_json, j) == 0)
@@ -8488,6 +8509,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->kvb) {
         cmq_kvb_destroy(srv->kvb);
         srv->kvb = NULL;
+    }
+    if (srv->obj) {
+        cmq_obj_destroy(srv->obj);
+        srv->obj = NULL;
     }
     if (srv->otel) {
         cmq_otel_destroy(srv->otel);

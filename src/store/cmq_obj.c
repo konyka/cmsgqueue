@@ -131,6 +131,38 @@ int cmq_obj_get(cmq_obj_t *obj, const char *name, uint8_t *out, size_t out_sz,
     return rc;
 }
 
+int cmq_obj_parse(const char *subject, char *name, size_t ncap) {
+    if (!subject) return -1;
+    if (subject[0] != '$') return -1;
+    if (strncmp(subject, CMQ_OBJ_PREFIX, 5) != 0) return -1;
+    const char *rest = subject + 5;
+    if (!obj_name_safe(rest)) return -2;
+    if (name && ncap) {
+        size_t n = strlen(rest);
+        if (n >= ncap) return -2;
+        memcpy(name, rest, n + 1);
+    }
+    return 0;
+}
+
+int cmq_obj_publish(cmq_obj_t *obj, const char *subject,
+                    const uint8_t *val, size_t len) {
+    if (!obj) return -1;
+    char name[CMQ_OBJ_NAME_MAX];
+    int pr = cmq_obj_parse(subject, name, sizeof(name));
+    if (pr == -1) return 0;
+    if (pr != 0) return -1;
+    if (len == 0) {
+        (void)cmq_obj_del(obj, name);
+        return 1;
+    }
+    int p = cmq_obj_put(obj, name, val, len);
+    if (p == 0) return 1;
+    if (p == -2) return -2;
+    if (p == -3) return -3;
+    return -1;
+}
+
 int cmq_obj_del(cmq_obj_t *obj, const char *name) {
     if (!obj || !obj_name_safe(name)) return -1;
     char path[640];

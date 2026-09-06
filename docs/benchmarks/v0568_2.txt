@@ -1,0 +1,3 @@
+v0.5.68 bench 2:
+- $OBJ put is tmp+fsync+rename on the sidecar of persist_dir.
+- Fanout still runs after the store write.
