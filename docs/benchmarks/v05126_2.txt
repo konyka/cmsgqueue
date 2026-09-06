@@ -1,0 +1,3 @@
+v0.5.126 bench 2:
+- Omitted/n=0: no lock work beyond the early return.
+- Reject: table unchanged; previous topic still matches.

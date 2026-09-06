@@ -499,6 +499,29 @@ int cmq_mqtt_find_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic,
     return rc;
 }
 
+int cmq_mqtt_reload_maps(cmq_mqtt_bridge_t *br,
+                         const cmq_mqtt_mapping_t *maps, int n) {
+    if (n == 0) return 0;
+    if (!br || !maps || n < 0 || n > 8) return -1;
+    for (int i = 0; i < n; i++) {
+        if (!maps[i].cmq_subject[0] || !maps[i].mqtt_topic[0])
+            return -1;
+        if (maps[i].qos < 0 || maps[i].qos > 2)
+            return -1;
+    }
+    if (mqtt_begin_op(br) != 0) return -1;
+    cmq_mutex_lock(&br->lock);
+    br->mapping_count = 0;
+    for (int i = 0; i < n; i++) {
+        br->mappings[i] = maps[i];
+        br->mappings[i].active = 1;
+        br->mapping_count++;
+    }
+    cmq_mutex_unlock(&br->lock);
+    mqtt_end_op(br);
+    return 0;
+}
+
 int cmq_mqtt_bridge_publish(cmq_mqtt_bridge_t *br, const char *subject,
                             const uint8_t *payload, size_t len) {
     if (!br || !subject || !subject[0]) return -1;

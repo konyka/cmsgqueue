@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.125)
+# Remaining unimplemented work (HEAD after v0.5.126)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -87,6 +87,7 @@ Required next cuts: none.
 | v0.5.123 | reload payload / sub / client caps |
 | v0.5.124 | reload F14 quota / N1 subject RL |
 | v0.5.125 | reload account_max_* defaults |
+| v0.5.126 | reload MQTT bridge maps |
 
 ## Deferred — detailed designs
 
@@ -194,6 +195,7 @@ are live (v0.5.88).
 | reload payload / sub / client caps | shipped v0.5.123 | — |
 | reload F14 quota / N1 subject RL | shipped v0.5.124 | — |
 | reload account_max_* defaults | shipped v0.5.125 | — |
+| reload MQTT bridge maps | shipped v0.5.126 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -207,7 +209,8 @@ are live (v0.5.88).
   v0.5.121. Live rate / timeout scalars shipped v0.5.122.
   Payload / sub / client caps shipped v0.5.123. F14
   quota / N1 subject RL reload shipped v0.5.124.
-  account_max_* defaults shipped v0.5.125.
+  account_max_* defaults shipped v0.5.125. MQTT bridge
+  map reload shipped v0.5.126 (addr/port stay create-time).
 
 ## TDD rule for every increment
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.126 - 2026-09-06
+
+### Added
+- **Reload MQTT bridge maps** — `cmq_server_reload`
+  replaces a non-empty `mqtt_bridge_map` table on the live
+  bridge. Omitted maps keep the current table. Addr/port
+  stay create-time.
+
+### Tests
+- `tests/test_mqm.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.126.enumeration.md`, `v0.5.126.plan.md`.
+- `docs/features/mqtt-bridge.md`.
+- `docs/benchmarks/v05126_{1,2}.txt`.
+
+### Test count
+- 495 tests (was 491 in v0.5.125; +4).
+
 ## 0.5.125 - 2026-09-06
 
 ### Added

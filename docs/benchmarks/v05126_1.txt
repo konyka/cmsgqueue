@@ -1,0 +1,3 @@
+v0.5.126 bench 1:
+- Outbound publish still scans the same mapping table.
+- Reload: one mutex + ≤8 copies. No reconnect.

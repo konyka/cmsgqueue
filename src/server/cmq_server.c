@@ -8908,6 +8908,28 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
     if (fresh.account_max_bytes_live > 0)
         server->config.account_max_bytes_live =
             fresh.account_max_bytes_live;
+    if (server->mqtt_bridge) {
+        cmq_mqtt_mapping_t maps[8];
+        memset(maps, 0, sizeof(maps));
+        int mn = fresh.mqtt_bridge_map_count;
+        if (mn < 0 || mn > 8) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+        for (int i = 0; i < mn; i++) {
+            const char *s = fresh.mqtt_bridge_maps[i].cmq_subject;
+            const char *t = fresh.mqtt_bridge_maps[i].mqtt_topic;
+            if (s) snprintf(maps[i].cmq_subject, sizeof(maps[i].cmq_subject),
+                            "%s", s);
+            if (t) snprintf(maps[i].mqtt_topic, sizeof(maps[i].mqtt_topic),
+                            "%s", t);
+            maps[i].qos = fresh.mqtt_bridge_maps[i].qos;
+        }
+        if (cmq_mqtt_reload_maps(server->mqtt_bridge, maps, mn) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+    }
     if (cmq_reload_apply_tls(server->tls_config_slots, CMQ_MAX_LISTENERS,
                              &fresh) != 0) {
         cmq_config_free(&fresh);

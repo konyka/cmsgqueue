@@ -28,6 +28,9 @@ Subject mapping is `mqtt_bridge_map=subject,topic[,qos]`
 A matching CMQ PUBLISH is written as MQTT PUBLISH
 (`cmq_mqtt_bridge_publish`). Route ingress, WAL replay, and
 `mqtt_bridge*` accounts are not re-bridged.
+SIGHUP replaces a non-empty map table on the live bridge
+(v0.5.126). Omitted maps keep the current table. Addr/port
+stay create-time.
 
 ## Files touched
 
