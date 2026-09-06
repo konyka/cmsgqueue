@@ -5731,6 +5731,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         break;
     case CMQ_OP_DISCONNECT:
         /* Unmark route so broadcast/live_count skip during graceful flush. */
+        if (srv->otel)
+            (void)cmq_otel_on_disconnect(srv->otel, c->trace_id, 1);
         client_force_closing(c);
         break;
     case CMQ_OP_STATS:

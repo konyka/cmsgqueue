@@ -1,4 +1,4 @@
-# OpenTelemetry (v0.5.61–64, 0.5.78, 0.5.84, 0.5.89, 0.5.92, 0.5.100–101, D1)
+# OpenTelemetry (v0.5.61–64, 0.5.78, 0.5.84, 0.5.89, 0.5.92, 0.5.100–102, D1)
 
 `cmq_otel` queues spans on a 256-slot ring. A sidecar thread
 drains them to an export hook. Offer never blocks.
@@ -6,7 +6,8 @@ drains them to an export hook. Offer never blocks.
 ## Span
 
 Trace id (16 bytes), kind (`PUBLISH` / `CONSUME` / `CONNECT` /
-`REQUEST` / `RESPONSE`), timestamp. No subject, no payload.
+`REQUEST` / `RESPONSE` / `DISCONNECT`), timestamp. No subject,
+no payload.
 
 `handle_publish` offers `PUBLISH` on the ingress path. After a
 successful local fanout it offers one `CONSUME` with the same
@@ -18,7 +19,9 @@ A successful local REQUEST answer (store reply or fanout
 responders and route-only forward skip it. A successful
 local RESPONSE deliver offers one `RESPONSE`
 (`cmq_otel_on_response`). Failed deliver and route-only
-forward skip it.
+forward skip it. A graceful inbound DISCONNECT offers one
+`DISCONNECT` (`cmq_otel_on_disconnect`) before
+`client_force_closing`.
 
 ## Overflow
 
@@ -46,7 +49,7 @@ No endpoint: the export hook stays NULL.
 
 `tests/test_otel.c`, `tests/test_otlp.c`, `tests/test_otlps.c`,
 `tests/test_otlpg.c`, `tests/test_otc.c`, `tests/test_otn.c`,
-`tests/test_otr.c`, `tests/test_ots.c`
+`tests/test_otr.c`, `tests/test_ots.c`, `tests/test_otd.c`
 
 ## See also
 
@@ -58,4 +61,5 @@ No endpoint: the export hook stays NULL.
 - `docs/reviews/v0.5.92.enumeration.md`
 - `docs/reviews/v0.5.100.enumeration.md`
 - `docs/reviews/v0.5.101.enumeration.md`
+- `docs/reviews/v0.5.102.enumeration.md`
 - `docs/features/tracing.md`

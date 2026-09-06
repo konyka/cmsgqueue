@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.102 - 2026-09-06
+
+### Added
+- **Disconnect spans (D1 follow-up)** — a graceful inbound
+  DISCONNECT offers one `KIND_DISCONNECT` with the accept
+  trace before `client_force_closing`.
+
+### Tests
+- `tests/test_otd.c` — ok, skipped, isolated, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.102.enumeration.md`, `v0.5.102.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v05102_{1,2}.txt`.
+
+### Test count
+- 399 tests (was 395 in v0.5.101; +4).
+
 ## 0.5.101 - 2026-09-06
 
 ### Added

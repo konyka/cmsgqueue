@@ -74,7 +74,7 @@ void cmq_otel_destroy(cmq_otel_t *o) {
 
 int cmq_otel_offer(cmq_otel_t *o, const uint8_t trace[16], uint8_t kind) {
     if (!o || !trace || kind < CMQ_OTEL_KIND_PUBLISH ||
-        kind > CMQ_OTEL_KIND_RESPONSE)
+        kind > CMQ_OTEL_KIND_DISCONNECT)
         return -1;
     for (;;) {
         uint64_t w = atomic_load_explicit(&o->wpos, memory_order_relaxed);
@@ -117,6 +117,12 @@ int cmq_otel_on_response(cmq_otel_t *o, const uint8_t trace[16], int delivered) 
     if (!o || !trace) return -1;
     if (!delivered) return 0;
     return cmq_otel_offer(o, trace, CMQ_OTEL_KIND_RESPONSE);
+}
+
+int cmq_otel_on_disconnect(cmq_otel_t *o, const uint8_t trace[16], int ok) {
+    if (!o || !trace) return -1;
+    if (!ok) return 0;
+    return cmq_otel_offer(o, trace, CMQ_OTEL_KIND_DISCONNECT);
 }
 
 int cmq_otel_poll(cmq_otel_t *o, cmq_otel_span_t *out) {
