@@ -15,7 +15,11 @@ A new `cmq_quota` module implements per-account token-bucket caps. Configuration
   ceilings are `account_max_*` on the account object (v0.5.48);
   see `docs/features/accounts.md`.
 
-The check is on the `credit_msgs_in` path (F5) and at CONNECT time. On exceed, the publish is rejected with `cmq_send_error("quota exceeded")`. The check uses a fixed-window (1 second) with reset on window expiry.
+Publish checks run on the `handle_publish` / BATCH path. CONNECT
+consults `cmq_quota_check_connect` **before** concurrent credit
+(v0.5.50). A reject is CONNACK 1 plus `rate_limit_reject` /
+`connect quota` in the audit log. Cluster route-adopt is not
+counted. The window is fixed 1 second.
 
 Per-account state is in a small linked list (max 4096 accounts). On collision, a new account is admitted (same trade-off as the F10 rate limit). Production deployments with >4096 accounts should use a per-account hash or upgrade to the full implementation.
 
@@ -33,6 +37,9 @@ Per-account state is in a small linked list (max 4096 accounts). On collision, a
 - `quota.byte_limit_enforced` — 700-byte cap, 4th 200-byte msg rejected.
 - `quota.accounts_isolated` — user1's quota doesn't affect user2.
 - `quota.connect_limit` — 2 connects/sec per account.
+- `quota.connect_null_admits` — NULL quota admits (hot-path skip).
+- `quota.connect_isolated` — per-account windows.
+- `quota.connect_disabled_when_only_msgs` — `max_connects=0` is off.
 
 ## Verification gates
 

@@ -4869,6 +4869,18 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             break;
         }
         c->account_epoch = aep;
+        /* F14: connect-rate before concurrent credit so a reject
+           does not consume account_max_connections. */
+        if (srv->quota &&
+            cmq_quota_check_connect(srv->quota, c->account_name) == 0) {
+            cmq_account_release(srv->accounts, acc);
+            c->account_epoch = 0;
+            cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, c->trace_hex,
+                          c->account_name, "connect quota");
+            cmq_send_connack(c, 1);
+            client_set_state(c, CMQ_CLIENT_CLOSING);
+            break;
+        }
         /* get→inc→CONNECTED TOCTOU: refuse if credit cannot stick or epoch died. */
         if (cmq_account_inc_connections(acc, aep) != 0) {
             cmq_account_release(srv->accounts, acc);

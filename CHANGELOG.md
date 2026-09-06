@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.50 - 2026-09-06
+
+### Added
+- **F14 connect-rate on CONNECT** — `max_connections_per_account`
+  is enforced as connects/sec. Check runs after account bind and
+  before `inc_connections`. `srv->quota == NULL` is one pointer
+  compare. Reject is CONNACK 1 + audit `connect quota`. Cluster
+  route-adopt is not counted.
+
+### Tests
+- `tests/test_quota.c` — NULL admit, isolate, msgs-only leaves
+  connect unlimited (+3).
+
+### Documentation
+- `docs/reviews/remaining-unimplemented.md` — remaining catalog
+  with designs (D1–D6, audit, MQTT QoS, ALPN).
+- `docs/reviews/v0.5.50.enumeration.md`, `v0.5.50.plan.md`.
+- `docs/features/quota.md`.
+- `docs/benchmarks/v0550_{1,2}.txt`.
+
+### Test count
+- 168 tests (was 165 in v0.5.49; +3).
+
 ## 0.5.49 - 2026-09-06
 
 ### Added
