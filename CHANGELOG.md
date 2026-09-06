@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.71 - 2026-09-06
+
+### Added
+- **HPACK Huffman (D2 phase 3)** — RFC 7541 Huffman
+  encode/decode; `cmq_hpack_str_decode` accepts H=1.
+  Literal H=0 encode unchanged. Dynamic table and h2
+  listener stay deferred.
+
+### Tests
+- `tests/test_huff.c` — rfc www.example.com, roundtrip,
+  H=1 string, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.71.enumeration.md`, `v0.5.71.plan.md`.
+- `docs/features/hpack.md`, `http2.md`.
+- `docs/benchmarks/v0571_{1,2}.txt`.
+
+### Test count
+- 275 tests (was 271 in v0.5.70; +4).
+
 ## 0.5.70 - 2026-09-06
 
 ### Added

@@ -1,8 +1,8 @@
-# Remaining unimplemented work (HEAD after v0.5.70)
+# Remaining unimplemented work (HEAD after v0.5.71)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
-cuts. Next cuts: D2 Huffman / dynamic table / listener,
+cuts. Next cuts: D2 dynamic table / listener,
 D3 RSA/EC / base32 / ES256, D5 multi-node 2PC, or
 leaf/gateway e2e.
 
@@ -34,6 +34,7 @@ leaf/gateway e2e.
 | v0.5.68 | D4 phase 5: object-store PUBLISH path |
 | v0.5.69 | D2 phase 2: HTTP/2 frame state machine |
 | v0.5.70 | D4 phase 6: KV/object REQUEST-get |
+| v0.5.71 | D2 phase 3: HPACK Huffman |
 
 ## Deferred — detailed designs
 
@@ -43,13 +44,12 @@ Span ring, sidecar, and OTLP/HTTP JSON POST are live.
 **Remaining:** OTLP/gRPC or HTTPS collectors. Consume
 spans are queued only when a caller offers `KIND_CONSUME`.
 
-### D2 HTTP/2 listener — phases 1–2 shipped v0.5.66–69
+### D2 HTTP/2 listener — phases 1–3 shipped v0.5.66–71
 
-HPACK static codec and the preface/SETTINGS/32-stream
-machine are live. **Remaining:** Huffman, 4 KiB dynamic
-table, and a dedicated h2 listener. Do not advertise `h2`
-until that exists. Server still never calls
-`cmq_tls_set_alpn`.
+HPACK static codec, Huffman, and the preface/SETTINGS/32-stream
+machine are live. **Remaining:** 4 KiB dynamic table and a
+dedicated h2 listener. Do not advertise `h2` until that
+exists. Server still never calls `cmq_tls_set_alpn`.
 
 ### D3 JWT / NKEY / JWKS — phases 1–3 shipped v0.5.62–65
 

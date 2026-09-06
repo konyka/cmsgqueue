@@ -20,6 +20,10 @@ int cmq_hpack_int_decode(const uint8_t *in, size_t in_len, unsigned nbits,
 int cmq_hpack_str_encode(const char *s, uint8_t *out, size_t cap);
 int cmq_hpack_str_decode(const uint8_t *in, size_t in_len, char *out,
                          size_t out_cap, size_t *consumed);
+int cmq_hpack_huff_encode(const uint8_t *in, size_t in_len, uint8_t *out,
+                          size_t cap);
+int cmq_hpack_huff_decode(const uint8_t *in, size_t in_len, char *out,
+                          size_t cap);
 
 int cmq_hpack_static_get(unsigned idx, const char **name,
                          const char **value);

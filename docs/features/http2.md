@@ -1,6 +1,7 @@
-# HTTP/2 (v0.5.66–69, D2 phases 1–2)
+# HTTP/2 (v0.5.66–71, D2 phases 1–3)
 
-HPACK static codec plus an HTTP/2 connection state machine.
+HPACK static + Huffman codec plus an HTTP/2 connection
+state machine.
 
 ## Frame layer (v0.5.69)
 
@@ -10,15 +11,16 @@ HPACK static codec plus an HTTP/2 connection state machine.
 - Max 32 concurrent streams. Client stream ids must be odd.
 - A 33rd stream or a protocol error moves the conn to GOAWAY.
 
-Huffman, the 4 KiB dynamic table, and a listener stay
-deferred. The server still does not call `cmq_tls_set_alpn`
-and does not advertise `h2`.
+Huffman is v0.5.71. The 4 KiB dynamic table and a listener
+stay deferred. The server still does not call
+`cmq_tls_set_alpn` and does not advertise `h2`.
 
 ## Tests
 
-`tests/test_hpack.c`, `tests/test_h2.c`
+`tests/test_hpack.c`, `tests/test_huff.c`, `tests/test_h2.c`
 
 ## See also
 
 - `docs/reviews/v0.5.66.enumeration.md`
 - `docs/reviews/v0.5.69.enumeration.md`
+- `docs/reviews/v0.5.71.enumeration.md`
