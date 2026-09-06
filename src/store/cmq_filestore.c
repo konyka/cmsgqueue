@@ -49,6 +49,8 @@ struct cmq_filestore {
     uint64_t last_sync_ms;
     /* P1 v0.5.5: max payload size for async enqueue. */
     size_t max_payload_bytes;
+    /* v0.5.45: 0 = no automatic rotate. */
+    uint64_t rotate_bytes;
     /* P1: async WAL ring (SPSC + worker thread). The producer enqueues
      * a copy of (data, len); the worker drains and writes. */
     pthread_t async_thread;
@@ -167,6 +169,9 @@ static void fs_unlock_pair(cmq_filestore_t *fs) {
     if (fs->idx_fp) fs_flock(fs->idx_fp, LOCK_UN);
     if (fs->data_fp) fs_flock(fs->data_fp, LOCK_UN);
 }
+
+static int filestore_rotate_archive_locked(cmq_filestore_t *fs);
+static int filestore_compact_impl(cmq_filestore_t *fs, uint64_t retain);
 
 /* Under flock: idx length is the cross-process authority for next_seq.
    may_truncate: only under LOCK_EX — drop a torn trailing partial entry. */
@@ -501,6 +506,223 @@ void cmq_filestore_destroy(cmq_filestore_t *fs) {
     free(fs);
 }
 
+/* Caller holds mutex. On success flock is released and files replaced. */
+static int filestore_rotate_archive_locked(cmq_filestore_t *fs) {
+    if (!fs || !fs->data_fp || !fs->idx_fp) return -1;
+    if (fflush(fs->data_fp) != 0 || fflush(fs->idx_fp) != 0)
+        return -1;
+    (void)fsync(fileno(fs->data_fp));
+    (void)fsync(fileno(fs->idx_fp));
+    fs_unlock_pair(fs);
+    fclose(fs->data_fp);
+    fs->data_fp = NULL;
+    fclose(fs->idx_fp);
+    fs->idx_fp = NULL;
+
+    char d1[616], i1[616];
+    if (snprintf(d1, sizeof(d1), "%s.1", fs->data_path) >= (int)sizeof(d1) ||
+        snprintf(i1, sizeof(i1), "%s.1", fs->idx_path) >= (int)sizeof(i1))
+        goto reopen;
+    unlink(d1);
+    unlink(i1);
+    if (rename(fs->data_path, d1) != 0)
+        goto reopen;
+    if (rename(fs->idx_path, i1) != 0)
+        goto reopen;
+    fs->data_fp = fopen(fs->data_path, "a+b");
+    fs->idx_fp = fopen(fs->idx_path, "a+b");
+    if (!fs->data_fp || !fs->idx_fp)
+        goto reopen;
+    fs->next_seq = 1;
+    fs->data_end_off = 0;
+    fs->idx_end_off = 0;
+    return 0;
+reopen:
+    if (!fs->data_fp)
+        fs->data_fp = fopen(fs->data_path, "a+b");
+    if (!fs->idx_fp)
+        fs->idx_fp = fopen(fs->idx_path, "a+b");
+    return -1;
+}
+
+static int compact_copy_one(cmq_filestore_t *fs, uint64_t old_seq,
+                             uint64_t new_seq, FILE *df, FILE *idf,
+                             uint64_t *off) {
+    if (fs_seek(fs->idx_fp, (old_seq - 1) * 8u) != 0)
+        return -1;
+    uint8_t idxb[8];
+    if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1)
+        return -1;
+    uint64_t data_offset = get_le64(idxb);
+    if (fs_seek(fs->data_fp, data_offset) != 0)
+        return -1;
+    uint8_t hdr[CMQ_FS_HDR_SIZE];
+    if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1)
+        return -1;
+    if (get_le32(hdr + 0) != CMQ_FS_MAGIC ||
+        get_le16(hdr + 4) != (uint16_t)CMQ_FS_VERSION)
+        return -1;
+    uint32_t hlen = get_le32(hdr + 14);
+    uint32_t hcrc = get_le32(hdr + 18);
+    if (hlen == 0 || hlen > (16u * 1024 * 1024))
+        return -1;
+    uint8_t *buf = malloc(hlen);
+    if (!buf)
+        return -1;
+    if (fread(buf, 1, hlen, fs->data_fp) != hlen) {
+        free(buf);
+        return -1;
+    }
+    if (crc32_compute(buf, hlen) != hcrc) {
+        free(buf);
+        return -1;
+    }
+    put_le64(hdr + 6, new_seq);
+    if (fwrite(hdr, sizeof(hdr), 1, df) != 1 ||
+        fwrite(buf, 1, hlen, df) != hlen) {
+        free(buf);
+        return -1;
+    }
+    uint8_t nidx[8];
+    put_le64(nidx, *off);
+    if (fwrite(nidx, sizeof(nidx), 1, idf) != 1) {
+        free(buf);
+        return -1;
+    }
+    *off += (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen;
+    free(buf);
+    return 0;
+}
+
+static int filestore_compact_impl(cmq_filestore_t *fs, uint64_t retain) {
+    if (!fs) return -1;
+    cmq_mutex_lock(&fs->lock);
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    if (fs_lock_pair(fs, LOCK_EX) != 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    if (fs_refresh_next_seq(fs, 1) != 0) {
+        clearerr(fs->idx_fp);
+        clearerr(fs->data_fp);
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    uint64_t last = fs->next_seq > 0 ? fs->next_seq - 1 : 0;
+    if (retain >= last) {
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return 0;
+    }
+    if (retain == 0) {
+        if (fflush(fs->data_fp) != 0 || fflush(fs->idx_fp) != 0) {
+            fs_unlock_pair(fs);
+            cmq_mutex_unlock(&fs->lock);
+            return -1;
+        }
+        if (ftruncate(fileno(fs->data_fp), 0) != 0 ||
+            ftruncate(fileno(fs->idx_fp), 0) != 0) {
+            fs_unlock_pair(fs);
+            cmq_mutex_unlock(&fs->lock);
+            return -1;
+        }
+        (void)fs_seek_end(fs->data_fp);
+        (void)fs_seek_end(fs->idx_fp);
+        fs->next_seq = 1;
+        fs->data_end_off = 0;
+        fs->idx_end_off = 0;
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return 0;
+    }
+
+    char dtmp[616], itmp[616];
+    if (snprintf(dtmp, sizeof(dtmp), "%s.tmp", fs->data_path) >= (int)sizeof(dtmp) ||
+        snprintf(itmp, sizeof(itmp), "%s.tmp", fs->idx_path) >= (int)sizeof(itmp)) {
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    FILE *df = fopen(dtmp, "wb");
+    FILE *idf = fopen(itmp, "wb");
+    if (!df || !idf) {
+        if (df) fclose(df);
+        if (idf) fclose(idf);
+        unlink(dtmp);
+        unlink(itmp);
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    uint64_t keep_from = last - retain + 1;
+    uint64_t off = 0;
+    int ok = 1;
+    for (uint64_t i = 0; i < retain; i++) {
+        if (compact_copy_one(fs, keep_from + i, i + 1, df, idf, &off) != 0) {
+            ok = 0;
+            break;
+        }
+    }
+    if (ok) {
+        ok = (fflush(df) == 0 && fflush(idf) == 0 &&
+              fsync(fileno(df)) == 0 && fsync(fileno(idf)) == 0);
+    }
+    fclose(df);
+    fclose(idf);
+    if (!ok) {
+        unlink(dtmp);
+        unlink(itmp);
+        if (fs->idx_fp) clearerr(fs->idx_fp);
+        if (fs->data_fp) clearerr(fs->data_fp);
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+
+    fs_unlock_pair(fs);
+    fclose(fs->data_fp);
+    fs->data_fp = NULL;
+    fclose(fs->idx_fp);
+    fs->idx_fp = NULL;
+    if (rename(dtmp, fs->data_path) != 0 ||
+        rename(itmp, fs->idx_path) != 0) {
+        unlink(dtmp);
+        unlink(itmp);
+        fs->data_fp = fopen(fs->data_path, "a+b");
+        fs->idx_fp = fopen(fs->idx_path, "a+b");
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    fs->data_fp = fopen(fs->data_path, "a+b");
+    fs->idx_fp = fopen(fs->idx_path, "a+b");
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    fs->next_seq = retain + 1;
+    fs->data_end_off = off;
+    fs->idx_end_off = retain * 8u;
+    cmq_mutex_unlock(&fs->lock);
+    return 0;
+}
+
+int cmq_filestore_compact(cmq_filestore_t *fs, uint64_t retain) {
+    if (!fs) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_compact_impl(fs, retain);
+    fs_end_op(fs);
+    return rc;
+}
+
+void cmq_filestore_set_rotate_bytes(cmq_filestore_t *fs, uint64_t cap) {
+    if (!fs) return;
+    fs->rotate_bytes = cap;
+}
+
 static int filestore_append_impl(cmq_filestore_t *fs, const uint8_t *data, size_t len,
                           uint64_t *out_seq) {
     if (!fs || !data || len == 0 || len > (16u * 1024 * 1024)) return -1;
@@ -631,7 +853,11 @@ static int filestore_append_impl(cmq_filestore_t *fs, const uint8_t *data, size_
     fs->data_end_off += (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)len;
     fs->idx_end_off += 8u;
 
-    fs_unlock_pair(fs);
+    int rotated = 0;
+    if (fs->rotate_bytes && fs->data_end_off >= fs->rotate_bytes)
+        rotated = (filestore_rotate_archive_locked(fs) == 0);
+    if (!rotated)
+        fs_unlock_pair(fs);
     cmq_mutex_unlock(&fs->lock);
     return 0;
 }

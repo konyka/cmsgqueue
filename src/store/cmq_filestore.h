@@ -63,6 +63,14 @@ int cmq_filestore_append_bridge(cmq_filestore_t *fs,
  * enqueue. Default 1 MiB. 0 disables the cap (NOT recommended). */
 void cmq_filestore_set_max_payload_size(cmq_filestore_t *fs, size_t bytes);
 
+/* v0.5.45: keep the newest `retain` records (renumbered 1..retain).
+ * retain=0 empties the live WAL. No-op if retain >= last_seq. */
+int cmq_filestore_compact(cmq_filestore_t *fs, uint64_t retain);
+
+/* v0.5.45: after a sync append, if live .data is >= cap bytes,
+ * archive to prefix.data.1 / .idx.1 and start empty. 0 = off. */
+void cmq_filestore_set_rotate_bytes(cmq_filestore_t *fs, uint64_t cap);
+
 /* P1: enqueue a record for async write. Returns 0 if queued, -1 if
  * queue full / dying / async not enabled. The worker will fwrite +
  * fflush the record; durability follows the fsync policy. */

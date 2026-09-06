@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.45 - 2026-09-06
+
+### Added
+- **Filestore compact / rotate** — `cmq_filestore_compact(retain)`
+  rewrites the newest `retain` records (or truncates when retain
+  is 0). `cmq_filestore_set_rotate_bytes` archives the live pair
+  to `.1` when the data file crosses the cap. Default cap is off
+  (one compare on the append path).
+
+### Tests
+- `tests/test_filestore_compact.c` — keep-tail, empty, reopen,
+  rotate_bytes archive.
+
+### Documentation
+- `docs/reviews/v0.5.45.enumeration.md`, `v0.5.45.plan.md`.
+- `docs/features/persistence.md`.
+- `docs/benchmarks/v0545_{1,2}.txt`.
+
+### Test count
+- 136 tests (was 132 in v0.5.44; +4).
+
 ## 0.5.44 - 2026-09-06
 
 ### Added

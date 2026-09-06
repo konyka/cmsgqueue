@@ -109,6 +109,18 @@ Threats NOT closed:
   `cmq_filestore_sync` but a crash between write() and fsync() may
   leave a torn record. Detected by CRC32 on read.
 
+## Rotation / compact (v0.5.45)
+
+- `cmq_filestore_compact(fs, retain)` keeps the newest `retain`
+  records (renumbered 1..N) or empties the live WAL when
+  `retain == 0`.
+- `cmq_filestore_set_rotate_bytes(cap)` archives the live pair to
+  `prefix.data.1` / `prefix.idx.1` when the data file reaches `cap`
+  and opens empty live files. Default cap is 0 (off). Hot path is
+  one compare.
+
+Kafka-style key compaction is still deferred (D6).
+
 ## Limitations
 
 - Replay is single-threaded; large WALs take O(N) time on restart.
@@ -117,6 +129,7 @@ Threats NOT closed:
   `cmq_filestore_read`.
 - fsync per message (no group-commit batching). Batched fsync
   is a follow-up.
+- Auto-rotate applies to the sync append path.
 
 ## See also
 

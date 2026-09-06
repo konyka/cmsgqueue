@@ -1,0 +1,4 @@
+v0.5.45 compact micro-note:
+- Tail rewrite streams one record at a time (no full-WAL malloc).
+- CRC fail leaves live files; tmp is unlinked.
+- One archived generation (.1) bounds disk at ~2x cap.
