@@ -53,8 +53,12 @@ Mutually exclusive with `jwks_json`.
 `jwks_refresh_sec` (v0.5.82) re-GETs that URL on a sidecar.
 `0` is one GET at create. Config allows 5–86400 seconds.
 v0.5.131: reload applies a non-zero interval to a live
-sidecar. Omitted / 0 keeps the current interval. The URL
-itself stays create-time.
+sidecar. Omitted / 0 keeps the current interval.
+v0.5.137: reload applies a non-empty `jwks_url` to the
+live sidecar (host/path/port/tls). Omitted / empty keeps
+the current URL. A bad URL fails closed. CA is preserved.
+Does not re-GET; the next interval uses the new URL.
+The first GET / sidecar start stays create-time.
 v0.5.134: reload applies a non-empty `jwks_ca` to the live
 sidecar URL. Omitted / empty keeps the current path.
 `..` fails closed. The next refresh uses the new CA.
@@ -86,7 +90,8 @@ Empty or omitted keys keep the current values.
 
 SIGHUP also parses a non-empty `jwks_json` into the live
 JWKS cache (v0.5.120). Bad JSON keeps the previous slot.
-`jwks_url` refresh stays create-time.
+A non-empty `jwks_url` updates the live sidecar (v0.5.137).
+The first GET / sidecar start stays create-time.
 
 ## Performance
 
@@ -100,7 +105,8 @@ never runs on offer/PUBLISH.
 `tests/test_jwt.c`, `tests/test_nkey_auth.c`, `tests/test_jwks.c`,
 `tests/test_es256.c`, `tests/test_nkeyb32.c`, `tests/test_jwksf.c`,
 `tests/test_rs256.c`, `tests/test_jwkss.c`, `tests/test_jwksr.c`,
-`tests/test_jwti.c`, `tests/test_jwts.c`
+`tests/test_jwti.c`, `tests/test_jwts.c`,
+`tests/test_jrf.c`, `tests/test_jca.c`, `tests/test_jru.c`
 
 ## See also
 

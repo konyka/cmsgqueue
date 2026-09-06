@@ -523,3 +523,37 @@ int cmq_jwks_refresh_reload_ca(cmq_jwks_refresher_t *r, const char **live_ca,
     }
     return 0;
 }
+
+int cmq_jwks_refresh_snapshot(cmq_jwks_refresher_t *r, cmq_jwks_url_t *out) {
+    if (!r || !out) return -1;
+    cmq_mutex_lock(&r->lock);
+    *out = r->url;
+    cmq_mutex_unlock(&r->lock);
+    return 0;
+}
+
+int cmq_jwks_refresh_reload_url(cmq_jwks_refresher_t *r, const char **live_url,
+                                const char *fresh_url) {
+    if (!fresh_url || !fresh_url[0])
+        return 0;
+    cmq_jwks_url_t tmp;
+    if (cmq_jwks_parse_url(fresh_url, &tmp) != 0)
+        return -1;
+    char *owned = NULL;
+    if (live_url) {
+        owned = strdup(fresh_url);
+        if (!owned)
+            return -1;
+    }
+    if (r) {
+        cmq_mutex_lock(&r->lock);
+        memcpy(tmp.ca, r->url.ca, sizeof(tmp.ca));
+        r->url = tmp;
+        cmq_mutex_unlock(&r->lock);
+    }
+    if (live_url) {
+        free((void *)*live_url);
+        *live_url = owned;
+    }
+    return 0;
+}

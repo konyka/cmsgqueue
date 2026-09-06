@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.137 - 2026-09-06
+
+### Added
+- **Reload `jwks_url`** — `cmq_server_reload` parses a
+  non-empty URL onto the live JWKS sidecar. Host / path /
+  port / tls update under the snapshot mutex; CA is
+  preserved. Omitted / empty keeps the current URL. A bad
+  URL fails closed. Does not re-GET. The first GET /
+  sidecar start stays create-time.
+
+### Tests
+- `tests/test_jru.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.137.enumeration.md`, `v0.5.137.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v05137_{1,2}.txt`.
+
+### Test count
+- 539 tests (was 535 in v0.5.136; +4).
+
 ## 0.5.136 - 2026-09-06
 
 ### Added

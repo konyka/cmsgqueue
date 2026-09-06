@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.136)
+# Remaining unimplemented work (HEAD after v0.5.137)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -98,6 +98,7 @@ Required next cuts: none.
 | v0.5.134 | reload jwks_ca |
 | v0.5.135 | reload otlp_ca |
 | v0.5.136 | reload MQTT bridge addr/port |
+| v0.5.137 | reload jwks_url |
 
 ## Deferred — detailed designs
 
@@ -216,6 +217,7 @@ are live (v0.5.88).
 | reload jwks_ca | shipped v0.5.134 | — |
 | reload otlp_ca | shipped v0.5.135 | — |
 | reload MQTT bridge addr/port | shipped v0.5.136 | — |
+| reload jwks_url | shipped v0.5.137 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -241,9 +243,10 @@ are live (v0.5.88).
   (v0.5.132). Empty `log_file` / slot-0 TLS store NULL
   (v0.5.133). `jwks_ca` reload shipped v0.5.134.
   `otlp_ca` reload shipped v0.5.135. MQTT addr/port
-  reload shipped v0.5.136. Create-time only: `jwks_url`
-  sidecar, OTLP endpoint, `persist_dir` remount,
-  `h2_port` rebind.
+  reload shipped v0.5.136. `jwks_url` apply on a live
+  sidecar shipped v0.5.137 (first GET / start stays
+  create-time). Create-time only: JWKS sidecar start,
+  OTLP endpoint, `persist_dir` remount, `h2_port` rebind.
 
 ## TDD rule for every increment
 

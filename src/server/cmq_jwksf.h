@@ -65,6 +65,12 @@ int cmq_jwks_refresh_ca(cmq_jwks_refresher_t *r, char *out, size_t cap);
  * Does not re-GET jwks_url. */
 int cmq_jwks_refresh_reload_ca(cmq_jwks_refresher_t *r, const char **live_ca,
                                const char *fresh_ca);
+/* v0.5.137: empty/omitted keeps. Bad URL fails closed.
+ * Copies host/path/port/tls onto a live sidecar; preserves CA.
+ * Does not re-GET. */
+int cmq_jwks_refresh_reload_url(cmq_jwks_refresher_t *r, const char **live_url,
+                                const char *fresh_url);
+int cmq_jwks_refresh_snapshot(cmq_jwks_refresher_t *r, cmq_jwks_url_t *out);
 
 #ifdef __cplusplus
 }
