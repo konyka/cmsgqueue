@@ -175,6 +175,50 @@ int cmq_reload_apply_caps(cmq_config_t *live, const cmq_config_t *fresh) {
     return 0;
 }
 
+/* Same fail-closed rules as persist_dir_ok in cmq_config.c. */
+static int config_file_ok(const char *path) {
+    if (!path || !path[0]) return 0;
+    size_t n = strnlen(path, 512);
+    if (n == 0 || n >= 512) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)path[i];
+        if (c == '\\' || c < 0x20 || c == 0x7f)
+            return 0;
+    }
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && path[i] == '/')
+            i++;
+        if (i >= n)
+            break;
+        size_t start = i;
+        while (i < n && path[i] != '/')
+            i++;
+        size_t len = i - start;
+        if (len == 1 && path[start] == '.')
+            return 0;
+        if (len == 2 && path[start] == '.' && path[start + 1] == '.')
+            return 0;
+    }
+    return 1;
+}
+
+int cmq_reload_apply_config_file(const char **live, const char *fresh) {
+    if (!live) return -1;
+    if (!fresh || !fresh[0])
+        return 0;
+    if (*live && strcmp(*live, fresh) == 0)
+        return 0;
+    if (!config_file_ok(fresh))
+        return -1;
+    char *owned = strdup(fresh);
+    if (!owned)
+        return -1;
+    free((void *)*live);
+    *live = owned;
+    return 0;
+}
+
 int cmq_reload_apply_limits(cmq_config_t *live, const cmq_config_t *fresh) {
     if (!live || !fresh) return -1;
     if (fresh->max_connects_per_sec < 0 ||

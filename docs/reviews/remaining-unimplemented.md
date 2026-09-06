@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.151)
+# Remaining unimplemented work (HEAD after v0.5.152)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -21,7 +21,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `max_clients` / payload / subs | yes | defaults + gates | `apply_caps` |
 | `ping` / `write_timeout` | yes | defaults + loop | `apply_limits` |
 | `max_connects_per_sec` / `inbox_max_pending` | yes | accept / REQUEST | `apply_limits` |
-| `config_file` | yes; load path if omitted | SIGHUP | live path; retarget is remount-like |
+| `config_file` | yes; load path if omitted | SIGHUP | `apply_config_file` (next SIGHUP; no fd remount) |
 | `log_*` | yes | sinks | `apply_dynamic` + `reload_sinks` |
 | `auth_*` / `jwt_*` / `nkey_pub` | yes | CONNECT | `apply_auth` |
 | `jwks_json` / `jwks_url` / `jwks_ca` / refresh | yes | cache / GET / sidecar | cache + url/ca/sec + fetch + attach |
@@ -158,6 +158,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.149 | attach blocklist on reload |
 | v0.5.150 | load persisted subscriptions on reload |
 | v0.5.151 | set h2 ALPN on reload |
+| v0.5.152 | apply config_file on reload |
 
 ## Deferred — detailed designs
 
@@ -291,6 +292,7 @@ are live (v0.5.88).
 | attach blocklist on reload | shipped v0.5.149 | — |
 | load persisted subscriptions on reload | shipped v0.5.150 | — |
 | set h2 ALPN on reload | shipped v0.5.151 | — |
+| apply config_file on reload | shipped v0.5.152 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -331,7 +333,8 @@ are live (v0.5.88).
   attach when create had none shipped v0.5.149. F18
   persist_load when persist was just attached shipped
   v0.5.150. h2 ALPN on an existing TLS slot shipped
-  v0.5.151. Create-time only: `persist_dir` remount,
+  v0.5.151. `config_file` apply for the next SIGHUP
+  shipped v0.5.152. Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.
 

@@ -9274,6 +9274,11 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         free((void *)server->config.log_file);
         server->config.log_file = nf;
     }
+    if (cmq_reload_apply_config_file(&server->config.config_file,
+                                     fresh.config_file) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     cmq_log_info(server->log, "Config reloaded: %s", config_path);
     cmq_config_free(&fresh);
     return 0;

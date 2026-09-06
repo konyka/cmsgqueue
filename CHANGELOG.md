@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.152 - 2026-09-07
+
+### Added
+- **Apply `config_file` on reload** — SIGHUP copies a
+  new path onto the live config so the next reload opens
+  it. Omitted / empty keeps the current file. `..` / `\`
+  fail closed. Applied last so a failed reload does not
+  retarget.
+
+### Tests
+- `tests/test_cfp.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.152.enumeration.md`, `v0.5.152.plan.md`.
+- `docs/benchmarks/v05152_{1,2}.txt`.
+
+### Test count
+- 599 tests (was 595 in v0.5.151; +4).
+
 ## 0.5.151 - 2026-09-07
 
 ### Added

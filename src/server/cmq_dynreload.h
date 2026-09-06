@@ -33,6 +33,11 @@ int cmq_reload_apply_limits(cmq_config_t *live, const cmq_config_t *fresh);
  * max_subs_per_client 0–1024; max_clients 0–CMQ_MAX_CLIENTS_LIMIT. */
 int cmq_reload_apply_caps(cmq_config_t *live, const cmq_config_t *fresh);
 
+/* Point the next SIGHUP at a new config_file. Empty/omitted
+ * keeps the current path. Same string is a no-op. `..` / `\`
+ * / controls / len ≥ 512 fail closed (persist_dir rules). */
+int cmq_reload_apply_config_file(const char **live, const char *fresh);
+
 /* Async-signal-safe SIGHUP latch. note() from the handler; take()
  * from the event loop. */
 void cmq_sighup_note(void);
