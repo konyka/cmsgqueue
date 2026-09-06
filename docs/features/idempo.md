@@ -24,9 +24,10 @@ seqs inside the window are accepted once.
 PUBLISH without `CMQ_FLAG_HEADERS`: unchanged. Headers
 without the `CMQI` magic: one 4-byte compare.
 
-## Not in this increment
+## Coordinator
 
-A transaction coordinator (D5 remainder) needs D4's log.
+D5 phase 2 (`cmq_txn`, v0.5.60) buffers `CMQT` adds and
+commits them after a durable log record.
 
 ## Tests
 

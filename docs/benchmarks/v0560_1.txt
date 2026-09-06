@@ -1,0 +1,3 @@
+v0.5.60 bench 1:
+- No CMQ_FLAG_HEADERS: zero extra work.
+- Headers without CMQT: one 4-byte compare after CMQI.

@@ -18,6 +18,7 @@
 #include "cmq_mqtt_server.h"
 #include "cmq_monitor.h"
 #include "cmq_idempo.h"
+#include "cmq_txn.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -2984,6 +2985,18 @@ static int cmq_route_forward_missed(cmq_server_t *srv, int route_rc,
     return route_sent == 0;
 }
 
+typedef struct {
+    cmq_server_t *srv;
+    const char *account;
+} cmq_txn_pub_ctx_t;
+
+static int txn_publish_apply(void *ctx, const char *subject,
+                             const uint8_t *data, size_t len) {
+    cmq_txn_pub_ctx_t *p = ctx;
+    if (!p || !p->srv || !p->account) return -1;
+    return cmq_server_publish(p->srv, subject, data, len, p->account);
+}
+
 static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                             const cmq_frame_t *frame) {
     (void)c;
@@ -3124,6 +3137,34 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                 cmq_send_error(c, "idempo full");
                 return;
             }
+        }
+    }
+
+    /* v0.5.60: CMQT begin/add/commit/abort before WAL / fanout. */
+    if ((frame->hdr.flags & CMQ_FLAG_HEADERS) && srv->txn && headers &&
+        headers_len >= CMQ_TXN_HDR_LEN) {
+        uint64_t tid = 0;
+        uint8_t top = 0;
+        if (cmq_txn_parse(headers, headers_len, &tid, &top) == 0) {
+            int trc = -1;
+            if (top == CMQ_TXN_BEGIN)
+                trc = cmq_txn_begin(srv->txn, tid);
+            else if (top == CMQ_TXN_ADD)
+                trc = cmq_txn_add(srv->txn, tid, subject, msg_payload, msg_len);
+            else if (top == CMQ_TXN_COMMIT) {
+                cmq_txn_pub_ctx_t ax;
+                ax.srv = srv;
+                ax.account = (c->account_name[0] != '\0')
+                    ? c->account_name : "$default";
+                trc = cmq_txn_commit(srv->txn, tid, txn_publish_apply, &ax);
+            } else if (top == CMQ_TXN_ABORT)
+                trc = cmq_txn_abort(srv->txn, tid);
+            if (trc != 0) {
+                cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_send_error(c, "txn");
+            }
+            return;
         }
     }
 
@@ -7530,6 +7571,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     }
 
     srv->idempo = cmq_idempo_create();
+    srv->txn = cmq_txn_create();
+    if (srv->txn && srv->config.persist_dir && srv->config.persist_dir[0])
+        (void)cmq_txn_set_log(srv->txn, srv->config.persist_dir);
 
     /* F14: per-account quota. */
     if (srv->config.max_msgs_per_sec_per_account > 0 ||
@@ -8324,6 +8368,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->idempo) {
         cmq_idempo_destroy(srv->idempo);
         srv->idempo = NULL;
+    }
+    if (srv->txn) {
+        cmq_txn_destroy(srv->txn);
+        srv->txn = NULL;
     }
     if (srv->acl_h) {
         cmq_rch_release_owner(srv->acl_h);

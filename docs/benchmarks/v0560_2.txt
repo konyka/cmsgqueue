@@ -1,0 +1,3 @@
+v0.5.60 bench 2:
+- Commit: one append+fsync when a log dir is set, then apply.
+- 32 txns / 8 ops; table-full rejects a new BEGIN.

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.60 - 2026-09-06
+
+### Added
+- **Transaction coordinator (D5 phase 2)** — `CMQT`+txn+op
+  begin/add/commit/abort. Adds are buffered; commit fsyncs
+  then applies. Default PUBLISH path unchanged. Duplicate
+  commit is a no-op. Log at `{persist_dir}/cmq.txn`.
+
+### Tests
+- `tests/test_txn.c` — parse, apply, abort, isolate, no-log,
+  reopen, uncommitted gone, full (+8).
+
+### Documentation
+- `docs/reviews/v0.5.60.enumeration.md`, `v0.5.60.plan.md`.
+- `docs/features/txn.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0560_{1,2}.txt`.
+
+### Test count
+- 228 tests (was 220 in v0.5.59; +8).
+
 ## 0.5.59 - 2026-09-06
 
 ### Added

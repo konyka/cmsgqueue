@@ -1,9 +1,9 @@
-# Remaining unimplemented work (HEAD after v0.5.59)
+# Remaining unimplemented work (HEAD after v0.5.60)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
-P3 D7/D8 are shipped. D4 library pieces (cursors / KV /
-object) are v0.5.56–59. Next cuts: D1–D3, D5 transactions,
-or leaf/gateway e2e.
+P3 D7/D8 are shipped. D4 library pieces are v0.5.56–59. D5
+phases 1–2 are v0.5.55/60. Next cuts: D1–D3, D5 multi-node
+2PC, or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -22,6 +22,7 @@ or leaf/gateway e2e.
 | v0.5.57 | MQTT outbound QoS 2 PUBREC/PUBREL/PUBCOMP |
 | v0.5.58 | D4 phase 2: KV last-value store |
 | v0.5.59 | D4 phase 3: named object store |
+| v0.5.60 | D5 phase 2: transaction coordinator |
 
 ## Deferred — detailed designs
 
@@ -56,11 +57,12 @@ Durable cursors, KV last-value, and named objects are
 library APIs. **Remaining:** a partition / bucket server
 path that wires them into PUBLISH.
 
-### D5 Exactly-once / transactions — phase 1 shipped v0.5.55
+### D5 Exactly-once / transactions — phases 1–2 shipped
 
-Idempotent publish (`CMQI` + pid + seq, 64-wide window, 256
-pids) is live on `handle_publish` before WAL. A transaction
-coordinator still needs D4's log.
+Idempotent publish is v0.5.55. The coordinator (`CMQT`
+begin/add/commit/abort + `{persist_dir}/cmq.txn`) is
+v0.5.60. **Remaining:** multi-node 2PC / prepare across
+routes.
 
 ### D6 Kafka-style key compaction — shipped v0.5.53
 
