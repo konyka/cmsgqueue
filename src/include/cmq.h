@@ -136,6 +136,13 @@ typedef struct cmq_config {
      * mapping to the upstream broker. NULL = disabled. */
     const char *mqtt_bridge_addr;
     int mqtt_bridge_port;
+    /* v0.5.112: repeatable mqtt_bridge_map=subject,topic[,qos] */
+    struct {
+        const char *cmq_subject;
+        const char *mqtt_topic;
+        int qos;
+    } mqtt_bridge_maps[8];
+    int mqtt_bridge_map_count;
 } cmq_config_t;
 
 /**

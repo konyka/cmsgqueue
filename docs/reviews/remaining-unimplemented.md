@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.111)
+# Remaining unimplemented work (HEAD after v0.5.112)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -73,6 +73,7 @@ Required next cuts: none.
 | v0.5.109 | F5 `persist_dir` config-file key |
 | v0.5.110 | P3 `persist_sync_interval_ms` config-file key |
 | v0.5.111 | F6 MQTT bridge config-file keys |
+| v0.5.112 | F6 MQTT bridge outbound PUBLISH |
 
 ## Deferred — detailed designs
 
@@ -166,6 +167,7 @@ are live (v0.5.88).
 | `persist_dir` config key | shipped v0.5.109 | — |
 | `persist_sync_interval_ms` config key | shipped v0.5.110 | — |
 | MQTT bridge config keys | shipped v0.5.111 | — |
+| MQTT bridge outbound PUBLISH | shipped v0.5.112 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)

@@ -38,6 +38,7 @@ struct cmq_mqtt_bridge {
     uint64_t messages_out;
     cmq_mqtt_mapping_t mappings[CMQ_MQTT_MAX_MAPPINGS];
     size_t mapping_count;
+    uint16_t next_pid;
     cmq_mutex_t lock;
     uint32_t cancel_gen; /* bumped on disconnect — aborts in-flight install */
     int dialing; /* 1 while unlocked TCP+MQTT CONNECT in progress */
@@ -496,6 +497,67 @@ int cmq_mqtt_find_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic,
     int rc = mqtt_find_mapping_impl(br, mqtt_topic, out);
     mqtt_end_op(br);
     return rc;
+}
+
+int cmq_mqtt_bridge_publish(cmq_mqtt_bridge_t *br, const char *subject,
+                            const uint8_t *payload, size_t len) {
+    if (!br || !subject || !subject[0]) return -1;
+    if (len > 0 && !payload) return -1;
+    if (mqtt_begin_op(br) != 0) return -1;
+    cmq_mutex_lock(&br->lock);
+    if (!br->connected || br->fd < 0) {
+        cmq_mutex_unlock(&br->lock);
+        mqtt_end_op(br);
+        return -1;
+    }
+    const cmq_mqtt_mapping_t *m = NULL;
+    for (size_t i = 0; i < br->mapping_count; i++) {
+        if (br->mappings[i].active &&
+            strcmp(br->mappings[i].cmq_subject, subject) == 0) {
+            m = &br->mappings[i];
+            break;
+        }
+    }
+    if (!m) {
+        cmq_mutex_unlock(&br->lock);
+        mqtt_end_op(br);
+        return 0;
+    }
+    char topic[CMQ_MQTT_TOPIC_MAX];
+    snprintf(topic, sizeof(topic), "%s", m->mqtt_topic);
+    int qos = m->qos;
+    int fd = br->fd;
+    uint16_t pid = 0;
+    if (qos > 0) {
+        br->next_pid++;
+        if (br->next_pid == 0) br->next_pid = 1;
+        pid = br->next_pid;
+    }
+    cmq_mutex_unlock(&br->lock);
+
+    size_t cap = 16 + strlen(topic) + len;
+    uint8_t *buf = malloc(cap);
+    if (!buf) {
+        mqtt_end_op(br);
+        return -1;
+    }
+    int n = cmq_mqtt_encode_publish(buf, cap, topic, payload, len, qos, pid);
+    int wr = (n > 0) ? mqtt_write_all(fd, buf, (size_t)n) : -1;
+    free(buf);
+
+    cmq_mutex_lock(&br->lock);
+    if (wr != 0) {
+        if (br->fd == fd)
+            mqtt_disconnect_unlocked(br);
+        cmq_mutex_unlock(&br->lock);
+        mqtt_end_op(br);
+        return -1;
+    }
+    if (br->connected && br->fd == fd)
+        br->messages_out++;
+    cmq_mutex_unlock(&br->lock);
+    mqtt_end_op(br);
+    return 1;
 }
 
 const char *cmq_mqtt_topic_to_subject(const char *mqtt_topic, char *buf, size_t len) {

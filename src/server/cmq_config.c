@@ -127,6 +127,65 @@ static int mqtt_bridge_addr_ok(const char *addr) {
     return 1;
 }
 
+static int parse_int_range(const char *value, int min, int max, int *out);
+
+static int mqtt_map_subject_ok(const char *s, size_t n) {
+    if (!s || n == 0 || n >= 256) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x21 || c > 0x7e || c == '/' || c == '\\' || c == ',')
+            return 0;
+    }
+    return 1;
+}
+
+static int mqtt_map_topic_ok(const char *s, size_t n) {
+    if (!s || n == 0 || n >= 256) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x21 || c > 0x7e || c == '\\' || c == ',')
+            return 0;
+    }
+    return 1;
+}
+
+static int parse_mqtt_bridge_map(const char *value, cmq_config_t *config) {
+    if (!value || !config) return -1;
+    if (config->mqtt_bridge_map_count >= 8) return -1;
+    const char *c1 = strchr(value, ',');
+    if (!c1 || c1 == value || !c1[1]) return -1;
+    size_t slen = (size_t)(c1 - value);
+    const char *rest = c1 + 1;
+    const char *c2 = strchr(rest, ',');
+    int qos = 0;
+    size_t tlen;
+    if (c2) {
+        tlen = (size_t)(c2 - rest);
+        if (parse_int_range(c2 + 1, 0, 2, &qos) != 0) return -1;
+    } else {
+        tlen = strlen(rest);
+    }
+    if (!mqtt_map_subject_ok(value, slen) || !mqtt_map_topic_ok(rest, tlen))
+        return -1;
+    char *subj = malloc(slen + 1);
+    char *top = malloc(tlen + 1);
+    if (!subj || !top) {
+        free(subj);
+        free(top);
+        return -1;
+    }
+    memcpy(subj, value, slen);
+    subj[slen] = '\0';
+    memcpy(top, rest, tlen);
+    top[tlen] = '\0';
+    int i = config->mqtt_bridge_map_count;
+    config->mqtt_bridge_maps[i].cmq_subject = subj;
+    config->mqtt_bridge_maps[i].mqtt_topic = top;
+    config->mqtt_bridge_maps[i].qos = qos;
+    config->mqtt_bridge_map_count++;
+    return 0;
+}
+
 static int parse_int_range(const char *value, int min, int max, int *out) {
     if (!value || !out || min > max) return -1;
     char *end = NULL;
@@ -172,6 +231,8 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->mqtt_bridge_addr, value);
     } else if (strcmp(key, "mqtt_bridge_port") == 0) {
         return parse_int_range(value, 0, 65535, &config->mqtt_bridge_port);
+    } else if (strcmp(key, "mqtt_bridge_map") == 0) {
+        return parse_mqtt_bridge_map(value, config);
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
         return parse_int_range(value, 0, 64, &config->num_threads);
     } else if (strcmp(key, "max_clients") == 0) {
@@ -316,6 +377,14 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->tls_key);
     cfg_free_owned(config->persist_dir);
     cfg_free_owned(config->mqtt_bridge_addr);
+    for (int i = 0; i < config->mqtt_bridge_map_count && i < 8; i++) {
+        cfg_free_owned(config->mqtt_bridge_maps[i].cmq_subject);
+        cfg_free_owned(config->mqtt_bridge_maps[i].mqtt_topic);
+        config->mqtt_bridge_maps[i].cmq_subject = NULL;
+        config->mqtt_bridge_maps[i].mqtt_topic = NULL;
+        config->mqtt_bridge_maps[i].qos = 0;
+    }
+    config->mqtt_bridge_map_count = 0;
     for (int i = 0; i < config->route_count && i < 8; i++)
         cfg_free_owned(config->routes[i].addr);
     config->host = NULL;
@@ -420,6 +489,9 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->persist_sync_interval_ms > 86400000u)
         return CMQ_ERR_INVALID_ARG;
     if (config->mqtt_bridge_port < 0 || config->mqtt_bridge_port > 65535)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->mqtt_bridge_map_count < 0 ||
+        config->mqtt_bridge_map_count > 8)
         return CMQ_ERR_INVALID_ARG;
     if (config->max_payload_size < 0) return CMQ_ERR_INVALID_ARG;
     /* Must fit CMQ_WRITE_BUF_LIMIT after framing — else deliver force-closes. */

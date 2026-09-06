@@ -23,9 +23,11 @@ are rejected. When set, `cmq_server_create`:
 
 On shutdown, `cmq_mqtt_bridge_disconnect` + destroy.
 
-Subject mapping (which CMQ subjects to forward) is left to the
-operator via the existing `cmq_mqtt_add_mapping` API. A future
-PR can wire an automatic "forward everything" mode.
+Subject mapping is `mqtt_bridge_map=subject,topic[,qos]`
+(repeatable, max 8, v0.5.112) or `cmq_mqtt_add_mapping`.
+A matching CMQ PUBLISH is written as MQTT PUBLISH
+(`cmq_mqtt_bridge_publish`). Route ingress, WAL replay, and
+`mqtt_bridge*` accounts are not re-bridged.
 
 ## Files touched
 

@@ -3444,6 +3444,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "subject map failed");
         return;
     }
+    if (srv->mqtt_bridge && !c->is_route && c->fd >= 0 &&
+        strncmp(c->account_name, "mqtt_bridge", 11) != 0)
+        (void)cmq_mqtt_bridge_publish(srv->mqtt_bridge, subject,
+                                      msg_payload, msg_len);
     /* v0.5.67–68 / 0.5.93: $KV / $OBJ / $JS. One '$' check. */
     if (subject[0] == '$') {
         if (srv->kvb) {
@@ -3671,6 +3675,10 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
     if (account_apply_rewrite(srv, account_name, mapped, sizeof(mapped)) != 0)
         return -1;
     subject = mapped;
+    if (srv->mqtt_bridge &&
+        strncmp(account_name, "mqtt_bridge", 11) != 0)
+        (void)cmq_mqtt_bridge_publish(srv->mqtt_bridge, subject,
+                                      payload, payload_len);
     int live_held = 0;
     if (account_live_hold_name(srv, account_name, 0, (uint64_t)payload_len,
                                &live_held) != 0)
@@ -7810,6 +7818,12 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.tls_key = NULL;
     srv->config.persist_dir = NULL;
     srv->config.mqtt_bridge_addr = NULL;
+    srv->config.mqtt_bridge_map_count = 0;
+    for (int i = 0; i < 8; i++) {
+        srv->config.mqtt_bridge_maps[i].cmq_subject = NULL;
+        srv->config.mqtt_bridge_maps[i].mqtt_topic = NULL;
+        srv->config.mqtt_bridge_maps[i].qos = 0;
+    }
     srv->config.route_count = 0;
     for (int i = 0; i < 8; i++) {
         srv->config.routes[i].addr = NULL;
@@ -7848,6 +7862,20 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.tls_key, src.tls_key);
     OWN(srv->config.persist_dir, src.persist_dir);
     OWN(srv->config.mqtt_bridge_addr, src.mqtt_bridge_addr);
+    if (src.mqtt_bridge_map_count < 0 || src.mqtt_bridge_map_count > 8) {
+        cmq_config_free(&srv->config);
+        free(srv);
+        return CMQ_ERR_INVALID_ARG;
+    }
+    srv->config.mqtt_bridge_map_count = 0;
+    for (int i = 0; i < src.mqtt_bridge_map_count; i++) {
+        OWN(srv->config.mqtt_bridge_maps[i].cmq_subject,
+            src.mqtt_bridge_maps[i].cmq_subject);
+        OWN(srv->config.mqtt_bridge_maps[i].mqtt_topic,
+            src.mqtt_bridge_maps[i].mqtt_topic);
+        srv->config.mqtt_bridge_maps[i].qos = src.mqtt_bridge_maps[i].qos;
+        srv->config.mqtt_bridge_map_count++;
+    }
 #undef OWN
     /* Fail closed before copy — truncating/skipping would hide invalid
        programmatic configs from cmq_config_validate. */
@@ -8316,6 +8344,13 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                 cmq_log_info(srv->log, "MQTT bridge connected: %s:%d",
                              srv->config.mqtt_bridge_addr,
                              srv->config.mqtt_bridge_port);
+                for (int mi = 0; mi < srv->config.mqtt_bridge_map_count; mi++) {
+                    const char *s = srv->config.mqtt_bridge_maps[mi].cmq_subject;
+                    const char *t = srv->config.mqtt_bridge_maps[mi].mqtt_topic;
+                    if (s && t)
+                        (void)cmq_mqtt_add_mapping(srv->mqtt_bridge, s, t,
+                            srv->config.mqtt_bridge_maps[mi].qos);
+                }
             }
         }
     }

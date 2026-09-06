@@ -111,6 +111,7 @@ persist_sync_interval_ms = 1000
 # MQTT bridge (omit or empty addr = disabled)
 mqtt_bridge_addr = 127.0.0.1
 mqtt_bridge_port = 1883
+mqtt_bridge_map = events.alerts,events/alerts,0
 ```
 
 ## Binary Protocol

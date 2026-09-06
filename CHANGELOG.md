@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.112 - 2026-09-06
+
+### Added
+- **MQTT bridge outbound PUBLISH (F6 follow-up)** —
+  `cmq_mqtt_bridge_publish` writes a mapped CMQ PUBLISH
+  as MQTT PUBLISH. Config `mqtt_bridge_map=subject,topic[,qos]`
+  (repeatable, max 8) is applied after connect. Route
+  ingress, replay, and `mqtt_bridge*` accounts are skipped.
+
+### Tests
+- `tests/test_mqp.c` — hit, miss, disconnected, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.112.enumeration.md`, `v0.5.112.plan.md`.
+- `docs/features/mqtt-bridge.md`.
+- `docs/benchmarks/v05112_{1,2}.txt`.
+
+### Test count
+- 439 tests (was 435 in v0.5.111; +4).
+
 ## 0.5.111 - 2026-09-06
 
 ### Added

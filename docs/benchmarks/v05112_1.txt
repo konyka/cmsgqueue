@@ -1,0 +1,4 @@
+v0.5.112 bench 1:
+- No bridge: one NULL check on PUBLISH.
+- No mapping: lock + scan, no malloc/encode.
+- Hit: one encode malloc + write_all; local fanout unchanged.
