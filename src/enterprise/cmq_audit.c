@@ -10,7 +10,7 @@
 static char *g_audit_path = NULL;
 static pthread_mutex_t g_audit_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static const char *event_name(cmq_audit_event_t e) {
+const char *cmq_audit_event_name(cmq_audit_event_t e) {
     switch (e) {
         case CMQ_AUDIT_AUTH_OK: return "auth_ok";
         case CMQ_AUDIT_AUTH_FAIL: return "auth_fail";
@@ -72,7 +72,7 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
                      "{\"ts\":\"%s.%03ldZ\",\"event\":\"%s\",\"trace\":\"%s\","
                      "\"subject\":\"%s\",\"details\":\"%s\"}\n",
                      ts_buf, (long)(ts.tv_nsec / 1000000),
-                     event_name(event),
+                     cmq_audit_event_name(event),
                      trace_id ? trace_id : "",
                      subj_esc, det_esc);
     if (n <= 0 || (size_t)n >= sizeof(line)) return;
@@ -100,4 +100,10 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
         }
     }
     pthread_mutex_unlock(&g_audit_lock);
+}
+
+void cmq_audit_auth(int ok, const char *trace_id, const char *user,
+                    const char *reason) {
+    cmq_audit_log(ok ? CMQ_AUDIT_AUTH_OK : CMQ_AUDIT_AUTH_FAIL,
+                  trace_id, user, reason);
 }

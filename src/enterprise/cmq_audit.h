@@ -31,10 +31,16 @@ typedef enum {
 /* Set the audit file path. NULL disables file output. */
 void cmq_audit_set_path(const char *path);
 
+const char *cmq_audit_event_name(cmq_audit_event_t event);
+
 /* Write a JSON-lines event. The trace_id is the 16-byte connection
  * ID (hex-encoded) or NULL for non-connection events. */
 void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
                     const char *subject, const char *details);
+
+/* CONNECT helper. `reason` must not contain a password. */
+void cmq_audit_auth(int ok, const char *trace_id, const char *user,
+                    const char *reason);
 
 #ifdef __cplusplus
 }

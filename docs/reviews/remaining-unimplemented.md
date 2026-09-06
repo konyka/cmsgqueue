@@ -1,10 +1,8 @@
-# Remaining unimplemented work (HEAD after v0.5.49)
+# Remaining unimplemented work (HEAD after v0.5.51)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
-P3 D7/D8 are shipped. This is the catalog the `/goal` asked for;
-each item has a performance-first, secure design. One increment
-per version. F14 connect-rate is v0.5.50. Next cuts: audit
-events, ALPN-h2 advertisement, then D6 or outstanding-byte caps.
+P3 D7/D8 are shipped. F14 connect-rate is v0.5.50. Audit events
+are v0.5.51. Next cuts: outstanding-byte caps, then D6.
 
 ## Shipped (do not re-open)
 
@@ -13,20 +11,8 @@ events, ALPN-h2 advertisement, then D6 or outstanding-byte caps.
 | v0.5.41–47 | F2 BATCH compress, aux accept, MQTT 5 props, trace logs, WAL compact/rotate, MQTT will/sessions, connz/subz/routez |
 | v0.5.48 | D8 concurrent account conn/sub/payload caps |
 | v0.5.49 | D7 publish-side subject rewrite |
-
-## This round — S
-
-### F14 connect-rate is dead
-
-`cmq_quota_check_connect` was library-only until v0.5.50.
-`max_connections_per_account` is the per-second window.
-Concurrent caps are a different knob (`account_max_connections`).
-
-**Design.** After account bind, before `inc_connections`: if
-`srv->quota` is NULL (all F14 knobs 0) skip (one pointer compare).
-If `max_connects == 0` the library returns 1 without hashing.
-Reject → CONNACK 1, no credit, `rate_limit_reject` audit.
-Cluster route-adopt is **not** counted (operator path).
+| v0.5.50 | F14 connect-rate on CONNECT |
+| v0.5.51 | Audit auth / persist / TLS events |
 
 ## Deferred — detailed designs
 
@@ -41,13 +27,11 @@ Security: no payload bodies in spans by default.
 
 ### D2 HTTP/2 listener (L)
 
-ALPN advertises `h2` (`cmq_tls.h`). No h2 state machine, no
-HPACK. **Design:** keep HTTP/1.1 monitor (`/healthz` `/connz`)
-on a dedicated listener. Do not put h2 on the message port.
-HPACK dynamic table capped (4 KiB); SETTINGS_MAX_CONCURRENT_STREAMS
-small (32). Until then, ALPN should not advertise `h2` or the
-client will speak a protocol we drop. (Follow-up if we do not
-ship h2: stop advertising it.)
+`cmq_tls_set_alpn` can encode `h2`, but the server never calls
+it. No h2 state machine, no HPACK. **Design:** keep HTTP/1.1
+monitor on a dedicated listener. Do not put h2 on the message
+port. HPACK table capped (4 KiB); max 32 streams. Do not
+advertise `h2` until that exists.
 
 ### D3 JWT / NKEY (XL)
 
@@ -82,10 +66,9 @@ Live PUBLISH path unchanged.
 
 | Item | Evidence | Next cut |
 |---|---|---|
-| Audit events mostly dead | Only `rate_limit_reject` is emitted | After F14: auth_ok/fail |
 | Outstanding-byte memory cap | D8 did payload, not live bytes | Account `bytes_live` + credit/debit |
 | MQTT QoS 1/2 inflight | Listener is QoS 0 + will | Inflight mqueue |
-| ALPN advertises h2 | `cmq_tls.h` | Stop advertising or ship D2 |
+| ALPN `h2` | Comment example only; server never calls `set_alpn` | Ship D2 or leave unset |
 | Leaf/gateway e2e | Library exists, no multi-process test | Test-only increment |
 
 ## TDD rule for every increment

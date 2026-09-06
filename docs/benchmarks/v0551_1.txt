@@ -1,0 +1,3 @@
+v0.5.51 bench 1:
+- Admitted PUBLISH: no extra audit call.
+- Persist-fail only after a failed WAL append (already I/O).

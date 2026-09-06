@@ -3070,6 +3070,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   frame->payload_len, &seq) != 0) {
             cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
                                       CMQ_ATOMIC_RELAXED);
+            cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, c->trace_hex, subject,
+                          "wal append");
         }
     }
 
@@ -4774,6 +4776,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                     /* F8: hashed password. Verify with cmq_password_verify. */
                     int v = cmq_password_verify(srv->config.auth_password, passwd);
                     if (v < 0) {
+                        cmq_audit_auth(0, c->trace_hex, uname, "auth failed");
                         cmq_send_connack(c, 1);
                         client_set_state(c, CMQ_CLIENT_CLOSING);
                         break;
@@ -4799,6 +4802,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             else
                 bad |= !ct_memeq(passwd, passwd, sizeof(passwd));
             if (bad) {
+                cmq_audit_auth(0, c->trace_hex, uname,
+                               malformed ? "malformed" : "auth failed");
                 cmq_send_connack(c, malformed ? 1 : 2);
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
@@ -4815,6 +4820,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
+            cmq_audit_auth(1, c->trace_hex, c->username, "auth ok");
         }
         /* CMQ_FLAG_ROUTE only trusted for peers whose IP is in routes[].
            Inbound source ports are ephemeral — IP ACL + optional shared auth.
@@ -6591,9 +6597,15 @@ static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
     if (slot < 0 || slot >= CMQ_MAX_LISTENERS) slot = 0;
     if (!srv->tls_config_slots[slot]) return 0;
     cmq_tls_session_t *tls = cmq_tls_server_session(srv->tls_config_slots[slot], client->fd);
-    if (!tls) return -1;
+    if (!tls) {
+        cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, client->trace_hex, "",
+                      "session");
+        return -1;
+    }
     int rc = cmq_tls_handshake(tls);
     if (rc != 0) {
+        cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, client->trace_hex, "",
+                      "handshake");
         cmq_tls_session_destroy(tls);
         return -1;
     }
@@ -6896,6 +6908,8 @@ static void replay_one_record(cmq_server_t *srv, uint8_t *data,
             /* Malformed record — drop. */
             cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
                                       CMQ_ATOMIC_RELAXED);
+            cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, NULL, "",
+                          "wal replay malformed");
             return;
         }
         const char *topic = (const char *)data + 7;
@@ -7376,6 +7390,12 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             }
             cmq_log_info(srv->log, "WAL replay complete: %llu records",
                          (unsigned long long)last);
+            {
+                char det[64];
+                snprintf(det, sizeof(det), "replay %llu",
+                         (unsigned long long)last);
+                cmq_audit_log(CMQ_AUDIT_PERSIST_RECOVER, NULL, "", det);
+            }
         }
         /* F18 P3: restore persisted subscriptions before accepting clients.
          * Each record becomes a subject pattern in the sublist — no live

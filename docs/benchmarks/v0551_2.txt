@@ -1,0 +1,3 @@
+v0.5.51 bench 2:
+- CONNECT auth: one mutex + best-effort append (same as blocklist).
+- persist_recover: once at startup after WAL replay.

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.51 - 2026-09-06
+
+### Added
+- **Audit events on the real paths** — CONNECT emits `auth_ok` /
+  `auth_fail` via `cmq_audit_auth` (no password in `details`).
+  WAL append/replay emit `persist_fail`; startup replay emits
+  `persist_recover`. TLS accept emits `tls_handshake_fail`.
+  Successful PUBLISH is unchanged.
+
+### Tests
+- `tests/test_audit.c` — event-name map, auth helper (+2).
+
+### Documentation
+- `docs/reviews/v0.5.51.enumeration.md`, `v0.5.51.plan.md`.
+- `docs/features/audit.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0551_{1,2}.txt`.
+
+### Test count
+- 170 tests (was 168 in v0.5.50; +2).
+
 ## 0.5.50 - 2026-09-06
 
 ### Added
