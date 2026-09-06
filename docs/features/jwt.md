@@ -77,7 +77,10 @@ SIGHUP / `cmq_server_reload` copies non-empty
 `jwt_rsa_n` / `jwt_rsa_e` onto the live config.
 `jwt_leeway_sec` 1–3600 replaces the stored leeway.
 Empty or omitted keys keep the current values.
-JWKS cache and `jwks_url` refresh stay create-time.
+
+SIGHUP also parses a non-empty `jwks_json` into the live
+JWKS cache (v0.5.120). Bad JSON keeps the previous slot.
+`jwks_url` refresh stays create-time.
 
 ## Performance
 

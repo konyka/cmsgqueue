@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.120 - 2026-09-06
+
+### Added
+- **Reload JWKS cache** — `cmq_server_reload` parses a
+  non-empty `jwks_json` into the live ping-pong cache
+  (`cmq_jwks_cache_reload`). Empty/omitted keeps the
+  current keys. Bad JSON fails closed.
+
+### Tests
+- `tests/test_jwr.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.120.enumeration.md`, `v0.5.120.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v05120_{1,2}.txt`.
+
+### Test count
+- 471 tests (was 467 in v0.5.119; +4).
+
 ## 0.5.119 - 2026-09-06
 
 ### Added

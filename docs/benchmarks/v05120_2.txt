@@ -1,0 +1,3 @@
+v0.5.120 bench 2:
+- Empty/omitted jwks_json: no parse, live slot unchanged.
+- Reject: parse fail before put; previous kid still verifies.

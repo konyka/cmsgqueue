@@ -39,6 +39,11 @@ cmq_jwks_cache_t *cmq_jwks_cache_create(void);
 void cmq_jwks_cache_destroy(cmq_jwks_cache_t *c);
 int cmq_jwks_cache_put(cmq_jwks_cache_t *c, const cmq_jwks_t *src);
 const cmq_jwks_t *cmq_jwks_cache_get(const cmq_jwks_cache_t *c);
+/* v0.5.120: parse fresh JWKS JSON into the live cache.
+ * Empty/NULL json keeps the current cache. Bad JSON fails closed.
+ * live_json (optional) takes ownership of a strdup of the document. */
+int cmq_jwks_cache_reload(cmq_jwks_cache_t **cache, const char **live_json,
+                          const char *fresh_json);
 
 int cmq_jwks_refresh_due(uint64_t last_ms, uint64_t now_ms,
                          unsigned interval_sec);

@@ -350,6 +350,45 @@ const cmq_jwks_t *cmq_jwks_cache_get(const cmq_jwks_cache_t *c) {
     return &c->slot[i & 1];
 }
 
+int cmq_jwks_cache_reload(cmq_jwks_cache_t **cache, const char **live_json,
+                          const char *fresh_json) {
+    if (!cache) return -1;
+    if (!fresh_json || !fresh_json[0])
+        return 0;
+
+    cmq_jwks_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    if (cmq_jwks_parse(fresh_json, &tmp) != 0)
+        return -1;
+
+    char *owned = strdup(fresh_json);
+    if (!owned) return -1;
+
+    cmq_jwks_cache_t *c = *cache;
+    int created = 0;
+    if (!c) {
+        c = cmq_jwks_cache_create();
+        if (!c) {
+            free(owned);
+            return -1;
+        }
+        created = 1;
+    }
+    if (cmq_jwks_cache_put(c, &tmp) != 0) {
+        if (created) cmq_jwks_cache_destroy(c);
+        free(owned);
+        return -1;
+    }
+    if (created) *cache = c;
+    if (live_json) {
+        free((void *)*live_json);
+        *live_json = owned;
+    } else {
+        free(owned);
+    }
+    return 0;
+}
+
 int cmq_jwks_refresh_due(uint64_t last_ms, uint64_t now_ms,
                          unsigned interval_sec) {
     if (interval_sec == 0) return 0;

@@ -1,0 +1,3 @@
+v0.5.120 bench 1:
+- Idle CONNECT: same cache_get + ≤8 kid compares.
+- Reload: one JWKS parse + one slot put. No PUBLISH work.
