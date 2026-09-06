@@ -1,0 +1,3 @@
+v0.5.88 bench 1:
+- Default TTL 0 / dirty den 0: compact_keys path unchanged.
+- Append: one compare after rotate when den is 0.

@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.87)
+# Remaining unimplemented work (HEAD after v0.5.88)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -49,6 +49,7 @@ Required next cuts: none.
 | v0.5.85 | D5 phase 4: route write retry |
 | v0.5.86 | Leaf/gateway CONNECT/CONNACK e2e |
 | v0.5.87 | D4 partitioned consume cursors |
+| v0.5.88 | D6 tombstone TTL + dirty-ratio compact |
 
 ## Deferred — detailed designs
 
@@ -91,8 +92,9 @@ retry from a 32-slot queue (v0.5.85).
 ### D6 Kafka-style key compaction — shipped v0.5.53
 
 Sealed `.1` last-value-per-key + tombstone drop. Live append
-unchanged. Tombstone TTL / dirty-ratio auto-trigger remain
-optional follow-ups.
+unchanged. Tombstone TTL (segment mtime) and dirty-ratio
+auto-compact (`set_compact_dirty`, after rotate / `maybe`)
+are live (v0.5.88).
 
 ### Other known gaps (not P3 IDs)
 
@@ -106,7 +108,6 @@ optional follow-ups.
 
 | Item | Notes |
 |---|---|
-| D6 tombstone TTL / dirty-ratio auto-trigger | Compact is explicit; no TTL sidecar |
 | D3 token issuing | Intentionally verify-only |
 | D1 consume spans | Only when caller offers `KIND_CONSUME` |
 

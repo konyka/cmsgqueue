@@ -131,6 +131,17 @@ little-endian u16 key length + key + value
 An empty value is a tombstone and drops that key. Records
 without the envelope are kept. No archive file is a no-op.
 
+## Tombstone TTL / dirty compact (v0.5.88)
+
+Default compact still drops a last-is-tombstone immediately.
+`cmq_filestore_set_tombstone_ttl_ms` keeps that tombstone
+when the sealed `.1` mtime is younger than the TTL (no
+header change). `set_compact_dirty(num, den)` runs
+`compact_keys` after rotate (and via `compact_keys_maybe`)
+when `drop * den >= total * num`. `den=0` disables.
+`key_dirty` is read-only. Live append is unchanged except
+one compare after rotate.
+
 ## Limitations
 
 - Replay is single-threaded; large WALs take O(N) time on restart.

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.88 - 2026-09-06
+
+### Added
+- **Tombstone TTL + dirty-ratio compact (D6 follow-up)** —
+  last-is-tombstone kept while sealed `.1` is younger than
+  `tombstone_ttl_ms`. `set_compact_dirty` auto-runs
+  `compact_keys` after rotate / `maybe`. Defaults match
+  v0.5.53 (TTL 0, den 0).
+
+### Tests
+- `tests/test_kttl.c` — dirty, ttl keep, auto rotate,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.88.enumeration.md`, `v0.5.88.plan.md`.
+- `docs/features/persistence.md`.
+- `docs/benchmarks/v0588_{1,2}.txt`.
+
+### Test count
+- 343 tests (was 339 in v0.5.87; +4).
+
 ## 0.5.87 - 2026-09-06
 
 ### Added

@@ -27,7 +27,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Connect-rate (v0.5.50)**: `max_connections_per_account` is live on CONNECT (per-second window; distinct from concurrent `account_max_connections`)
 - **Audit trail (v0.5.51)**: `auth_ok` / `auth_fail` / `persist_*` / `tls_handshake_fail` on their real paths (not only `rate_limit_reject`)
 - **Outstanding-byte cap (v0.5.52)**: `account_max_bytes_live` bounds concurrent in-flight ingress per account (`0` = unlimited)
-- **Key compaction (v0.5.53)**: `cmq_filestore_compact_keys` last-value-wins on sealed `.1` segments (live append unchanged)
+- **Key compaction (v0.5.53 / v0.5.88)**: `cmq_filestore_compact_keys` last-value-wins on sealed `.1`; optional tombstone TTL + dirty-ratio auto-compact (D6)
 - **MQTT QoS 1 inflight (v0.5.54)**: 16-slot outbound window; local fanout + PUBACK (SUBSCRIBE still grants at most QoS 1)
 - **Idempotent publish (v0.5.55)**: `CMQI`+pid+seq sliding window drops retries before WAL (D5 phase 1)
 - **Durable stream cursors (v0.5.56 / v0.5.87)**: opt-in `{dir}/{name}.cursors` ack watermarks; 1–16 hash partitions via `append_key` / `next_part` / `ack_part` (D4)

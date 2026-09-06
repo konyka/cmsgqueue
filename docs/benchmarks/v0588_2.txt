@@ -1,0 +1,3 @@
+v0.5.88 bench 2:
+- key_dirty is a sealed-segment scan, no rewrite.
+- maybe writes only when drop*den >= total*num.

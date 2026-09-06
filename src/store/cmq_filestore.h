@@ -87,6 +87,15 @@ int cmq_filestore_key_decode(const uint8_t *p, size_t n,
  * is not rewritten. */
 int cmq_filestore_compact_keys(cmq_filestore_t *fs);
 
+/* v0.5.88: 0 = drop last-is-tombstone immediately (default).
+ * >0 keep it when sealed .1 mtime is younger than ttl. */
+void cmq_filestore_set_tombstone_ttl_ms(cmq_filestore_t *fs, uint64_t ms);
+/* Auto compact_keys when drop*den >= total*num. den=0 disables. */
+int cmq_filestore_set_compact_dirty(cmq_filestore_t *fs, unsigned num,
+                                    unsigned den);
+int cmq_filestore_key_dirty(cmq_filestore_t *fs, size_t *drop, size_t *total);
+int cmq_filestore_compact_keys_maybe(cmq_filestore_t *fs);
+
 /* P1: enqueue a record for async write. Returns 0 if queued, -1 if
  * queue full / dying / async not enabled. The worker will fwrite +
  * fflush the record; durability follows the fsync policy. */

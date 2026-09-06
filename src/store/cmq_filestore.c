@@ -51,6 +51,10 @@ struct cmq_filestore {
     size_t max_payload_bytes;
     /* v0.5.45: 0 = no automatic rotate. */
     uint64_t rotate_bytes;
+    /* v0.5.88: 0 = drop tombstones immediately. */
+    uint64_t tombstone_ttl_ms;
+    unsigned compact_dirty_num;
+    unsigned compact_dirty_den;
     /* P1: async WAL ring (SPSC + worker thread). The producer enqueues
      * a copy of (data, len); the worker drains and writes. */
     pthread_t async_thread;
@@ -172,6 +176,8 @@ static void fs_unlock_pair(cmq_filestore_t *fs) {
 
 static int filestore_rotate_archive_locked(cmq_filestore_t *fs);
 static int filestore_compact_impl(cmq_filestore_t *fs, uint64_t retain);
+static int filestore_compact_keys_impl(cmq_filestore_t *fs);
+static int filestore_compact_keys_maybe_impl(cmq_filestore_t *fs);
 
 /* Under flock: idx length is the cross-process authority for next_seq.
    may_truncate: only under LOCK_EX — drop a torn trailing partial entry. */
@@ -842,7 +848,24 @@ static int keycompact_load(FILE *df, FILE *idf, kc_rec_t **out, size_t *out_n) {
     return 0;
 }
 
-static void keycompact_mark(kc_rec_t *recs, size_t n) {
+static uint64_t fs_wall_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
+}
+
+static uint64_t fs_mtime_ms(const char *path) {
+    struct stat st;
+    if (!path || stat(path, &st) != 0) return 0;
+    return (uint64_t)st.st_mtime * 1000ull;
+}
+
+static void keycompact_mark(kc_rec_t *recs, size_t n, uint64_t ttl_ms,
+                            uint64_t archive_mtime_ms) {
+    uint64_t now = fs_wall_ms();
+    int keep_young = (ttl_ms > 0 && archive_mtime_ms != 0 &&
+                      now >= archive_mtime_ms &&
+                      now - archive_mtime_ms < ttl_ms);
     for (size_t i = 0; i < n; i++) {
         if (!recs[i].keyed) {
             recs[i].keep = 1;
@@ -854,7 +877,7 @@ static void keycompact_mark(kc_rec_t *recs, size_t n) {
                 memcmp(recs[j].key, recs[i].key, recs[i].klen) == 0)
                 last = j;
         }
-        if (last == i && !recs[i].tombstone)
+        if (last == i && (!recs[i].tombstone || keep_young))
             recs[i].keep = 1;
     }
 }
@@ -928,7 +951,7 @@ static int filestore_compact_keys_impl(cmq_filestore_t *fs) {
     int rc = -1;
     if (keycompact_load(src, sidx, &recs, &n) != 0)
         goto out_src;
-    keycompact_mark(recs, n);
+    keycompact_mark(recs, n, fs->tombstone_ttl_ms, fs_mtime_ms(d1));
     FILE *df = fopen(dtmp, "wb");
     FILE *idf = fopen(itmp, "wb");
     if (!df || !idf) {
@@ -974,6 +997,96 @@ int cmq_filestore_compact_keys(cmq_filestore_t *fs) {
     if (!fs) return -1;
     if (fs_begin_op(fs) != 0) return -1;
     int rc = filestore_compact_keys_impl(fs);
+    fs_end_op(fs);
+    return rc;
+}
+
+void cmq_filestore_set_tombstone_ttl_ms(cmq_filestore_t *fs, uint64_t ms) {
+    if (!fs) return;
+    fs->tombstone_ttl_ms = ms;
+}
+
+int cmq_filestore_set_compact_dirty(cmq_filestore_t *fs, unsigned num,
+                                    unsigned den) {
+    if (!fs) return -1;
+    fs->compact_dirty_num = num;
+    fs->compact_dirty_den = den;
+    return 0;
+}
+
+static int filestore_key_dirty_impl(cmq_filestore_t *fs, size_t *drop,
+                                    size_t *total) {
+    if (!fs || !drop || !total) return -1;
+    *drop = 0;
+    *total = 0;
+    cmq_mutex_lock(&fs->lock);
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    char d1[616], i1[616];
+    if (snprintf(d1, sizeof(d1), "%s.1", fs->data_path) >= (int)sizeof(d1) ||
+        snprintf(i1, sizeof(i1), "%s.1", fs->idx_path) >= (int)sizeof(i1)) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    FILE *src = fopen(d1, "rb");
+    FILE *sidx = fopen(i1, "rb");
+    if (!src || !sidx) {
+        if (src) fclose(src);
+        if (sidx) fclose(sidx);
+        cmq_mutex_unlock(&fs->lock);
+        return 0;
+    }
+    kc_rec_t *recs = NULL;
+    size_t n = 0;
+    int rc = -1;
+    if (keycompact_load(src, sidx, &recs, &n) == 0) {
+        keycompact_mark(recs, n, fs->tombstone_ttl_ms, fs_mtime_ms(d1));
+        size_t d = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (!recs[i].keep)
+                d++;
+        }
+        *drop = d;
+        *total = n;
+        rc = 0;
+    }
+    free(recs);
+    fclose(src);
+    fclose(sidx);
+    cmq_mutex_unlock(&fs->lock);
+    return rc;
+}
+
+static int filestore_compact_keys_maybe_impl(cmq_filestore_t *fs) {
+    if (!fs) return -1;
+    if (fs->compact_dirty_den == 0)
+        return 0;
+    size_t drop = 0, total = 0;
+    if (filestore_key_dirty_impl(fs, &drop, &total) != 0)
+        return -1;
+    if (total == 0)
+        return 0;
+    /* drop/total >= num/den  <=>  drop*den >= total*num (64-bit). */
+    if ((uint64_t)drop * (uint64_t)fs->compact_dirty_den <
+        (uint64_t)total * (uint64_t)fs->compact_dirty_num)
+        return 0;
+    return filestore_compact_keys_impl(fs);
+}
+
+int cmq_filestore_key_dirty(cmq_filestore_t *fs, size_t *drop, size_t *total) {
+    if (!fs || !drop || !total) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_key_dirty_impl(fs, drop, total);
+    fs_end_op(fs);
+    return rc;
+}
+
+int cmq_filestore_compact_keys_maybe(cmq_filestore_t *fs) {
+    if (!fs) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_compact_keys_maybe_impl(fs);
     fs_end_op(fs);
     return rc;
 }
@@ -1111,9 +1224,12 @@ static int filestore_append_impl(cmq_filestore_t *fs, const uint8_t *data, size_
     int rotated = 0;
     if (fs->rotate_bytes && fs->data_end_off >= fs->rotate_bytes)
         rotated = (filestore_rotate_archive_locked(fs) == 0);
+    unsigned dirty_den = fs->compact_dirty_den;
     if (!rotated)
         fs_unlock_pair(fs);
     cmq_mutex_unlock(&fs->lock);
+    if (rotated && dirty_den)
+        (void)filestore_compact_keys_maybe_impl(fs);
     return 0;
 }
 
