@@ -1,0 +1,3 @@
+v0.5.99 bench 2:
+- SUBSCRIBE+COMPRESSED still pending_error.
+- Corrupt zstd RESPONSE is rejected before inbox decrement.

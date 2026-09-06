@@ -1,0 +1,3 @@
+v0.5.99 bench 1:
+- Uncompressed RESPONSE: one flags-bit compare.
+- Compressed RESPONSE: inflate + recurse, then inbox/subject parse.

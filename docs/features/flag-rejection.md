@@ -8,8 +8,8 @@ The CMSGQueue wire protocol reserves two flag bits:
 - `CMQ_FLAG_CHECKSUM   = 0x02` (defined in `src/proto/cmq_proto.h:15`)
 
 `CMQ_FLAG_CHECKSUM` is implemented (F3). `CMQ_FLAG_COMPRESSED` is
-implemented for **BATCH, PUBLISH, MESSAGE, and REQUEST** (F2,
-v0.5.41 / v0.5.96–98). Prior to the F11 reject, a
+implemented for the **data path** (BATCH, PUBLISH, MESSAGE,
+REQUEST, RESPONSE; F2, v0.5.41 / v0.5.96–99). Prior to the F11 reject, a
 peer setting either bit on a `PUBLISH` frame was successfully parsed — the
 parser recorded the flag bits in `frame.hdr.flags`, then re-emitted them on
 outbound `MESSAGE` frames (`src/server/cmq_server.c:2915/2956/2983`). The
@@ -24,23 +24,23 @@ highest-priority weakness preceding any new feature work.
 
 **Reject unimplemented flag+opcode combinations.** The parser inspects
 the flags byte and marks `pending_error = 1` when `CMQ_FLAG_COMPRESSED`
-is set on any opcode other than BATCH, PUBLISH, MESSAGE, or REQUEST.
-The server's accept loop drains the queue and tears down the
-connection on `pending_error`.
+is set on any opcode other than the data path (BATCH, PUBLISH,
+MESSAGE, REQUEST, RESPONSE). The server's accept loop drains
+the queue and tears down the connection on `pending_error`.
 
-The rule is **fail-closed**: a compressed RESPONSE must not silently
-round-trip garbage. BATCH, PUBLISH, MESSAGE, and REQUEST inflate
-before use.
+The rule is **fail-closed**: a compressed SUBSCRIBE must not
+silently round-trip garbage. Data-path opcodes inflate before use.
 
 **Compatibility:**
 - `CMQ_FLAG_HEADERS (0x04)` — already implemented, still passes.
 - `CMQ_FLAG_BATCH (0x08)` — already implemented, still passes.
 - `CMQ_FLAG_ROUTE (0x10)` — used on CONNECT, not in the parser path.
 - `CMQ_FLAG_COMPRESSED (0x01)` — accepted on BATCH, PUBLISH,
-  MESSAGE, and REQUEST; rejected on RESPONSE (v0.5.98).
+  MESSAGE, REQUEST, RESPONSE; rejected on control ops (v0.5.99).
 - `CMQ_FLAG_CHECKSUM (0x02)` — accepted; verified in `handle_publish`
   after inflate.
-- `COMPRESSED` on RESPONSE and other remaining opcodes — rejected (F11).
+- `COMPRESSED` on SUBSCRIBE / CONNECT and other control opcodes —
+  rejected (F11).
 
 `handle_batch` is the F2 decompress branch; `handle_publish` is the
 F3 checksum branch.

@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.98)
+# Remaining unimplemented work (HEAD after v0.5.99)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -60,6 +60,7 @@ Required next cuts: none.
 | v0.5.96 | F2 COMPRESSED on PUBLISH |
 | v0.5.97 | F2 COMPRESSED on MESSAGE |
 | v0.5.98 | F2 COMPRESSED on REQUEST |
+| v0.5.99 | F2 COMPRESSED on RESPONSE |
 
 ## Deferred — detailed designs
 
@@ -124,7 +125,8 @@ are live (v0.5.88).
 | COMPRESSED on PUBLISH | shipped v0.5.96 | — |
 | COMPRESSED on MESSAGE | shipped v0.5.97 | — |
 | COMPRESSED on REQUEST | shipped v0.5.98 | — |
-| COMPRESSED on RESPONSE | still rejected (F11) | Optional |
+| COMPRESSED on RESPONSE | shipped v0.5.99 | — |
+| COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
 

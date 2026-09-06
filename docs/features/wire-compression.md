@@ -34,9 +34,9 @@ decompresses, clears `CMQ_FLAG_COMPRESSED` on a local frame, and
 recurses once. The original `frame->payload` remains owned by the
 parser; the decoded buffer is freed on this return path.
 
-**Parser (v0.5.41 / v0.5.96–98):** `CMQ_FLAG_COMPRESSED` is accepted
-when `op` is BATCH, PUBLISH, MESSAGE, or REQUEST. RESPONSE and
-other opcodes with the bit set are still `pending_error` (F11).
+**Parser (v0.5.41 / v0.5.96–99):** `CMQ_FLAG_COMPRESSED` is accepted
+on the data path (BATCH, PUBLISH, MESSAGE, REQUEST, RESPONSE).
+Control opcodes with the bit set are still `pending_error` (F11).
 
 ### Threshold policy
 
@@ -100,8 +100,8 @@ Threats closed:
   cap is **not** used: a 4 KiB JSON payload at zstd-1 is ~30 B
   (~130×) and is a supported happy path.
 - **Memory exhaustion** — the 16 MiB cap is the allocator ceiling.
-- **F11 interop** — COMPRESSED on RESPONSE and other remaining
-  opcodes is still rejected in the parser.
+- **F11 interop** — COMPRESSED on control opcodes (SUBSCRIBE,
+  CONNECT, …) is still rejected in the parser.
 
 Threats NOT closed (covered by TLS in F1):
 - Active tampering of compressed data. The CRC32C trailing checksum
@@ -109,9 +109,10 @@ Threats NOT closed (covered by TLS in F1):
 
 ## Limitations
 
-- BATCH, PUBLISH, MESSAGE, and REQUEST. RESPONSE stays rejected.
-  PUBLISH / REQUEST inflate the whole payload once. MESSAGE
-  inflates, converts to a PUBLISH body, then fans out plaintext.
+- Data path: BATCH, PUBLISH, MESSAGE, REQUEST, RESPONSE.
+  Control ops stay rejected. PUBLISH / REQUEST / RESPONSE inflate
+  the whole payload once. MESSAGE inflates, converts to a PUBLISH
+  body, then fans out plaintext.
 - Level 1 only. Higher levels (3, 6, 9) trade CPU for ratio;
   1 is the recommended default for hot paths.
 - No negotiated codec — only zstd. LZ4 could be added behind

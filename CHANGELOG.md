@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.99 - 2026-09-06
+
+### Added
+- **COMPRESSED on RESPONSE (F2 follow-up)** — zstd RESPONSE
+  inflates before inbox decrement / subject parse (16 MiB
+  cap). Control opcodes still rejected (F11).
+
+### Tests
+- `tests/test_resc.c` — accept RESPONSE, reject SUBSCRIBE,
+  inflate, reject CONNECT (+4).
+
+### Documentation
+- `docs/reviews/v0.5.99.enumeration.md`, `v0.5.99.plan.md`.
+- `docs/features/wire-compression.md`, `flag-rejection.md`.
+- `docs/benchmarks/v0599_{1,2}.txt`.
+
+### Test count
+- 387 tests (was 383 in v0.5.98; +4).
+
 ## 0.5.98 - 2026-09-06
 
 ### Added

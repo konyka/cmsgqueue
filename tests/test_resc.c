@@ -1,4 +1,4 @@
-/* v0.5.98: COMPRESSED on REQUEST. */
+/* v0.5.99: COMPRESSED on RESPONSE. */
 #include "cmq_test.h"
 #include "cmq_parser.h"
 #include "cmq_proto.h"
@@ -6,21 +6,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-TEST(reqc, accept_request) {
+TEST(resc, accept_response) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
-    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_REQUEST,
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_RESPONSE,
                                 CMQ_FLAG_COMPRESSED, NULL, 0);
     ASSERT(n > 0);
     ASSERT_EQ(cmq_parser_feed(p, buf, n), 1);
     ASSERT_EQ(cmq_parser_pending_error(p), 0);
     const cmq_frame_t *f = cmq_parser_frame(p);
     ASSERT_NOT_NULL(f);
-    ASSERT_EQ(f->hdr.op, CMQ_OP_REQUEST);
+    ASSERT_EQ(f->hdr.op, CMQ_OP_RESPONSE);
     cmq_parser_destroy(p);
 }
 
-TEST(reqc, reject_subscribe) {
+TEST(resc, reject_subscribe) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
     size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_SUBSCRIBE,
@@ -31,8 +31,8 @@ TEST(reqc, reject_subscribe) {
     cmq_parser_destroy(p);
 }
 
-TEST(reqc, inflate_roundtrip) {
-    uint8_t plain[] = {0, 3, 'f', 'o', 'o', 0, 2, 'i', 'n', 'x'};
+TEST(resc, inflate_roundtrip) {
+    uint8_t plain[] = {0, 7, '_', 'I', 'N', 'B', 'O', 'X', '.', 'x'};
     size_t cap = cmq_compress_bound(sizeof(plain));
     uint8_t *enc = malloc(cap);
     ASSERT_NOT_NULL(enc);
@@ -47,7 +47,7 @@ TEST(reqc, inflate_roundtrip) {
     free(enc);
 }
 
-TEST(reqc, reject) {
+TEST(resc, reject) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
     size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_CONNECT,
