@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.109 - 2026-09-06
+
+### Added
+- **`persist_dir` config-file key (F5 follow-up)** —
+  `persist_dir = /path` in `cmq.conf` enables the WAL.
+  Empty value disables. `.` / `..` components fail closed.
+  The server `strdup`s the path so destroy owns it.
+
+### Tests
+- `tests/test_pdir.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.109.enumeration.md`, `v0.5.109.plan.md`.
+- `docs/features/persistence.md`.
+- `docs/benchmarks/v05109_{1,2}.txt`.
+
+### Test count
+- 427 tests (was 423 in v0.5.108; +4).
+
 ## 0.5.108 - 2026-09-06
 
 ### Added

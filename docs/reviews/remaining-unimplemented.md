@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.108)
+# Remaining unimplemented work (HEAD after v0.5.109)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -70,6 +70,7 @@ Required next cuts: none.
 | v0.5.106 | D4 `$JS` consume-part subject |
 | v0.5.107 | D4 `$JS` default partitions |
 | v0.5.108 | D4 `$JS` history WAL rotate |
+| v0.5.109 | F5 `persist_dir` config-file key |
 
 ## Deferred — detailed designs
 
@@ -160,6 +161,7 @@ are live (v0.5.88).
 | `$JS` consume-part subject | shipped v0.5.106 | — |
 | `$JS` default partitions | shipped v0.5.107 | — |
 | `$JS` history WAL rotate | shipped v0.5.108 | — |
+| `persist_dir` config key | shipped v0.5.109 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)

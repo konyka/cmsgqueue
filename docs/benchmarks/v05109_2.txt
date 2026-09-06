@@ -1,0 +1,4 @@
+v0.5.109 bench 2:
+- Path check is a single scan (no stat, no mkdir).
+- Reject is parse-time; filestore open is unchanged.
+- Reload still does not move the live WAL (log only).

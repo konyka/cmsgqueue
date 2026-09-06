@@ -8,7 +8,9 @@ needed durability had no way to enable it from the public config.
 
 ## Design
 
-A new config field `persist_dir` (default NULL = disabled). When
+A new config field `persist_dir` (default NULL = disabled). The
+config file key is `persist_dir` (v0.5.109). Empty value means
+disabled. Paths with `.` / `..` components are rejected. When
 set, `cmq_server_create` opens a filestore at `persist_dir/<prefix>`
 and appends every **validated publish** to it via
 `cmq_filestore_append`. The append happens in `handle_publish`

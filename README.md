@@ -15,7 +15,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Backpressure** 4MB write buffer limit per client; validated by tests/test_parser_backpressure.c
 - **Connection Limit** atomic `active_clients` gate on accept (`max_clients`)
 - **Graceful Shutdown** cmq_server_drain() sends DISCONNECT to all clients before stopping; validated by tests/test_server_ops.c shutdown path
-- **Persistence** ring buffer memstore, durable stream cursors, file-based WAL (`persist_dir`) with CRC32
+- **Persistence** ring buffer memstore, durable stream cursors, file-based WAL (`persist_dir` in `cmq.conf`, v0.5.109) with CRC32
   Note: `$JS.<name>` PUBLISH appends; REQUEST returns last; `$JS.<name>.<consumer>` pull consume / ack (v0.5.93–95); `$JS.<name>.<consumer>.<part>` consume-part (v0.5.106). Last payload persists as `{persist_dir}/js/{name}.last` (v0.5.103); history as `{persist_dir}/js/{name}.msgs` (v0.5.104); cursors persist under `{persist_dir}/js` when set. `js_partitions` (v0.5.107) sets the default hash-partition count for new streams. `js_msgs_rotate_bytes` (v0.5.108) bounds the history WAL.
 - **Clustering** node membership and outbound route broadcast; leaf/gateway CONNECT/CONNACK e2e (v0.5.86)
 - **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired, F1 pending), MQTT bridge library with **5.0 property decode (v0.5.43)** and **will / durable sessions (v0.5.46)**, WebSocket transport with frame reassembly
@@ -103,6 +103,9 @@ auth_password = secret
 
 # Limits
 max_payload_size = 1048576
+
+# Persistence (omit or empty = disabled)
+persist_dir = /var/lib/cmsgqueue
 ```
 
 ## Binary Protocol

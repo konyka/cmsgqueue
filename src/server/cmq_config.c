@@ -87,6 +87,34 @@ static int parse_log_level(const char *value, int *out) {
     return 0;
 }
 
+/* Match filestore dir_safe: no '\', controls, or "."/".." components. */
+static int persist_dir_ok(const char *dir) {
+    if (!dir || !dir[0]) return 0;
+    size_t n = strnlen(dir, 512);
+    if (n == 0 || n >= 512) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)dir[i];
+        if (c == '\\' || c < 0x20 || c == 0x7f)
+            return 0;
+    }
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && dir[i] == '/')
+            i++;
+        if (i >= n)
+            break;
+        size_t start = i;
+        while (i < n && dir[i] != '/')
+            i++;
+        size_t len = i - start;
+        if (len == 1 && dir[start] == '.')
+            return 0;
+        if (len == 2 && dir[start] == '.' && dir[start + 1] == '.')
+            return 0;
+    }
+    return 1;
+}
+
 static int parse_int_range(const char *value, int min, int max, int *out) {
     if (!value || !out || min > max) return -1;
     char *end = NULL;
@@ -109,6 +137,14 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "js_msgs_rotate_bytes") == 0) {
         return parse_int_range(value, 0, 1073741824,
                                &config->js_msgs_rotate_bytes);
+    } else if (strcmp(key, "persist_dir") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->persist_dir);
+            config->persist_dir = NULL;
+            return 0;
+        }
+        if (!persist_dir_ok(value)) return -1;
+        return cfg_set_str(&config->persist_dir, value);
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
         return parse_int_range(value, 0, 64, &config->num_threads);
     } else if (strcmp(key, "max_clients") == 0) {
@@ -251,6 +287,7 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->cluster_node_id);
     cfg_free_owned(config->tls_cert);
     cfg_free_owned(config->tls_key);
+    cfg_free_owned(config->persist_dir);
     for (int i = 0; i < config->route_count && i < 8; i++)
         cfg_free_owned(config->routes[i].addr);
     config->host = NULL;
@@ -272,6 +309,7 @@ void cmq_config_free(cmq_config_t *config) {
     config->cluster_node_id = NULL;
     config->tls_cert = NULL;
     config->tls_key = NULL;
+    config->persist_dir = NULL;
     for (int i = 0; i < 8; i++) {
         config->routes[i].addr = NULL;
         config->routes[i].port = 0;

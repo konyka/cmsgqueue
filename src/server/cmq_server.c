@@ -7808,6 +7808,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.cluster_node_id = NULL;
     srv->config.tls_cert = NULL;
     srv->config.tls_key = NULL;
+    srv->config.persist_dir = NULL;
     srv->config.route_count = 0;
     for (int i = 0; i < 8; i++) {
         srv->config.routes[i].addr = NULL;
@@ -7844,6 +7845,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.cluster_node_id, src.cluster_node_id);
     OWN(srv->config.tls_cert, src.tls_cert);
     OWN(srv->config.tls_key, src.tls_key);
+    OWN(srv->config.persist_dir, src.persist_dir);
 #undef OWN
     /* Fail closed before copy — truncating/skipping would hide invalid
        programmatic configs from cmq_config_validate. */
