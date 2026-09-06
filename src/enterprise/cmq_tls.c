@@ -465,6 +465,36 @@ int cmq_tls_reload_attach(cmq_tls_config_t **slot,
     return 0;
 }
 
+static int tls_reload_alpn_ok(const char *alpn) {
+    if (!alpn || !alpn[0]) return 0;
+    size_t n = strnlen(alpn, 128);
+    if (n == 0 || n >= 128) return 0;
+    if (strstr(alpn, "..") || strchr(alpn, '\\'))
+        return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)alpn[i];
+        if (c < 0x21 || c > 0x7e)
+            return 0;
+    }
+    return 1;
+}
+
+int cmq_tls_reload_alpn(cmq_tls_config_t *cfg, const char *alpn) {
+    if (!cfg) return -1;
+    if (!alpn || !alpn[0])
+        return 0;
+    if (!tls_reload_alpn_ok(alpn))
+        return -1;
+    if (tls_begin_op(cfg) != 0) return -1;
+    int have = cfg->alpn_len > 0;
+    tls_end_op(cfg);
+    if (have)
+        return 0;
+    if (cmq_tls_set_alpn(cfg, alpn) != 0)
+        return -1;
+    return cmq_tls_reload(cfg);
+}
+
 /* F12: Reload the SSL_CTX from the current cert/key paths.
  * Existing sessions continue with the old CTX until they tear down.
  * Returns 0 on success, -1 on failure. */

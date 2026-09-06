@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.151 - 2026-09-07
+
+### Added
+- **Set h2 ALPN on reload** — when create had TLS but no
+  `h2_port`, SIGHUP adds `h2` ALPN to empty slots after
+  the h2 listen binds. Omitted / empty keeps off. `..` /
+  `\` fail closed. Existing ALPN is not remounted.
+
+### Tests
+- `tests/test_alp.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.151.enumeration.md`, `v0.5.151.plan.md`.
+- `docs/features/tls-hardening.md`.
+- `docs/benchmarks/v05151_{1,2}.txt`.
+
+### Test count
+- 595 tests (was 591 in v0.5.150; +4).
+
 ## 0.5.150 - 2026-09-07
 
 ### Added

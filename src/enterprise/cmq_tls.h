@@ -44,6 +44,10 @@ int cmq_tls_reload_attach(cmq_tls_config_t **slot,
                           const char *fresh_cert, const char *fresh_key,
                           const char *fresh_ca, int fresh_verify,
                           const char *alpn);
+/* v0.5.151: empty/omitted ALPN keeps off. Unsafe tokens fail
+ * closed. Sets ALPN when the slot has none. Existing ALPN is
+ * left alone (no remount). Rebuilds the CTX via cmq_tls_reload. */
+int cmq_tls_reload_alpn(cmq_tls_config_t *cfg, const char *alpn);
 
 /* Copy-out under begin_op — never return an interior pointer (destroy UAF). */
 int cmq_tls_cert_path(cmq_tls_config_t *cfg, char *out, size_t out_len);

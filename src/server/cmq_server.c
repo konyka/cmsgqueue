@@ -9137,6 +9137,16 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (server->h2_lfd >= 0) {
+        for (int ti = 0; ti < CMQ_MAX_LISTENERS; ti++) {
+            if (!server->tls_config_slots[ti])
+                continue;
+            if (cmq_tls_reload_alpn(server->tls_config_slots[ti], "h2") != 0) {
+                cmq_config_free(&fresh);
+                return -1;
+            }
+        }
+    }
     if (fresh.listener_count < 0 || fresh.listener_count > CMQ_MAX_LISTENERS) {
         cmq_config_free(&fresh);
         return -1;

@@ -60,6 +60,9 @@ v0.5.148: reload attaches TLS when create left a slot
 empty (`tls_enabled` + cert/key for slot 0;
 `listener{1,2,3}_tls_*` for extra slots). Existing
 SSL_CTX is not remounted.
+v0.5.151: reload sets `h2` ALPN on a live slot that
+had none after `h2_port` binds. Existing ALPN is not
+remounted.
 
 ## Limitations
 

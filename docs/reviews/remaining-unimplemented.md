@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.150)
+# Remaining unimplemented work (HEAD after v0.5.151)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -157,6 +157,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.148 | attach TLS on reload |
 | v0.5.149 | attach blocklist on reload |
 | v0.5.150 | load persisted subscriptions on reload |
+| v0.5.151 | set h2 ALPN on reload |
 
 ## Deferred — detailed designs
 
@@ -289,6 +290,7 @@ are live (v0.5.88).
 | attach TLS on reload | shipped v0.5.148 | — |
 | attach blocklist on reload | shipped v0.5.149 | — |
 | load persisted subscriptions on reload | shipped v0.5.150 | — |
+| set h2 ALPN on reload | shipped v0.5.151 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -328,7 +330,8 @@ are live (v0.5.88).
   create left a slot empty shipped v0.5.148. Blocklist
   attach when create had none shipped v0.5.149. F18
   persist_load when persist was just attached shipped
-  v0.5.150. Create-time only: `persist_dir` remount,
+  v0.5.150. h2 ALPN on an existing TLS slot shipped
+  v0.5.151. Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.
 
