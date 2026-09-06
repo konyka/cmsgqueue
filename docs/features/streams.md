@@ -59,15 +59,18 @@ Optional cursors: `{persist_dir}/js/{name}.cursors`
 when `persist_dir` is set. Message bodies stay on
 the ring (not durable).
 
-REQUEST-get / consume stay deferred.
+REQUEST `$JS.<name>` (v0.5.94) returns the last payload
+to reply-to, or an empty body on miss. Oversized last
+message is an empty miss. Consume/ack stays library-only.
 
 ## Tests
 
 `tests/test_stream_cursors.c`, `tests/test_spart.c`,
-`tests/test_js.c`
+`tests/test_js.c`, `tests/test_jsr.c`
 
 ## See also
 
 - `docs/reviews/v0.5.56.enumeration.md`
 - `docs/reviews/v0.5.87.enumeration.md`
 - `docs/reviews/v0.5.93.enumeration.md`
+- `docs/reviews/v0.5.94.enumeration.md`

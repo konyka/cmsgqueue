@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.94 - 2026-09-06
+
+### Added
+- **Stream REQUEST-get (D4 follow-up)** — REQUEST
+  `$JS.<name>` returns the last payload to reply-to,
+  or an empty body on miss.
+
+### Tests
+- `tests/test_jsr.c` — hit/miss, not-js, isolate,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.94.enumeration.md`, `v0.5.94.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v0594_{1,2}.txt`.
+
+### Test count
+- 367 tests (was 363 in v0.5.93; +4).
+
 ## 0.5.93 - 2026-09-06
 
 ### Added

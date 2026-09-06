@@ -158,3 +158,17 @@ int cmq_js_last(cmq_js_t *j, const char *subject, uint8_t *out,
     cmq_mutex_unlock(&j->lock);
     return rc;
 }
+
+int cmq_js_request(cmq_js_t *j, const char *subject, uint8_t *out,
+                   size_t out_sz, size_t *out_len) {
+    if (!out_len) return -1;
+    *out_len = 0;
+    if (!j || !subject || !out) return -1;
+    int pr = cmq_js_parse(subject, NULL, 0);
+    if (pr != 0) return -1;
+    uint64_t seq = 0;
+    if (cmq_js_last(j, subject, out, out_sz, out_len, &seq) == 0)
+        return 1;
+    *out_len = 0;
+    return 0;
+}

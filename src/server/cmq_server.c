@@ -4293,8 +4293,8 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    /* v0.5.70: $KV / $OBJ REQUEST-get. Answer locally; drop inbox. */
-    if (subject[0] == '$' && (srv->kvb || srv->obj)) {
+    /* v0.5.70 / 0.5.94: $KV / $OBJ / $JS REQUEST-get. Local; drop inbox. */
+    if (subject[0] == '$' && (srv->kvb || srv->obj || srv->js)) {
         uint8_t vbuf[CMQ_KV_VAL_MAX];
         uint8_t *obuf = vbuf;
         uint8_t *big = NULL;
@@ -4312,6 +4312,20 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                 return;
             }
             hit = cmq_obj_request(srv->obj, subject, big, CMQ_OBJ_VAL_MAX, &vn);
+            obuf = big;
+        }
+        if (hit < 0 && srv->js) {
+            if (!big) {
+                big = malloc(CMQ_JS_VAL_MAX);
+                if (!big) {
+                    cmq_send_error(c, "js get");
+                    if (cmq_atomic_load_int(&c->inbox_pending, CMQ_ATOMIC_RELAXED) > 0)
+                        cmq_atomic_fetch_sub_int(&c->inbox_pending, 1,
+                                                 CMQ_ATOMIC_RELAXED);
+                    return;
+                }
+            }
+            hit = cmq_js_request(srv->js, subject, big, CMQ_JS_VAL_MAX, &vn);
             obuf = big;
         }
         if (hit >= 0) {
