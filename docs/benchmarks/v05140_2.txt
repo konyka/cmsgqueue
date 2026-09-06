@@ -1,0 +1,3 @@
+v0.5.140 bench 2:
+- Reload 0: no socket.
+- Reject -1 / 65536: no socket; live port stays.

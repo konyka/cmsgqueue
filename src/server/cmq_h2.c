@@ -196,6 +196,20 @@ int cmq_h2_listen_port(int lfd) {
     return (int)ntohs(addr.sin_port);
 }
 
+int cmq_h2_reload_listen(int *lfd, int *live_port, int fresh_port) {
+    if (!lfd || !live_port) return -1;
+    if (fresh_port < 0 || fresh_port > 65535) return -1;
+    if (fresh_port == 0)
+        return 0;
+    if (*lfd >= 0)
+        return 0;
+    int s = cmq_h2_listen("127.0.0.1", fresh_port);
+    if (s < 0) return -1;
+    *lfd = s;
+    *live_port = fresh_port;
+    return 0;
+}
+
 typedef struct {
     ssize_t (*rd)(void *ctx, uint8_t *buf, size_t n);
     ssize_t (*wr)(void *ctx, const uint8_t *buf, size_t n);

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.140 - 2026-09-06
+
+### Added
+- **Bind `h2_port` on reload** — when create had no HTTP/2
+  listener, SIGHUP calls `cmq_h2_listen` on loopback.
+  Omitted / 0 keeps the current fd. Out-of-range fails
+  closed. An existing listener is left alone (no accept-fd
+  rebind).
+
+### Tests
+- `tests/test_hup.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.140.enumeration.md`, `v0.5.140.plan.md`.
+- `docs/features/http2.md`.
+- `docs/benchmarks/v05140_{1,2}.txt`.
+
+### Test count
+- 551 tests (was 547 in v0.5.139; +4).
+
 ## 0.5.139 - 2026-09-06
 
 ### Added

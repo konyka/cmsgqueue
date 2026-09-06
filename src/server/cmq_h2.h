@@ -52,6 +52,10 @@ int cmq_h2_stream_count(const cmq_h2_t *h);
 /* Loopback-only prior-knowledge listener. Port 0 picks an ephemeral. */
 int cmq_h2_listen(const char *bind_addr, int port);
 int cmq_h2_listen_port(int lfd);
+/* v0.5.140: 0 / omitted keeps. Out-of-range fails closed.
+ * Binds loopback when *lfd < 0. Existing listener is left
+ * alone (no accept-fd rebind). */
+int cmq_h2_reload_listen(int *lfd, int *live_port, int fresh_port);
 int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
                    size_t pcap, size_t *plen);
 int cmq_h2_accept(int lfd, char *subject, size_t scap, uint8_t *payload,

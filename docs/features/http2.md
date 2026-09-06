@@ -20,6 +20,10 @@ POST `:path` `/subject` plus DATA becomes subject + payload.
 (loopback only). When TLS is also enabled, the server calls
 `cmq_tls_set_alpn("h2")` before `cmq_tls_load` so the CTX
 advertises `h2`. `h2_port` 0 leaves both off.
+v0.5.140: reload binds `h2_port` when create had none.
+Omitted / 0 keeps the current fd. Out-of-range fails
+closed. An existing listener is left alone (no accept-fd
+rebind).
 
 `cmq_h2_accept_tls` / `cmq_h2_session_tls` (v0.5.83) wrap
 that same POST machine in a TLS handshake. Without a TLS
@@ -30,7 +34,7 @@ config, plaintext prior-knowledge accept is unchanged.
 
 `tests/test_hpack.c`, `tests/test_huff.c`, `tests/test_hdyn.c`,
 `tests/test_h2.c`, `tests/test_h2l.c`, `tests/test_h2p.c`,
-`tests/test_h2t.c`
+`tests/test_h2t.c`, `tests/test_hup.c`
 
 ## See also
 

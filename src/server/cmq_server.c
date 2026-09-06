@@ -9006,6 +9006,11 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (cmq_h2_reload_listen(&server->h2_lfd, &server->config.h2_port,
+                             fresh.h2_port) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_reload_apply_dynamic(server->log, &server->config.log_level,
                                  &server->acl_h, &fresh) != 0) {
         cmq_config_free(&fresh);

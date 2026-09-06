@@ -1,55 +1,54 @@
-/* v0.5.118: config_file ownership + SIGHUP pending flag. */
-#include "cmq_config.h"
-#include "cmq_dynreload.h"
+/* v0.5.140: reload binds h2_port when create had none. */
+#include "cmq_h2.h"
 #include "cmq_test.h"
-#include <stdio.h>
-#include <string.h>
-
-static const char *write_conf(const char *content) {
-    const char *path = "/tmp/cmq_test_hup.conf";
-    FILE *fp = fopen(path, "w");
-    if (!fp) return NULL;
-    fputs(content, fp);
-    fclose(fp);
-    return path;
-}
+#include <unistd.h>
 
 TEST(hup, apply) {
-    const char *path = write_conf("config_file = /tmp/cmq_hup_named.conf\n");
-    cmq_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    ASSERT_EQ(cmq_config_load(path, &cfg), CMQ_OK);
-    ASSERT_STR_EQ(cfg.config_file, "/tmp/cmq_hup_named.conf");
-    cmq_config_free(&cfg);
-    cmq_sighup_note();
-    ASSERT_EQ(cmq_sighup_take(), 1);
-    ASSERT_EQ(cmq_sighup_take(), 0);
+    int probe = cmq_h2_listen("127.0.0.1", 0);
+    ASSERT(probe >= 0);
+    int port = cmq_h2_listen_port(probe);
+    ASSERT(port > 0);
+    close(probe);
+    int lfd = -1;
+    int live = 0;
+    ASSERT_EQ(cmq_h2_reload_listen(&lfd, &live, port), 0);
+    ASSERT(lfd >= 0);
+    ASSERT_EQ(live, port);
+    ASSERT_EQ(cmq_h2_listen_port(lfd), port);
+    int same = lfd;
+    ASSERT_EQ(cmq_h2_reload_listen(&lfd, &live, port + 1), 0);
+    ASSERT(lfd == same);
+    ASSERT_EQ(live, port);
+    close(lfd);
 }
 
 TEST(hup, omitted) {
-    const char *path = write_conf("port = 7654\n");
-    cmq_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    ASSERT_EQ(cmq_config_load(path, &cfg), CMQ_OK);
-    ASSERT_STR_EQ(cfg.config_file, path);
-    cmq_config_free(&cfg);
+    int lfd = -1;
+    int live = 0;
+    ASSERT_EQ(cmq_h2_reload_listen(&lfd, &live, 0), 0);
+    ASSERT_EQ(lfd, -1);
+    ASSERT_EQ(live, 0);
 }
 
 TEST(hup, empty) {
-    const char *path = write_conf("config_file =\n");
-    cmq_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    ASSERT_EQ(cmq_config_load(path, &cfg), CMQ_OK);
-    ASSERT(cfg.config_file == NULL);
-    cmq_config_free(&cfg);
+    int lfd = -1;
+    int live = 7;
+    ASSERT_EQ(cmq_h2_reload_listen(&lfd, &live, 0), 0);
+    ASSERT_EQ(lfd, -1);
+    ASSERT_EQ(live, 7);
 }
 
 TEST(hup, reject) {
-    const char *path = write_conf("config_file = ../x.conf\n");
-    cmq_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    ASSERT(cmq_config_load(path, &cfg) != CMQ_OK);
-    cmq_config_free(&cfg);
+    int lfd = -1;
+    int live = 9;
+    ASSERT(cmq_h2_reload_listen(&lfd, &live, -1) != 0);
+    ASSERT_EQ(lfd, -1);
+    ASSERT_EQ(live, 9);
+    ASSERT(cmq_h2_reload_listen(&lfd, &live, 65536) != 0);
+    ASSERT_EQ(lfd, -1);
+    ASSERT_EQ(live, 9);
+    ASSERT(cmq_h2_reload_listen(NULL, &live, 1) != 0);
+    ASSERT(cmq_h2_reload_listen(&lfd, NULL, 1) != 0);
 }
 
 TEST_MAIN()
