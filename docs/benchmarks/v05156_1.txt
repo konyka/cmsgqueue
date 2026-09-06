@@ -1,0 +1,3 @@
+v0.5.156 bench 1:
+- MQTT maps live apply: strcmp per row, then strdup pair.
+- Same table: strcmp only, no heap.

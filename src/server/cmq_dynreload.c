@@ -204,6 +204,98 @@ int cmq_reload_apply_acl_live(cmq_config_t *live, const cmq_config_t *fresh) {
     return 0;
 }
 
+static int mqtt_map_subject_ok(const char *s) {
+    if (!s || !s[0] || !reload_path_ok(s))
+        return 0;
+    size_t n = strnlen(s, 256);
+    if (n == 0 || n >= 256) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x21 || c > 0x7e || c == '/' || c == '\\' || c == ',')
+            return 0;
+    }
+    return 1;
+}
+
+static int mqtt_map_topic_ok(const char *s) {
+    if (!s || !s[0] || !reload_path_ok(s))
+        return 0;
+    size_t n = strnlen(s, 256);
+    if (n == 0 || n >= 256) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x21 || c > 0x7e || c == '\\' || c == ',')
+            return 0;
+    }
+    return 1;
+}
+
+int cmq_reload_apply_mqtt_maps_live(cmq_config_t *live,
+                                    const cmq_config_t *fresh) {
+    if (!live || !fresh) return -1;
+    int n = fresh->mqtt_bridge_map_count;
+    if (n == 0)
+        return 0;
+    if (n < 0 || n > 8)
+        return -1;
+    for (int i = 0; i < n; i++) {
+        const char *s = fresh->mqtt_bridge_maps[i].cmq_subject;
+        const char *t = fresh->mqtt_bridge_maps[i].mqtt_topic;
+        int q = fresh->mqtt_bridge_maps[i].qos;
+        if (!mqtt_map_subject_ok(s) || !mqtt_map_topic_ok(t) ||
+            q < 0 || q > 2)
+            return -1;
+    }
+    if (n == live->mqtt_bridge_map_count) {
+        int same = 1;
+        for (int i = 0; i < n; i++) {
+            const char *ls = live->mqtt_bridge_maps[i].cmq_subject;
+            const char *lt = live->mqtt_bridge_maps[i].mqtt_topic;
+            if (!ls || !lt ||
+                strcmp(ls, fresh->mqtt_bridge_maps[i].cmq_subject) != 0 ||
+                strcmp(lt, fresh->mqtt_bridge_maps[i].mqtt_topic) != 0 ||
+                live->mqtt_bridge_maps[i].qos !=
+                    fresh->mqtt_bridge_maps[i].qos) {
+                same = 0;
+                break;
+            }
+        }
+        if (same)
+            return 0;
+    }
+    char *subj[8] = {0};
+    char *top[8] = {0};
+    int qos[8] = {0};
+    for (int i = 0; i < n; i++) {
+        subj[i] = strdup(fresh->mqtt_bridge_maps[i].cmq_subject);
+        top[i] = strdup(fresh->mqtt_bridge_maps[i].mqtt_topic);
+        if (!subj[i] || !top[i]) {
+            free(subj[i]);
+            free(top[i]);
+            for (int j = 0; j < i; j++) {
+                free(subj[j]);
+                free(top[j]);
+            }
+            return -1;
+        }
+        qos[i] = fresh->mqtt_bridge_maps[i].qos;
+    }
+    for (int i = 0; i < live->mqtt_bridge_map_count && i < 8; i++) {
+        free((void *)live->mqtt_bridge_maps[i].cmq_subject);
+        free((void *)live->mqtt_bridge_maps[i].mqtt_topic);
+        live->mqtt_bridge_maps[i].cmq_subject = NULL;
+        live->mqtt_bridge_maps[i].mqtt_topic = NULL;
+        live->mqtt_bridge_maps[i].qos = 0;
+    }
+    for (int i = 0; i < n; i++) {
+        live->mqtt_bridge_maps[i].cmq_subject = subj[i];
+        live->mqtt_bridge_maps[i].mqtt_topic = top[i];
+        live->mqtt_bridge_maps[i].qos = qos[i];
+    }
+    live->mqtt_bridge_map_count = n;
+    return 0;
+}
+
 static int auth_dup(const char *fresh, char **out) {
     if (!fresh || !fresh[0]) {
         *out = NULL;

@@ -9019,6 +9019,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
             cmq_config_free(&fresh);
             return -1;
         }
+        if (cmq_reload_apply_mqtt_maps_live(&server->config, &fresh) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
         if (cmq_mqtt_reload_endpoint(server->mqtt_bridge,
                                      &server->config.mqtt_bridge_addr,
                                      &server->config.mqtt_bridge_port,

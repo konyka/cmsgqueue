@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.155)
+# Remaining unimplemented work (HEAD after v0.5.156)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -36,7 +36,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `tls_*` / `listener*_tls_*` | yes | SSL_CTX slots | `apply_tls` + live paths + attach |
 | `listener{1,2,3}_host/port` / count | yes | extra bind | bind empty slots (no rebind) |
 | `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync + F18 load (no remount / WAL replay) |
-| `mqtt_bridge_*` | yes | outbound bridge | attach + maps + endpoint |
+| `mqtt_bridge_*` | yes | outbound bridge | attach + maps + endpoint + live maps |
 
 Intentional / out of scope (not unused create/conf paths):
 
@@ -162,6 +162,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.153 | apply TLS paths on reload |
 | v0.5.154 | apply blocklist path on reload |
 | v0.5.155 | apply ACL strings on reload |
+| v0.5.156 | apply MQTT maps on reload |
 
 ## Deferred — detailed designs
 
@@ -299,6 +300,7 @@ are live (v0.5.88).
 | apply TLS paths on reload | shipped v0.5.153 | — |
 | apply blocklist path on reload | shipped v0.5.154 | — |
 | apply ACL strings on reload | shipped v0.5.155 | — |
+| apply MQTT maps on reload | shipped v0.5.156 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -343,7 +345,8 @@ are live (v0.5.88).
   shipped v0.5.152. TLS live path apply + fail-closed
   `..` shipped v0.5.153. Blocklist swap fail-closed + live
   path shipped v0.5.154. ACL live CSV apply shipped
-  v0.5.155. Create-time only: `persist_dir` remount,
+  v0.5.155. MQTT maps live apply shipped v0.5.156.
+  Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.
 

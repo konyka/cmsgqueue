@@ -30,6 +30,10 @@ A matching CMQ PUBLISH is written as MQTT PUBLISH
 `mqtt_bridge*` accounts are not re-bridged.
 SIGHUP replaces a non-empty map table on the live bridge
 (v0.5.126). Omitted maps keep the current table.
+v0.5.156: SIGHUP also copies that table onto the live
+config. Count 0 / omitted keeps the current rows.
+`..` / `\` / empty subject or topic / qos outside 0–2
+fail closed.
 v0.5.136: reload applies a non-empty `mqtt_bridge_addr`
 and/or non-zero `mqtt_bridge_port` via
 `cmq_mqtt_bridge_connect` (same-endpoint live peer is a

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.156 - 2026-09-07
+
+### Added
+- **Apply MQTT maps on reload** — SIGHUP copies a
+  non-empty `mqtt_bridge_maps` table onto the live
+  config. Count 0 / omitted keeps the current rows.
+  `..` / `\` / empty subject or topic / qos outside
+  0–2 fail closed. The bridge object is not remounted
+  (still replaced by `cmq_mqtt_reload_maps`).
+
+### Tests
+- `tests/test_mml.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.156.enumeration.md`, `v0.5.156.plan.md`.
+- `docs/features/mqtt-bridge.md`.
+- `docs/benchmarks/v05156_{1,2}.txt`.
+
+### Test count
+- 615 tests (was 611 in v0.5.155; +4).
+
 ## 0.5.155 - 2026-09-07
 
 ### Added

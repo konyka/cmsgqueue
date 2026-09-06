@@ -29,6 +29,13 @@ int cmq_reload_apply_tls_live(cmq_config_t *live, const cmq_config_t *fresh);
  * closed. Same string is a no-op. */
 int cmq_reload_apply_acl_live(cmq_config_t *live, const cmq_config_t *fresh);
 
+/* Copy a non-empty mqtt_bridge_maps table onto the live config.
+ * Count 0 / omitted keeps the current table. `..` / `\` / empty
+ * subject or topic / qos outside 0–2 fail closed. Same table
+ * is a no-op. */
+int cmq_reload_apply_mqtt_maps_live(cmq_config_t *live,
+                                    const cmq_config_t *fresh);
+
 /* Copy non-empty auth / JWT / nkey fields onto the live config.
  * Empty/omitted strings and jwt_leeway_sec 0 keep the current
  * values. jwt_leeway_sec must be 0–3600. All-or-nothing. */
