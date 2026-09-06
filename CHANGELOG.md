@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.57 - 2026-09-06
+
+### Added
+- **MQTT outbound QoS 2** — SUBSCRIBE may grant 2. Matching
+  subscribers get `PUBLISH` `0x34`; `PUBREC` sends `PUBREL`
+  `0x62`; `PUBCOMP` frees the slot. Same 16-slot window.
+  QoS 1 PUBACK cannot free a QoS 2 slot.
+
+### Tests
+- `tests/test_mqtt_qos2.c` — encode, handshake order, rec
+  rejects QoS 1, PUBREL, fanout, QoS 1 untouched (+6).
+
+### Documentation
+- `docs/reviews/v0.5.57.enumeration.md`, `v0.5.57.plan.md`.
+- `docs/features/mqtt-server-stub.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0557_{1,2}.txt`.
+
+### Test count
+- 211 tests (was 205 in v0.5.56; +6).
+
 ## 0.5.56 - 2026-09-06
 
 ### Added

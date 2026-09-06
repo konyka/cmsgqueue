@@ -35,8 +35,14 @@ Each live session has a 16-slot outbound window. Matching
 local subscribers receive `PUBLISH` with QoS 1 and a packet
 id. `PUBACK` frees the slot. A full window skips that dest
 (the publisher is not blocked). Payload over 1024 bytes is
-not tracked (offer returns `-3`). Outbound QoS 2 is not
-granted (SUBSCRIBE still caps at 1).
+not tracked (offer returns `-3`).
+
+## QoS 2 outbound (v0.5.57)
+
+SUBSCRIBE may grant QoS 2. Matching subscribers receive
+`PUBLISH` `0x34`. `PUBREC` advances the slot and sends
+`PUBREL` `0x62`. `PUBCOMP` frees it. A QoS 1 PUBACK cannot
+free a QoS 2 slot; `rec` on a QoS 1 slot fails.
 
 ## Tests
 
@@ -49,9 +55,13 @@ session save/load/drop.
 `tests/test_mqtt_inflight.c` — offer/ack/full/encode, socketpair
 fanout + PUBACK, full window skips.
 
+`tests/test_mqtt_qos2.c` — encode 0x34, rec/comp order, PUBREL,
+fanout handshake, QoS 1 untouched.
+
 ## See also
 
 - `docs/reviews/v0.5.43.enumeration.md`
 - `docs/reviews/v0.5.46.enumeration.md`
 - `docs/reviews/v0.5.54.enumeration.md`
+- `docs/reviews/v0.5.57.enumeration.md`
 - `docs/features/mqtt-bridge.md`

@@ -1,0 +1,3 @@
+v0.5.57 bench 2:
+- PUBREL is 4 bytes, encoded only after a matching PUBREC.
+- Window full still skips that dest (publisher not blocked).

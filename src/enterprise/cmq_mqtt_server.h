@@ -155,7 +155,7 @@ int cmq_mqtt_test_freelist_count(void);
  * Pure function; no allocations, no globals, no locks. */
 int cmq_mqtt_topic_match(const char *pattern, const char *topic);
 
-/* v0.5.54: per-session QoS 1 outbound inflight. Fixed slots. */
+/* v0.5.54/57: per-session QoS 1/2 outbound inflight. Fixed slots. */
 #define CMQ_MQTT_INFLIGHT_MAX 16
 #define CMQ_MQTT_INFLIGHT_PAYLOAD_MAX 1024
 #define CMQ_MQTT_INFLIGHT_TOPIC_MAX 128
@@ -165,6 +165,7 @@ typedef struct {
     uint16_t packet_id;
     uint8_t qos;
     uint8_t used;
+    uint8_t phase; /* 0=wait PUBACK/PUBREC, 1=wait PUBCOMP */
     uint16_t topic_len;
     uint16_t payload_len;
     char topic[CMQ_MQTT_INFLIGHT_TOPIC_MAX];
@@ -183,14 +184,19 @@ int cmq_mqtt_inflight_offer(cmq_mqtt_inflight_t *w, const char *topic,
                             const uint8_t *payload, size_t payload_len,
                             uint8_t qos, uint16_t *out_id);
 int cmq_mqtt_inflight_ack(cmq_mqtt_inflight_t *w, uint16_t packet_id);
+int cmq_mqtt_inflight_rec(cmq_mqtt_inflight_t *w, uint16_t packet_id);
 int cmq_mqtt_inflight_encode(const cmq_mqtt_inflight_t *w, uint16_t packet_id,
                              uint8_t *out, size_t out_sz, size_t *out_len);
+int cmq_mqtt_inflight_encode_pubrel(const cmq_mqtt_inflight_t *w,
+                                    uint16_t packet_id, uint8_t *out,
+                                    size_t out_sz, size_t *out_len);
 int cmq_mqtt_inflight_count(const cmq_mqtt_inflight_t *w);
 
 int cmq_mqtt_session_attach(int fd, cmq_mqtt_inflight_t *w);
 void cmq_mqtt_session_detach(int fd);
 int cmq_mqtt_session_add_filter(int fd, const char *filter, uint8_t qos);
 int cmq_mqtt_session_ack(int fd, uint16_t packet_id);
+int cmq_mqtt_session_rec(int fd, uint16_t packet_id);
 /* Deliver to matching live MQTT sessions. Returns sends started. */
 int cmq_mqtt_fanout(const char *topic, const uint8_t *payload, size_t len);
 

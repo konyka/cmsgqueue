@@ -624,7 +624,7 @@ int cmq_mqtt_inflight_offer(cmq_mqtt_inflight_t *w, const char *topic,
                             uint8_t qos, uint16_t *out_id) {
     if (!w || !topic || !topic[0] || (payload_len > 0 && !payload) || !out_id)
         return -1;
-    if (qos != 1) return -1;
+    if (qos != 1 && qos != 2) return -1;
     size_t tlen = strnlen(topic, CMQ_MQTT_INFLIGHT_TOPIC_MAX);
     if (tlen == 0 || tlen >= CMQ_MQTT_INFLIGHT_TOPIC_MAX) return -1;
     if (payload_len > CMQ_MQTT_INFLIGHT_PAYLOAD_MAX) return -3;
@@ -642,7 +642,8 @@ int cmq_mqtt_inflight_offer(cmq_mqtt_inflight_t *w, const char *topic,
     w->next_id = (uint16_t)(id + 1);
     if (w->next_id == 0) w->next_id = 1;
     w->slots[slot].used = 1;
-    w->slots[slot].qos = 1;
+    w->slots[slot].qos = qos;
+    w->slots[slot].phase = 0;
     w->slots[slot].packet_id = id;
     w->slots[slot].topic_len = (uint16_t)tlen;
     w->slots[slot].payload_len = (uint16_t)payload_len;
@@ -658,9 +659,29 @@ int cmq_mqtt_inflight_offer(cmq_mqtt_inflight_t *w, const char *topic,
 int cmq_mqtt_inflight_ack(cmq_mqtt_inflight_t *w, uint16_t packet_id) {
     if (!w || packet_id == 0) return -1;
     for (int i = 0; i < CMQ_MQTT_INFLIGHT_MAX; i++) {
-        if (w->slots[i].used && w->slots[i].packet_id == packet_id) {
+        if (!w->slots[i].used || w->slots[i].packet_id != packet_id)
+            continue;
+        if (w->slots[i].qos == 1 && w->slots[i].phase == 0) {
             w->slots[i].used = 0;
             if (w->count > 0) w->count--;
+            return 0;
+        }
+        if (w->slots[i].qos == 2 && w->slots[i].phase == 1) {
+            w->slots[i].used = 0;
+            if (w->count > 0) w->count--;
+            return 0;
+        }
+        return -1;
+    }
+    return -1;
+}
+
+int cmq_mqtt_inflight_rec(cmq_mqtt_inflight_t *w, uint16_t packet_id) {
+    if (!w || packet_id == 0) return -1;
+    for (int i = 0; i < CMQ_MQTT_INFLIGHT_MAX; i++) {
+        if (w->slots[i].used && w->slots[i].packet_id == packet_id &&
+            w->slots[i].qos == 2 && w->slots[i].phase == 0) {
+            w->slots[i].phase = 1;
             return 0;
         }
     }
@@ -685,7 +706,7 @@ int cmq_mqtt_inflight_encode(const cmq_mqtt_inflight_t *w, uint16_t packet_id,
     size_t need = 1u + (size_t)rln + (size_t)rem;
     if (need > out_sz || need > CMQ_MQTT_INFLIGHT_PKT_MAX) return -1;
     size_t o = 0;
-    out[o++] = 0x32;
+    out[o++] = (uint8_t)(0x30 | ((s->qos & 0x03) << 1));
     memcpy(out + o, rl, (size_t)rln);
     o += (size_t)rln;
     out[o++] = (uint8_t)(s->topic_len >> 8);
@@ -699,6 +720,28 @@ int cmq_mqtt_inflight_encode(const cmq_mqtt_inflight_t *w, uint16_t packet_id,
         o += s->payload_len;
     }
     *out_len = o;
+    return 0;
+}
+
+int cmq_mqtt_inflight_encode_pubrel(const cmq_mqtt_inflight_t *w,
+                                    uint16_t packet_id, uint8_t *out,
+                                    size_t out_sz, size_t *out_len) {
+    if (!w || !out || !out_len || packet_id == 0 || out_sz < 4)
+        return -1;
+    int found = 0;
+    for (int i = 0; i < CMQ_MQTT_INFLIGHT_MAX; i++) {
+        if (w->slots[i].used && w->slots[i].packet_id == packet_id &&
+            w->slots[i].qos == 2 && w->slots[i].phase == 1) {
+            found = 1;
+            break;
+        }
+    }
+    if (!found) return -1;
+    out[0] = 0x62;
+    out[1] = 0x02;
+    out[2] = (uint8_t)(packet_id >> 8);
+    out[3] = (uint8_t)(packet_id & 0xFF);
+    *out_len = 4;
     return 0;
 }
 
@@ -746,7 +789,7 @@ void cmq_mqtt_session_detach(int fd) {
 
 int cmq_mqtt_session_add_filter(int fd, const char *filter, uint8_t qos) {
     if (fd < 0 || !filter || !*filter) return -1;
-    if (qos > 1) qos = 1;
+    if (qos > 2) qos = 2;
     pthread_mutex_lock(&g_live_lock);
     int rc = -1;
     for (int i = 0; i < MQTT_LIVE_MAX; i++) {
@@ -775,6 +818,28 @@ int cmq_mqtt_session_ack(int fd, uint16_t packet_id) {
     return rc;
 }
 
+int cmq_mqtt_session_rec(int fd, uint16_t packet_id) {
+    uint8_t pkt[8];
+    size_t n = 0;
+    int send_fd = -1;
+    pthread_mutex_lock(&g_live_lock);
+    int rc = -1;
+    for (int i = 0; i < MQTT_LIVE_MAX; i++) {
+        if (g_live[i].used && g_live[i].fd == fd && g_live[i].inf) {
+            rc = cmq_mqtt_inflight_rec(g_live[i].inf, packet_id);
+            if (rc == 0 &&
+                cmq_mqtt_inflight_encode_pubrel(g_live[i].inf, packet_id, pkt,
+                                                sizeof(pkt), &n) == 0)
+                send_fd = g_live[i].fd;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_live_lock);
+    if (rc == 0 && send_fd >= 0)
+        (void)send(send_fd, pkt, n, 0);
+    return rc;
+}
+
 int cmq_mqtt_fanout(const char *topic, const uint8_t *payload, size_t len) {
     if (!topic || !*topic || (len > 0 && !payload)) return 0;
     struct {
@@ -797,7 +862,7 @@ int cmq_mqtt_fanout(const char *topic, const uint8_t *payload, size_t len) {
         }
         if (!match || grant < 1) continue;
         uint16_t id = 0;
-        if (cmq_mqtt_inflight_offer(g_live[i].inf, topic, payload, len, 1,
+        if (cmq_mqtt_inflight_offer(g_live[i].inf, topic, payload, len, grant,
                                      &id) != 0)
             continue;
         if (cmq_mqtt_inflight_encode(g_live[i].inf, id, pending[np].pkt,
@@ -1320,6 +1385,16 @@ size_t got = (size_t)n;
             if (rem_len >= 2)
                 (void)cmq_mqtt_session_ack(fd,
                     (uint16_t)(((uint16_t)ap[0] << 8) | ap[1]));
+        } else if (type == 0x50 && connected) {
+            const uint8_t *ap = buf + 1 + rl_off;
+            if (rem_len >= 2)
+                (void)cmq_mqtt_session_rec(fd,
+                    (uint16_t)(((uint16_t)ap[0] << 8) | ap[1]));
+        } else if (type == 0x70 && connected) {
+            const uint8_t *ap = buf + 1 + rl_off;
+            if (rem_len >= 2)
+                (void)cmq_mqtt_session_ack(fd,
+                    (uint16_t)(((uint16_t)ap[0] << 8) | ap[1]));
         } else if (type == MQTT_TYPE_DISCONNECT) {
             if (have_ci) {
                 cmq_mqtt_will_clear(ci.client_id);
@@ -1357,7 +1432,7 @@ size_t got = (size_t)n;
                 off += tlen;
                 uint8_t req_qos = p[off];
                 off += 1;
-                if (req_qos > 1) req_qos = 1;
+                if (req_qos > 2) req_qos = 2;
                 cmq_mqtt_record_subscriber(topic);
                 if (my_nsubs < CMQ_MQTT_SESSION_SUBS)
                     snprintf(my_subs[my_nsubs++], 128, "%s", topic);

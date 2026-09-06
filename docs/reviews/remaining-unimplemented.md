@@ -1,10 +1,9 @@
-# Remaining unimplemented work (HEAD after v0.5.56)
+# Remaining unimplemented work (HEAD after v0.5.57)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
-P3 D7/D8 are shipped. D6 is v0.5.53. MQTT QoS 1 inflight is
-v0.5.54. D5 phase 1 (idempotent publish) is v0.5.55. D4
-phase 1 (durable stream cursors) is v0.5.56. Next cuts:
-D1–D3, D4 KV/object, D5 txns, MQTT QoS 2, or leaf/gateway e2e.
+P3 D7/D8 are shipped. D6 is v0.5.53. MQTT QoS 1/2 inflight is
+v0.5.54/57. D5 phase 1 is v0.5.55. D4 phase 1 is v0.5.56.
+Next cuts: D1–D3, D4 KV/object, D5 txns, or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -20,6 +19,7 @@ D1–D3, D4 KV/object, D5 txns, MQTT QoS 2, or leaf/gateway e2e.
 | v0.5.54 | MQTT QoS 1 outbound inflight + local fanout |
 | v0.5.55 | D5 phase 1: idempotent publish pid+seq window |
 | v0.5.56 | D4 phase 1: durable stream consumer cursors |
+| v0.5.57 | MQTT outbound QoS 2 PUBREC/PUBREL/PUBCOMP |
 
 ## Deferred — detailed designs
 
@@ -71,7 +71,7 @@ optional follow-ups.
 
 | Item | Evidence | Next cut |
 |---|---|---|
-| MQTT outbound QoS 2 | SUBSCRIBE grants at most 1 | PUBREL window |
+| MQTT outbound QoS 2 | shipped v0.5.57 | — |
 | ALPN `h2` | Comment example only; server never calls `set_alpn` | Ship D2 or leave unset |
 | Leaf/gateway e2e | Library exists, no multi-process test | Test-only increment |
 
