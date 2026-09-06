@@ -1,0 +1,3 @@
+v0.5.90 bench 2:
+- Token cap 2048; secret cap 128 (same as verify).
+- No heap on the success path besides caller out[].

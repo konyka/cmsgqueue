@@ -179,6 +179,82 @@ int cmq_jwt_verify_hs256(const char *token, const char *secret,
                                     leeway_sec, sub_out, sub_len);
 }
 
+static int jwt_claim_safe(const char *s, size_t maxn) {
+    if (!s || !s[0]) return 0;
+    size_t n = 0;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p < 0x20 || *p == 0x7f || *p == '"' || *p == '\\')
+            return 0;
+        if (++n >= maxn)
+            return 0;
+    }
+    return 1;
+}
+
+static int b64url_encode(const uint8_t *in, size_t n, char *out, size_t cap) {
+    static const char t[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    if (!in || !out || cap == 0) return -1;
+    size_t o = 0;
+    for (size_t i = 0; i < n; i += 3) {
+        unsigned v = (unsigned)in[i] << 16;
+        if (i + 1 < n) v |= (unsigned)in[i + 1] << 8;
+        if (i + 2 < n) v |= (unsigned)in[i + 2];
+        if (o + 4 >= cap) return -1;
+        out[o++] = t[(v >> 18) & 63];
+        out[o++] = t[(v >> 12) & 63];
+        if (i + 1 < n) out[o++] = t[(v >> 6) & 63];
+        if (i + 2 < n) out[o++] = t[v & 63];
+    }
+    out[o] = '\0';
+    return 0;
+}
+
+int cmq_jwt_sign_hs256(const char *secret, const char *issuer,
+                       const char *sub, uint64_t exp_sec,
+                       char *out, size_t out_len) {
+    if (!secret || !secret[0] || !issuer || !sub || !out || out_len == 0)
+        return -1;
+    size_t slen = strnlen(secret, 129);
+    if (slen == 0 || slen > 128) return -1;
+    if (!jwt_claim_safe(issuer, 128) || !jwt_claim_safe(sub, 128))
+        return -1;
+    if (exp_sec == 0) return -1;
+
+    static const char hdr[] = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+    char pay[320];
+    int pn = snprintf(pay, sizeof(pay),
+                      "{\"iss\":\"%s\",\"sub\":\"%s\",\"exp\":%llu}",
+                      issuer, sub, (unsigned long long)exp_sec);
+    if (pn < 0 || pn >= (int)sizeof(pay)) return -1;
+
+    char hb[128], pb[256];
+    if (b64url_encode((const uint8_t *)hdr, sizeof(hdr) - 1, hb,
+                      sizeof(hb)) != 0)
+        return -1;
+    if (b64url_encode((const uint8_t *)pay, (size_t)pn, pb, sizeof(pb)) != 0)
+        return -1;
+
+    char signing[400];
+    int sn = snprintf(signing, sizeof(signing), "%s.%s", hb, pb);
+    if (sn < 0 || sn >= (int)sizeof(signing)) return -1;
+
+    unsigned char mac[EVP_MAX_MD_SIZE];
+    unsigned int mac_n = 0;
+    if (!HMAC(EVP_sha256(), secret, (int)slen,
+              (const unsigned char *)signing, (size_t)sn, mac, &mac_n) ||
+        mac_n == 0)
+        return -1;
+
+    char sb[64];
+    if (b64url_encode(mac, mac_n, sb, sizeof(sb)) != 0)
+        return -1;
+    int n = snprintf(out, out_len, "%s.%s", signing, sb);
+    if (n < 0 || (size_t)n >= out_len || (size_t)n > CMQ_JWT_TOKEN_MAX)
+        return -1;
+    return 0;
+}
+
 static int jwt_header_claim(const char *token, const char *key, char *out,
                             size_t out_len) {
     if (!token || !key || !out || out_len == 0) return -1;

@@ -1,9 +1,15 @@
-# JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–79, 0.5.82, D3 phases 1–9)
+# JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–79, 0.5.82, 0.5.90, D3)
 
 CONNECT may present a compact JWT in the password field
 when `jwt_issuer` is set with `jwt_hmac_secret`,
 `jwt_ec_pub`, `jwt_rsa_n`/`jwt_rsa_e`, and/or `jwks_json`.
-Tokens are never issued here.
+
+## Issue (v0.5.90)
+
+`cmq_jwt_sign_hs256(secret, issuer, sub, exp, out, len)`
+mints a compact HS256 token the verify path accepts.
+`iss`/`sub` reject `"`, `\`, and controls. Secret cap 128.
+ES256 / RS256 issuing is not in this increment.
 
 ## Checks
 
@@ -74,7 +80,8 @@ never runs on offer/PUBLISH.
 
 `tests/test_jwt.c`, `tests/test_nkey_auth.c`, `tests/test_jwks.c`,
 `tests/test_es256.c`, `tests/test_nkeyb32.c`, `tests/test_jwksf.c`,
-`tests/test_rs256.c`, `tests/test_jwkss.c`, `tests/test_jwksr.c`
+`tests/test_rs256.c`, `tests/test_jwkss.c`, `tests/test_jwksr.c`,
+`tests/test_jwti.c`
 
 ## See also
 
@@ -87,3 +94,4 @@ never runs on offer/PUBLISH.
 - `docs/reviews/v0.5.77.enumeration.md`
 - `docs/reviews/v0.5.79.enumeration.md`
 - `docs/reviews/v0.5.82.enumeration.md`
+- `docs/reviews/v0.5.90.enumeration.md`

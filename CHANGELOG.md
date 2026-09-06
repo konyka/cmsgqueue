@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.90 - 2026-09-06
+
+### Added
+- **JWT HS256 issuing (D3 follow-up)** —
+  `cmq_jwt_sign_hs256` mints a compact token that the
+  existing CONNECT verify path accepts. iss/sub reject
+  JSON metacharacters.
+
+### Tests
+- `tests/test_jwti.c` — sign+verify, bad secret, expired,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.90.enumeration.md`, `v0.5.90.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v0590_{1,2}.txt`.
+
+### Test count
+- 351 tests (was 347 in v0.5.89; +4).
+
 ## 0.5.89 - 2026-09-06
 
 ### Added

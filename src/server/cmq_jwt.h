@@ -46,6 +46,10 @@ extern "C" {
 int cmq_jwt_verify_hs256(const char *token, const char *secret,
                          const char *issuer, uint64_t now_sec,
                          unsigned leeway_sec, char *sub_out, size_t sub_len);
+/* v0.5.90: mint compact HS256. 0 ok. iss/sub reject JSON metachars. */
+int cmq_jwt_sign_hs256(const char *secret, const char *issuer,
+                       const char *sub, uint64_t exp_sec,
+                       char *out, size_t out_len);
 int cmq_jwt_verify_hs256_bin(const char *token, const uint8_t *secret,
                              size_t slen, const char *issuer,
                              uint64_t now_sec, unsigned leeway_sec,

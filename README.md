@@ -36,7 +36,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Object store (v0.5.59–70)**: named blobs; `$OBJ.<name>` PUBLISH + REQUEST-get when persist_dir is set
 - **Transactions (v0.5.60 / v0.5.80 / v0.5.85)**: `CMQT` begin/add/commit/abort + 2PC PREPARE/VOTE across live routes + EAGAIN write retry queue (D5 phases 2–4)
 - **OTel / OTLP (v0.5.61–64, 0.5.78, 0.5.84, 0.5.89)**: lock-free 256-slot sidecar; OTLP/HTTP(S) JSON or `grpc://` protobuf Export when `otlp_endpoint` is set; consume span after successful local fanout (D1)
-- **JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–79, 0.5.82)**: HS256 / ES256 / RS256 JWT on CONNECT; Ed25519 nkey of `CMQNK1|<user>` (`nkey_pub` is 64 hex or NATS `U…`); JWKS oct/EC/RSA `kid` cache + HTTP/HTTPS `jwks_url` + `jwks_refresh_sec` (D3 phases 1–9)
+- **JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–79, 0.5.82, 0.5.90)**: HS256 / ES256 / RS256 JWT on CONNECT; `cmq_jwt_sign_hs256` mint; Ed25519 nkey of `CMQNK1|<user>` (`nkey_pub` is 64 hex or NATS `U…`); JWKS oct/EC/RSA `kid` cache + HTTP/HTTPS `jwks_url` + `jwks_refresh_sec` (D3)
 - **HTTP/2 (v0.5.66–73, 0.5.81, 0.5.83)**: HPACK static + Huffman + 4 KiB dynamic table + preface/SETTINGS/32-stream machine + loopback listener + `h2_port` / ALPN `h2` + TLS-wrapped accept (D2 phases 1–7)
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
