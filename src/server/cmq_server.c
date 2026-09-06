@@ -5555,6 +5555,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 (void)shutdown(c->fd, SHUT_RDWR);
                 break;
             }
+            if (srv->otel)
+                (void)cmq_otel_on_connect(srv->otel, c->trace_id, 1);
             break; /* CONNACK 0 already drained */
         }
         /* Soft-delete after inc/CONNECTED (INFO window) must not CONNACK 0. */
@@ -5565,6 +5567,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             break;
         }
         cmq_send_connack(c, 0);
+        if (srv->otel)
+            (void)cmq_otel_on_connect(srv->otel, c->trace_id, 1);
         break;
     case CMQ_OP_PING:
         if (!client_account_live(srv, c)) {

@@ -27,6 +27,8 @@ int cmq_otel_offer(cmq_otel_t *o, const uint8_t trace[16], uint8_t kind);
 /* v0.5.89: one CONSUME after successful local fanout.
  * delivered==0: no-op (0). Missing o/trace: -1. */
 int cmq_otel_on_consume(cmq_otel_t *o, const uint8_t trace[16], int delivered);
+/* v0.5.92: one CONNECT after CONNACK 0. ok==0: no-op (0). */
+int cmq_otel_on_connect(cmq_otel_t *o, const uint8_t trace[16], int ok);
 /* 1 copied; 0 empty. */
 int cmq_otel_poll(cmq_otel_t *o, cmq_otel_span_t *out);
 uint64_t cmq_otel_dropped(const cmq_otel_t *o);

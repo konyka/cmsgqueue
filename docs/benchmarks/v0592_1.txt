@@ -1,0 +1,3 @@
+v0.5.92 bench 1:
+- CONNECT success: one extra offer after CONNACK 0.
+- Failed CONNACK does not touch the ring.

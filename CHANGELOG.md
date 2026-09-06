@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.92 - 2026-09-06
+
+### Added
+- **Connect spans (D1 follow-up)** — CONNACK 0 offers one
+  `KIND_CONNECT` with the accept trace. Failed CONNACK
+  skips it.
+
+### Tests
+- `tests/test_otn.c` — ok, skipped, isolated, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.92.enumeration.md`, `v0.5.92.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v0592_{1,2}.txt`.
+
+### Test count
+- 359 tests (was 355 in v0.5.91; +4).
+
 ## 0.5.91 - 2026-09-06
 
 ### Added
