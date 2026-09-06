@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.92)
+# Remaining unimplemented work (HEAD after v0.5.93)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -54,6 +54,7 @@ Required next cuts: none.
 | v0.5.90 | D3 JWT HS256 issuing |
 | v0.5.91 | D3 JWT ES256 / RS256 issuing |
 | v0.5.92 | D1 connect spans |
+| v0.5.93 | D4 `$JS.<name>` stream PUBLISH path |
 
 ## Deferred — detailed designs
 
@@ -84,9 +85,10 @@ HTTP/HTTPS `jwks_url` fetch, and periodic refresh
 ### D4 JetStream / KV / Object Store — phases 1–6 shipped
 
 Durable cursors, KV last-value, named objects,
-`$KV.<bucket>.<key>` / `$OBJ.<name>` PUBLISH and REQUEST-get,
-and partitioned consume cursors (1–16, `append_key` /
-`next_part` / `ack_part`, `CMQC2`) are live.
+`$KV.<bucket>.<key>` / `$OBJ.<name>` / `$JS.<name>` PUBLISH
+and KV/object REQUEST-get, and partitioned consume cursors
+(1–16, `append_key` / `next_part` / `ack_part`, `CMQC2`)
+are live. Stream REQUEST-get stays deferred.
 
 ### D5 Exactly-once / transactions — phases 1–4 shipped
 
@@ -110,8 +112,10 @@ are live (v0.5.88).
 | MQTT outbound QoS 2 | shipped v0.5.57 | — |
 | ALPN `h2` | shipped v0.5.81 / TLS wrap v0.5.83 | — |
 | Leaf/gateway e2e | shipped v0.5.86 (`test_leafe.c`) | — |
-| Bridge WAL recover | `persist_bridge` writes `CMQB`; startup `cmq_server_publish` replay is still future | Recover increment |
-| Durable stream server wiring | README: stream library is not the server process | Optional |
+| Bridge WAL recover | shipped v0.5.40 (`replay_one_record` CMQB) | — |
+| `$JS.<name>` PUBLISH | shipped v0.5.93 | — |
+| Stream REQUEST-get | `$JS.` append is live; consume/get is still library-only | Optional |
+| COMPRESSED on PUBLISH | still rejected (F11); BATCH-only (F2) | Optional |
 
 ## Optional follow-ups (not required next cuts)
 

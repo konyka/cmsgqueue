@@ -45,15 +45,29 @@ watermarks. Wrong-part ack fails closed.
 Cursor file is `CMQC2` when n>1 (`name part seq`); `CMQC1`
 is unchanged.
 
-## Not in this increment
+## Stream PUBLISH path (v0.5.93)
 
-KV / object store stay on their own APIs.
+PUBLISH `$JS.<name>` appends the payload to a named
+in-memory stream (`cmq_js`). Non-`$` subjects pay the
+existing one-byte compare. At most 8 lazy streams.
+Empty payload fails closed (the ring refuses len 0).
+Fanout still runs so watchers see the write.
+
+Names: `[A-Za-z0-9_-]`, max 32, no dots.
+
+Optional cursors: `{persist_dir}/js/{name}.cursors`
+when `persist_dir` is set. Message bodies stay on
+the ring (not durable).
+
+REQUEST-get / consume stay deferred.
 
 ## Tests
 
-`tests/test_stream_cursors.c`, `tests/test_spart.c`
+`tests/test_stream_cursors.c`, `tests/test_spart.c`,
+`tests/test_js.c`
 
 ## See also
 
 - `docs/reviews/v0.5.56.enumeration.md`
 - `docs/reviews/v0.5.87.enumeration.md`
+- `docs/reviews/v0.5.93.enumeration.md`

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.93 - 2026-09-06
+
+### Added
+- **Stream PUBLISH path (D4 follow-up)** — `$JS.<name>`
+  appends to a named in-memory stream (max 8). Empty
+  payload fails closed. Optional cursors under
+  `{persist_dir}/js`.
+
+### Tests
+- `tests/test_js.c` — parse, append/read, isolate,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.93.enumeration.md`, `v0.5.93.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v0593_{1,2}.txt`.
+
+### Test count
+- 363 tests (was 359 in v0.5.92; +4).
+
 ## 0.5.92 - 2026-09-06
 
 ### Added

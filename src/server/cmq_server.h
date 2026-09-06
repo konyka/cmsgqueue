@@ -217,6 +217,7 @@ struct cmq_server {
     struct cmq_otel *otel;     /* v0.5.61: D1 span ring; always on */
     struct cmq_kvb *kvb;       /* v0.5.67: D4 $KV.bucket.key; always on */
     struct cmq_obj *obj;       /* v0.5.68: D4 $OBJ.name; persist_dir only */
+    struct cmq_js *js;         /* v0.5.93: D4 $JS.name; always on */
     void *otlp;                /* v0.5.64: cmq_otlp_url_t*; NULL = off */
     void *jwks;                /* v0.5.65/82: cmq_jwks_cache_t*; NULL = off */
     void *jwks_refresh;        /* v0.5.82: cmq_jwks_refresher_t*; NULL = off */
@@ -280,9 +281,9 @@ int cmq_server_h2_accept(cmq_server_t *srv, const char *account);
 
 /* v0.5.39: bridge-specific WAL persist. Builds a self-describing
  * frame (magic 'CMQB' + version + topic_len + topic + payload)
- * and appends it to the server's filestore. The matching recovery
- * path is a future round. Best-effort: returns 0 on success, -1
- * on error or when the server has no filestore. */
+ * and appends it to the server's filestore. Replay is v0.5.40.
+ * Best-effort: returns 0 on success, -1 on error or when the
+ * server has no filestore. */
 int cmq_server_persist_bridge(cmq_server_t *srv, const char *topic,
                                 const uint8_t *payload, size_t payload_len);
 

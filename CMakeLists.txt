@@ -112,6 +112,7 @@ set(CMQ_STORE_SOURCES
     src/store/cmq_kv.c
     src/store/cmq_kvb.c
     src/store/cmq_obj.c
+    src/store/cmq_js.c
 )
 
 set(CMQ_CLUSTER_SOURCES

@@ -26,6 +26,7 @@
 #include "cmq_kvb.h"
 #include "cmq_kv.h"
 #include "cmq_obj.h"
+#include "cmq_js.h"
 #include "cmq_h2.h"
 #include <sys/stat.h>
 #include <unistd.h>
@@ -3395,7 +3396,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "subject map failed");
         return;
     }
-    /* v0.5.67–68: $KV / $OBJ. One '$' check. */
+    /* v0.5.67–68 / 0.5.93: $KV / $OBJ / $JS. One '$' check. */
     if (subject[0] == '$') {
         if (srv->kvb) {
             int krc = cmq_kvb_publish(srv->kvb, subject, msg_payload, msg_len);
@@ -3412,6 +3413,15 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                 cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                           CMQ_ATOMIC_RELAXED);
                 cmq_send_error(c, "obj");
+                return;
+            }
+        }
+        if (srv->js) {
+            int jrc = cmq_js_publish(srv->js, subject, msg_payload, msg_len);
+            if (jrc < 0) {
+                cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_send_error(c, "js");
                 return;
             }
         }
@@ -3685,8 +3695,7 @@ int cmq_server_h2_accept(cmq_server_t *srv, const char *account) {
 
 /* v0.5.39: bridge-specific WAL persist. Routes through
  * cmq_filestore_append_bridge where the server has a filestore; no-op
- * otherwise. The matching recovery path that dispatches via
- * cmq_server_publish on startup is a future round. */
+ * otherwise. Replay of CMQB records is v0.5.40 (replay_one_record). */
 int cmq_server_persist_bridge(cmq_server_t *srv, const char *topic,
                                 const uint8_t *payload,
                                 size_t payload_len) {
@@ -8039,6 +8048,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->kvb = cmq_kvb_create();
     if (srv->kvb && srv->config.persist_dir && srv->config.persist_dir[0])
         (void)cmq_kvb_set_persist(srv->kvb, srv->config.persist_dir);
+    srv->js = cmq_js_create();
+    if (srv->js && srv->config.persist_dir && srv->config.persist_dir[0])
+        (void)cmq_js_set_persist(srv->js, srv->config.persist_dir);
     if (srv->config.persist_dir && srv->config.persist_dir[0]) {
         char odir[600];
         int n = snprintf(odir, sizeof(odir), "%s/obj", srv->config.persist_dir);
@@ -8901,6 +8913,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->obj) {
         cmq_obj_destroy(srv->obj);
         srv->obj = NULL;
+    }
+    if (srv->js) {
+        cmq_js_destroy(srv->js);
+        srv->js = NULL;
     }
     if (srv->otel) {
         cmq_otel_destroy(srv->otel);
