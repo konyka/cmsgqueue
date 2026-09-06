@@ -53,6 +53,9 @@ every listener string so destroy owns them.
 `listener{1,2,3}_host` (IPv4) and `_port` (v0.5.115) select
 the extra bind. Empty host / port 0 keep `127.0.0.1` and
 `port+index`. Slot 0 remains `host` / `port`.
+v0.5.146: reload binds an extra slot when create left it
+empty. Omitted / empty keeps off. Non-IPv4 and bad port
+fail closed. An existing accept fd is not rebound.
 
 ## Limitations
 

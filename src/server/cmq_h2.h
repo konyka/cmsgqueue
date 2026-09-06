@@ -56,6 +56,12 @@ int cmq_h2_listen_port(int lfd);
  * Binds loopback when *lfd < 0. Existing listener is left
  * alone (no accept-fd rebind). */
 int cmq_h2_reload_listen(int *lfd, int *live_port, int fresh_port);
+/* v0.5.146: empty host and port 0 keep off. Non-IPv4 / bad
+ * port fail closed. Binds when *lfd < 0. Existing accept fd
+ * is left alone. default_port is used when both ports are 0. */
+int cmq_listener_reload_bind(int *lfd, const char **live_host, int *live_port,
+                             const char *fresh_host, int fresh_port,
+                             int default_port);
 int cmq_h2_session(int fd, char *subject, size_t scap, uint8_t *payload,
                    size_t pcap, size_t *plen);
 int cmq_h2_accept(int lfd, char *subject, size_t scap, uint8_t *payload,

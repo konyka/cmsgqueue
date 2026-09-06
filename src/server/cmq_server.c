@@ -9068,6 +9068,46 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (fresh.listener_count < 0 || fresh.listener_count > CMQ_MAX_LISTENERS) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
+    {
+        int nli = fresh.listener_count > 0 ? fresh.listener_count
+                                           : server->config.listener_count;
+        for (int li = 1; li < nli && li < CMQ_MAX_LISTENERS; li++) {
+            int had = server->listen_fds[li] >= 0;
+            int def = server->config.port > 0
+                          ? server->config.port + li : 0;
+            if (cmq_listener_reload_bind(&server->listen_fds[li],
+                                         &server->config.listeners[li].host,
+                                         &server->config.listeners[li].port,
+                                         fresh.listeners[li].host,
+                                         fresh.listeners[li].port,
+                                         def) != 0) {
+                cmq_config_free(&fresh);
+                return -1;
+            }
+            if (!had && server->listen_fds[li] >= 0) {
+                if (set_nonblocking(server->listen_fds[li]) != 0) {
+                    close(server->listen_fds[li]);
+                    server->listen_fds[li] = -1;
+                    cmq_config_free(&fresh);
+                    return -1;
+                }
+                if (server->ev_loop &&
+                    cmq_ev_add(server->ev_loop, server->listen_fds[li],
+                               CMQ_EV_READ, accept_cb, server) != 0) {
+                    close(server->listen_fds[li]);
+                    server->listen_fds[li] = -1;
+                    cmq_config_free(&fresh);
+                    return -1;
+                }
+            }
+        }
+        if (fresh.listener_count > 0)
+            server->config.listener_count = fresh.listener_count;
+    }
     if (!server->cluster) {
         if (cmq_cluster_reload_attach(&server->cluster,
                                       &server->config.cluster_name,

@@ -210,6 +210,57 @@ int cmq_h2_reload_listen(int *lfd, int *live_port, int fresh_port) {
     return 0;
 }
 
+int cmq_listener_reload_bind(int *lfd, const char **live_host, int *live_port,
+                             const char *fresh_host, int fresh_port,
+                             int default_port) {
+    if (!lfd || !live_port) return -1;
+    if (fresh_port < 0 || fresh_port > 65535) return -1;
+    if (default_port < 0 || default_port > 65535) return -1;
+    if ((!fresh_host || !fresh_host[0]) && fresh_port == 0 &&
+        default_port == 0)
+        return 0;
+    if (*lfd >= 0)
+        return 0;
+    const char *use_host = (fresh_host && fresh_host[0])
+                               ? fresh_host
+                               : (live_host && *live_host && (*live_host)[0]
+                                      ? *live_host
+                                      : "127.0.0.1");
+    int use_port = fresh_port > 0 ? fresh_port
+                                  : (*live_port > 0 ? *live_port : default_port);
+    if (use_port <= 0)
+        return 0;
+    struct in_addr ha;
+    if (inet_pton(AF_INET, use_host, &ha) != 1)
+        return -1;
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) return -1;
+    int one = 1;
+    (void)setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)use_port);
+    addr.sin_addr = ha;
+    if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+        listen(s, 512) != 0) {
+        close(s);
+        return -1;
+    }
+    if (fresh_host && fresh_host[0] && live_host) {
+        char *owned = strdup(fresh_host);
+        if (!owned) {
+            close(s);
+            return -1;
+        }
+        free((void *)*live_host);
+        *live_host = owned;
+    }
+    *lfd = s;
+    *live_port = use_port;
+    return 0;
+}
+
 typedef struct {
     ssize_t (*rd)(void *ctx, uint8_t *buf, size_t n);
     ssize_t (*wr)(void *ctx, const uint8_t *buf, size_t n);

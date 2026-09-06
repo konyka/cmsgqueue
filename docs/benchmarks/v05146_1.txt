@@ -1,0 +1,3 @@
+v0.5.146 bench 1:
+- Bind apply: one IPv4 socket + bind + listen.
+- Existing listener: one fd compare, no close.

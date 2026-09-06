@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.146 - 2026-09-06
+
+### Added
+- **Bind extra listeners on reload** — when create left
+  slots 1–3 empty, SIGHUP binds `listener{1,2,3}_host/port`
+  and `ev_add`s a live loop. Omitted / empty keeps off.
+  Non-IPv4 and bad port fail closed. Existing accept fds
+  are not rebound.
+
+### Tests
+- `tests/test_lbn.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.146.enumeration.md`, `v0.5.146.plan.md`.
+- `docs/features/tls-hardening.md`.
+- `docs/benchmarks/v05146_{1,2}.txt`.
+
+### Test count
+- 575 tests (was 571 in v0.5.145; +4).
+
 ## 0.5.145 - 2026-09-06
 
 ### Added
