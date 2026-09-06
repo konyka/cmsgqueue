@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.78 - 2026-09-06
+
+### Added
+- **OTLP HTTPS (D1 phase 3)** — `otlp_endpoint` accepts
+  `https://`; sidecar POSTs OTLP/JSON over TLS with peer
+  verify. Optional `otlp_ca` PEM; otherwise the system
+  store. `http://` path unchanged. gRPC deferred.
+
+### Tests
+- `tests/test_otlps.c` — HTTPS parse, TLS POST, missing
+  CA fail, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.78.enumeration.md`, `v0.5.78.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v0578_{1,2}.txt`.
+
+### Test count
+- 303 tests (was 299 in v0.5.77; +4).
+
 ## 0.5.77 - 2026-09-06
 
 ### Added

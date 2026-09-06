@@ -181,6 +181,8 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->jwt_rsa_e, value);
     } else if (strcmp(key, "otlp_endpoint") == 0) {
         return cfg_set_str(&config->otlp_endpoint, value);
+    } else if (strcmp(key, "otlp_ca") == 0) {
+        return cfg_set_str(&config->otlp_ca, value);
     } else if (strcmp(key, "cluster_name") == 0) {
         return cfg_set_str(&config->cluster_name, value);
     } else if (strcmp(key, "cluster_node_id") == 0) {
@@ -231,6 +233,7 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->jwt_rsa_n);
     cfg_free_owned(config->jwt_rsa_e);
     cfg_free_owned(config->otlp_endpoint);
+    cfg_free_owned(config->otlp_ca);
     cfg_free_owned(config->cluster_name);
     cfg_free_owned(config->cluster_node_id);
     cfg_free_owned(config->tls_cert);
@@ -250,6 +253,7 @@ void cmq_config_free(cmq_config_t *config) {
     config->jwt_rsa_n = NULL;
     config->jwt_rsa_e = NULL;
     config->otlp_endpoint = NULL;
+    config->otlp_ca = NULL;
     config->cluster_name = NULL;
     config->cluster_node_id = NULL;
     config->tls_cert = NULL;
@@ -421,6 +425,12 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->otlp_endpoint && config->otlp_endpoint[0]) {
         cmq_otlp_url_t u;
         if (cmq_otlp_parse_url(config->otlp_endpoint, &u) != 0)
+            return CMQ_ERR_INVALID_ARG;
+    }
+    if (config->otlp_ca && config->otlp_ca[0]) {
+        cmq_otlp_url_t tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        if (cmq_otlp_set_ca(&tmp, config->otlp_ca) != 0)
             return CMQ_ERR_INVALID_ARG;
     }
     if (config->auth_username && config->auth_username[0] &&

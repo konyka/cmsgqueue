@@ -7460,6 +7460,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.jwt_rsa_n = NULL;
     srv->config.jwt_rsa_e = NULL;
     srv->config.otlp_endpoint = NULL;
+    srv->config.otlp_ca = NULL;
     srv->config.cluster_name = NULL;
     srv->config.cluster_node_id = NULL;
     srv->config.tls_cert = NULL;
@@ -7494,6 +7495,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.jwt_rsa_n, src.jwt_rsa_n);
     OWN(srv->config.jwt_rsa_e, src.jwt_rsa_e);
     OWN(srv->config.otlp_endpoint, src.otlp_endpoint);
+    OWN(srv->config.otlp_ca, src.otlp_ca);
     OWN(srv->config.cluster_name, src.cluster_name);
     OWN(srv->config.cluster_node_id, src.cluster_node_id);
     OWN(srv->config.tls_cert, src.tls_cert);
@@ -7844,7 +7846,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->otel = cmq_otel_create();
     if (srv->otel && src.otlp_endpoint && src.otlp_endpoint[0]) {
         cmq_otlp_url_t *u = calloc(1, sizeof(*u));
-        if (u && cmq_otlp_parse_url(src.otlp_endpoint, u) == 0) {
+        if (u && cmq_otlp_parse_url(src.otlp_endpoint, u) == 0 &&
+            (!src.otlp_ca || !src.otlp_ca[0] ||
+             cmq_otlp_set_ca(u, src.otlp_ca) == 0)) {
             srv->otlp = u;
             cmq_otel_set_export(srv->otel, cmq_otlp_export, u);
         } else {

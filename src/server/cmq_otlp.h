@@ -7,11 +7,15 @@
 #define CMQ_OTLP_URL_MAX      256
 #define CMQ_OTLP_JSON_MAX     4096
 #define CMQ_OTLP_DEFAULT_PORT 4318
+#define CMQ_OTLP_IO_MS        200
+#define CMQ_OTLP_CA_MAX       256
 
 typedef struct {
     char host[128];
     char path[128];
     int port;
+    int tls;                 /* v0.5.78: 1 = https */
+    char ca[CMQ_OTLP_CA_MAX];
 } cmq_otlp_url_t;
 
 #ifdef __cplusplus
@@ -19,6 +23,7 @@ extern "C" {
 #endif
 
 int cmq_otlp_parse_url(const char *url, cmq_otlp_url_t *out);
+int cmq_otlp_set_ca(cmq_otlp_url_t *url, const char *ca_path);
 /* Bytes written (no NUL); -1 on error. */
 int cmq_otlp_encode_json(const cmq_otel_span_t *spans, size_t n,
                          char *out, size_t out_len);

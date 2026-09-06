@@ -29,6 +29,11 @@ TEST(otlp, parse_url) {
     ASSERT_EQ(cmq_otlp_parse_url("http://10.0.0.8", &u), 0);
     ASSERT_EQ(u.port, CMQ_OTLP_DEFAULT_PORT);
     ASSERT(strcmp(u.path, "/v1/traces") == 0);
+    ASSERT_EQ(u.tls, 0);
+    ASSERT_EQ(cmq_otlp_parse_url("https://collector.local/v1/traces", &u), 0);
+    ASSERT_EQ(u.tls, 1);
+    ASSERT_EQ(u.port, CMQ_OTLP_DEFAULT_PORT);
+    ASSERT(strcmp(u.host, "collector.local") == 0);
 }
 
 TEST(otlp, build_request) {
@@ -46,7 +51,7 @@ TEST(otlp, build_request) {
 TEST(otlp, reject) {
     cmq_otlp_url_t u;
     ASSERT(cmq_otlp_parse_url(NULL, &u) != 0);
-    ASSERT(cmq_otlp_parse_url("https://127.0.0.1/v1/traces", &u) != 0);
+    ASSERT(cmq_otlp_parse_url("ftp://127.0.0.1/v1/traces", &u) != 0);
     ASSERT(cmq_otlp_parse_url("http://user:pass@127.0.0.1/x", &u) != 0);
     ASSERT(cmq_otlp_parse_url("http://127.0.0.1/../etc", &u) != 0);
     char buf[32];

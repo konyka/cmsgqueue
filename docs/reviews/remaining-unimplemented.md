@@ -1,8 +1,8 @@
-# Remaining unimplemented work (HEAD after v0.5.77)
+# Remaining unimplemented work (HEAD after v0.5.78)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
-cuts. Next cuts: D5 multi-node 2PC, OTLP HTTPS, HTTPS JWKS,
+cuts. Next cuts: D5 multi-node 2PC, HTTPS JWKS, OTLP/gRPC,
 or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
@@ -40,13 +40,14 @@ or leaf/gateway e2e.
 | v0.5.75 | D3 phase 5: nkey seed / base32 |
 | v0.5.76 | D3 phase 6: remote JWKS HTTP GET |
 | v0.5.77 | D3 phase 7: JWT RS256 + JWKS RSA |
+| v0.5.78 | D1 phase 3: OTLP HTTPS POST |
 
 ## Deferred — detailed designs
 
-### D1 OpenTelemetry exporter — phases 1–2 shipped v0.5.61–64
+### D1 OpenTelemetry exporter — phases 1–3 shipped v0.5.61–64, 0.5.78
 
-Span ring, sidecar, and OTLP/HTTP JSON POST are live.
-**Remaining:** OTLP/gRPC or HTTPS collectors. Consume
+Span ring, sidecar, OTLP/HTTP JSON, and OTLP HTTPS POST
+are live. **Remaining:** OTLP/gRPC collectors. Consume
 spans are queued only when a caller offers `KIND_CONSUME`.
 
 ### D2 HTTP/2 listener — phases 1–5 shipped v0.5.66–73
