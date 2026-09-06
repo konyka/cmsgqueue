@@ -1,0 +1,3 @@
+v0.5.116 bench 2:
+- _probe_ policy mismatch keeps the old ACL handle.
+- log_level 6 fails closed; stored level unchanged.

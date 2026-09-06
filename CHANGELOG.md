@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.116 - 2026-09-06
+
+### Added
+- **Reload log_level and acl_deny** —
+  `cmq_server_reload` applies `log_level` via
+  `cmq_log_set_level` and rebuilds the ACL when
+  `acl_allow` or `acl_deny` is set. Deny-only files
+  work. Create-without-ACL can gain ACL on reload.
+
+### Tests
+- `tests/test_rld.c` — apply_log, apply_acl_deny,
+  apply_acl_both, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.116.enumeration.md`, `v0.5.116.plan.md`.
+- `docs/features/acl.md`.
+- `docs/benchmarks/v05116_{1,2}.txt`.
+
+### Test count
+- 455 tests (was 451 in v0.5.115; +4).
+
 ## 0.5.115 - 2026-09-06
 
 ### Added

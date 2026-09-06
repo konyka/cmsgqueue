@@ -155,8 +155,8 @@ typedef struct cmq_config {
 cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config);
 
 /* N2: Reload dynamic config from a config file. Updates
- * blocklist_file, audit path, log levels, and similar dynamic
- * fields. Returns 0 on success, -1 on failure. */
+ * blocklist_file, log_level, acl_allow / acl_deny, and similar
+ * dynamic fields. Returns 0 on success, -1 on failure. */
 int cmq_server_reload(cmq_server_t *server, const char *config_path);
 
 /**

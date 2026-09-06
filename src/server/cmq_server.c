@@ -12,6 +12,7 @@
 #include "cmq_audit.h"
 #include "cmq_quota.h"
 #include "cmq_acl.h"
+#include "cmq_dynreload.h"
 #include "cmq_blocklist.h"
 #include "cmq_subject_rl.h"
 #include "cmq_sublist_persist.h"
@@ -8826,35 +8827,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
     if (fresh.persist_dir && server->filestore) {
         cmq_log_info(server->log, "Persist dir reload: %s", fresh.persist_dir);
     }
-    if (fresh.acl_allow && server->acl_h) {
-        cmq_acl_t *new_acl = cmq_acl_create();
-        if (new_acl) {
-            char *copy = strdup(fresh.acl_allow);
-            if (copy) {
-                char *save = NULL;
-                for (char *t = strtok_r(copy, ",", &save); t;
-                     t = strtok_r(NULL, ",", &save)) {
-                    cmq_acl_allow(new_acl, t);
-                }
-                free(copy);
-            }
-        }
-        /* Default-deny preservation check — same logic as before. */
-        cmq_acl_t *cur = (cmq_acl_t *)cmq_rch_acquire(server->acl_h);
-        int cur_probe = cur ? cmq_acl_check(cur, "_probe_") : 1;
-        cmq_rch_release(server->acl_h, cur);
-        int new_probe = new_acl ? cmq_acl_check(new_acl, "_probe_") : 1;
-        if (new_acl && cur_probe == new_probe) {
-            cmq_rch_t *nh = cmq_rch_new(new_acl, (cmq_rch_free_fn)cmq_acl_free);
-            if (nh) {
-                cmq_rch_t *old = cmq_rch_swap(&server->acl_h, nh);
-                if (old) cmq_rch_release_owner(old);
-            } else {
-                cmq_acl_free(new_acl);
-            }
-        } else {
-            cmq_acl_free(new_acl);
-        }
+    if (cmq_reload_apply_dynamic(server->log, &server->config.log_level,
+                                 &server->acl_h, &fresh) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
     }
     cmq_log_info(server->log, "Config reloaded: %s", config_path);
     cmq_config_free(&fresh);

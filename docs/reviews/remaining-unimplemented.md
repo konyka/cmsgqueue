@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.115)
+# Remaining unimplemented work (HEAD after v0.5.116)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -77,6 +77,7 @@ Required next cuts: none.
 | v0.5.113 | config string ownership (tls_ca / ACL / blocklist) |
 | v0.5.114 | listener TLS config keys |
 | v0.5.115 | extra-listener bind host/port |
+| v0.5.116 | reload log_level and acl_deny |
 
 ## Deferred — detailed designs
 
@@ -174,6 +175,7 @@ are live (v0.5.88).
 | config string ownership | shipped v0.5.113 | — |
 | listener TLS config keys | shipped v0.5.114 | — |
 | extra-listener bind host/port | shipped v0.5.115 | — |
+| reload log_level and acl_deny | shipped v0.5.116 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)

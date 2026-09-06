@@ -172,6 +172,11 @@ void cmq_log_set_level(cmq_log_t *log, cmq_log_level_t level) {
     log_end_op(log);
 }
 
+cmq_log_level_t cmq_log_get_level(const cmq_log_t *log) {
+    if (!log) return CMQ_LOG_INFO;
+    return log->level;
+}
+
 int cmq_log_add_appender(cmq_log_t *log, cmq_log_appender_fn fn, void *ctx) {
     if (!log || !fn) return -1;
     if (log_begin_op(log) != 0) return -1;

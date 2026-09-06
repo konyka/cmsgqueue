@@ -1,0 +1,3 @@
+v0.5.116 bench 1:
+- Reload without ACL keys: one log_level store + set_level.
+- Deny-only file: one ACL create + CSV parse; no allow required.

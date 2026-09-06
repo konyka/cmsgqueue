@@ -27,6 +27,10 @@ Config keys `acl_allow` / `acl_deny` (CSV patterns) and
 empty disables; `cmq_config_free` releases them; create
 `strdup`s so destroy does not free a caller literal.
 
+`cmq_server_reload` applies `log_level` and rebuilds the
+ACL from `acl_allow` / `acl_deny` (v0.5.116). Deny-only
+files work. A server started without ACL can gain one.
+
 ## Files touched
 
 - `src/enterprise/cmq_acl.{h,c}` (new).
