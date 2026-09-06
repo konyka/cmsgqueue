@@ -46,6 +46,10 @@ size_t cmq_compress_bound(size_t src_len);
  * returns -1. No allocation. */
 ssize_t cmq_decompress_bound(const uint8_t *src, size_t src_len);
 
+/* 0 ok (*out malloc, caller frees); -1 fail. Same 16 MiB cap. */
+int cmq_inflate(const uint8_t *src, size_t src_len,
+                uint8_t **out, size_t *out_len);
+
 #ifdef __cplusplus
 }
 #endif

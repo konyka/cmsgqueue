@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.96 - 2026-09-06
+
+### Added
+- **COMPRESSED on PUBLISH (F2 follow-up)** — zstd PUBLISH
+  inflates before subject parse (16 MiB cap). Fanout is
+  plaintext. MESSAGE still rejected (F11).
+
+### Tests
+- `tests/test_pubc.c` — accept PUBLISH, reject MESSAGE,
+  inflate roundtrip / reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.96.enumeration.md`, `v0.5.96.plan.md`.
+- `docs/features/wire-compression.md`, `flag-rejection.md`.
+- `docs/benchmarks/v0596_{1,2}.txt`.
+
+### Test count
+- 375 tests (was 371 in v0.5.95; +4).
+
 ## 0.5.95 - 2026-09-06
 
 ### Added

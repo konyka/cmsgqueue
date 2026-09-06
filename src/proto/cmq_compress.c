@@ -43,3 +43,22 @@ ssize_t cmq_decompress(const uint8_t *src, size_t src_len,
      * (content size, capped at 16 MiB). */
     return (ssize_t)rc;
 }
+
+int cmq_inflate(const uint8_t *src, size_t src_len,
+                uint8_t **out, size_t *out_len) {
+    if (!out || !out_len) return -1;
+    *out = NULL;
+    *out_len = 0;
+    ssize_t bound = cmq_decompress_bound(src, src_len);
+    if (bound < 0) return -1;
+    uint8_t *buf = malloc((size_t)bound);
+    if (!buf) return -1;
+    ssize_t dlen = cmq_decompress(src, src_len, buf, (size_t)bound);
+    if (dlen < 0) {
+        free(buf);
+        return -1;
+    }
+    *out = buf;
+    *out_len = (size_t)dlen;
+    return 0;
+}

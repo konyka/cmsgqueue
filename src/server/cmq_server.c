@@ -3144,6 +3144,25 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         client_set_state(c, CMQ_CLIENT_CLOSING);
         return;
     }
+    /* v0.5.96: inflate once, then parse plaintext. Recurse with the
+     * flag cleared so a nested COMPRESSED bit cannot loop. */
+    if (frame->hdr.flags & CMQ_FLAG_COMPRESSED) {
+        uint8_t *decoded = NULL;
+        size_t dlen = 0;
+        if (cmq_inflate(frame->payload, frame->payload_len,
+                        &decoded, &dlen) != 0) {
+            cmq_send_error(c, "compressed publish rejected");
+            return;
+        }
+        cmq_frame_t dec_frame = *frame;
+        dec_frame.hdr.flags =
+            (cmq_u8_t)(dec_frame.hdr.flags & ~(cmq_u8_t)CMQ_FLAG_COMPRESSED);
+        dec_frame.payload = decoded;
+        dec_frame.payload_len = dlen;
+        handle_publish(srv, c, &dec_frame);
+        free(decoded);
+        return;
+    }
     if (!frame->payload || frame->payload_len < 2) {
         cmq_send_error(c, "invalid publish");
         return;

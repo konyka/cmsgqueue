@@ -430,15 +430,13 @@ TEST(parser, hard_cap_keeps_queued) {
     cmq_parser_destroy(p);
 }
 
-/* F11 + F2: COMPRESSED is BATCH-only. A PUBLISH with the bit set
- * would still fan out opaque bytes — reject it. BATCH with the bit
- * set is the F2 wire path (v0.5.41).
+/* F11 + F2 / v0.5.96: COMPRESSED is BATCH or PUBLISH. MESSAGE
+ * still fails closed so inbound MESSAGE cannot fan out garbage.
  */
 TEST(parser, reject_flag_compressed) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
-    /* Encode with flags=CMQ_FLAG_COMPRESSED (0x01) on PUBLISH */
-    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_MESSAGE,
                                 CMQ_FLAG_COMPRESSED, NULL, 0);
     ASSERT(n > 0);
     (void)cmq_parser_feed(p, buf, n);
@@ -481,8 +479,8 @@ TEST(parser, reject_flag_checksum) {
 TEST(parser, reject_flag_combined_reserved) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
-    /* flags = 0x03 (both COMPRESSED|Checksum) — must also reject */
-    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
+    /* flags = 0x03 on MESSAGE — still rejected (no MESSAGE inflate). */
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_MESSAGE,
                                 0x03, NULL, 0);
     ASSERT(n > 0);
     (void)cmq_parser_feed(p, buf, n);

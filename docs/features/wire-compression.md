@@ -34,10 +34,9 @@ decompresses, clears `CMQ_FLAG_COMPRESSED` on a local frame, and
 recurses once. The original `frame->payload` remains owned by the
 parser; the decoded buffer is freed on this return path.
 
-**Parser (v0.5.41):** `CMQ_FLAG_COMPRESSED` is accepted only when
-`op == CMQ_OP_BATCH`. Any other opcode with the bit set is still
-`pending_error` (F11). Before v0.5.41 the parser rejected the bit
-on every opcode, so this path was dead.
+**Parser (v0.5.41 / v0.5.96):** `CMQ_FLAG_COMPRESSED` is accepted
+when `op == CMQ_OP_BATCH` or `CMQ_OP_PUBLISH`. MESSAGE and other
+opcodes with the bit set are still `pending_error` (F11).
 
 ### Threshold policy
 
@@ -101,8 +100,8 @@ Threats closed:
   cap is **not** used: a 4 KiB JSON payload at zstd-1 is ~30 B
   (~130×) and is a supported happy path.
 - **Memory exhaustion** — the 16 MiB cap is the allocator ceiling.
-- **F11 interop** — COMPRESSED on non-BATCH opcodes is still
-  rejected in the parser.
+- **F11 interop** — COMPRESSED on MESSAGE / REQUEST and other
+  non-PUBLISH opcodes is still rejected in the parser.
 
 Threats NOT closed (covered by TLS in F1):
 - Active tampering of compressed data. The CRC32C trailing checksum
@@ -110,7 +109,9 @@ Threats NOT closed (covered by TLS in F1):
 
 ## Limitations
 
-- BATCH-only. Per-message compression remains rejected (F11).
+- BATCH and PUBLISH. MESSAGE stays rejected (F11).
+  PUBLISH inflates the whole payload (subject + body) once,
+  then fans out plaintext.
 - Level 1 only. Higher levels (3, 6, 9) trade CPU for ratio;
   1 is the recommended default for hot paths.
 - No negotiated codec — only zstd. LZ4 could be added behind

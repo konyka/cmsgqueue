@@ -254,10 +254,11 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
             return parser_have_frames(p, produced);
         }
 
-        /* F2: COMPRESSED is implemented for BATCH only. Per-message
-         * compression is still the F11 interop bug — reject it. */
+        /* F2 / v0.5.96: COMPRESSED is BATCH or PUBLISH. MESSAGE and
+         * other opcodes still fail closed (F11 garbage fanout). */
         if ((hb[3] & (uint8_t)CMQ_FLAG_COMPRESSED) &&
-            hb[4] != (uint8_t)CMQ_OP_BATCH) {
+            hb[4] != (uint8_t)CMQ_OP_BATCH &&
+            hb[4] != (uint8_t)CMQ_OP_PUBLISH) {
             p->pending_error = 1;
             return parser_have_frames(p, produced);
         }
