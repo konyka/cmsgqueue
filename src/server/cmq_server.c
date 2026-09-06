@@ -1244,6 +1244,7 @@ static cmq_client_t *cmq_client_create(int fd, uint32_t id,
     c->subs = NULL;
     c->username = NULL;
     c->next = NULL;
+    cmq_trace_assign(c->trace_id, c->trace_hex);
     client_touch_activity(c);
     return c;
 }
@@ -4599,16 +4600,9 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
 
     switch (frame->hdr.op) {
     case CMQ_OP_CONNECT:
-        /* F11: assign a trace ID at the earliest point in the
-         * connection's lifecycle so log entries from this point
-         * forward can be correlated. */
-        {
-            int assigned = 0;
-            for (int i = 0; i < 16; i++) {
-                if (c->trace_id[i] == 0) { assigned = 1; break; }
-            }
-            if (!assigned) cmq_trace_id(c->trace_id);
-        }
+        /* v0.5.44: ID is assigned at accept. Backfill if missing. */
+        if (c->trace_hex[0] == '\0')
+            cmq_trace_assign(c->trace_id, c->trace_hex);
         /* Only virgin INIT sockets may CONNECT — CLOSING must not resurrect. */
         if (client_state(c) == CMQ_CLIENT_CLOSING || client_state(c) == CMQ_CLIENT_CLOSED) {
             cmq_send_connack(c, 1);
@@ -4625,7 +4619,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 uint32_t ip = (uint32_t)peer.sin_addr.s_addr;
                 if (cmq_blocklist_check(bl, ip)) {
                     cmq_rch_release(srv->blocklist_h, bl);
-                    cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, NULL, "",
+                    cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, c->trace_hex, "",
                                   "blocklist reject");
                     client_finish_closing(c);
                     break;
@@ -4843,6 +4837,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
         }
         cmq_atomic_fetch_add_u64(&srv->stat_connections, 1, CMQ_ATOMIC_RELAXED);
         c->session_accounted = 1;
+        cmq_log_info(srv->log, "client connected id=%u", (unsigned)c->id);
         /* Stage inbound (connected=0) before CONNACK so failure can still
            send CONNACK 1; promote after drain so broadcast cannot race. */
         if (want_route) {
@@ -5544,7 +5539,9 @@ static int client_dispatch_parser(cmq_server_t *srv, cmq_client_t *c, int rc) {
                     client_finish_closing(c);
                     return -1;
                 }
+                cmq_log_set_thread_trace(c->trace_hex);
                 handle_frame(srv, c, frame);
+                cmq_log_set_thread_trace(NULL);
             }
             if (client_state(c) == CMQ_CLIENT_CLOSING || client_state(c) == CMQ_CLIENT_CLOSED) {
                 client_finish_closing(c);

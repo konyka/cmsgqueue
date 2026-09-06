@@ -12,6 +12,29 @@
 #define CMQ_LOG_MAX_APPENDERS 8
 #define CMQ_LOG_MSG_SIZE 1024
 
+/* Borrowed 32-char hex or NULL. Per-worker; no lock. */
+static _Thread_local const char *g_log_trace;
+
+static int trace_hex_ok(const char *hex) {
+    if (!hex) return 0;
+    size_t n = 0;
+    while (n < 32 && hex[n]) {
+        char c = hex[n];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            return 0;
+        n++;
+    }
+    return n == 32 && hex[32] == '\0';
+}
+
+void cmq_log_set_thread_trace(const char *hex) {
+    g_log_trace = trace_hex_ok(hex) ? hex : NULL;
+}
+
+const char *cmq_log_thread_trace(void) {
+    return g_log_trace;
+}
+
 
 typedef struct {
     cmq_log_appender_fn fn;
@@ -222,10 +245,17 @@ void cmq_log_write(cmq_log_t *log, cmq_log_level_t level, const char *file, int 
 
     char final_buf[CMQ_LOG_MSG_SIZE];
     const char *lvlstr = level_to_string(level);
+    const char *tid = g_log_trace;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
-    snprintf(final_buf, sizeof(final_buf), "[%s] [%s] %s:%d: %s",
-             lvlstr, timebuf, file, line, user_buf);
+    if (tid) {
+        snprintf(final_buf, sizeof(final_buf),
+                 "[%s] [%s] [tid=%s] %s:%d: %s",
+                 lvlstr, timebuf, tid, file, line, user_buf);
+    } else {
+        snprintf(final_buf, sizeof(final_buf), "[%s] [%s] %s:%d: %s",
+                 lvlstr, timebuf, file, line, user_buf);
+    }
 #pragma GCC diagnostic pop
     size_t flen = strlen(final_buf);
     if (flen + 1 < sizeof(final_buf)) {

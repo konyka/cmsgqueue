@@ -57,7 +57,54 @@ TEST(log, format_output) {
     cmq_log_write(log, CMQ_LOG_INFO, "test.c", 42, "hello %s %d", "world", 123);
     ASSERT(strstr(log_buffer, "hello world 123") != NULL);
     ASSERT(strstr(log_buffer, "test.c:42") != NULL);
+    ASSERT(strstr(log_buffer, "tid=") == NULL);
 
+    cmq_log_destroy(log);
+}
+
+TEST(log, thread_trace_in_line) {
+    memset(log_buffer, 0, sizeof(log_buffer));
+    log_buffer_pos = 0;
+
+    cmq_log_t *log = cmq_log_create(CMQ_LOG_INFO);
+    cmq_log_add_appender(log, test_appender, NULL);
+    cmq_log_set_thread_trace("00112233445566778899aabbccddeeff");
+    cmq_log_write(log, CMQ_LOG_INFO, "test.c", 1, "traced");
+    cmq_log_set_thread_trace(NULL);
+
+    ASSERT(strstr(log_buffer, "traced") != NULL);
+    ASSERT(strstr(log_buffer, "[tid=00112233445566778899aabbccddeeff]") != NULL);
+    cmq_log_destroy(log);
+}
+
+TEST(log, thread_trace_cleared) {
+    memset(log_buffer, 0, sizeof(log_buffer));
+    log_buffer_pos = 0;
+
+    cmq_log_t *log = cmq_log_create(CMQ_LOG_INFO);
+    cmq_log_add_appender(log, test_appender, NULL);
+    cmq_log_set_thread_trace("00112233445566778899aabbccddeeff");
+    cmq_log_set_thread_trace(NULL);
+    cmq_log_write(log, CMQ_LOG_INFO, "test.c", 1, "plain");
+
+    ASSERT(strstr(log_buffer, "plain") != NULL);
+    ASSERT(strstr(log_buffer, "tid=") == NULL);
+    cmq_log_destroy(log);
+}
+
+TEST(log, thread_trace_rejects_junk) {
+    memset(log_buffer, 0, sizeof(log_buffer));
+    log_buffer_pos = 0;
+
+    cmq_log_t *log = cmq_log_create(CMQ_LOG_INFO);
+    cmq_log_add_appender(log, test_appender, NULL);
+    cmq_log_set_thread_trace("not-a-trace-id");
+    cmq_log_write(log, CMQ_LOG_INFO, "test.c", 1, "safe");
+    cmq_log_set_thread_trace(NULL);
+
+    ASSERT(strstr(log_buffer, "safe") != NULL);
+    ASSERT(strstr(log_buffer, "tid=") == NULL);
+    ASSERT(strstr(log_buffer, "not-a-trace-id") == NULL);
     cmq_log_destroy(log);
 }
 

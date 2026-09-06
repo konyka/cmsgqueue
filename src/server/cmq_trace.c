@@ -29,3 +29,10 @@ int cmq_trace_id_hex(const uint8_t id[16], char *out, size_t out_len) {
     if (copy > 0) out[copy - 1] = '\0';
     return (int)(copy - 1);
 }
+
+void cmq_trace_assign(uint8_t id[16], char hex[33]) {
+    if (!id) return;
+    cmq_trace_id(id);
+    if (hex)
+        cmq_trace_id_hex(id, hex, 33);
+}

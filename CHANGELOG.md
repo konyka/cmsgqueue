@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.44 - 2026-09-06
+
+### Added
+- **Trace ID in log lines** — `cmq_log_set_thread_trace` binds a
+  32-char hex ID to the calling thread. Format is
+  `[LEVEL] [time] [tid=hex] file:line: msg`. Junk input is ignored.
+- `cmq_trace_assign` generates the binary ID and hex together.
+
+### Fixed
+- CONNECT treated a calloc-zero `trace_id` as already assigned, so
+  every connection kept an all-zero ID. Assignment is now at
+  `cmq_client_create`.
+- Blocklist audit events now include `c->trace_hex`.
+
+### Tests
+- `tests/test_log.c` — thread_trace_in_line / cleared / rejects_junk.
+- `tests/test_trace.c` — assign_fills_hex.
+
+### Documentation
+- `docs/reviews/v0.5.44.enumeration.md`, `v0.5.44.plan.md`.
+- `docs/features/tracing.md`.
+- `docs/benchmarks/v0544_{1,2}.txt`.
+
+### Test count
+- 132 tests (was 128 in v0.5.43; +4).
+
 ## 0.5.43 - 2026-09-06
 
 ### Added

@@ -26,6 +26,11 @@ void cmq_log_add_stdout(cmq_log_t *log);
 void cmq_log_write(cmq_log_t *log, cmq_log_level_t level, const char *file, int line, const char *fmt, ...);
 void cmq_log_flush(cmq_log_t *log);
 
+/* v0.5.44: borrowed 32-char lowercase hex, or NULL to clear.
+ * Junk / wrong length is ignored so log format stays injection-free. */
+void cmq_log_set_thread_trace(const char *hex);
+const char *cmq_log_thread_trace(void);
+
 #define cmq_log_trace(log, ...) cmq_log_write(log, CMQ_LOG_TRACE, __FILE__, __LINE__, __VA_ARGS__)
 #define cmq_log_debug(log, ...) cmq_log_write(log, CMQ_LOG_DEBUG, __FILE__, __LINE__, __VA_ARGS__)
 #define cmq_log_info(log, ...)  cmq_log_write(log, CMQ_LOG_INFO,  __FILE__, __LINE__, __VA_ARGS__)
