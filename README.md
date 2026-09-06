@@ -16,7 +16,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Connection Limit** atomic `active_clients` gate on accept (`max_clients`)
 - **Graceful Shutdown** cmq_server_drain() sends DISCONNECT to all clients before stopping; validated by tests/test_server_ops.c shutdown path
 - **Persistence** ring buffer memstore, durable stream cursors, file-based WAL (`persist_dir`) with CRC32
-  Note: `$JS.<name>` PUBLISH appends; REQUEST returns last; `$JS.<name>.<consumer>` pull consume / ack (v0.5.93–95). Message bodies stay on the ring; cursors persist under `{persist_dir}/js` when set.
+  Note: `$JS.<name>` PUBLISH appends; REQUEST returns last; `$JS.<name>.<consumer>` pull consume / ack (v0.5.93–95). Last payload persists as `{persist_dir}/js/{name}.last` (v0.5.103); earlier bodies stay on the ring; cursors persist under `{persist_dir}/js` when set.
 - **Clustering** node membership and outbound route broadcast; leaf/gateway CONNECT/CONNACK e2e (v0.5.86)
 - **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired, F1 pending), MQTT bridge library with **5.0 property decode (v0.5.43)** and **will / durable sessions (v0.5.46)**, WebSocket transport with frame reassembly
 - **Connection tracing (v0.5.44)**: 16-byte ID at accept, `[tid=hex]` on `cmq_log` lines for that connection
@@ -30,7 +30,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Key compaction (v0.5.53 / v0.5.88)**: `cmq_filestore_compact_keys` last-value-wins on sealed `.1`; optional tombstone TTL + dirty-ratio auto-compact (D6)
 - **MQTT QoS 1 inflight (v0.5.54)**: 16-slot outbound window; local fanout + PUBACK (SUBSCRIBE still grants at most QoS 1)
 - **Idempotent publish (v0.5.55)**: `CMQI`+pid+seq sliding window drops retries before WAL (D5 phase 1)
-- **Durable stream cursors (v0.5.56 / v0.5.87 / v0.5.93–95)**: opt-in `{dir}/{name}.cursors` ack watermarks; 1–16 hash partitions via `append_key` / `next_part` / `ack_part`; `$JS.<name>` PUBLISH + REQUEST-get; `$JS.<name>.<consumer>` consume / ack (D4)
+- **Durable stream cursors (v0.5.56 / v0.5.87 / v0.5.93–95 / v0.5.103)**: opt-in `{dir}/{name}.cursors` ack watermarks; last `$JS` payload in `{dir}/js/{name}.last`; 1–16 hash partitions via `append_key` / `next_part` / `ack_part`; `$JS.<name>` PUBLISH + REQUEST-get; `$JS.<name>.<consumer>` consume / ack (D4)
 - **MQTT QoS 2 outbound (v0.5.57)**: grant 2; PUBLISH/PUBREC/PUBREL/PUBCOMP on the 16-slot window
 - **KV store (v0.5.58–70)**: last-value put/get/del; `$KV.<bucket>.<key>` PUBLISH + REQUEST-get
 - **Object store (v0.5.59–70)**: named blobs; `$OBJ.<name>` PUBLISH + REQUEST-get when persist_dir is set

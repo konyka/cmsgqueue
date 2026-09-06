@@ -8,10 +8,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 typedef struct {
     char name[CMQ_JS_NAME_MAX];
     cmq_stream_t *st;
+    uint8_t *last;
+    size_t last_len;
+    uint64_t last_seq;
 } cmq_js_slot_t;
 
 struct cmq_js {
@@ -86,12 +90,99 @@ static uint64_t js_get_be64(const uint8_t *p) {
     return v;
 }
 
-static cmq_stream_t *js_find(cmq_js_t *j, const char *name) {
+static cmq_js_slot_t *js_find_slot(cmq_js_t *j, const char *name) {
     for (int i = 0; i < j->n; i++) {
         if (strcmp(j->slots[i].name, name) == 0)
-            return j->slots[i].st;
+            return &j->slots[i];
     }
     return NULL;
+}
+
+static cmq_stream_t *js_find(cmq_js_t *j, const char *name) {
+    cmq_js_slot_t *s = js_find_slot(j, name);
+    return s ? s->st : NULL;
+}
+
+static int js_last_path(const cmq_js_t *j, const char *name,
+                        char *out, size_t cap) {
+    if (!j || !j->persist_dir[0] || !name || !out || !cap) return -1;
+    int w = snprintf(out, cap, "%s/%s.last", j->persist_dir, name);
+    if (w < 0 || (size_t)w >= cap) return -1;
+    return 0;
+}
+
+static int js_slot_set_last(cmq_js_slot_t *s, uint64_t seq,
+                            const uint8_t *val, size_t len) {
+    if (!s || !val || len == 0 || len > CMQ_JS_VAL_MAX) return -1;
+    uint8_t *p = malloc(len);
+    if (!p) return -1;
+    memcpy(p, val, len);
+    free(s->last);
+    s->last = p;
+    s->last_len = len;
+    s->last_seq = seq;
+    return 0;
+}
+
+static int js_save_last(cmq_js_t *j, const cmq_js_slot_t *s) {
+    char path[640], tmp[648];
+    if (js_last_path(j, s->name, path, sizeof(path)) != 0) return -1;
+    int w = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    if (w < 0 || (size_t)w >= sizeof(tmp)) return -1;
+    FILE *fp = fopen(tmp, "wb");
+    if (!fp) return -1;
+    uint8_t hdr[16];
+    memcpy(hdr, "CMQL", 4);
+    js_put_be64(hdr + 4, s->last_seq);
+    hdr[12] = (uint8_t)((s->last_len >> 24) & 0xFF);
+    hdr[13] = (uint8_t)((s->last_len >> 16) & 0xFF);
+    hdr[14] = (uint8_t)((s->last_len >> 8) & 0xFF);
+    hdr[15] = (uint8_t)(s->last_len & 0xFF);
+    int ok = (fwrite(hdr, 1, 16, fp) == 16 &&
+              fwrite(s->last, 1, s->last_len, fp) == s->last_len &&
+              fflush(fp) == 0 && fsync(fileno(fp)) == 0);
+    fclose(fp);
+    if (!ok) {
+        unlink(tmp);
+        return -1;
+    }
+    unlink(path);
+    if (rename(tmp, path) != 0) {
+        unlink(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+static int js_load_last(cmq_js_t *j, cmq_js_slot_t *s) {
+    char path[640];
+    if (js_last_path(j, s->name, path, sizeof(path)) != 0) return 0;
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return 0;
+    uint8_t hdr[16];
+    if (fread(hdr, 1, 16, fp) != 16 || memcmp(hdr, "CMQL", 4) != 0) {
+        fclose(fp);
+        return -1;
+    }
+    uint64_t seq = js_get_be64(hdr + 4);
+    size_t len = ((size_t)hdr[12] << 24) | ((size_t)hdr[13] << 16) |
+                 ((size_t)hdr[14] << 8) | (size_t)hdr[15];
+    if (seq == 0 || len == 0 || len > CMQ_JS_VAL_MAX) {
+        fclose(fp);
+        return -1;
+    }
+    uint8_t *p = malloc(len);
+    if (!p || fread(p, 1, len, fp) != len) {
+        free(p);
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+    free(s->last);
+    s->last = p;
+    s->last_len = len;
+    s->last_seq = seq;
+    return 0;
 }
 
 cmq_js_t *cmq_js_create(void) {
@@ -103,8 +194,10 @@ cmq_js_t *cmq_js_create(void) {
 
 void cmq_js_destroy(cmq_js_t *j) {
     if (!j) return;
-    for (int i = 0; i < j->n; i++)
+    for (int i = 0; i < j->n; i++) {
         cmq_stream_destroy(j->slots[i].st);
+        free(j->slots[i].last);
+    }
     cmq_mutex_destroy(&j->lock);
     free(j);
 }
@@ -124,16 +217,20 @@ int cmq_js_set_persist(cmq_js_t *j, const char *dir) {
     for (int i = 0; i < j->n; i++) {
         if (cmq_stream_set_cursor_path(j->slots[i].st, j->persist_dir) != 0)
             rc = -1;
+        if (j->slots[i].last_len == 0) {
+            if (js_load_last(j, &j->slots[i]) != 0)
+                rc = -1;
+        } else if (js_save_last(j, &j->slots[i]) != 0) {
+            rc = -1;
+        }
     }
     cmq_mutex_unlock(&j->lock);
     return rc;
 }
 
-static cmq_stream_t *js_get_or_create(cmq_js_t *j, const char *name) {
-    for (int i = 0; i < j->n; i++) {
-        if (strcmp(j->slots[i].name, name) == 0)
-            return j->slots[i].st;
-    }
+static cmq_js_slot_t *js_get_or_create_slot(cmq_js_t *j, const char *name) {
+    cmq_js_slot_t *s = js_find_slot(j, name);
+    if (s) return s;
     if (j->n >= CMQ_JS_MAX) return NULL;
     cmq_stream_t *st = cmq_stream_create(name, 1024, 0);
     if (!st) return NULL;
@@ -142,10 +239,23 @@ static cmq_stream_t *js_get_or_create(cmq_js_t *j, const char *name) {
         cmq_stream_destroy(st);
         return NULL;
     }
-    snprintf(j->slots[j->n].name, sizeof(j->slots[j->n].name), "%s", name);
-    j->slots[j->n].st = st;
+    s = &j->slots[j->n];
+    snprintf(s->name, sizeof(s->name), "%s", name);
+    s->st = st;
+    s->last = NULL;
+    s->last_len = 0;
+    s->last_seq = 0;
+    if (j->persist_dir[0])
+        (void)js_load_last(j, s);
     j->n++;
-    return st;
+    return s;
+}
+
+static int js_last_exists(cmq_js_t *j, const char *name) {
+    char path[640];
+    struct stat st;
+    if (js_last_path(j, name, path, sizeof(path)) != 0) return 0;
+    return stat(path, &st) == 0;
 }
 
 int cmq_js_publish(cmq_js_t *j, const char *subject,
@@ -157,11 +267,15 @@ int cmq_js_publish(cmq_js_t *j, const char *subject,
     if (pr == 0) {
         if (len == 0 || !val) return -1;
         cmq_mutex_lock(&j->lock);
-        cmq_stream_t *st = js_get_or_create(j, name);
+        cmq_js_slot_t *s = js_get_or_create_slot(j, name);
         int rc;
-        if (!st)
+        if (!s)
             rc = -2;
-        else if (cmq_stream_append(st, val, len) == 0)
+        else if (cmq_stream_append(s->st, val, len) == 0)
+            rc = -1;
+        else if (js_slot_set_last(s, cmq_stream_last_seq(s->st), val, len) != 0)
+            rc = -1;
+        else if (j->persist_dir[0] && js_save_last(j, s) != 0)
             rc = -1;
         else
             rc = 1;
@@ -192,19 +306,22 @@ int cmq_js_last(cmq_js_t *j, const char *subject, uint8_t *out,
     if (cmq_js_parse(subject, name, sizeof(name)) != 0)
         return -1;
     cmq_mutex_lock(&j->lock);
-    cmq_stream_t *st = NULL;
-    for (int i = 0; i < j->n; i++) {
-        if (strcmp(j->slots[i].name, name) == 0) {
-            st = j->slots[i].st;
-            break;
-        }
-    }
+    cmq_js_slot_t *s = js_find_slot(j, name);
+    if (!s && j->persist_dir[0] && js_last_exists(j, name))
+        s = js_get_or_create_slot(j, name);
     int rc = -1;
-    if (st) {
-        uint64_t seq = cmq_stream_last_seq(st);
+    if (s && s->last_len) {
+        if (s->last_len <= out_sz) {
+            memcpy(out, s->last, s->last_len);
+            *out_len = s->last_len;
+            *out_seq = s->last_seq;
+            rc = 0;
+        }
+    } else if (s && s->st) {
+        uint64_t seq = cmq_stream_last_seq(s->st);
         cmq_stream_msg_t msg;
         memset(&msg, 0, sizeof(msg));
-        if (seq > 0 && cmq_stream_read(st, seq, &msg) == 0) {
+        if (seq > 0 && cmq_stream_read(s->st, seq, &msg) == 0) {
             if (msg.len <= out_sz) {
                 if (msg.len)
                     memcpy(out, msg.data, msg.len);

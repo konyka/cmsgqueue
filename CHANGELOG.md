@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.103 - 2026-09-06
+
+### Added
+- **Durable `$JS` last payload (D4 follow-up)** — when
+  `persist_dir` is set, PUBLISH `$JS.<name>` writes
+  `{persist_dir}/js/{name}.last` (`CMQL`). REQUEST-get
+  survives reopen. Earlier bodies stay on the ring.
+
+### Tests
+- `tests/test_jsl.c` — reopen, no-persist, isolate,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.103.enumeration.md`, `v0.5.103.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v05103_{1,2}.txt`.
+
+### Test count
+- 403 tests (was 399 in v0.5.102; +4).
+
 ## 0.5.102 - 2026-09-06
 
 ### Added
