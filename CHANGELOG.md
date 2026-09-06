@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.148 - 2026-09-07
+
+### Added
+- **Attach TLS on reload** — when create left a slot empty,
+  SIGHUP loads `tls_enabled` + `tls_cert`/`tls_key` (slot 0)
+  or `listener{1,2,3}_tls_*` into a new SSL_CTX. Omitted /
+  empty keeps off. Unsafe paths, cert-without-key, and load
+  failure fail closed. Existing slots are not remounted.
+
+### Tests
+- `tests/test_tla.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.148.enumeration.md`, `v0.5.148.plan.md`.
+- `docs/features/tls-hardening.md`.
+- `docs/benchmarks/v05148_{1,2}.txt`.
+
+### Test count
+- 583 tests (was 579 in v0.5.147; +4).
+
 ## 0.5.147 - 2026-09-07
 
 ### Added

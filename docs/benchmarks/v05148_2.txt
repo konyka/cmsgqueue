@@ -1,0 +1,3 @@
+v0.5.148 bench 2:
+- Reload omitted/empty: no CTX.
+- Reject .. / cert-without-key: no CTX; live paths stay.

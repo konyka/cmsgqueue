@@ -56,6 +56,10 @@ the extra bind. Empty host / port 0 keep `127.0.0.1` and
 v0.5.146: reload binds an extra slot when create left it
 empty. Omitted / empty keeps off. Non-IPv4 and bad port
 fail closed. An existing accept fd is not rebound.
+v0.5.148: reload attaches TLS when create left a slot
+empty (`tls_enabled` + cert/key for slot 0;
+`listener{1,2,3}_tls_*` for extra slots). Existing
+SSL_CTX is not remounted.
 
 ## Limitations
 

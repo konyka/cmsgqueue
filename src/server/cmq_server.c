@@ -8998,6 +8998,46 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    {
+        const char *alpn = (server->config.h2_port > 0 || server->h2_lfd >= 0)
+                               ? "h2" : NULL;
+        int had0 = server->tls_config_slots[0] != NULL;
+        if (fresh.tls_enabled) {
+            if (cmq_tls_reload_attach(&server->tls_config_slots[0],
+                                      &server->config.tls_cert,
+                                      &server->config.tls_key,
+                                      &server->config.tls_ca,
+                                      &server->config.tls_verify_peer,
+                                      fresh.tls_cert, fresh.tls_key,
+                                      fresh.tls_ca, fresh.tls_verify_peer,
+                                      alpn) != 0 ||
+                !server->tls_config_slots[0]) {
+                cmq_config_free(&fresh);
+                return -1;
+            }
+            server->config.tls_enabled = 1;
+            if (!had0)
+                server->tls_config_count++;
+        }
+        for (int li = 1; li < CMQ_MAX_LISTENERS; li++) {
+            int had = server->tls_config_slots[li] != NULL;
+            if (cmq_tls_reload_attach(&server->tls_config_slots[li],
+                                      &server->config.listeners[li].tls_cert,
+                                      &server->config.listeners[li].tls_key,
+                                      &server->config.listeners[li].tls_ca,
+                                      &server->config.listeners[li].tls_verify_peer,
+                                      fresh.listeners[li].tls_cert,
+                                      fresh.listeners[li].tls_key,
+                                      fresh.listeners[li].tls_ca,
+                                      fresh.listeners[li].tls_verify_peer,
+                                      alpn) != 0) {
+                cmq_config_free(&fresh);
+                return -1;
+            }
+            if (!had && server->tls_config_slots[li])
+                server->tls_config_count++;
+        }
+    }
     if (cmq_reload_apply_auth(&server->config, &fresh) != 0) {
         cmq_config_free(&fresh);
         return -1;

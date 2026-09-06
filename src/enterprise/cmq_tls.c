@@ -377,6 +377,94 @@ int cmq_tls_alpn_has(cmq_tls_config_t *cfg, const char *proto) {
     return rc;
 }
 
+static int tls_reload_path_ok(const char *path) {
+    if (!path || !path[0]) return 0;
+    size_t n = strnlen(path, CMQ_TLS_PATH_MAX);
+    if (n == 0 || n >= CMQ_TLS_PATH_MAX) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)path[i];
+        if (c == '\\' || c < 0x20 || c == 0x7f)
+            return 0;
+    }
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && path[i] == '/')
+            i++;
+        if (i >= n)
+            break;
+        size_t start = i;
+        while (i < n && path[i] != '/')
+            i++;
+        size_t len = i - start;
+        if (len == 1 && path[start] == '.')
+            return 0;
+        if (len == 2 && path[start] == '.' && path[start + 1] == '.')
+            return 0;
+    }
+    return 1;
+}
+
+static int tls_reload_dup(const char *fresh, const char **live) {
+    if (!fresh || !fresh[0] || !live) return 0;
+    char *owned = strdup(fresh);
+    if (!owned) return -1;
+    free((void *)*live);
+    *live = owned;
+    return 0;
+}
+
+int cmq_tls_reload_attach(cmq_tls_config_t **slot,
+                          const char **live_cert, const char **live_key,
+                          const char **live_ca, int *live_verify,
+                          const char *fresh_cert, const char *fresh_key,
+                          const char *fresh_ca, int fresh_verify,
+                          const char *alpn) {
+    if (!slot) return -1;
+    int has_cert = fresh_cert && fresh_cert[0];
+    int has_key = fresh_key && fresh_key[0];
+    if (!has_cert && !has_key && (!fresh_ca || !fresh_ca[0]))
+        return 0;
+    if (has_cert != has_key) return -1;
+    if (has_cert && !tls_reload_path_ok(fresh_cert)) return -1;
+    if (has_key && !tls_reload_path_ok(fresh_key)) return -1;
+    if (fresh_ca && fresh_ca[0] && !tls_reload_path_ok(fresh_ca)) return -1;
+    if (*slot)
+        return 0;
+    if (!has_cert || !has_key)
+        return -1;
+    if (!cmq_tls_backend_secure())
+        return -1;
+    cmq_tls_config_t *n = cmq_tls_config_create();
+    if (!n) return -1;
+    if (cmq_tls_set_cert(n, fresh_cert) != 0 ||
+        cmq_tls_set_key(n, fresh_key) != 0) {
+        cmq_tls_config_destroy(n);
+        return -1;
+    }
+    if (fresh_ca && fresh_ca[0] && cmq_tls_set_ca(n, fresh_ca) != 0) {
+        cmq_tls_config_destroy(n);
+        return -1;
+    }
+    if (fresh_verify)
+        (void)cmq_tls_set_verify(n, 1);
+    if (alpn && alpn[0])
+        (void)cmq_tls_set_alpn(n, alpn);
+    if (cmq_tls_load(n) != 0) {
+        cmq_tls_config_destroy(n);
+        return -1;
+    }
+    if (tls_reload_dup(fresh_cert, live_cert) != 0 ||
+        tls_reload_dup(fresh_key, live_key) != 0 ||
+        tls_reload_dup(fresh_ca, live_ca) != 0) {
+        cmq_tls_config_destroy(n);
+        return -1;
+    }
+    if (live_verify && fresh_verify)
+        *live_verify = 1;
+    *slot = n;
+    return 0;
+}
+
 /* F12: Reload the SSL_CTX from the current cert/key paths.
  * Existing sessions continue with the old CTX until they tear down.
  * Returns 0 on success, -1 on failure. */
