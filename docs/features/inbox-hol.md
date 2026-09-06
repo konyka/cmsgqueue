@@ -11,6 +11,7 @@ did not.
 ## Design
 
 A new config field `inbox_max_pending` (default 0 = disabled).
+SIGHUP copies a non-zero value onto the live config (v0.5.122).
 When set, the server tracks per-connection pending REQUESTs
 (`cmq_client_t::inbox_pending`). On `handle_request`:
 

@@ -48,6 +48,10 @@ should provision a larger table or use a per-IP hash.
 
 ## Files touched
 
+SIGHUP / `cmq_server_reload` copies a non-zero
+`max_connects_per_sec` onto the live config (v0.5.122).
+0 / omitted keeps the current cap.
+
 - `src/include/cmq.h` — `max_connects_per_sec` config field.
 - `src/server/cmq_server.h` — `rate_slots[]` field.
 - `src/server/cmq_server.c` — `accept_cb` rate limit.

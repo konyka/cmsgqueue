@@ -155,6 +155,31 @@ int cmq_reload_apply_auth(cmq_config_t *live, const cmq_config_t *fresh) {
     return 0;
 }
 
+int cmq_reload_apply_limits(cmq_config_t *live, const cmq_config_t *fresh) {
+    if (!live || !fresh) return -1;
+    if (fresh->max_connects_per_sec < 0 ||
+        fresh->max_connects_per_sec > 100000)
+        return -1;
+    if (fresh->inbox_max_pending < 0 ||
+        fresh->inbox_max_pending > 100000)
+        return -1;
+    if (fresh->ping_interval_ms < 0 ||
+        fresh->ping_interval_ms > 86400000)
+        return -1;
+    if (fresh->write_timeout_ms < 0 ||
+        fresh->write_timeout_ms > 86400000)
+        return -1;
+    if (fresh->max_connects_per_sec > 0)
+        live->max_connects_per_sec = fresh->max_connects_per_sec;
+    if (fresh->inbox_max_pending > 0)
+        live->inbox_max_pending = fresh->inbox_max_pending;
+    if (fresh->ping_interval_ms > 0)
+        live->ping_interval_ms = fresh->ping_interval_ms;
+    if (fresh->write_timeout_ms > 0)
+        live->write_timeout_ms = fresh->write_timeout_ms;
+    return 0;
+}
+
 void cmq_sighup_note(void) {
     cmq_atomic_store_int(&cmq_sighup_pending, 1, CMQ_ATOMIC_RELEASE);
 }

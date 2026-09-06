@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.122 - 2026-09-06
+
+### Added
+- **Reload live rate / timeout scalars** —
+  `cmq_server_reload` copies non-zero
+  `max_connects_per_sec`, `inbox_max_pending`,
+  `ping_interval_ms`, and `write_timeout_ms`.
+  0 / omitted keeps the current caps.
+
+### Tests
+- `tests/test_lim.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.122.enumeration.md`, `v0.5.122.plan.md`.
+- `docs/features/rate-limit.md`, `inbox-hol.md`.
+- `docs/benchmarks/v05122_{1,2}.txt`.
+
+### Test count
+- 479 tests (was 475 in v0.5.121; +4).
+
 ## 0.5.121 - 2026-09-06
 
 ### Added
