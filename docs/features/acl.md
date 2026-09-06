@@ -22,6 +22,11 @@ Semantics:
 
 Per-account ACL is layered: each `cmq_account` has a `cmq_acl_t *acl`. The check is in `handle_publish` before `cmq_sublist_match`. On deny, `cmq_send_error("permission denied")`.
 
+Config keys `acl_allow` / `acl_deny` (CSV patterns) and
+`blocklist_file` / `tls_ca` are owned strings (v0.5.113):
+empty disables; `cmq_config_free` releases them; create
+`strdup`s so destroy does not free a caller literal.
+
 ## Files touched
 
 - `src/enterprise/cmq_acl.{h,c}` (new).

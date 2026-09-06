@@ -269,10 +269,25 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return parse_int_range(value, 0, 1000000,
                               &config->max_msgs_per_sec_per_subject);
     } else if (strcmp(key, "acl_allow") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->acl_allow);
+            config->acl_allow = NULL;
+            return 0;
+        }
         return cfg_set_str(&config->acl_allow, value);
     } else if (strcmp(key, "acl_deny") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->acl_deny);
+            config->acl_deny = NULL;
+            return 0;
+        }
         return cfg_set_str(&config->acl_deny, value);
     } else if (strcmp(key, "blocklist_file") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->blocklist_file);
+            config->blocklist_file = NULL;
+            return 0;
+        }
         return cfg_set_str(&config->blocklist_file, value);
     } else if (strcmp(key, "inbox_max_pending") == 0) {
         return parse_int_range(value, 0, 100000, &config->inbox_max_pending);
@@ -330,6 +345,11 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "tls_key") == 0) {
         return cfg_set_str(&config->tls_key, value);
     } else if (strcmp(key, "tls_ca") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->tls_ca);
+            config->tls_ca = NULL;
+            return 0;
+        }
         return cfg_set_str(&config->tls_ca, value);
     } else if (strcmp(key, "tls_verify_peer") == 0) {
         return parse_int_range(value, 0, 1, &config->tls_verify_peer);
@@ -375,6 +395,10 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->cluster_node_id);
     cfg_free_owned(config->tls_cert);
     cfg_free_owned(config->tls_key);
+    cfg_free_owned(config->tls_ca);
+    cfg_free_owned(config->acl_allow);
+    cfg_free_owned(config->acl_deny);
+    cfg_free_owned(config->blocklist_file);
     cfg_free_owned(config->persist_dir);
     cfg_free_owned(config->mqtt_bridge_addr);
     for (int i = 0; i < config->mqtt_bridge_map_count && i < 8; i++) {
@@ -406,6 +430,10 @@ void cmq_config_free(cmq_config_t *config) {
     config->cluster_node_id = NULL;
     config->tls_cert = NULL;
     config->tls_key = NULL;
+    config->tls_ca = NULL;
+    config->acl_allow = NULL;
+    config->acl_deny = NULL;
+    config->blocklist_file = NULL;
     config->persist_dir = NULL;
     config->mqtt_bridge_addr = NULL;
     for (int i = 0; i < 8; i++) {

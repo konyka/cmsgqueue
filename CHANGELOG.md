@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.113 - 2026-09-06
+
+### Added
+- **Config string ownership** — `tls_ca`, `acl_allow`,
+  `acl_deny`, and `blocklist_file` are freed by
+  `cmq_config_free` and `strdup`'d at server create.
+  Empty value means disabled.
+
+### Tests
+- `tests/test_cfgo.c` — apply, omitted, empty,
+  reload_clears (+4).
+
+### Documentation
+- `docs/reviews/v0.5.113.enumeration.md`, `v0.5.113.plan.md`.
+- `docs/features/acl.md`.
+- `docs/benchmarks/v05113_{1,2}.txt`.
+
+### Test count
+- 443 tests (was 439 in v0.5.112; +4).
+
 ## 0.5.112 - 2026-09-06
 
 ### Added
