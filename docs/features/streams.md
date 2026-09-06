@@ -88,11 +88,17 @@ First pull adds the consumer.
 PUBLISH with exactly 8 BE seq bytes acks. Unknown stream
 or consumer fails closed (does not append).
 
+REQUEST `$JS.<name>.<consumer>.<part>` (v0.5.106, part
+0–15) is `cmq_js_consume` → `consume_part`. The server
+REQUEST path already calls `cmq_js_consume`, so the
+three-token subject reaches a hash partition without a
+new opcode. Two-token consume is unchanged.
+
 ## Tests
 
 `tests/test_stream_cursors.c`, `tests/test_spart.c`,
 `tests/test_js.c`, `tests/test_jsr.c`, `tests/test_jsc.c`,
-`tests/test_jsl.c`, `tests/test_jsh.c`, `tests/test_jsp.c`
+`tests/test_jsl.c`, `tests/test_jsh.c`, `tests/test_jsp.c`, `tests/test_jsq.c`
 
 ## See also
 
@@ -104,3 +110,4 @@ or consumer fails closed (does not append).
 - `docs/reviews/v0.5.103.enumeration.md`
 - `docs/reviews/v0.5.104.enumeration.md`
 - `docs/reviews/v0.5.105.enumeration.md`
+- `docs/reviews/v0.5.106.enumeration.md`

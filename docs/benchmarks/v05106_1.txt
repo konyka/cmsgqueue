@@ -1,0 +1,4 @@
+v0.5.106 bench 1:
+- Two-token consume: parse_cons hit; no parse_part.
+- Three-token consume: parse_cons miss + parse_part + next_part.
+- Non-$JS REQUEST unchanged (one-byte $ gate).

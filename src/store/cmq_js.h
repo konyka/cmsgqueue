@@ -29,6 +29,9 @@ int cmq_js_parse(const char *subject, char *name, size_t ncap);
 /* 0 parsed stream+consumer; -1 not $JS; -2 malformed. */
 int cmq_js_parse_cons(const char *subject, char *name, size_t ncap,
                       char *cons, size_t ccap);
+/* 0 parsed name+consumer+part (0–15); -1 not $JS; -2 malformed. */
+int cmq_js_parse_part(const char *subject, char *name, size_t ncap,
+                      char *cons, size_t ccap, unsigned *part);
 
 /* 1 applied; 0 not $JS; -1 malformed / append fail; -2 table full. */
 int cmq_js_publish(cmq_js_t *j, const char *subject,

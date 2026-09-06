@@ -87,6 +87,42 @@ int cmq_js_parse_cons(const char *subject, char *name, size_t ncap,
     return 0;
 }
 
+int cmq_js_parse_part(const char *subject, char *name, size_t ncap,
+                      char *cons, size_t ccap, unsigned *part) {
+    if (!subject) return -1;
+    if (subject[0] != '$') return -1;
+    if (strncmp(subject, CMQ_JS_PREFIX, 4) != 0) return -1;
+    const char *rest = subject + 4;
+    if (!rest[0]) return -2;
+    const char *d1 = strchr(rest, '.');
+    if (!d1) return -1;
+    if (!d1[1]) return -2;
+    const char *d2 = strchr(d1 + 1, '.');
+    if (!d2 || !d2[1] || strchr(d2 + 1, '.')) return -2;
+    size_t nlen = (size_t)(d1 - rest);
+    size_t clen = (size_t)(d2 - (d1 + 1));
+    const char *pt = d2 + 1;
+    if (!name_ok(rest, nlen) || !name_ok(d1 + 1, clen)) return -2;
+    if (!pt[0]) return -2;
+    for (const char *q = pt; *q; q++) {
+        if (*q < '0' || *q > '9') return -2;
+    }
+    unsigned long v = strtoul(pt, NULL, 10);
+    if (v > 15) return -2;
+    if (name && ncap) {
+        if (nlen >= ncap) return -2;
+        memcpy(name, rest, nlen);
+        name[nlen] = '\0';
+    }
+    if (cons && ccap) {
+        if (clen >= ccap) return -2;
+        memcpy(cons, d1 + 1, clen);
+        cons[clen] = '\0';
+    }
+    if (part) *part = (unsigned)v;
+    return 0;
+}
+
 static void js_put_be64(uint8_t *p, uint64_t v) {
     for (int i = 7; i >= 0; i--) {
         p[i] = (uint8_t)v;
@@ -518,8 +554,14 @@ int cmq_js_consume(cmq_js_t *j, const char *subject, uint8_t *out,
     *out_len = 0;
     if (!j || !subject || !out) return -1;
     char name[CMQ_JS_NAME_MAX], cons[CMQ_JS_NAME_MAX];
-    if (cmq_js_parse_cons(subject, name, sizeof(name), cons, sizeof(cons)) != 0)
-        return -1;
+    unsigned part = 0;
+    int pr = cmq_js_parse_cons(subject, name, sizeof(name), cons, sizeof(cons));
+    if (pr != 0) {
+        if (cmq_js_parse_part(subject, name, sizeof(name), cons, sizeof(cons),
+                              &part) != 0)
+            return -1;
+        return cmq_js_consume_part(j, subject, part, out, out_sz, out_len);
+    }
     cmq_mutex_lock(&j->lock);
     cmq_stream_t *st = js_find(j, name);
     if (!st && j->persist_dir[0] &&
@@ -584,7 +626,10 @@ int cmq_js_consume_part(cmq_js_t *j, const char *subject, unsigned part,
     *out_len = 0;
     if (!j || !subject || !out) return -1;
     char name[CMQ_JS_NAME_MAX], cons[CMQ_JS_NAME_MAX];
-    if (cmq_js_parse_cons(subject, name, sizeof(name), cons, sizeof(cons)) != 0)
+    unsigned use = part;
+    if (cmq_js_parse_part(subject, name, sizeof(name), cons, sizeof(cons),
+                          &use) != 0 &&
+        cmq_js_parse_cons(subject, name, sizeof(name), cons, sizeof(cons)) != 0)
         return -1;
     cmq_mutex_lock(&j->lock);
     cmq_stream_t *st = js_find(j, name);
@@ -595,7 +640,7 @@ int cmq_js_consume_part(cmq_js_t *j, const char *subject, unsigned part,
     }
     int rc = 0;
     if (st && cmq_stream_add_consumer(st, cons) == 0) {
-        uint64_t seq = cmq_stream_consumer_next_part(st, cons, part);
+        uint64_t seq = cmq_stream_consumer_next_part(st, cons, use);
         cmq_stream_msg_t msg;
         memset(&msg, 0, sizeof(msg));
         if (seq > 0 && cmq_stream_read(st, seq, &msg) == 0) {

@@ -1,0 +1,3 @@
+v0.5.106 bench 2:
+- No new opcode or server switch arm.
+- Part token is 0–15; reject is a parse, not a ring walk.

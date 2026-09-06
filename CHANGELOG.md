@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.106 - 2026-09-06
+
+### Added
+- **`$JS` consume-part subject (D4 follow-up)** —
+  REQUEST `$JS.<name>.<consumer>.<part>` (0–15) is
+  parsed by `cmq_js_parse_part` and handled by
+  `cmq_js_consume` → `consume_part`. The server REQUEST
+  path needs no new opcode. Two-token consume is
+  unchanged.
+
+### Tests
+- `tests/test_jsq.c` — parse, isolate, compat, reject
+  (+4).
+
+### Documentation
+- `docs/reviews/v0.5.106.enumeration.md`, `v0.5.106.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v05106_{1,2}.txt`.
+
+### Test count
+- 415 tests (was 411 in v0.5.105; +4).
+
 ## 0.5.105 - 2026-09-06
 
 ### Added
