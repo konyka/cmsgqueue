@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.59 - 2026-09-06
+
+### Added
+- **Object store (D4 phase 3)** — `cmq_obj` named blobs under
+  a directory. Put is tmp + fsync + rename. 64 KiB cap.
+  Path traversal rejected.
+
+### Tests
+- `tests/test_obj.c` — put/get/overwrite+reopen, del/isolate,
+  unsafe names (+3).
+
+### Documentation
+- `docs/reviews/v0.5.59.enumeration.md`, `v0.5.59.plan.md`.
+- `docs/features/object-store.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0559_{1,2}.txt`.
+
+### Test count
+- 220 tests (was 217 in v0.5.58; +3).
+
 ## 0.5.58 - 2026-09-06
 
 ### Added
