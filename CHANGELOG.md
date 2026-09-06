@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.84 - 2026-09-06
+
+### Added
+- **OTLP/gRPC (D1 phase 4)** — `grpc://` encodes an OTLP
+  protobuf Export and POSTs it as prior-knowledge HTTP/2
+  (`application/grpc`). Default port 4317. JSON `http(s)://`
+  path unchanged. Failures ignored.
+
+### Tests
+- `tests/test_otlpg.c` — proto, grpc frame, parse+post,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.84.enumeration.md`, `v0.5.84.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v0584_{1,2}.txt`.
+
+### Test count
+- 327 tests (was 323 in v0.5.83; +4).
+
 ## 0.5.83 - 2026-09-06
 
 ### Added

@@ -1,4 +1,4 @@
-# OpenTelemetry (v0.5.61–64, 0.5.78, D1 phases 1–3)
+# OpenTelemetry (v0.5.61–64, 0.5.78, 0.5.84, D1 phases 1–4)
 
 `cmq_otel` queues spans on a 256-slot ring. A sidecar thread
 drains them to an export hook. Offer never blocks.
@@ -17,8 +17,11 @@ returns 1 (newest span lost). Oldest in-flight spans stay.
 
 When `otlp_endpoint` is set (`http(s)://host[:port][/path]`),
 the sidecar POSTs OTLP/JSON to that URL. Default port is
-4318; default path is `/v1/traces`. gRPC and userinfo are
-rejected.
+4318; default path is `/v1/traces`. userinfo is rejected.
+
+`grpc://` (v0.5.84) POSTs an OTLP protobuf Export over
+prior-knowledge HTTP/2 (default port 4317). The sidecar
+picks JSON or gRPC from the URL scheme.
 
 `https://` uses TLS with peer verify. `otlp_ca` is an
 optional PEM; otherwise the system CA store is used.
@@ -29,11 +32,13 @@ No endpoint: the export hook stays NULL.
 
 ## Tests
 
-`tests/test_otel.c`, `tests/test_otlp.c`, `tests/test_otlps.c`
+`tests/test_otel.c`, `tests/test_otlp.c`, `tests/test_otlps.c`,
+`tests/test_otlpg.c`
 
 ## See also
 
 - `docs/reviews/v0.5.61.enumeration.md`
 - `docs/reviews/v0.5.64.enumeration.md`
 - `docs/reviews/v0.5.78.enumeration.md`
+- `docs/reviews/v0.5.84.enumeration.md`
 - `docs/features/tracing.md`

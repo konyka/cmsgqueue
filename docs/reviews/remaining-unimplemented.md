@@ -1,8 +1,9 @@
-# Remaining unimplemented work (HEAD after v0.5.83)
+# Remaining unimplemented work (HEAD after v0.5.84)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
-cuts. Next cuts: OTLP/gRPC, or leaf/gateway e2e.
+cuts. Next cuts: leaf/gateway e2e, or optional retry of
+deferred route writes.
 
 ## Shipped (do not re-open)
 
@@ -45,14 +46,16 @@ cuts. Next cuts: OTLP/gRPC, or leaf/gateway e2e.
 | v0.5.81 | D2 phase 6: ALPN h2 + h2_port |
 | v0.5.82 | D3 phase 9: JWKS refresh |
 | v0.5.83 | D2 phase 7: TLS-wrapped h2 I/O |
+| v0.5.84 | D1 phase 4: OTLP/gRPC |
 
 ## Deferred — detailed designs
 
-### D1 OpenTelemetry exporter — phases 1–3 shipped v0.5.61–64, 0.5.78
+### D1 OpenTelemetry exporter — phases 1–4 shipped v0.5.61–64, 0.5.78, 0.5.84
 
-Span ring, sidecar, OTLP/HTTP JSON, and OTLP HTTPS POST
-are live. **Remaining:** OTLP/gRPC collectors. Consume
-spans are queued only when a caller offers `KIND_CONSUME`.
+Span ring, sidecar, OTLP/HTTP JSON, OTLP HTTPS POST, and
+OTLP/gRPC (`grpc://`, protobuf Export over HTTP/2) are
+live. Consume spans are queued only when a caller offers
+`KIND_CONSUME`.
 
 ### D2 HTTP/2 listener — phases 1–7 shipped v0.5.66–73, 0.5.81, 0.5.83
 
