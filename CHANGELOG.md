@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.101 - 2026-09-06
+
+### Added
+- **Response spans (D1 follow-up)** — a successful local
+  RESPONSE deliver offers one `KIND_RESPONSE` with the
+  accept trace. Failed deliver and route-only forward
+  skip it.
+
+### Tests
+- `tests/test_ots.c` — ok, skipped, isolated, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.101.enumeration.md`, `v0.5.101.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v05101_{1,2}.txt`.
+
+### Test count
+- 395 tests (was 391 in v0.5.100; +4).
+
 ## 0.5.100 - 2026-09-06
 
 ### Added

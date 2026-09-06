@@ -117,6 +117,7 @@ static const char *kind_name(uint8_t k) {
     if (k == CMQ_OTEL_KIND_CONSUME) return "consume";
     if (k == CMQ_OTEL_KIND_CONNECT) return "connect";
     if (k == CMQ_OTEL_KIND_REQUEST) return "request";
+    if (k == CMQ_OTEL_KIND_RESPONSE) return "response";
     return "span";
 }
 
@@ -124,6 +125,7 @@ static int kind_otlp(uint8_t k) {
     if (k == CMQ_OTEL_KIND_PUBLISH) return 4;
     if (k == CMQ_OTEL_KIND_CONSUME) return 5;
     if (k == CMQ_OTEL_KIND_REQUEST) return 2;
+    if (k == CMQ_OTEL_KIND_RESPONSE) return 4;
     return 1;
 }
 
@@ -137,7 +139,7 @@ int cmq_otlp_encode_json(const cmq_otel_span_t *spans, size_t n,
     if (off < 0 || (size_t)off >= out_len) return -1;
     for (size_t i = 0; i < n; i++) {
         if (spans[i].kind < CMQ_OTEL_KIND_PUBLISH ||
-            spans[i].kind > CMQ_OTEL_KIND_REQUEST)
+            spans[i].kind > CMQ_OTEL_KIND_RESPONSE)
             return -1;
         char tid[33], sid[17];
         hex32(spans[i].trace, 16, tid);
@@ -396,7 +398,7 @@ int cmq_otlp_encode_proto(const cmq_otel_span_t *spans, size_t n,
     if (pb_embed(res, sizeof(res), &resn, 1, kv, kvn) != 0) return -1;
     for (size_t i = 0; i < n; i++) {
         if (spans[i].kind < CMQ_OTEL_KIND_PUBLISH ||
-            spans[i].kind > CMQ_OTEL_KIND_REQUEST)
+            spans[i].kind > CMQ_OTEL_KIND_RESPONSE)
             return -1;
         uint8_t one[192];
         size_t on = 0;

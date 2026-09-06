@@ -1,0 +1,4 @@
+v0.5.101 bench 1:
+- RESPONSE local deliver: one extra offer after credit.
+- Failed deliver / no subscribers: ring untouched.
+- Route-only forward: no span (align REQUEST).

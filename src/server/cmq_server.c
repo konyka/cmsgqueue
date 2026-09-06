@@ -4713,6 +4713,8 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
             }
         } else {
             credit_msgs_in(srv, c, frame);
+            if (srv->otel)
+                (void)cmq_otel_on_response(srv->otel, c->trace_id, 1);
         }
     } else if (!c->is_route) {
         if (route_sent > 0) {

@@ -9,6 +9,7 @@
 #define CMQ_OTEL_KIND_CONSUME 2
 #define CMQ_OTEL_KIND_CONNECT 3
 #define CMQ_OTEL_KIND_REQUEST 4
+#define CMQ_OTEL_KIND_RESPONSE 5
 
 typedef struct {
     uint8_t trace[16];
@@ -33,6 +34,9 @@ int cmq_otel_on_connect(cmq_otel_t *o, const uint8_t trace[16], int ok);
 /* v0.5.100: one REQUEST after a successful local answer.
  * answered==0: no-op (0). Missing o/trace: -1. */
 int cmq_otel_on_request(cmq_otel_t *o, const uint8_t trace[16], int answered);
+/* v0.5.101: one RESPONSE after successful local deliver.
+ * delivered==0: no-op (0). Missing o/trace: -1. */
+int cmq_otel_on_response(cmq_otel_t *o, const uint8_t trace[16], int delivered);
 /* 1 copied; 0 empty. */
 int cmq_otel_poll(cmq_otel_t *o, cmq_otel_span_t *out);
 uint64_t cmq_otel_dropped(const cmq_otel_t *o);
