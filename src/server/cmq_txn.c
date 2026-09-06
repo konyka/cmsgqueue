@@ -2,9 +2,11 @@
 #include "cmq_txn.h"
 #include "cmq_thread.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 typedef struct {
@@ -17,6 +19,10 @@ typedef struct {
     uint64_t id;
     uint8_t used;
     uint8_t nops;
+    uint8_t prepared;
+    uint8_t nparts;
+    char parts[CMQ_TXN_PARTS][CMQ_TXN_NODE_MAX];
+    uint8_t votes[CMQ_TXN_PARTS];
     cmq_txn_op_t ops[CMQ_TXN_OPS];
 } cmq_txn_slot_t;
 
@@ -26,6 +32,7 @@ struct cmq_txn {
     size_t ndone;
     char log_path[600];
     cmq_mutex_t lock;
+    cmq_cond_t cv;
 };
 
 static void put_be64(uint8_t *p, uint64_t v) {
@@ -137,15 +144,35 @@ static int txn_log_load(cmq_txn_t *t) {
     return 0;
 }
 
+static int txn_all_voted(const cmq_txn_slot_t *s) {
+    if (!s || s->nparts == 0) return 0;
+    for (int i = 0; i < s->nparts; i++) {
+        if (s->votes[i] == 0)
+            return 0;
+    }
+    return 1;
+}
+
+static int txn_all_yes_slot(const cmq_txn_slot_t *s) {
+    if (!s || s->nparts == 0) return 0;
+    for (int i = 0; i < s->nparts; i++) {
+        if (s->votes[i] != 1)
+            return 0;
+    }
+    return 1;
+}
+
 cmq_txn_t *cmq_txn_create(void) {
     cmq_txn_t *t = calloc(1, sizeof(*t));
     if (!t) return NULL;
     cmq_mutex_init(&t->lock);
+    cmq_cond_init(&t->cv);
     return t;
 }
 
 void cmq_txn_destroy(cmq_txn_t *t) {
     if (!t) return;
+    cmq_cond_destroy(&t->cv);
     cmq_mutex_destroy(&t->lock);
     free(t);
 }
@@ -167,7 +194,7 @@ int cmq_txn_encode(uint8_t *out, size_t cap, uint64_t id, uint8_t op,
                    size_t *out_len) {
     if (!out || cap < CMQ_TXN_HDR_LEN || !out_len || id == 0)
         return -1;
-    if (op < CMQ_TXN_BEGIN || op > CMQ_TXN_ABORT) return -1;
+    if (op < CMQ_TXN_BEGIN || op > CMQ_TXN_PREPARE) return -1;
     memcpy(out, CMQ_TXN_MAGIC, 4);
     put_be64(out + 4, id);
     out[12] = op;
@@ -180,7 +207,7 @@ int cmq_txn_parse(const uint8_t *hdr, size_t n, uint64_t *id, uint8_t *op) {
     if (memcmp(hdr, CMQ_TXN_MAGIC, 4) != 0) return -1;
     uint64_t tid = get_be64(hdr + 4);
     uint8_t o = hdr[12];
-    if (tid == 0 || o < CMQ_TXN_BEGIN || o > CMQ_TXN_ABORT) return -1;
+    if (tid == 0 || o < CMQ_TXN_BEGIN || o > CMQ_TXN_PREPARE) return -1;
     *id = tid;
     *op = o;
     return 0;
@@ -218,7 +245,8 @@ int cmq_txn_add(cmq_txn_t *t, uint64_t id, const char *subject,
     cmq_mutex_lock(&t->lock);
     int idx = txn_find(t, id);
     int rc = -1;
-    if (idx >= 0 && t->slots[idx].nops < CMQ_TXN_OPS) {
+    if (idx >= 0 && !t->slots[idx].prepared &&
+        t->slots[idx].nops < CMQ_TXN_OPS) {
         cmq_txn_op_t *op = &t->slots[idx].ops[t->slots[idx].nops++];
         memcpy(op->subject, subject, slen);
         op->subject[slen] = '\0';
@@ -242,6 +270,11 @@ int cmq_txn_commit(cmq_txn_t *t, uint64_t id, cmq_txn_apply_fn fn, void *ctx) {
     }
     int idx = txn_find(t, id);
     if (idx < 0) {
+        cmq_mutex_unlock(&t->lock);
+        return -1;
+    }
+    if (t->slots[idx].nparts > 0 &&
+        (!t->slots[idx].prepared || !txn_all_yes_slot(&t->slots[idx]))) {
         cmq_mutex_unlock(&t->lock);
         return -1;
     }
@@ -281,4 +314,191 @@ int cmq_txn_was_committed(cmq_txn_t *t, uint64_t id) {
     int rc = txn_done_has(t, id);
     cmq_mutex_unlock(&t->lock);
     return rc;
+}
+
+int cmq_txn_add_part(cmq_txn_t *t, uint64_t id, const char *node_id) {
+    if (!t || id == 0 || !txn_token_safe(node_id)) return -1;
+    size_t n = strnlen(node_id, CMQ_TXN_NODE_MAX);
+    if (n == 0 || n >= CMQ_TXN_NODE_MAX) return -1;
+    cmq_mutex_lock(&t->lock);
+    int idx = txn_find(t, id);
+    int rc = -1;
+    if (idx >= 0 && t->slots[idx].nparts < CMQ_TXN_PARTS) {
+        int dup = 0;
+        for (int i = 0; i < t->slots[idx].nparts; i++) {
+            if (strcmp(t->slots[idx].parts[i], node_id) == 0) {
+                dup = 1;
+                break;
+            }
+        }
+        if (!dup) {
+            memcpy(t->slots[idx].parts[t->slots[idx].nparts], node_id, n);
+            t->slots[idx].parts[t->slots[idx].nparts][n] = '\0';
+            t->slots[idx].votes[t->slots[idx].nparts] = 0;
+            t->slots[idx].nparts++;
+            rc = 0;
+        } else {
+            rc = 0;
+        }
+    }
+    cmq_mutex_unlock(&t->lock);
+    return rc;
+}
+
+int cmq_txn_prepare(cmq_txn_t *t, uint64_t id) {
+    if (!t || id == 0) return -1;
+    cmq_mutex_lock(&t->lock);
+    int idx = txn_find(t, id);
+    int rc = -1;
+    if (idx >= 0) {
+        t->slots[idx].prepared = 1;
+        rc = 0;
+    }
+    cmq_mutex_unlock(&t->lock);
+    return rc;
+}
+
+int cmq_txn_vote(cmq_txn_t *t, uint64_t id, const char *node_id, int yes) {
+    if (!t || id == 0 || !node_id || !node_id[0]) return -1;
+    cmq_mutex_lock(&t->lock);
+    int idx = txn_find(t, id);
+    int rc = -1;
+    if (idx >= 0) {
+        for (int i = 0; i < t->slots[idx].nparts; i++) {
+            if (strcmp(t->slots[idx].parts[i], node_id) == 0) {
+                t->slots[idx].votes[i] = yes ? 1 : 2;
+                rc = 0;
+                cmq_cond_broadcast(&t->cv);
+                break;
+            }
+        }
+    }
+    cmq_mutex_unlock(&t->lock);
+    return rc;
+}
+
+int cmq_txn_prepared(cmq_txn_t *t, uint64_t id) {
+    if (!t || id == 0) return 0;
+    cmq_mutex_lock(&t->lock);
+    int idx = txn_find(t, id);
+    int rc = (idx >= 0 && t->slots[idx].prepared) ? 1 : 0;
+    cmq_mutex_unlock(&t->lock);
+    return rc;
+}
+
+int cmq_txn_all_yes(cmq_txn_t *t, uint64_t id) {
+    if (!t || id == 0) return 0;
+    cmq_mutex_lock(&t->lock);
+    int idx = txn_find(t, id);
+    int rc = (idx >= 0 && txn_all_yes_slot(&t->slots[idx])) ? 1 : 0;
+    cmq_mutex_unlock(&t->lock);
+    return rc;
+}
+
+int cmq_txn_part_count(cmq_txn_t *t, uint64_t id) {
+    if (!t || id == 0) return -1;
+    cmq_mutex_lock(&t->lock);
+    int idx = txn_find(t, id);
+    int rc = idx >= 0 ? t->slots[idx].nparts : -1;
+    cmq_mutex_unlock(&t->lock);
+    return rc;
+}
+
+int cmq_txn_wait_votes(cmq_txn_t *t, uint64_t id, unsigned timeout_ms) {
+    if (!t || id == 0) return -1;
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return -1;
+    ts.tv_sec += timeout_ms / 1000u;
+    ts.tv_nsec += (long)(timeout_ms % 1000u) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000L;
+    }
+    cmq_mutex_lock(&t->lock);
+    int idx = txn_find(t, id);
+    int rc = -1;
+    if (idx >= 0) {
+        while (!txn_all_voted(&t->slots[idx])) {
+            int w = pthread_cond_timedwait(&t->cv, &t->lock, &ts);
+            idx = txn_find(t, id);
+            if (idx < 0) break;
+            if (w == ETIMEDOUT) break;
+            if (w != 0) break;
+        }
+        if (idx >= 0 && txn_all_yes_slot(&t->slots[idx]))
+            rc = 0;
+    }
+    cmq_mutex_unlock(&t->lock);
+    return rc;
+}
+
+int cmq_txn_op_count(cmq_txn_t *t, uint64_t id) {
+    if (!t || id == 0) return -1;
+    cmq_mutex_lock(&t->lock);
+    int idx = txn_find(t, id);
+    int rc = idx >= 0 ? t->slots[idx].nops : -1;
+    cmq_mutex_unlock(&t->lock);
+    return rc;
+}
+
+int cmq_txn_op_at(cmq_txn_t *t, uint64_t id, int idx, char *subject,
+                  size_t sub_cap, uint8_t *data, size_t data_cap,
+                  size_t *dlen) {
+    if (!t || id == 0 || idx < 0 || !subject || sub_cap == 0 || !dlen)
+        return -1;
+    cmq_mutex_lock(&t->lock);
+    int sidx = txn_find(t, id);
+    int rc = -1;
+    if (sidx >= 0 && idx < t->slots[sidx].nops) {
+        cmq_txn_op_t *op = &t->slots[sidx].ops[idx];
+        size_t sl = strnlen(op->subject, CMQ_TXN_SUB_MAX);
+        if (sl < sub_cap && (op->len == 0 || (data && op->len <= data_cap))) {
+            memcpy(subject, op->subject, sl);
+            subject[sl] = '\0';
+            if (op->len > 0)
+                memcpy(data, op->data, op->len);
+            *dlen = op->len;
+            rc = 0;
+        }
+    }
+    cmq_mutex_unlock(&t->lock);
+    return rc;
+}
+
+int cmq_txn_encode_vote(uint8_t *out, size_t cap, uint64_t id,
+                        const char *node_id, int yes, size_t *out_len) {
+    if (!out || cap < CMQ_TXN_VOTE_LEN || !out_len || id == 0 ||
+        !txn_token_safe(node_id))
+        return -1;
+    size_t n = strnlen(node_id, CMQ_TXN_NODE_MAX);
+    if (n == 0 || n >= CMQ_TXN_NODE_MAX) return -1;
+    memcpy(out, CMQ_TXN_MAGIC, 4);
+    put_be64(out + 4, id);
+    out[12] = CMQ_TXN_VOTE;
+    out[13] = yes ? 1 : 0;
+    memset(out + 14, 0, CMQ_TXN_NODE_MAX);
+    memcpy(out + 14, node_id, n);
+    *out_len = CMQ_TXN_VOTE_LEN;
+    return 0;
+}
+
+int cmq_txn_parse_vote(const uint8_t *hdr, size_t n, uint64_t *id,
+                       char *node_id, size_t node_cap, int *yes) {
+    if (!hdr || n < CMQ_TXN_VOTE_LEN || !id || !node_id || node_cap == 0 ||
+        !yes)
+        return -1;
+    if (memcmp(hdr, CMQ_TXN_MAGIC, 4) != 0) return -1;
+    if (hdr[12] != CMQ_TXN_VOTE) return -1;
+    uint64_t tid = get_be64(hdr + 4);
+    if (tid == 0) return -1;
+    char node[CMQ_TXN_NODE_MAX];
+    memcpy(node, hdr + 14, CMQ_TXN_NODE_MAX);
+    node[CMQ_TXN_NODE_MAX - 1] = '\0';
+    if (!txn_token_safe(node)) return -1;
+    size_t nl = strnlen(node, CMQ_TXN_NODE_MAX);
+    if (nl == 0 || nl >= node_cap) return -1;
+    *id = tid;
+    *yes = hdr[13] ? 1 : 0;
+    memcpy(node_id, node, nl + 1);
+    return 0;
 }

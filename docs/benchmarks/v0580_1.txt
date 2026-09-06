@@ -1,0 +1,3 @@
+v0.5.80 bench 1:
+- No live routes: COMMIT is the existing apply path.
+- 2PC wait and route I/O run only when the pool is live.

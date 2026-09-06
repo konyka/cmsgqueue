@@ -1,9 +1,9 @@
-# Remaining unimplemented work (HEAD after v0.5.79)
+# Remaining unimplemented work (HEAD after v0.5.80)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
-cuts. Next cuts: D5 multi-node 2PC, OTLP/gRPC, ALPN `h2`,
-or leaf/gateway e2e.
+cuts. Next cuts: OTLP/gRPC, ALPN `h2`, JWKS refresh, or
+leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -42,6 +42,7 @@ or leaf/gateway e2e.
 | v0.5.77 | D3 phase 7: JWT RS256 + JWKS RSA |
 | v0.5.78 | D1 phase 3: OTLP HTTPS POST |
 | v0.5.79 | D3 phase 8: HTTPS JWKS GET |
+| v0.5.80 | D5 phase 3: multi-node 2PC |
 
 ## Deferred — detailed designs
 
@@ -73,12 +74,13 @@ Durable cursors, KV last-value, named objects,
 are live. Partitioned consume cursors beyond the library API
 remain optional follow-ups.
 
-### D5 Exactly-once / transactions — phases 1–2 shipped
+### D5 Exactly-once / transactions — phases 1–3 shipped
 
 Idempotent publish is v0.5.55. The coordinator (`CMQT`
 begin/add/commit/abort + `{persist_dir}/cmq.txn`) is
-v0.5.60. **Remaining:** multi-node 2PC / prepare across
-routes.
+v0.5.60. Multi-node 2PC (PREPARE / VOTE / COMMIT across
+live routes, 200 ms) is v0.5.80.
+**Remaining:** optional retry of deferred route writes.
 
 ### D6 Kafka-style key compaction — shipped v0.5.53
 

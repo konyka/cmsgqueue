@@ -34,7 +34,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **MQTT QoS 2 outbound (v0.5.57)**: grant 2; PUBLISH/PUBREC/PUBREL/PUBCOMP on the 16-slot window
 - **KV store (v0.5.58–70)**: last-value put/get/del; `$KV.<bucket>.<key>` PUBLISH + REQUEST-get
 - **Object store (v0.5.59–70)**: named blobs; `$OBJ.<name>` PUBLISH + REQUEST-get when persist_dir is set
-- **Transactions (v0.5.60)**: `CMQT` begin/add/commit/abort coordinator (D5 phase 2)
+- **Transactions (v0.5.60 / v0.5.80)**: `CMQT` begin/add/commit/abort + 2PC PREPARE/VOTE across live routes (D5 phases 2–3)
 - **OTel / OTLP (v0.5.61–64, 0.5.78)**: lock-free 256-slot sidecar; OTLP/HTTP(S) JSON POST when `otlp_endpoint` is set (D1 phases 1–3)
 - **JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–79)**: HS256 / ES256 / RS256 JWT on CONNECT; Ed25519 nkey of `CMQNK1|<user>` (`nkey_pub` is 64 hex or NATS `U…`); JWKS oct/EC/RSA `kid` cache + HTTP/HTTPS `jwks_url` (D3 phases 1–8)
 - **HTTP/2 (v0.5.66–73)**: HPACK static + Huffman + 4 KiB dynamic table + preface/SETTINGS/32-stream machine + loopback prior-knowledge listener (D2 phases 1–5; no `h2` advertise)

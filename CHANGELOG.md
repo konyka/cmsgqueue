@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.80 - 2026-09-06
+
+### Added
+- **Multi-node 2PC (D5 phase 3)** — COMMIT with live
+  routes PREPARE/VOTE (≤200 ms) then COMMIT or ABORT.
+  Route peers vote with `cluster_node_id`. No routes:
+  existing local COMMIT. At most 8 participants.
+
+### Tests
+- `tests/test_txn2.c` — prepare+votes, no-vote fail,
+  wire, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.80.enumeration.md`, `v0.5.80.plan.md`.
+- `docs/features/txn.md`.
+- `docs/benchmarks/v0580_{1,2}.txt`.
+
+### Test count
+- 311 tests (was 307 in v0.5.79; +4).
+
 ## 0.5.79 - 2026-09-06
 
 ### Added

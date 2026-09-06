@@ -3014,6 +3014,119 @@ static int txn_publish_apply(void *ctx, const char *subject,
     return cmq_server_publish(p->srv, subject, data, len, p->account);
 }
 
+static int txn_route_hdr(cmq_server_t *srv, const char *subject,
+                         const uint8_t *hdr, size_t hlen,
+                         const uint8_t *data, size_t dlen) {
+    if (!srv || !subject || !hdr || hlen == 0) return -1;
+    size_t slen = strlen(subject);
+    size_t need = 2 + slen + 2 + 2 + hlen + dlen;
+    uint8_t *buf = malloc(need);
+    if (!buf) return -1;
+    uint8_t *p = buf;
+    p[0] = (uint8_t)(slen >> 8);
+    p[1] = (uint8_t)slen;
+    p += 2;
+    memcpy(p, subject, slen);
+    p += slen;
+    p[0] = 0;
+    p[1] = 0;
+    p += 2;
+    p[0] = (uint8_t)(hlen >> 8);
+    p[1] = (uint8_t)hlen;
+    p += 2;
+    memcpy(p, hdr, hlen);
+    p += hlen;
+    if (dlen && data)
+        memcpy(p, data, dlen);
+    size_t sent = 0;
+    int rc = cmq_route_forward_op(srv, CMQ_OP_PUBLISH, CMQ_FLAG_HEADERS, buf,
+                                  need, &sent);
+    free(buf);
+    return rc;
+}
+
+static int txn_add_live_parts(cmq_server_t *srv, uint64_t tid) {
+    if (!srv || !srv->routes) return 0;
+    size_t live = cmq_route_live_count(srv->routes);
+    if (live == 0) return 0;
+    if (live > (size_t)CMQ_TXN_PARTS) return -1;
+    cmq_route_conn_t snap[CMQ_TXN_PARTS];
+    size_t n = 0;
+    if (cmq_route_snapshot(srv->routes, snap, CMQ_TXN_PARTS, &n) != 0)
+        return -1;
+    int added = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (!snap[i].connected || !snap[i].remote_id[0])
+            continue;
+        if (!cmq_route_peer_live(srv->routes, snap[i].remote_id))
+            continue;
+        if (cmq_txn_add_part(srv->txn, tid, snap[i].remote_id) != 0)
+            return -1;
+        added++;
+    }
+    return added;
+}
+
+static int txn_fanout_op(cmq_server_t *srv, uint64_t tid, uint8_t op) {
+    uint8_t hdr[CMQ_TXN_HDR_LEN];
+    size_t hlen = 0;
+    if (cmq_txn_encode(hdr, sizeof(hdr), tid, op, &hlen) != 0)
+        return -1;
+    if (op == CMQ_TXN_PREPARE) {
+        uint8_t bhdr[CMQ_TXN_HDR_LEN];
+        size_t blen = 0;
+        if (cmq_txn_encode(bhdr, sizeof(bhdr), tid, CMQ_TXN_BEGIN, &blen) != 0)
+            return -1;
+        if (txn_route_hdr(srv, "_cmq.txn", bhdr, blen, NULL, 0) != 0)
+            return -1;
+        uint8_t ahdr[CMQ_TXN_HDR_LEN];
+        size_t alen = 0;
+        if (cmq_txn_encode(ahdr, sizeof(ahdr), tid, CMQ_TXN_ADD, &alen) != 0)
+            return -1;
+        int nops = cmq_txn_op_count(srv->txn, tid);
+        int rc = 0;
+        for (int i = 0; i < nops; i++) {
+            char sub[CMQ_TXN_SUB_MAX];
+            uint8_t data[CMQ_TXN_PAY_MAX];
+            size_t dlen = 0;
+            if (cmq_txn_op_at(srv->txn, tid, i, sub, sizeof(sub), data,
+                              sizeof(data), &dlen) != 0)
+                return -1;
+            if (txn_route_hdr(srv, sub, ahdr, alen, data, dlen) != 0)
+                rc = -1;
+        }
+        if (txn_route_hdr(srv, "_cmq.txn", hdr, hlen, NULL, 0) != 0)
+            rc = -1;
+        return rc;
+    }
+    return txn_route_hdr(srv, "_cmq.txn", hdr, hlen, NULL, 0);
+}
+
+static int txn_2pc_commit(cmq_server_t *srv, uint64_t tid,
+                          cmq_txn_pub_ctx_t *ax) {
+    if (txn_add_live_parts(srv, tid) < 0) return -1;
+    if (cmq_txn_prepare(srv->txn, tid) != 0) return -1;
+    if (cmq_txn_part_count(srv->txn, tid) <= 0)
+        return cmq_txn_commit(srv->txn, tid, txn_publish_apply, ax);
+    if (txn_fanout_op(srv, tid, CMQ_TXN_PREPARE) != 0) {
+        (void)cmq_txn_abort(srv->txn, tid);
+        return -1;
+    }
+    if (cmq_txn_wait_votes(srv->txn, tid, CMQ_TXN_2PC_MS) != 0) {
+        (void)txn_fanout_op(srv, tid, CMQ_TXN_ABORT);
+        (void)cmq_txn_abort(srv->txn, tid);
+        return -1;
+    }
+    int rc = cmq_txn_commit(srv->txn, tid, txn_publish_apply, ax);
+    if (rc == 0)
+        (void)txn_fanout_op(srv, tid, CMQ_TXN_COMMIT);
+    else {
+        (void)txn_fanout_op(srv, tid, CMQ_TXN_ABORT);
+        (void)cmq_txn_abort(srv->txn, tid);
+    }
+    return rc;
+}
+
 static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                             const cmq_frame_t *frame) {
     (void)c;
@@ -3162,20 +3275,50 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         headers_len >= CMQ_TXN_HDR_LEN) {
         uint64_t tid = 0;
         uint8_t top = 0;
+        uint64_t vid = 0;
+        char vnode[CMQ_TXN_NODE_MAX];
+        int vyes = 0;
+        if (headers_len >= CMQ_TXN_VOTE_LEN &&
+            cmq_txn_parse_vote(headers, headers_len, &vid, vnode,
+                               sizeof(vnode), &vyes) == 0) {
+            (void)cmq_txn_vote(srv->txn, vid, vnode, vyes);
+            return;
+        }
         if (cmq_txn_parse(headers, headers_len, &tid, &top) == 0) {
             int trc = -1;
             if (top == CMQ_TXN_BEGIN)
                 trc = cmq_txn_begin(srv->txn, tid);
             else if (top == CMQ_TXN_ADD)
                 trc = cmq_txn_add(srv->txn, tid, subject, msg_payload, msg_len);
-            else if (top == CMQ_TXN_COMMIT) {
+            else if (top == CMQ_TXN_PREPARE) {
+                trc = cmq_txn_begin(srv->txn, tid);
+                if (trc == 0)
+                    trc = cmq_txn_prepare(srv->txn, tid);
+                if (trc == 0 && c->is_route &&
+                    srv->config.cluster_node_id &&
+                    srv->config.cluster_node_id[0]) {
+                    uint8_t vh[CMQ_TXN_VOTE_LEN];
+                    size_t vlen = 0;
+                    if (cmq_txn_encode_vote(vh, sizeof(vh), tid,
+                                            srv->config.cluster_node_id, 1,
+                                            &vlen) == 0)
+                        (void)txn_route_hdr(srv, "_cmq.txn", vh, vlen, NULL, 0);
+                }
+            } else if (top == CMQ_TXN_COMMIT) {
                 cmq_txn_pub_ctx_t ax;
                 ax.srv = srv;
                 ax.account = (c->account_name[0] != '\0')
                     ? c->account_name : "$default";
-                trc = cmq_txn_commit(srv->txn, tid, txn_publish_apply, &ax);
-            } else if (top == CMQ_TXN_ABORT)
+                if (!c->is_route && srv->routes &&
+                    cmq_route_live_count(srv->routes) > 0)
+                    trc = txn_2pc_commit(srv, tid, &ax);
+                else
+                    trc = cmq_txn_commit(srv->txn, tid, txn_publish_apply, &ax);
+            } else if (top == CMQ_TXN_ABORT) {
                 trc = cmq_txn_abort(srv->txn, tid);
+                if (trc == 0 && !c->is_route)
+                    (void)txn_fanout_op(srv, tid, CMQ_TXN_ABORT);
+            }
             if (trc != 0) {
                 cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                           CMQ_ATOMIC_RELAXED);
