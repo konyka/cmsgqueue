@@ -97,6 +97,7 @@ set(CMQ_SERVER_SOURCES
     src/server/cmq_monitor.c
     src/server/cmq_idempo.c
     src/server/cmq_txn.c
+    src/server/cmq_otel.c
 )
 
 set(CMQ_STORE_SOURCES

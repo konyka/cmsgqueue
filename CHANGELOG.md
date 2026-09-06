@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.61 - 2026-09-06
+
+### Added
+- **OpenTelemetry span ring (D1 phase 1)** — 256-slot MPSC
+  ring + sidecar. Offer never blocks; full ring drops newest.
+  Spans have trace id / kind / time only (no payload).
+  OTLP/gRPC deferred.
+
+### Tests
+- `tests/test_otel.c` — offer/poll, drop newest, kinds,
+  sidecar drain, reject (+5).
+
+### Documentation
+- `docs/reviews/v0.5.61.enumeration.md`, `v0.5.61.plan.md`.
+- `docs/features/otel.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0561_{1,2}.txt`.
+
+### Test count
+- 233 tests (was 228 in v0.5.60; +5).
+
 ## 0.5.60 - 2026-09-06
 
 ### Added

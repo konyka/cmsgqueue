@@ -1,9 +1,10 @@
-# Remaining unimplemented work (HEAD after v0.5.60)
+# Remaining unimplemented work (HEAD after v0.5.61)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D4 library pieces are v0.5.56–59. D5
-phases 1–2 are v0.5.55/60. Next cuts: D1–D3, D5 multi-node
-2PC, or leaf/gateway e2e.
+phases 1–2 are v0.5.55/60. D1 phase 1 is v0.5.61. Next cuts:
+D1 OTLP, D2 HTTP/2, D3 JWT/NKEY, D5 multi-node 2PC, or
+leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -23,17 +24,15 @@ phases 1–2 are v0.5.55/60. Next cuts: D1–D3, D5 multi-node
 | v0.5.58 | D4 phase 2: KV last-value store |
 | v0.5.59 | D4 phase 3: named object store |
 | v0.5.60 | D5 phase 2: transaction coordinator |
+| v0.5.61 | D1 phase 1: OTel span ring + sidecar |
 
 ## Deferred — detailed designs
 
-### D1 OpenTelemetry exporter (XL)
+### D1 OpenTelemetry exporter — phase 1 shipped v0.5.61
 
-NATS `trace` / OTel spans on publish and consume. No OTLP client
-in tree. **Design (when we take it):** allocation-free span IDs
-already exist (`trace_hex`). Export is a **sidecar thread** +
-bounded lock-free ring (drop newest on overflow). Never on the
-PUBLISH hot path. gRPC/HTTP exporter behind a compile flag.
-Security: no payload bodies in spans by default.
+Span ring + sidecar are live. **Remaining:** OTLP/gRPC or
+HTTP exporter behind a compile flag. Consume spans are
+queued only when a caller offers `KIND_CONSUME`.
 
 ### D2 HTTP/2 listener (L)
 

@@ -19,6 +19,7 @@
 #include "cmq_monitor.h"
 #include "cmq_idempo.h"
 #include "cmq_txn.h"
+#include "cmq_otel.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -3167,6 +3168,9 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             return;
         }
     }
+
+    if (srv->otel)
+        (void)cmq_otel_offer(srv->otel, c->trace_id, CMQ_OTEL_KIND_PUBLISH);
 
     /* F5: persist to WAL BEFORE sublist match. We persist validated
      * publishes regardless of subscriber count. During replay (fd==-1),
@@ -7574,6 +7578,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->txn = cmq_txn_create();
     if (srv->txn && srv->config.persist_dir && srv->config.persist_dir[0])
         (void)cmq_txn_set_log(srv->txn, srv->config.persist_dir);
+    srv->otel = cmq_otel_create();
+    if (srv->otel)
+        (void)cmq_otel_start(srv->otel);
 
     /* F14: per-account quota. */
     if (srv->config.max_msgs_per_sec_per_account > 0 ||
@@ -8372,6 +8379,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->txn) {
         cmq_txn_destroy(srv->txn);
         srv->txn = NULL;
+    }
+    if (srv->otel) {
+        cmq_otel_destroy(srv->otel);
+        srv->otel = NULL;
     }
     if (srv->acl_h) {
         cmq_rch_release_owner(srv->acl_h);
