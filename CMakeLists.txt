@@ -100,6 +100,7 @@ set(CMQ_SERVER_SOURCES
     src/server/cmq_otel.c
     src/server/cmq_otlp.c
     src/server/cmq_hpack.c
+    src/server/cmq_h2.c
     src/server/cmq_jwt.c
 )
 

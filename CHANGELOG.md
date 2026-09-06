@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.69 - 2026-09-06
+
+### Added
+- **HTTP/2 frame state machine (D2 phase 2)** — preface,
+  SETTINGS, and a 32-stream table. Oversize frames and a
+  33rd stream fail closed. No `h2` ALPN advertise.
+
+### Tests
+- `tests/test_h2.c` — preface, settings, stream cap, reject
+  (+4).
+
+### Documentation
+- `docs/reviews/v0.5.69.enumeration.md`, `v0.5.69.plan.md`.
+- `docs/features/http2.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0569_{1,2}.txt`.
+
+### Test count
+- 267 tests (was 263 in v0.5.68; +4).
+
 ## 0.5.68 - 2026-09-06
 
 ### Added
