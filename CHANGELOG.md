@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.147 - 2026-09-07
+
+### Added
+- **Attach routes on reload** — when create left the live
+  route table empty, SIGHUP dials `route=` peers (`r0`…`r7`)
+  and binds an egress reader on a live loop. Omitted / empty
+  keeps off. Non-IPv4 and bad port fail closed. Existing
+  live peers are not redialed.
+
+### Tests
+- `tests/test_rta.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.147.enumeration.md`, `v0.5.147.plan.md`.
+- `docs/features/leaf-gateway.md`.
+- `docs/benchmarks/v05147_{1,2}.txt`.
+
+### Test count
+- 579 tests (was 575 in v0.5.146; +4).
+
 ## 0.5.146 - 2026-09-06
 
 ### Added

@@ -9124,6 +9124,54 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
                                              &server->acceptor_drain);
         }
     }
+    if (fresh.route_count < 0 || fresh.route_count > 8) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
+    if (fresh.route_count > 0 && !server->routes) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
+    if (server->routes) {
+        int nrt = fresh.route_count > 0 ? fresh.route_count
+                                        : server->config.route_count;
+        for (int ri = 0; ri < nrt && ri < 8; ri++) {
+            char nid[CMQ_NODE_ID_SIZE];
+            snprintf(nid, sizeof(nid), "r%d", ri);
+            int had = server->config.routes[ri].addr &&
+                      server->config.routes[ri].addr[0];
+            if (cmq_route_reload_attach(server->routes, nid,
+                                        &server->config.routes[ri].addr,
+                                        &server->config.routes[ri].port,
+                                        fresh.routes[ri].addr,
+                                        fresh.routes[ri].port,
+                                        server->config.auth_username,
+                                        server->config.auth_password) != 0) {
+                cmq_config_free(&fresh);
+                return -1;
+            }
+            if (!had && server->config.routes[ri].addr &&
+                server->config.routes[ri].addr[0] && server->ev_loop) {
+                cmq_route_conn_t snap;
+                if (cmq_route_get_conn(server->routes, nid, &snap) == 0 &&
+                    snap.fd >= 0 &&
+                    route_bind_egress_reader(server, nid) != 0) {
+                    route_disconnect_if_owned_fd(server, nid, snap.fd);
+                    cmq_config_free(&fresh);
+                    return -1;
+                }
+            }
+        }
+        if (fresh.route_count > server->config.route_count)
+            server->config.route_count = fresh.route_count;
+        if (server->config.route_count > 0 &&
+            !server->route_reconn_started &&
+            cmq_atomic_load_int(&server->running, CMQ_ATOMIC_ACQUIRE)) {
+            if (cmq_thread_create(&server->route_reconn_thr,
+                                  route_reconnect_thread, server) == 0)
+                server->route_reconn_started = 1;
+        }
+    }
     if (cmq_reload_apply_dynamic(server->log, &server->config.log_level,
                                  &server->acl_h, &fresh) != 0) {
         cmq_config_free(&fresh);

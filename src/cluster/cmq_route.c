@@ -1913,6 +1913,62 @@ int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
     return rc;
 }
 
+static int route_reload_addr_ok(const char *addr) {
+    if (!addr || !addr[0]) return 0;
+    size_t n = strnlen(addr, CMQ_NODE_ADDR_SIZE);
+    if (n == 0 || n >= CMQ_NODE_ADDR_SIZE) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)addr[i];
+        if (c < 0x21 || c > 0x7e || c == '/' || c == '\\')
+            return 0;
+    }
+    struct in_addr ha;
+    return inet_pton(AF_INET, addr, &ha) == 1;
+}
+
+int cmq_route_reload_attach(cmq_route_pool_t *pool, const char *nid,
+                            const char **live_addr, int *live_port,
+                            const char *fresh_addr, int fresh_port,
+                            const char *auth_user, const char *auth_pass) {
+    if (!pool || !nid || !nid[0] || !live_port) return -1;
+    if (strnlen(nid, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE) return -1;
+    if (fresh_port < 0 || fresh_port > 65535) return -1;
+    if (fresh_addr && fresh_addr[0] && !route_reload_addr_ok(fresh_addr))
+        return -1;
+    if ((!fresh_addr || !fresh_addr[0]) && fresh_port == 0)
+        return 0;
+    if (live_addr && *live_addr && (*live_addr)[0])
+        return 0;
+    cmq_route_conn_t snap;
+    if (cmq_route_get_conn(pool, nid, &snap) == 0)
+        return 0;
+    const char *use_addr = (fresh_addr && fresh_addr[0])
+                               ? fresh_addr
+                               : (live_addr ? *live_addr : NULL);
+    int use_port = fresh_port > 0 ? fresh_port : *live_port;
+    if (!use_addr || !use_addr[0] || use_port <= 0)
+        return 0;
+    if (!route_reload_addr_ok(use_addr))
+        return -1;
+    char *owned = NULL;
+    if (fresh_addr && fresh_addr[0] && live_addr) {
+        owned = strdup(fresh_addr);
+        if (!owned) return -1;
+    }
+    if (cmq_route_connect(pool, nid, use_addr, use_port,
+                          auth_user, auth_pass) != 0) {
+        free(owned);
+        return -1;
+    }
+    if (owned) {
+        free((void *)*live_addr);
+        *live_addr = owned;
+    }
+    if (fresh_port > 0)
+        *live_port = fresh_port;
+    return 0;
+}
+
 int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                         const char *auth_user, const char *auth_pass) {
     if (!pool) {

@@ -31,6 +31,10 @@ gateway connect, bad CONNACK, reject.
 (v0.5.143). Existing cluster / route peers are not
 recreated.
 
+`tests/test_rta.c` covers SIGHUP attach of `route=`
+when create left the live table empty (v0.5.147).
+Existing live peers are not redialed.
+
 ## See also
 
 - `docs/reviews/v0.5.86.enumeration.md`

@@ -44,6 +44,13 @@ void cmq_route_pool_set_dial_gate(cmq_route_pool_t *pool, cmq_atomic_int *gate);
 int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                        const char *addr, int port,
                        const char *auth_user, const char *auth_pass);
+/* v0.5.147: empty/omitted addr and port 0 keep off. Non-IPv4 /
+ * bad port fail closed. Dials when live slot is empty. Existing
+ * live addr is left alone (no redial). */
+int cmq_route_reload_attach(cmq_route_pool_t *pool, const char *nid,
+                            const char **live_addr, int *live_port,
+                            const char *fresh_addr, int fresh_port,
+                            const char *auth_user, const char *auth_pass);
 /* fd < 0: placeholder slot (connected=1, no I/O). fd >= 0: handshake then nonblock. */
 int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                         const char *auth_user, const char *auth_pass);
