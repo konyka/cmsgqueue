@@ -80,9 +80,11 @@ typedef struct cmq_config {
     const char *jwt_hmac_secret;   /* v0.5.62: HS256; CONNECT password is JWT */
     int jwt_leeway_sec;            /* v0.5.62: exp/nbf skew; 0 = 60 */
     const char *nkey_pub;          /* v0.5.63/75: 64 hex or NATS U… pub */
-    const char *jwks_json;         /* v0.5.65: JWKS oct/HS256 or EC/ES256 */
+    const char *jwks_json;         /* v0.5.65: JWKS oct/HS256, EC/ES256, RSA */
     const char *jwks_url;          /* v0.5.76: http:// JWKS GET (not both) */
     const char *jwt_ec_pub;        /* v0.5.74: 128 hex P-256 X||Y */
+    const char *jwt_rsa_n;         /* v0.5.77: base64url RSA modulus */
+    const char *jwt_rsa_e;         /* v0.5.77: base64url RSA exponent */
     const char *otlp_endpoint;     /* v0.5.64: http://host[:port][/path] */
     const char *cluster_name;
     const char *cluster_node_id;

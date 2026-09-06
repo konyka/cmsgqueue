@@ -175,6 +175,10 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->jwks_url, value);
     } else if (strcmp(key, "jwt_ec_pub") == 0) {
         return cfg_set_str(&config->jwt_ec_pub, value);
+    } else if (strcmp(key, "jwt_rsa_n") == 0) {
+        return cfg_set_str(&config->jwt_rsa_n, value);
+    } else if (strcmp(key, "jwt_rsa_e") == 0) {
+        return cfg_set_str(&config->jwt_rsa_e, value);
     } else if (strcmp(key, "otlp_endpoint") == 0) {
         return cfg_set_str(&config->otlp_endpoint, value);
     } else if (strcmp(key, "cluster_name") == 0) {
@@ -224,6 +228,8 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->jwks_json);
     cfg_free_owned(config->jwks_url);
     cfg_free_owned(config->jwt_ec_pub);
+    cfg_free_owned(config->jwt_rsa_n);
+    cfg_free_owned(config->jwt_rsa_e);
     cfg_free_owned(config->otlp_endpoint);
     cfg_free_owned(config->cluster_name);
     cfg_free_owned(config->cluster_node_id);
@@ -241,6 +247,8 @@ void cmq_config_free(cmq_config_t *config) {
     config->jwks_json = NULL;
     config->jwks_url = NULL;
     config->jwt_ec_pub = NULL;
+    config->jwt_rsa_n = NULL;
+    config->jwt_rsa_e = NULL;
     config->otlp_endpoint = NULL;
     config->cluster_name = NULL;
     config->cluster_node_id = NULL;
@@ -365,18 +373,30 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         int have_jwks = config->jwks_json && config->jwks_json[0];
         int have_jwks_url = config->jwks_url && config->jwks_url[0];
         int have_ec = config->jwt_ec_pub && config->jwt_ec_pub[0];
+        int have_rsa_n = config->jwt_rsa_n && config->jwt_rsa_n[0];
+        int have_rsa_e = config->jwt_rsa_e && config->jwt_rsa_e[0];
+        int have_rsa = have_rsa_n && have_rsa_e;
         int have_iss = config->jwt_issuer && config->jwt_issuer[0];
         if (have_jwks && have_jwks_url)
             return CMQ_ERR_INVALID_ARG;
-        if ((have_hmac || have_jwks || have_jwks_url || have_ec) &&
+        if (have_rsa_n != have_rsa_e)
+            return CMQ_ERR_INVALID_ARG;
+        if ((have_hmac || have_jwks || have_jwks_url || have_ec || have_rsa) &&
             !have_iss)
             return CMQ_ERR_INVALID_ARG;
         if (have_iss && !have_hmac && !have_jwks && !have_jwks_url &&
-            !have_ec)
+            !have_ec && !have_rsa)
             return CMQ_ERR_INVALID_ARG;
         if (have_ec) {
             uint8_t xy[64];
             if (cmq_nkey_hex_decode(config->jwt_ec_pub, xy, 64) != 0)
+                return CMQ_ERR_INVALID_ARG;
+        }
+        if (have_rsa) {
+            uint8_t rn[CMQ_JWT_RSA_N_MAX], re[CMQ_JWT_RSA_E_MAX];
+            size_t rnl = 0, rel = 0;
+            if (cmq_jwt_rsa_decode(config->jwt_rsa_n, config->jwt_rsa_e,
+                                   rn, &rnl, re, &rel) != 0)
                 return CMQ_ERR_INVALID_ARG;
         }
         if (have_jwks) {
@@ -409,6 +429,7 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         !(config->jwks_json && config->jwks_json[0]) &&
         !(config->jwks_url && config->jwks_url[0]) &&
         !(config->jwt_ec_pub && config->jwt_ec_pub[0]) &&
+        !(config->jwt_rsa_n && config->jwt_rsa_n[0]) &&
         !(config->nkey_pub && config->nkey_pub[0]))
         return CMQ_ERR_INVALID_ARG;
     /* Username becomes account name — must fit CMQ_ACCOUNT_NAME_SIZE.

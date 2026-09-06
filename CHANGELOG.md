@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.77 - 2026-09-06
+
+### Added
+- **JWT RS256 (D3 phase 7)** — compact RS256 verify
+  (2048–4096 bit); JWKS `kty=RSA` (`n`+`e`);
+  `jwt_rsa_n` / `jwt_rsa_e` are base64url. HMAC / ES256 /
+  nkey paths unchanged. Still verify-only.
+
+### Tests
+- `tests/test_rs256.c` — ok, bad sig, JWKS RSA, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.77.enumeration.md`, `v0.5.77.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v0577_{1,2}.txt`.
+
+### Test count
+- 299 tests (was 295 in v0.5.76; +4).
+
 ## 0.5.76 - 2026-09-06
 
 ### Added

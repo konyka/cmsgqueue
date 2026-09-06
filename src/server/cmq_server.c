@@ -59,10 +59,11 @@ static int auth_configured(const cmq_server_t *srv) {
     const char *jw = srv->config.jwks_json;
     const char *ju = srv->config.jwks_url;
     const char *ec = srv->config.jwt_ec_pub;
+    const char *rn = srv->config.jwt_rsa_n;
     return (u && u[0] != '\0') || (p && p[0] != '\0') ||
            (j && j[0] != '\0') || (nk && nk[0] != '\0') ||
            (jw && jw[0] != '\0') || (ju && ju[0] != '\0') ||
-           (ec && ec[0] != '\0');
+           (ec && ec[0] != '\0') || (rn && rn[0] != '\0');
 }
 
 /* v0.5.49: remap subject in place. No-op when map_total is 0. */
@@ -5005,7 +5006,11 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                               srv->config.jwt_hmac_secret[0]) ||
                              srv->jwks ||
                              (srv->config.jwt_ec_pub &&
-                              srv->config.jwt_ec_pub[0])));
+                              srv->config.jwt_ec_pub[0]) ||
+                             (srv->config.jwt_rsa_n &&
+                              srv->config.jwt_rsa_n[0] &&
+                              srv->config.jwt_rsa_e &&
+                              srv->config.jwt_rsa_e[0])));
             int nkey_mode = !jwt_mode && srv->config.nkey_pub &&
                             srv->config.nkey_pub[0];
             size_t pass_max = jwt_mode ? (size_t)CMQ_JWT_TOKEN_MAX
@@ -5042,13 +5047,19 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 size_t jslen = 0;
                 const uint8_t *ecx = NULL, *ecy = NULL;
                 uint8_t ecxy[64];
+                const uint8_t *rsan = NULL, *rsae = NULL;
+                size_t rsanl = 0, rsael = 0;
+                uint8_t rsabn[CMQ_JWT_RSA_N_MAX], rsabe[CMQ_JWT_RSA_E_MAX];
                 const char *sstr = srv->config.jwt_hmac_secret;
                 char alg[16] = {0};
                 int is_es = 0;
+                int is_rs = 0;
                 if (cmq_jwt_header_alg(passwd, alg, sizeof(alg)) != 0)
                     jwt_fail = 1;
                 else if (strcmp(alg, "ES256") == 0)
                     is_es = 1;
+                else if (strcmp(alg, "RS256") == 0)
+                    is_rs = 1;
                 else if (strcmp(alg, "HS256") != 0)
                     jwt_fail = 1;
                 if (!jwt_fail && srv->jwks) {
@@ -5058,12 +5069,23 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                             if (cmq_jwks_lookup_ec((const cmq_jwks_t *)srv->jwks,
                                                    kid, &ecx, &ecy) != 0)
                                 jwt_fail = 1;
+                        } else if (is_rs) {
+                            if (cmq_jwks_lookup_rsa((const cmq_jwks_t *)srv->jwks,
+                                                    kid, &rsan, &rsanl,
+                                                    &rsae, &rsael) != 0)
+                                jwt_fail = 1;
                         } else if (cmq_jwks_lookup((const cmq_jwks_t *)srv->jwks,
                                                    kid, &jsec, &jslen) != 0)
                             jwt_fail = 1;
                     } else if (is_es) {
                         if (!srv->config.jwt_ec_pub ||
                             !srv->config.jwt_ec_pub[0])
+                            jwt_fail = 1;
+                    } else if (is_rs) {
+                        if (!srv->config.jwt_rsa_n ||
+                            !srv->config.jwt_rsa_n[0] ||
+                            !srv->config.jwt_rsa_e ||
+                            !srv->config.jwt_rsa_e[0])
                             jwt_fail = 1;
                     } else if (!sstr || !sstr[0]) {
                         jwt_fail = 1;
@@ -5079,12 +5101,28 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                         ecy = ecxy + 32;
                     }
                 }
+                if (!jwt_fail && is_rs && !rsan) {
+                    if (!srv->config.jwt_rsa_n ||
+                        cmq_jwt_rsa_decode(srv->config.jwt_rsa_n,
+                                           srv->config.jwt_rsa_e,
+                                           rsabn, &rsanl, rsabe, &rsael) != 0)
+                        jwt_fail = 1;
+                    else {
+                        rsan = rsabn;
+                        rsae = rsabe;
+                    }
+                }
                 if (!jwt_fail) {
                     int vr;
                     if (is_es)
                         vr = cmq_jwt_verify_es256(
                             passwd, ecx, ecy, srv->config.jwt_issuer,
                             (uint64_t)tsj.tv_sec, leeway, sub, sizeof(sub));
+                    else if (is_rs)
+                        vr = cmq_jwt_verify_rs256(
+                            passwd, rsan, rsanl, rsae, rsael,
+                            srv->config.jwt_issuer, (uint64_t)tsj.tv_sec,
+                            leeway, sub, sizeof(sub));
                     else if (jsec)
                         vr = cmq_jwt_verify_hs256_bin(
                             passwd, jsec, jslen, srv->config.jwt_issuer,
@@ -7419,6 +7457,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.jwks_json = NULL;
     srv->config.jwks_url = NULL;
     srv->config.jwt_ec_pub = NULL;
+    srv->config.jwt_rsa_n = NULL;
+    srv->config.jwt_rsa_e = NULL;
     srv->config.otlp_endpoint = NULL;
     srv->config.cluster_name = NULL;
     srv->config.cluster_node_id = NULL;
@@ -7451,6 +7491,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.jwks_json, src.jwks_json);
     OWN(srv->config.jwks_url, src.jwks_url);
     OWN(srv->config.jwt_ec_pub, src.jwt_ec_pub);
+    OWN(srv->config.jwt_rsa_n, src.jwt_rsa_n);
+    OWN(srv->config.jwt_rsa_e, src.jwt_rsa_e);
     OWN(srv->config.otlp_endpoint, src.otlp_endpoint);
     OWN(srv->config.cluster_name, src.cluster_name);
     OWN(srv->config.cluster_node_id, src.cluster_node_id);

@@ -12,7 +12,11 @@
 #define CMQ_JWKS_JSON_MAX  4096
 #define CMQ_JWKS_KTY_OCT   1
 #define CMQ_JWKS_KTY_EC    2
+#define CMQ_JWKS_KTY_RSA   3
 #define CMQ_JWT_EC_XY_LEN  32
+#define CMQ_JWT_RSA_N_MIN  256
+#define CMQ_JWT_RSA_N_MAX  512
+#define CMQ_JWT_RSA_E_MAX  8
 
 typedef struct {
     char kid[64];
@@ -21,6 +25,10 @@ typedef struct {
     size_t slen;
     uint8_t x[CMQ_JWT_EC_XY_LEN];
     uint8_t y[CMQ_JWT_EC_XY_LEN];
+    uint8_t n[CMQ_JWT_RSA_N_MAX];
+    size_t nlen;
+    uint8_t e[CMQ_JWT_RSA_E_MAX];
+    size_t elen;
 } cmq_jwks_key_t;
 
 typedef struct {
@@ -53,6 +61,16 @@ int cmq_jwks_lookup(const cmq_jwks_t *j, const char *kid,
                     const uint8_t **secret, size_t *slen);
 int cmq_jwks_lookup_ec(const cmq_jwks_t *j, const char *kid,
                        const uint8_t **x, const uint8_t **y);
+int cmq_jwt_verify_rs256(const char *token, const uint8_t *n, size_t nlen,
+                         const uint8_t *e, size_t elen, const char *issuer,
+                         uint64_t now_sec, unsigned leeway_sec,
+                         char *sub_out, size_t sub_len);
+int cmq_jwks_lookup_rsa(const cmq_jwks_t *j, const char *kid,
+                        const uint8_t **n, size_t *nlen,
+                        const uint8_t **e, size_t *elen);
+int cmq_jwt_rsa_decode(const char *n_b64, const char *e_b64,
+                       uint8_t *n, size_t *nlen,
+                       uint8_t *e, size_t *elen);
 
 /* Ed25519 verify. pub[32], sig[64]. 0 ok; -1 fail. */
 int cmq_nkey_verify(const uint8_t pub[CMQ_NKEY_PUB_LEN],

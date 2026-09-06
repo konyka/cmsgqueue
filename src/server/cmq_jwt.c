@@ -286,6 +286,89 @@ int cmq_jwt_verify_es256(const char *token, const uint8_t x[CMQ_JWT_EC_XY_LEN],
     return rc;
 }
 
+int cmq_jwt_rsa_decode(const char *n_b64, const char *e_b64,
+                       uint8_t *n, size_t *nlen,
+                       uint8_t *e, size_t *elen) {
+    if (!n_b64 || !e_b64 || !n || !nlen || !e || !elen) return -1;
+    size_t nn = 0, ne = 0;
+    if (b64url_decode(n_b64, strlen(n_b64), n, CMQ_JWT_RSA_N_MAX, &nn) != 0)
+        return -1;
+    if (nn < CMQ_JWT_RSA_N_MIN || nn > CMQ_JWT_RSA_N_MAX) return -1;
+    if (b64url_decode(e_b64, strlen(e_b64), e, CMQ_JWT_RSA_E_MAX, &ne) != 0)
+        return -1;
+    if (ne == 0 || ne > CMQ_JWT_RSA_E_MAX) return -1;
+    *nlen = nn;
+    *elen = ne;
+    return 0;
+}
+
+int cmq_jwt_verify_rs256(const char *token, const uint8_t *n, size_t nlen,
+                         const uint8_t *e, size_t elen, const char *issuer,
+                         uint64_t now_sec, unsigned leeway_sec,
+                         char *sub_out, size_t sub_len) {
+    if (!token || !n || !e || !issuer || !issuer[0]) return -1;
+    if (nlen < CMQ_JWT_RSA_N_MIN || nlen > CMQ_JWT_RSA_N_MAX) return -1;
+    if (elen == 0 || elen > CMQ_JWT_RSA_E_MAX) return -1;
+    size_t tlen = strnlen(token, CMQ_JWT_TOKEN_MAX + 1);
+    if (tlen == 0 || tlen > CMQ_JWT_TOKEN_MAX) return -1;
+    const char *d1 = strchr(token, '.');
+    if (!d1) return -1;
+    const char *d2 = strchr(d1 + 1, '.');
+    if (!d2 || strchr(d2 + 1, '.')) return -1;
+    size_t hlen = (size_t)(d1 - token);
+    size_t plen = (size_t)(d2 - d1 - 1);
+    size_t sigl = strlen(d2 + 1);
+    if (hlen == 0 || plen == 0 || sigl == 0) return -1;
+
+    uint8_t hdr[256], pay[1024], sig[CMQ_JWT_RSA_N_MAX];
+    size_t hdr_n = 0, pay_n = 0, sig_n = 0;
+    if (b64url_decode(token, hlen, hdr, sizeof(hdr) - 1, &hdr_n) != 0)
+        return -1;
+    if (b64url_decode(d1 + 1, plen, pay, sizeof(pay) - 1, &pay_n) != 0)
+        return -1;
+    if (b64url_decode(d2 + 1, sigl, sig, sizeof(sig), &sig_n) != 0)
+        return -1;
+    hdr[hdr_n] = '\0';
+    pay[pay_n] = '\0';
+    char alg[16] = {0};
+    if (json_str_claim((char *)hdr, hdr_n, "alg", alg, sizeof(alg)) != 0)
+        return -1;
+    if (strcmp(alg, "RS256") != 0) return -1;
+    if (sig_n < CMQ_JWT_RSA_N_MIN || sig_n > CMQ_JWT_RSA_N_MAX) return -1;
+
+    BIGNUM *bn = BN_bin2bn(n, (int)nlen, NULL);
+    BIGNUM *be = BN_bin2bn(e, (int)elen, NULL);
+    EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+    OSSL_PARAM_BLD *bld = OSSL_PARAM_BLD_new();
+    OSSL_PARAM *params = NULL;
+    EVP_PKEY *pkey = NULL;
+    int rc = -1;
+    if (bn && be && pctx && bld && EVP_PKEY_fromdata_init(pctx) == 1 &&
+        OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, bn) &&
+        OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, be))
+        params = OSSL_PARAM_BLD_to_param(bld);
+    if (params &&
+        EVP_PKEY_fromdata(pctx, &pkey, EVP_PKEY_PUBLIC_KEY, params) == 1 &&
+        pkey) {
+        EVP_MD_CTX *m = EVP_MD_CTX_new();
+        size_t signing_len = hlen + 1 + plen;
+        if (m &&
+            EVP_DigestVerifyInit(m, NULL, EVP_sha256(), NULL, pkey) == 1 &&
+            EVP_DigestVerify(m, sig, sig_n, (const unsigned char *)token,
+                             signing_len) == 1)
+            rc = jwt_check_claims((char *)pay, pay_n, issuer, now_sec,
+                                  leeway_sec, sub_out, sub_len);
+        EVP_MD_CTX_free(m);
+    }
+    OSSL_PARAM_free(params);
+    OSSL_PARAM_BLD_free(bld);
+    EVP_PKEY_free(pkey);
+    EVP_PKEY_CTX_free(pctx);
+    BN_free(bn);
+    BN_free(be);
+    return rc;
+}
+
 int cmq_jwks_parse(const char *json, cmq_jwks_t *out) {
     if (!json || !out) return -1;
     memset(out, 0, sizeof(*out));
@@ -350,6 +433,18 @@ int cmq_jwks_parse(const char *json, cmq_jwks_t *out) {
                 return -1;
             slot->slen = rn;
             slot->kty = CMQ_JWKS_KTY_OCT;
+        } else if (strcmp(kty, "RSA") == 0) {
+            char ns[800] = {0}, es[16] = {0};
+            if (json_str_claim(ob, on, "n", ns, sizeof(ns)) != 0 ||
+                json_str_claim(ob, on, "e", es, sizeof(es)) != 0)
+                return -1;
+            if (json_str_claim(ob, on, "alg", alg, sizeof(alg)) == 0 &&
+                strcmp(alg, "RS256") != 0)
+                return -1;
+            if (cmq_jwt_rsa_decode(ns, es, slot->n, &slot->nlen, slot->e,
+                                   &slot->elen) != 0)
+                return -1;
+            slot->kty = CMQ_JWKS_KTY_RSA;
         } else {
             return -1;
         }
@@ -382,6 +477,23 @@ int cmq_jwks_lookup_ec(const cmq_jwks_t *j, const char *kid,
             strcmp(j->keys[i].kid, kid) == 0) {
             *x = j->keys[i].x;
             *y = j->keys[i].y;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int cmq_jwks_lookup_rsa(const cmq_jwks_t *j, const char *kid,
+                        const uint8_t **n, size_t *nlen,
+                        const uint8_t **e, size_t *elen) {
+    if (!j || !kid || !kid[0] || !n || !nlen || !e || !elen) return -1;
+    for (int i = 0; i < j->n; i++) {
+        if (j->keys[i].kty == CMQ_JWKS_KTY_RSA &&
+            strcmp(j->keys[i].kid, kid) == 0) {
+            *n = j->keys[i].n;
+            *nlen = j->keys[i].nlen;
+            *e = j->keys[i].e;
+            *elen = j->keys[i].elen;
             return 0;
         }
     }
