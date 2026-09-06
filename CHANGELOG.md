@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.129 - 2026-09-06
+
+### Added
+- **Audit file from `persist_dir`** — create writes
+  `{persist_dir}/cmq-audit.log` via `cmq_audit_from_persist`.
+  Destroy clears the path. Reload omitted/empty keeps the
+  current file. `..` / `\` / controls fail closed.
+
+### Tests
+- `tests/test_adt.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.129.enumeration.md`, `v0.5.129.plan.md`.
+- `docs/features/audit.md`.
+- `docs/benchmarks/v05129_{1,2}.txt`.
+
+### Test count
+- 507 tests (was 503 in v0.5.128; +4).
+
 ## 0.5.128 - 2026-09-06
 
 ### Added

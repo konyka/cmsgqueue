@@ -1,0 +1,4 @@
+v0.5.129 bench 2:
+- Reload omitted persist_dir: no path store.
+- Reload apply: same snprintf + strdup as create.
+- Reject: no store; previous path stays.

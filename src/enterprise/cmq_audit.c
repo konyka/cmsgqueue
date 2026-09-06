@@ -31,6 +31,31 @@ void cmq_audit_set_path(const char *path) {
     pthread_mutex_unlock(&g_audit_lock);
 }
 
+int cmq_audit_from_persist(const char *dir) {
+    if (!dir || !dir[0]) {
+        cmq_audit_set_path(NULL);
+        return 0;
+    }
+    if (strstr(dir, "..") || strchr(dir, '\\'))
+        return -1;
+    for (const char *p = dir; *p; p++) {
+        if ((unsigned char)*p < 0x20)
+            return -1;
+    }
+    char path[600];
+    int n = snprintf(path, sizeof(path), "%s/cmq-audit.log", dir);
+    if (n <= 0 || (size_t)n >= sizeof(path))
+        return -1;
+    cmq_audit_set_path(path);
+    return 0;
+}
+
+int cmq_audit_reload_persist(const char *dir) {
+    if (!dir || !dir[0])
+        return 0;
+    return cmq_audit_from_persist(dir);
+}
+
 static void json_escape(const char *in, char *out, size_t out_cap) {
     size_t o = 0;
     for (size_t i = 0; in[i] && o + 2 < out_cap; i++) {

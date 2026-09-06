@@ -19,7 +19,12 @@ Fields:
 - `subject` — the user, account, or IP the event is about.
 - `details` — free-form context.
 
-Output destinations: stderr (always) and an optional audit file (`cmq-audit.log` in `persist_dir`).
+Output destinations: stderr (always) and an optional audit file
+(`cmq-audit.log` in `persist_dir`). v0.5.129: create calls
+`cmq_audit_from_persist` after the WAL opens. Destroy clears
+the path. Reload applies a non-empty `persist_dir`; omitted
+or empty keeps the current file. `..` / `\` / controls fail
+closed.
 
 v0.5.51 wires the remaining events at their natural sites
 (CONNECT auth, WAL append/replay, TLS handshake). Successful
@@ -43,6 +48,11 @@ JSON escaping: `"` and `\\` are escaped, control chars (including `\n`/`\r`) are
 - `audit.json_escape_special_chars` — quote/backslash/newline escape.
 - `audit.event_names` — enum → string map, including unknown.
 - `audit.auth_helper_no_secret` — `cmq_audit_auth` writes ok/fail.
+
+`tests/test_adt.c` (v0.5.129):
+- `adt.apply` — `{dir}/cmq-audit.log` receives the event.
+- `adt.omitted` / `adt.empty` — reload keeps the current file.
+- `adt.reject` — `..` / `\` leave the current file.
 
 ## Verification gates
 

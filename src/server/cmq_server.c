@@ -8148,6 +8148,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                 srv->config.persist_sync_interval_ms);
         }
         cmq_log_info(srv->log, "Persistence enabled: dir=%s", srv->config.persist_dir);
+        if (cmq_audit_from_persist(srv->config.persist_dir) != 0)
+            cmq_log_error(srv->log, "audit file path rejected");
         /* F18: also open the subscription persistence file. */
         srv->persist = cmq_sublist_persist_open(srv->config.persist_dir);
         if (!srv->persist) {
@@ -8851,6 +8853,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
     if (fresh.persist_dir && server->filestore) {
         cmq_log_info(server->log, "Persist dir reload: %s", fresh.persist_dir);
     }
+    if (cmq_audit_reload_persist(fresh.persist_dir) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_filestore_reload_sync(server->filestore,
                                   &server->config.persist_sync_interval_ms,
                                   fresh.persist_sync_interval_ms) != 0) {
@@ -9200,6 +9206,7 @@ void cmq_server_destroy(cmq_server_t *srv) {
         cmq_filestore_destroy(srv->filestore);
         srv->filestore = NULL;
     }
+    cmq_audit_set_path(NULL);
     if (srv->persist) {
         cmq_sublist_persist_close(srv->persist);
         srv->persist = NULL;

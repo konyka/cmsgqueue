@@ -30,6 +30,12 @@ typedef enum {
 
 /* Set the audit file path. NULL disables file output. */
 void cmq_audit_set_path(const char *path);
+/* v0.5.129: `{dir}/cmq-audit.log`. NULL/empty disables. `..` / `\\`
+ * / controls fail closed and leave the current path. */
+int cmq_audit_from_persist(const char *dir);
+/* Reload: NULL/empty keeps the current file. Invalid dir fails
+ * closed. Create uses from_persist; destroy clears the path. */
+int cmq_audit_reload_persist(const char *dir);
 
 const char *cmq_audit_event_name(cmq_audit_event_t event);
 
