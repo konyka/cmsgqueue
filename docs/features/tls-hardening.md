@@ -45,6 +45,10 @@ path disables that string. Slot 0 remains `tls_cert` /
 `tls_key` / `tls_ca` / `tls_verify_peer`. Create `strdup`s
 every listener string so destroy owns them.
 
+`listener{1,2,3}_host` (IPv4) and `_port` (v0.5.115) select
+the extra bind. Empty host / port 0 keep `127.0.0.1` and
+`port+index`. Slot 0 remains `host` / `port`.
+
 ## Limitations
 
 - mTLS verify chain (issuer validation, CRL, OCSP) is the OpenSSL default; custom CRL paths are out of scope.

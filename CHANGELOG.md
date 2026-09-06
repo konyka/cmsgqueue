@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.115 - 2026-09-06
+
+### Added
+- **Extra-listener bind host/port** —
+  `listener{1,2,3}_host` (IPv4; empty = `127.0.0.1`) and
+  `listener{1,2,3}_port` (0 = `port+index`) in `cmq.conf`.
+  Create `strdup`s the host. Test-port guards unchanged.
+
+### Tests
+- `tests/test_lbnd.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.115.enumeration.md`, `v0.5.115.plan.md`.
+- `docs/features/tls-hardening.md`.
+- `docs/benchmarks/v05115_{1,2}.txt`.
+
+### Test count
+- 451 tests (was 447 in v0.5.114; +4).
+
 ## 0.5.114 - 2026-09-06
 
 ### Added

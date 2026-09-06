@@ -213,6 +213,22 @@ static int parse_listener_key(const char *key, const char *value,
     if (strcmp(rest, "_tls_verify_peer") == 0)
         return parse_int_range(value, 0, 1,
                                &config->listeners[idx].tls_verify_peer);
+    if (strcmp(rest, "_host") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->listeners[idx].host);
+            config->listeners[idx].host = NULL;
+            return 0;
+        }
+        {
+            struct in_addr ha;
+            if (inet_pton(AF_INET, value, &ha) != 1)
+                return -1;
+        }
+        return cfg_set_str(&config->listeners[idx].host, value);
+    }
+    if (strcmp(rest, "_port") == 0)
+        return parse_int_range(value, 0, 65535,
+                               &config->listeners[idx].port);
     return -1;
 }
 
@@ -438,10 +454,13 @@ void cmq_config_free(cmq_config_t *config) {
         cfg_free_owned(config->listeners[i].tls_cert);
         cfg_free_owned(config->listeners[i].tls_key);
         cfg_free_owned(config->listeners[i].tls_ca);
+        cfg_free_owned(config->listeners[i].host);
         config->listeners[i].tls_cert = NULL;
         config->listeners[i].tls_key = NULL;
         config->listeners[i].tls_ca = NULL;
+        config->listeners[i].host = NULL;
         config->listeners[i].tls_verify_peer = 0;
+        config->listeners[i].port = 0;
     }
     for (int i = 0; i < config->mqtt_bridge_map_count && i < 8; i++) {
         cfg_free_owned(config->mqtt_bridge_maps[i].cmq_subject);
@@ -569,6 +588,14 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         if (config->listeners[i].tls_verify_peer < 0 ||
             config->listeners[i].tls_verify_peer > 1)
             return CMQ_ERR_INVALID_ARG;
+        if (config->listeners[i].port < 0 ||
+            config->listeners[i].port > 65535)
+            return CMQ_ERR_INVALID_ARG;
+        if (config->listeners[i].host) {
+            struct in_addr ha;
+            if (inet_pton(AF_INET, config->listeners[i].host, &ha) != 1)
+                return CMQ_ERR_INVALID_ARG;
+        }
     }
     if (config->max_payload_size < 0) return CMQ_ERR_INVALID_ARG;
     /* Must fit CMQ_WRITE_BUF_LIMIT after framing — else deliver force-closes. */

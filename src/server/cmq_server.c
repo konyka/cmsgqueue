@@ -7832,6 +7832,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         srv->config.listeners[i].tls_cert = NULL;
         srv->config.listeners[i].tls_key = NULL;
         srv->config.listeners[i].tls_ca = NULL;
+        srv->config.listeners[i].host = NULL;
     }
     srv->config.route_count = 0;
     for (int i = 0; i < 8; i++) {
@@ -7893,6 +7894,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         OWN(srv->config.listeners[i].tls_cert, src.listeners[i].tls_cert);
         OWN(srv->config.listeners[i].tls_key, src.listeners[i].tls_key);
         OWN(srv->config.listeners[i].tls_ca, src.listeners[i].tls_ca);
+        OWN(srv->config.listeners[i].host, src.listeners[i].host);
     }
 #undef OWN
     /* Fail closed before copy — truncating/skipping would hide invalid
@@ -8469,8 +8471,21 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             struct sockaddr_in laddr;
             memset(&laddr, 0, sizeof(laddr));
             laddr.sin_family = AF_INET;
-            laddr.sin_port = htons((uint16_t)(srv->config.port + li));
-            inet_pton(AF_INET, "127.0.0.1", &laddr.sin_addr);
+            {
+                int lp = srv->config.listeners[li].port;
+                if (lp <= 0)
+                    lp = srv->config.port + li;
+                laddr.sin_port = htons((uint16_t)lp);
+            }
+            {
+                const char *lh = srv->config.listeners[li].host;
+                if (!lh || !lh[0])
+                    lh = "127.0.0.1";
+                if (inet_pton(AF_INET, lh, &laddr.sin_addr) != 1) {
+                    close(s);
+                    continue;
+                }
+            }
             if (bind(s, (struct sockaddr *)&laddr, sizeof(laddr)) != 0 ||
                 listen(s, 512) != 0) {
                 close(s);

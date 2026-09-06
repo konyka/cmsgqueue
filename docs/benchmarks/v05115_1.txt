@@ -1,0 +1,3 @@
+v0.5.115 bench 1:
+- Host/port omitted: same 127.0.0.1:port+li bind as v0.5.114.
+- Host set: one inet_pton + one strdup at load/create.

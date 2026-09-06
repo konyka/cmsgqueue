@@ -120,12 +120,14 @@ typedef struct cmq_config {
     /* P2 (v0.5.2): per-listener config slots. Slot 0 mirrors the
      * legacy tls_cert/tls_key/tls_ca fields above for back-compat.
      * Slots 1..3: listener{1,2,3}_tls_{cert,key,ca,verify_peer}
-     * and listener_count (v0.5.114). */
+     * and listener_count (v0.5.114). Bind host/port are v0.5.115. */
     struct cmq_listener {
         const char *tls_cert;
         const char *tls_key;
         const char *tls_ca;
         int tls_verify_peer;
+        const char *host;      /* v0.5.115: IPv4; NULL = 127.0.0.1 */
+        int port;              /* v0.5.115: 0 = port+index */
     } listeners[4];
     int listener_count;
     int max_connects_per_sec;  /* F10: per-IP connect rate cap; 0=disabled */
