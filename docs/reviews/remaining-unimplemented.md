@@ -1,10 +1,10 @@
-# Remaining unimplemented work (HEAD after v0.5.65)
+# Remaining unimplemented work (HEAD after v0.5.66)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
-P3 D7/D8 are shipped. D1/D3/D4/D5 have library or phase
-cuts. Next cuts: D2 HTTP/2, D3 RSA/EC / base32 / ES256,
-D4 partition/bucket server path, D5 multi-node 2PC, or
-leaf/gateway e2e.
+P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
+cuts. Next cuts: D2 h2 state machine, D3 RSA/EC / base32 /
+ES256, D4 partition/bucket server path, D5 multi-node 2PC,
+or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -29,6 +29,7 @@ leaf/gateway e2e.
 | v0.5.63 | D3 phase 2: nkey signature on CONNECT |
 | v0.5.64 | D1 phase 2: OTLP/HTTP JSON exporter |
 | v0.5.65 | D3 phase 3: JWKS oct-key cache |
+| v0.5.66 | D2 phase 1: HPACK static codec |
 
 ## Deferred — detailed designs
 
@@ -38,13 +39,13 @@ Span ring, sidecar, and OTLP/HTTP JSON POST are live.
 **Remaining:** OTLP/gRPC or HTTPS collectors. Consume
 spans are queued only when a caller offers `KIND_CONSUME`.
 
-### D2 HTTP/2 listener (L)
+### D2 HTTP/2 listener — phase 1 shipped v0.5.66
 
-`cmq_tls_set_alpn` can encode `h2`, but the server never calls
-it. No h2 state machine, no HPACK. **Design:** keep HTTP/1.1
-monitor on a dedicated listener. Do not put h2 on the message
-port. HPACK table capped (4 KiB); max 32 streams. Do not
-advertise `h2` until that exists.
+HPACK static codec is live. **Remaining:** dynamic table
+(4 KiB), Huffman, h2 state machine, max 32 streams. Keep
+HTTP/1.1 monitor on a dedicated listener. Do not advertise
+`h2` until that exists. Server still never calls
+`cmq_tls_set_alpn`.
 
 ### D3 JWT / NKEY / JWKS — phases 1–3 shipped v0.5.62–65
 
@@ -76,7 +77,7 @@ optional follow-ups.
 | Item | Evidence | Next cut |
 |---|---|---|
 | MQTT outbound QoS 2 | shipped v0.5.57 | — |
-| ALPN `h2` | Comment example only; server never calls `set_alpn` | Ship D2 or leave unset |
+| ALPN `h2` | Comment example only; server never calls `set_alpn` | Ship D2 h2 or leave unset |
 | Leaf/gateway e2e | Library exists, no multi-process test | Test-only increment |
 
 ## TDD rule for every increment

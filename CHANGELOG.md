@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.66 - 2026-09-06
+
+### Added
+- **HPACK static codec (D2 phase 1)** — RFC 7541 integers,
+  literal strings (no Huffman), and static indexed headers.
+  No `h2` ALPN advertise. Dynamic table deferred.
+
+### Tests
+- `tests/test_hpack.c` — C.1 integers, literal, indexed GET,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.66.enumeration.md`, `v0.5.66.plan.md`.
+- `docs/features/hpack.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0566_{1,2}.txt`.
+
+### Test count
+- 255 tests (was 251 in v0.5.65; +4).
+
 ## 0.5.65 - 2026-09-06
 
 ### Added
