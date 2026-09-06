@@ -557,3 +557,28 @@ int cmq_jwks_refresh_reload_url(cmq_jwks_refresher_t *r, const char **live_url,
     }
     return 0;
 }
+
+int cmq_jwks_refresh_attach(cmq_jwks_refresher_t **r, cmq_jwks_cache_t *cache,
+                            const char *url, const char *ca, int fresh_sec) {
+    if (!r || !cache) return -1;
+    if (fresh_sec < 0 || fresh_sec > CMQ_JWKS_REFRESH_MAX)
+        return -1;
+    if (fresh_sec != 0 && fresh_sec < CMQ_JWKS_REFRESH_MIN)
+        return -1;
+    if (fresh_sec == 0)
+        return 0;
+    if (!url || !url[0])
+        return 0;
+    if (*r)
+        return 0;
+    cmq_jwks_url_t u;
+    if (cmq_jwks_parse_url(url, &u) != 0)
+        return -1;
+    if (ca && ca[0] && cmq_jwks_set_ca(&u, ca) != 0)
+        return -1;
+    cmq_jwks_refresher_t *n = cmq_jwks_refresh_start(&u, cache,
+                                                     (unsigned)fresh_sec);
+    if (!n) return -1;
+    *r = n;
+    return 0;
+}

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.141 - 2026-09-06
+
+### Added
+- **Attach JWKS refresh on reload** — when create had a
+  JWKS cache but no sidecar, SIGHUP starts the refresher
+  from the live `jwks_url`. Omitted / 0 / empty URL keeps
+  off. A bad URL or interval fails closed. An existing
+  sidecar is left to v0.5.131. Does not GET.
+
+### Tests
+- `tests/test_jra.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.141.enumeration.md`, `v0.5.141.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v05141_{1,2}.txt`.
+
+### Test count
+- 555 tests (was 551 in v0.5.140; +4).
+
 ## 0.5.140 - 2026-09-06
 
 ### Added

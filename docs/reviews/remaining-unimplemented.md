@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.140)
+# Remaining unimplemented work (HEAD after v0.5.141)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -102,6 +102,7 @@ Required next cuts: none.
 | v0.5.138 | reload otlp_endpoint |
 | v0.5.139 | attach OTLP exporter on reload |
 | v0.5.140 | bind h2_port on reload |
+| v0.5.141 | attach JWKS refresh on reload |
 
 ## Deferred — detailed designs
 
@@ -224,6 +225,7 @@ are live (v0.5.88).
 | reload otlp_endpoint | shipped v0.5.138 | — |
 | attach OTLP exporter on reload | shipped v0.5.139 | — |
 | bind h2_port on reload | shipped v0.5.140 | — |
+| attach JWKS refresh on reload | shipped v0.5.141 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -252,8 +254,9 @@ are live (v0.5.88).
   create-time). `otlp_endpoint` apply on a live exporter
   shipped v0.5.138. OTLP attach when create had none
   shipped v0.5.139. `h2_port` bind when create had none
-  shipped v0.5.140. Create-time only: JWKS sidecar start
-  (first GET), `persist_dir` remount, `h2_port` rebind.
+  shipped v0.5.140. JWKS refresh attach when create had a
+  cache shipped v0.5.141. Create-time only: JWKS first GET,
+  `persist_dir` remount, `h2_port` rebind.
 
 ## TDD rule for every increment
 

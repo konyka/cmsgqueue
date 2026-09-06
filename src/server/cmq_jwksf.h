@@ -71,6 +71,12 @@ int cmq_jwks_refresh_reload_ca(cmq_jwks_refresher_t *r, const char **live_ca,
 int cmq_jwks_refresh_reload_url(cmq_jwks_refresher_t *r, const char **live_url,
                                 const char *fresh_url);
 int cmq_jwks_refresh_snapshot(cmq_jwks_refresher_t *r, cmq_jwks_url_t *out);
+/* v0.5.141: 0 / omitted / empty URL keeps off. Bad URL or
+ * interval fails closed. Starts a sidecar when *r is NULL
+ * and cache is live. Existing sidecar is left alone.
+ * Does not GET. */
+int cmq_jwks_refresh_attach(cmq_jwks_refresher_t **r, cmq_jwks_cache_t *cache,
+                            const char *url, const char *ca, int fresh_sec);
 
 #ifdef __cplusplus
 }

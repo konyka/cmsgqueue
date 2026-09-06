@@ -1,0 +1,3 @@
+v0.5.141 bench 1:
+- Attach apply: parse + thread create. No GET.
+- Existing sidecar: one pointer check, no thread.

@@ -8985,6 +8985,15 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (server->jwks &&
+        cmq_jwks_refresh_attach((cmq_jwks_refresher_t **)&server->jwks_refresh,
+                                (cmq_jwks_cache_t *)server->jwks,
+                                server->config.jwks_url,
+                                server->config.jwks_ca,
+                                server->config.jwks_refresh_sec) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_otlp_reload_url((cmq_otlp_url_t *)server->otlp,
                             &server->config.otlp_endpoint,
                             fresh.otlp_endpoint) != 0) {
