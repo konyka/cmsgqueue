@@ -3,6 +3,7 @@
 
 #include "cmq_jwt.h"
 #include <stddef.h>
+#include <stdint.h>
 
 #define CMQ_JWKS_URL_MAX      256
 #define CMQ_JWKS_DEFAULT_PORT 80
@@ -27,6 +28,28 @@ int cmq_jwks_set_ca(cmq_jwks_url_t *url, const char *ca_path);
 int cmq_jwks_build_get(const cmq_jwks_url_t *url, char *out, size_t cap);
 /* GET + parse into out. 0 ok; -1 fail. */
 int cmq_jwks_http_get(const cmq_jwks_url_t *url, cmq_jwks_t *out);
+
+#define CMQ_JWKS_REFRESH_MIN 5
+#define CMQ_JWKS_REFRESH_MAX 86400
+
+typedef struct cmq_jwks_cache cmq_jwks_cache_t;
+typedef struct cmq_jwks_refresher cmq_jwks_refresher_t;
+
+cmq_jwks_cache_t *cmq_jwks_cache_create(void);
+void cmq_jwks_cache_destroy(cmq_jwks_cache_t *c);
+int cmq_jwks_cache_put(cmq_jwks_cache_t *c, const cmq_jwks_t *src);
+const cmq_jwks_t *cmq_jwks_cache_get(const cmq_jwks_cache_t *c);
+
+int cmq_jwks_refresh_due(uint64_t last_ms, uint64_t now_ms,
+                         unsigned interval_sec);
+int cmq_jwks_refresh_step(const cmq_jwks_url_t *url, cmq_jwks_cache_t *cache,
+                          uint64_t *last_ms, uint64_t now_ms,
+                          unsigned interval_sec);
+
+cmq_jwks_refresher_t *cmq_jwks_refresh_start(const cmq_jwks_url_t *url,
+                                             cmq_jwks_cache_t *cache,
+                                             unsigned interval_sec);
+void cmq_jwks_refresh_stop(cmq_jwks_refresher_t *r);
 
 #ifdef __cplusplus
 }

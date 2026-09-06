@@ -68,6 +68,11 @@ static int auth_configured(const cmq_server_t *srv) {
            (ec && ec[0] != '\0') || (rn && rn[0] != '\0');
 }
 
+static const cmq_jwks_t *srv_jwks_live(const cmq_server_t *srv) {
+    if (!srv || !srv->jwks) return NULL;
+    return cmq_jwks_cache_get((const cmq_jwks_cache_t *)srv->jwks);
+}
+
 /* v0.5.49: remap subject in place. No-op when map_total is 0. */
 static int account_apply_rewrite(cmq_server_t *srv, const char *account,
                                  char *subject, size_t subject_sz) {
@@ -5212,11 +5217,13 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                     : (unsigned)CMQ_JWT_LEEWAY_SEC;
                 const uint8_t *jsec = NULL;
                 size_t jslen = 0;
+                uint8_t jsecbuf[128];
                 const uint8_t *ecx = NULL, *ecy = NULL;
                 uint8_t ecxy[64];
                 const uint8_t *rsan = NULL, *rsae = NULL;
                 size_t rsanl = 0, rsael = 0;
                 uint8_t rsabn[CMQ_JWT_RSA_N_MAX], rsabe[CMQ_JWT_RSA_E_MAX];
+                const cmq_jwks_t *jk = srv_jwks_live(srv);
                 const char *sstr = srv->config.jwt_hmac_secret;
                 char alg[16] = {0};
                 int is_es = 0;
@@ -5229,21 +5236,41 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                     is_rs = 1;
                 else if (strcmp(alg, "HS256") != 0)
                     jwt_fail = 1;
-                if (!jwt_fail && srv->jwks) {
+                if (!jwt_fail && jk) {
                     char kid[64] = {0};
                     if (cmq_jwt_header_kid(passwd, kid, sizeof(kid)) == 0) {
                         if (is_es) {
-                            if (cmq_jwks_lookup_ec((const cmq_jwks_t *)srv->jwks,
-                                                   kid, &ecx, &ecy) != 0)
+                            const uint8_t *x = NULL, *y = NULL;
+                            if (cmq_jwks_lookup_ec(jk, kid, &x, &y) != 0)
                                 jwt_fail = 1;
+                            else {
+                                memcpy(ecxy, x, 32);
+                                memcpy(ecxy + 32, y, 32);
+                                ecx = ecxy;
+                                ecy = ecxy + 32;
+                            }
                         } else if (is_rs) {
-                            if (cmq_jwks_lookup_rsa((const cmq_jwks_t *)srv->jwks,
-                                                    kid, &rsan, &rsanl,
-                                                    &rsae, &rsael) != 0)
+                            const uint8_t *n = NULL, *e = NULL;
+                            size_t nl = 0, el = 0;
+                            if (cmq_jwks_lookup_rsa(jk, kid, &n, &nl, &e, &el)
+                                    != 0)
                                 jwt_fail = 1;
-                        } else if (cmq_jwks_lookup((const cmq_jwks_t *)srv->jwks,
-                                                   kid, &jsec, &jslen) != 0)
+                            else {
+                                memcpy(rsabn, n, nl);
+                                memcpy(rsabe, e, el);
+                                rsan = rsabn;
+                                rsae = rsabe;
+                                rsanl = nl;
+                                rsael = el;
+                            }
+                        } else if (cmq_jwks_lookup(jk, kid, &jsec, &jslen)
+                                       != 0 ||
+                                   jslen == 0 || jslen > sizeof(jsecbuf)) {
                             jwt_fail = 1;
+                        } else {
+                            memcpy(jsecbuf, jsec, jslen);
+                            jsec = jsecbuf;
+                        }
                     } else if (is_es) {
                         if (!srv->config.jwt_ec_pub ||
                             !srv->config.jwt_ec_pub[0])
@@ -8003,21 +8030,29 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         }
     }
     if (src.jwks_json && src.jwks_json[0]) {
-        cmq_jwks_t *j = calloc(1, sizeof(*j));
-        if (j && cmq_jwks_parse(src.jwks_json, j) == 0)
-            srv->jwks = j;
+        cmq_jwks_t tmp;
+        cmq_jwks_cache_t *c = cmq_jwks_cache_create();
+        if (c && cmq_jwks_parse(src.jwks_json, &tmp) == 0 &&
+            cmq_jwks_cache_put(c, &tmp) == 0)
+            srv->jwks = c;
         else
-            free(j);
+            cmq_jwks_cache_destroy(c);
     } else if (src.jwks_url && src.jwks_url[0]) {
         cmq_jwks_url_t u;
-        cmq_jwks_t *j = calloc(1, sizeof(*j));
-        if (j && cmq_jwks_parse_url(src.jwks_url, &u) == 0 &&
+        cmq_jwks_t tmp;
+        cmq_jwks_cache_t *c = cmq_jwks_cache_create();
+        if (c && cmq_jwks_parse_url(src.jwks_url, &u) == 0 &&
             (!src.jwks_ca || !src.jwks_ca[0] ||
              cmq_jwks_set_ca(&u, src.jwks_ca) == 0) &&
-            cmq_jwks_http_get(&u, j) == 0)
-            srv->jwks = j;
-        else
-            free(j);
+            cmq_jwks_http_get(&u, &tmp) == 0 &&
+            cmq_jwks_cache_put(c, &tmp) == 0) {
+            srv->jwks = c;
+            if (src.jwks_refresh_sec > 0)
+                srv->jwks_refresh = cmq_jwks_refresh_start(
+                    &u, c, (unsigned)src.jwks_refresh_sec);
+        } else {
+            cmq_jwks_cache_destroy(c);
+        }
     }
     srv->otel = cmq_otel_create();
     if (srv->otel && src.otlp_endpoint && src.otlp_endpoint[0]) {
@@ -8857,8 +8892,12 @@ void cmq_server_destroy(cmq_server_t *srv) {
         free(srv->otlp);
         srv->otlp = NULL;
     }
+    if (srv->jwks_refresh) {
+        cmq_jwks_refresh_stop(srv->jwks_refresh);
+        srv->jwks_refresh = NULL;
+    }
     if (srv->jwks) {
-        free(srv->jwks);
+        cmq_jwks_cache_destroy(srv->jwks);
         srv->jwks = NULL;
     }
     if (srv->acl_h) {

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.82 - 2026-09-06
+
+### Added
+- **JWKS refresh (D3 phase 9)** — `jwks_refresh_sec` re-GETs
+  `jwks_url` on a sidecar (5–86400 s; 0 = once at create).
+  Ping-pong cache; failed GET keeps the old keys. CONNECT
+  copies material out of the live slot.
+
+### Tests
+- `tests/test_jwksr.c` — due, step updates, fail keeps old,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.82.enumeration.md`, `v0.5.82.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v0582_{1,2}.txt`.
+
+### Test count
+- 319 tests (was 315 in v0.5.81; +4).
+
 ## 0.5.81 - 2026-09-06
 
 ### Added

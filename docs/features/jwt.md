@@ -1,4 +1,4 @@
-# JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–79, D3 phases 1–8)
+# JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–79, 0.5.82, D3 phases 1–9)
 
 CONNECT may present a compact JWT in the password field
 when `jwt_issuer` is set with `jwt_hmac_secret`,
@@ -42,7 +42,13 @@ Unknown `kid` fails. Missing `kid` may use
 document at server create (`/.well-known/jwks.json` if the
 path is omitted). Default HTTPS port is 443. `jwks_ca` is
 an optional PEM; otherwise the system CA store is used.
-Mutually exclusive with `jwks_json`. Refresh stays deferred.
+Mutually exclusive with `jwks_json`.
+
+`jwks_refresh_sec` (v0.5.82) re-GETs that URL on a sidecar.
+`0` is one GET at create. Config allows 5–86400 seconds.
+A failed GET keeps the previous ping-pong slot. CONNECT
+copies key bytes out of the live slot so a later refresh
+cannot overwrite material mid-verify.
 
 ## NKEY on CONNECT (v0.5.63)
 
@@ -61,13 +67,14 @@ sig). JWT wins if both JWT and nkey are configured.
 
 No secret / JWKS / EC / RSA / `nkey_pub`: one pointer check on CONNECT.
 HMAC / ECDSA / RSA / Ed25519 run only on the worker CONNECT path.
-JWKS is parsed once at create; lookup is ≤8 compares.
+JWKS lookup is ≤8 compares on the live cache slot. Refresh I/O
+never runs on offer/PUBLISH.
 
 ## Tests
 
 `tests/test_jwt.c`, `tests/test_nkey_auth.c`, `tests/test_jwks.c`,
 `tests/test_es256.c`, `tests/test_nkeyb32.c`, `tests/test_jwksf.c`,
-`tests/test_rs256.c`, `tests/test_jwkss.c`
+`tests/test_rs256.c`, `tests/test_jwkss.c`, `tests/test_jwksr.c`
 
 ## See also
 
@@ -79,3 +86,4 @@ JWKS is parsed once at create; lookup is ≤8 compares.
 - `docs/reviews/v0.5.76.enumeration.md`
 - `docs/reviews/v0.5.77.enumeration.md`
 - `docs/reviews/v0.5.79.enumeration.md`
+- `docs/reviews/v0.5.82.enumeration.md`

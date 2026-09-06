@@ -83,6 +83,7 @@ typedef struct cmq_config {
     const char *jwks_json;         /* v0.5.65: JWKS oct/HS256, EC/ES256, RSA */
     const char *jwks_url;          /* v0.5.76/79: http(s):// JWKS GET */
     const char *jwks_ca;           /* v0.5.79: optional PEM for https verify */
+    int jwks_refresh_sec;          /* v0.5.82: JWKS re-GET; 0 = once */
     const char *jwt_ec_pub;        /* v0.5.74: 128 hex P-256 X||Y */
     const char *jwt_rsa_n;         /* v0.5.77: base64url RSA modulus */
     const char *jwt_rsa_e;         /* v0.5.77: base64url RSA exponent */

@@ -1,0 +1,3 @@
+v0.5.82 bench 1:
+- jwks_refresh_sec 0: no sidecar; one GET at create.
+- CONNECT reads the live ping-pong slot (no mutex).

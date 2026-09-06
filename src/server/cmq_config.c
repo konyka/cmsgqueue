@@ -177,6 +177,9 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->jwks_url, value);
     } else if (strcmp(key, "jwks_ca") == 0) {
         return cfg_set_str(&config->jwks_ca, value);
+    } else if (strcmp(key, "jwks_refresh_sec") == 0) {
+        return parse_int_range(value, 0, CMQ_JWKS_REFRESH_MAX,
+                               &config->jwks_refresh_sec);
     } else if (strcmp(key, "jwt_ec_pub") == 0) {
         return cfg_set_str(&config->jwt_ec_pub, value);
     } else if (strcmp(key, "jwt_rsa_n") == 0) {
@@ -419,6 +422,13 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         if (have_jwks_url) {
             cmq_jwks_url_t u;
             if (cmq_jwks_parse_url(config->jwks_url, &u) != 0)
+                return CMQ_ERR_INVALID_ARG;
+        }
+        if (config->jwks_refresh_sec != 0) {
+            if (config->jwks_refresh_sec < CMQ_JWKS_REFRESH_MIN ||
+                config->jwks_refresh_sec > CMQ_JWKS_REFRESH_MAX)
+                return CMQ_ERR_INVALID_ARG;
+            if (!have_jwks_url)
                 return CMQ_ERR_INVALID_ARG;
         }
         if (config->jwks_ca && config->jwks_ca[0]) {

@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_jwksf.h"
+#include "cmq_thread.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -8,11 +9,13 @@
 #include <netinet/in.h>
 #include <openssl/ssl.h>
 #include <poll.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 static int host_ok(const char *h) {
@@ -292,4 +295,126 @@ int cmq_jwks_http_get(const cmq_jwks_url_t *url, cmq_jwks_t *out) {
     size_t blen = strlen(body);
     if (blen == 0 || blen > CMQ_JWKS_JSON_MAX) return -1;
     return cmq_jwks_parse(body, out);
+}
+
+struct cmq_jwks_cache {
+    cmq_jwks_t slot[2];
+    atomic_int idx;
+    atomic_int have;
+};
+
+struct cmq_jwks_refresher {
+    cmq_jwks_url_t url;
+    cmq_jwks_cache_t *cache;
+    unsigned interval_sec;
+    uint64_t last_ms;
+    atomic_int run;
+    cmq_thread_t thr;
+    int started;
+};
+
+static uint64_t jwks_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+cmq_jwks_cache_t *cmq_jwks_cache_create(void) {
+    cmq_jwks_cache_t *c = calloc(1, sizeof(*c));
+    if (!c) return NULL;
+    atomic_init(&c->idx, 0);
+    atomic_init(&c->have, 0);
+    return c;
+}
+
+void cmq_jwks_cache_destroy(cmq_jwks_cache_t *c) {
+    free(c);
+}
+
+int cmq_jwks_cache_put(cmq_jwks_cache_t *c, const cmq_jwks_t *src) {
+    if (!c || !src || src->n <= 0) return -1;
+    int have = atomic_load_explicit(&c->have, memory_order_acquire);
+    int cur = atomic_load_explicit(&c->idx, memory_order_relaxed);
+    int idle = have ? (1 - (cur & 1)) : 0;
+    c->slot[idle] = *src;
+    atomic_store_explicit(&c->idx, idle, memory_order_release);
+    atomic_store_explicit(&c->have, 1, memory_order_release);
+    return 0;
+}
+
+const cmq_jwks_t *cmq_jwks_cache_get(const cmq_jwks_cache_t *c) {
+    if (!c) return NULL;
+    if (!atomic_load_explicit(&c->have, memory_order_acquire))
+        return NULL;
+    int i = atomic_load_explicit(&c->idx, memory_order_acquire);
+    return &c->slot[i & 1];
+}
+
+int cmq_jwks_refresh_due(uint64_t last_ms, uint64_t now_ms,
+                         unsigned interval_sec) {
+    if (interval_sec == 0) return 0;
+    uint64_t span = (uint64_t)interval_sec * 1000ULL;
+    if (now_ms < last_ms) return 1;
+    return (now_ms - last_ms) >= span ? 1 : 0;
+}
+
+int cmq_jwks_refresh_step(const cmq_jwks_url_t *url, cmq_jwks_cache_t *cache,
+                          uint64_t *last_ms, uint64_t now_ms,
+                          unsigned interval_sec) {
+    if (!url || !cache || !last_ms) return -1;
+    if (!cmq_jwks_refresh_due(*last_ms, now_ms, interval_sec))
+        return 0;
+    cmq_jwks_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    if (cmq_jwks_http_get(url, &tmp) != 0)
+        return -1;
+    if (cmq_jwks_cache_put(cache, &tmp) != 0)
+        return -1;
+    *last_ms = now_ms;
+    return 0;
+}
+
+static void *jwks_refresh_thr(void *arg) {
+    cmq_jwks_refresher_t *r = arg;
+    while (atomic_load_explicit(&r->run, memory_order_acquire)) {
+        uint64_t now = jwks_now_ms();
+        (void)cmq_jwks_refresh_step(&r->url, r->cache, &r->last_ms, now,
+                                    r->interval_sec);
+        for (int i = 0; i < 10 &&
+             atomic_load_explicit(&r->run, memory_order_acquire); i++) {
+            struct timespec ts = {0, 100000000L};
+            nanosleep(&ts, NULL);
+        }
+    }
+    return NULL;
+}
+
+cmq_jwks_refresher_t *cmq_jwks_refresh_start(const cmq_jwks_url_t *url,
+                                             cmq_jwks_cache_t *cache,
+                                             unsigned interval_sec) {
+    if (!url || !url->host[0] || !cache || interval_sec == 0)
+        return NULL;
+    cmq_jwks_refresher_t *r = calloc(1, sizeof(*r));
+    if (!r) return NULL;
+    r->url = *url;
+    r->cache = cache;
+    r->interval_sec = interval_sec;
+    r->last_ms = jwks_now_ms();
+    atomic_init(&r->run, 1);
+    if (cmq_thread_create(&r->thr, jwks_refresh_thr, r) != 0) {
+        free(r);
+        return NULL;
+    }
+    r->started = 1;
+    return r;
+}
+
+void cmq_jwks_refresh_stop(cmq_jwks_refresher_t *r) {
+    if (!r) return;
+    if (r->started) {
+        atomic_store_explicit(&r->run, 0, memory_order_release);
+        cmq_thread_join(r->thr);
+        r->started = 0;
+    }
+    free(r);
 }
