@@ -72,6 +72,14 @@ while the stream is empty. `{persist_dir}/js/{name}.parts`
 `cmq_js_consume_part` isolates one hash partition.
 Default `n=1` keeps the unpartitioned append path.
 
+## Default partitions (v0.5.107)
+
+`cmq_js_set_default_partitions(n)` (1–16) applies to new
+streams that have no `{name}.parts` file. A present
+`.parts` file wins. Config `js_partitions` (0–16; 0/1 =
+unpartitioned) is wired at `cmq_js_create`. Persist +
+default writes `.parts` so reopen does not rematch keys.
+
 REQUEST `$JS.<name>` (v0.5.94) returns the last payload
 to reply-to, or an empty body on miss. Oversized last
 message is an empty miss.
@@ -98,7 +106,8 @@ new opcode. Two-token consume is unchanged.
 
 `tests/test_stream_cursors.c`, `tests/test_spart.c`,
 `tests/test_js.c`, `tests/test_jsr.c`, `tests/test_jsc.c`,
-`tests/test_jsl.c`, `tests/test_jsh.c`, `tests/test_jsp.c`, `tests/test_jsq.c`
+`tests/test_jsl.c`, `tests/test_jsh.c`, `tests/test_jsp.c`,
+`tests/test_jsq.c`, `tests/test_jsd.c`
 
 ## See also
 
@@ -111,3 +120,4 @@ new opcode. Two-token consume is unchanged.
 - `docs/reviews/v0.5.104.enumeration.md`
 - `docs/reviews/v0.5.105.enumeration.md`
 - `docs/reviews/v0.5.106.enumeration.md`
+- `docs/reviews/v0.5.107.enumeration.md`

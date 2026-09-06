@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.107 - 2026-09-06
+
+### Added
+- **`$JS` default partitions (D4 follow-up)** —
+  `cmq_js_set_default_partitions` (1–16) applies to new
+  streams without a `.parts` file. Config `js_partitions`
+  (0–16; 0/1 = unpartitioned) is wired at server create.
+  An existing `{name}.parts` file wins.
+
+### Tests
+- `tests/test_jsd.c` — apply, file_wins, n1, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.107.enumeration.md`, `v0.5.107.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v05107_{1,2}.txt`.
+
+### Test count
+- 419 tests (was 415 in v0.5.106; +4).
+
 ## 0.5.106 - 2026-09-06
 
 ### Added

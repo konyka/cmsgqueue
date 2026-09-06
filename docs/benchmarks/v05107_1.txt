@@ -1,0 +1,4 @@
+v0.5.107 bench 1:
+- Default n=1: one compare on first stream create; append path unchanged.
+- Default n>1: one set_partitions on empty stream before first append_key.
+- Existing streams: no extra work (slot already live).

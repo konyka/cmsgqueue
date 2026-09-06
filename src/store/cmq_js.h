@@ -23,6 +23,8 @@ int cmq_js_set_persist(cmq_js_t *j, const char *dir);
 /* 1–16. Empty stream only. 0 ok; -1 bad args / not empty. */
 int cmq_js_set_partitions(cmq_js_t *j, const char *name, unsigned n);
 unsigned cmq_js_partitions(cmq_js_t *j, const char *name);
+/* Default n for new streams without a .parts file. 1–16. */
+int cmq_js_set_default_partitions(cmq_js_t *j, unsigned n);
 
 /* 0 parsed; -1 not $JS; -2 malformed. */
 int cmq_js_parse(const char *subject, char *name, size_t ncap);

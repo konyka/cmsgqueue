@@ -22,6 +22,7 @@ struct cmq_js {
     cmq_js_slot_t slots[CMQ_JS_MAX];
     int n;
     char persist_dir[512];
+    unsigned def_parts;
     cmq_mutex_t lock;
 };
 
@@ -236,6 +237,7 @@ cmq_js_t *cmq_js_create(void) {
     cmq_js_t *j = calloc(1, sizeof(*j));
     if (!j) return NULL;
     cmq_mutex_init(&j->lock);
+    j->def_parts = 1;
     return j;
 }
 
@@ -295,8 +297,14 @@ static cmq_js_slot_t *js_get_or_create_slot(cmq_js_t *j, const char *name) {
     s->last = NULL;
     s->last_len = 0;
     s->last_seq = 0;
+    int got_parts = 0;
     if (j->persist_dir[0])
-        (void)js_load_parts(j, s);
+        got_parts = js_load_parts(j, s);
+    if (got_parts != 1 && j->def_parts > 1) {
+        if (cmq_stream_set_partitions(st, j->def_parts) == 0 &&
+            j->persist_dir[0])
+            (void)js_save_parts(j, s);
+    }
     if (j->persist_dir[0] && cmq_stream_last_seq(st) == 0)
         (void)js_replay_msgs(j, s);
     if (j->persist_dir[0])
@@ -388,7 +396,7 @@ static int js_save_parts(cmq_js_t *j, const cmq_js_slot_t *s) {
 static int js_load_parts(cmq_js_t *j, cmq_js_slot_t *s) {
     unsigned n = js_parts_file_n(j, s->name);
     if (n == 0) return 0;
-    return cmq_stream_set_partitions(s->st, n);
+    return cmq_stream_set_partitions(s->st, n) == 0 ? 1 : -1;
 }
 
 static int js_append_msg(cmq_js_t *j, const char *name, uint64_t seq,
@@ -587,6 +595,14 @@ int cmq_js_consume(cmq_js_t *j, const char *subject, uint8_t *out,
     }
     cmq_mutex_unlock(&j->lock);
     return rc;
+}
+
+int cmq_js_set_default_partitions(cmq_js_t *j, unsigned n) {
+    if (!j || n < 1 || n > CMQ_STREAM_MAX_PARTS) return -1;
+    cmq_mutex_lock(&j->lock);
+    j->def_parts = n;
+    cmq_mutex_unlock(&j->lock);
+    return 0;
 }
 
 int cmq_js_set_partitions(cmq_js_t *j, const char *name, unsigned n) {

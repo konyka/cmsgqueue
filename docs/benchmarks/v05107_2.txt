@@ -1,0 +1,4 @@
+v0.5.107 bench 2:
+- .parts file hit skips the default (one parse + one set).
+- Persist + default writes .parts once so reopen is a file load.
+- Config parse is the same int-range path as h2_port.

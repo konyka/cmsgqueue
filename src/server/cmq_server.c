@@ -8169,6 +8169,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     if (srv->kvb && srv->config.persist_dir && srv->config.persist_dir[0])
         (void)cmq_kvb_set_persist(srv->kvb, srv->config.persist_dir);
     srv->js = cmq_js_create();
+    if (srv->js && srv->config.js_partitions > 1)
+        (void)cmq_js_set_default_partitions(srv->js,
+                                            (unsigned)srv->config.js_partitions);
     if (srv->js && srv->config.persist_dir && srv->config.persist_dir[0])
         (void)cmq_js_set_persist(srv->js, srv->config.persist_dir);
     if (srv->config.persist_dir && srv->config.persist_dir[0]) {
