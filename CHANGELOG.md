@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.145 - 2026-09-06
+
+### Added
+- **Fetch JWKS on reload** — when create had no JWKS
+  cache, SIGHUP GETs `jwks_url` into a new cache. Omitted /
+  empty keeps off. A bad URL or GET fails closed. An
+  existing cache is left alone. Refresher start stays
+  v0.5.141.
+
+### Tests
+- `tests/test_jgf.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.145.enumeration.md`, `v0.5.145.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v05145_{1,2}.txt`.
+
+### Test count
+- 571 tests (was 567 in v0.5.144; +4).
+
 ## 0.5.144 - 2026-09-06
 
 ### Added

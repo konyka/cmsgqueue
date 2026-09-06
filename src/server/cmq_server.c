@@ -9026,6 +9026,13 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (!server->jwks &&
+        cmq_jwks_reload_fetch((cmq_jwks_cache_t **)&server->jwks,
+                              server->config.jwks_url,
+                              server->config.jwks_ca) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (server->jwks &&
         cmq_jwks_refresh_attach((cmq_jwks_refresher_t **)&server->jwks_refresh,
                                 (cmq_jwks_cache_t *)server->jwks,

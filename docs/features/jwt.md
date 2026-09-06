@@ -60,8 +60,8 @@ the current URL. A bad URL fails closed. CA is preserved.
 Does not re-GET; the next interval uses the new URL.
 v0.5.141: reload starts the sidecar when create had a
 JWKS cache but no refresher. Omitted / 0 / empty URL
-keeps off. Does not GET. The first create-time GET stays
-create-time.
+keeps off. Does not GET. v0.5.145 GETs when create had no
+cache.
 v0.5.134: reload applies a non-empty `jwks_ca` to the live
 sidecar URL. Omitted / empty keeps the current path.
 `..` fails closed. The next refresh uses the new CA.
@@ -95,7 +95,10 @@ SIGHUP also parses a non-empty `jwks_json` into the live
 JWKS cache (v0.5.120). Bad JSON keeps the previous slot.
 A non-empty `jwks_url` updates the live sidecar (v0.5.137).
 Reload starts a refresher when create had a cache but no
-sidecar (v0.5.141). The first GET stays create-time.
+sidecar (v0.5.141). v0.5.145: reload GETs `jwks_url` into a new cache when
+create had none. Omitted / empty keeps off. An existing
+cache is left alone. The refresher still starts via
+v0.5.141.
 
 ## Performance
 
@@ -111,7 +114,7 @@ never runs on offer/PUBLISH.
 `tests/test_rs256.c`, `tests/test_jwkss.c`, `tests/test_jwksr.c`,
 `tests/test_jwti.c`, `tests/test_jwts.c`,
 `tests/test_jrf.c`, `tests/test_jca.c`, `tests/test_jru.c`,
-`tests/test_jra.c`
+`tests/test_jra.c`, `tests/test_jgf.c`
 
 ## See also
 

@@ -77,6 +77,11 @@ int cmq_jwks_refresh_snapshot(cmq_jwks_refresher_t *r, cmq_jwks_url_t *out);
  * Does not GET. */
 int cmq_jwks_refresh_attach(cmq_jwks_refresher_t **r, cmq_jwks_cache_t *cache,
                             const char *url, const char *ca, int fresh_sec);
+/* v0.5.145: empty/omitted keeps off. Bad URL / GET fail closed.
+ * First GET into a new cache when *cache is NULL. Existing
+ * cache is left alone. Does not start the refresher. */
+int cmq_jwks_reload_fetch(cmq_jwks_cache_t **cache, const char *url,
+                          const char *ca);
 
 #ifdef __cplusplus
 }
