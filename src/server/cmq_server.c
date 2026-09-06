@@ -22,6 +22,7 @@
 #include "cmq_otel.h"
 #include "cmq_jwt.h"
 #include "cmq_otlp.h"
+#include "cmq_kvb.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -3234,6 +3235,16 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "subject map failed");
         return;
+    }
+    /* v0.5.67: $KV.<bucket>.<key> last-value. One '$' check. */
+    if (srv->kvb && subject[0] == '$') {
+        int krc = cmq_kvb_publish(srv->kvb, subject, msg_payload, msg_len);
+        if (krc < 0) {
+            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_error(c, "kv");
+            return;
+        }
     }
     /* v0.5.52: hold after rewrite so ACL/quota/map rejects skip the budget. */
     int live_held = 0;
@@ -7653,6 +7664,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->txn = cmq_txn_create();
     if (srv->txn && srv->config.persist_dir && srv->config.persist_dir[0])
         (void)cmq_txn_set_log(srv->txn, srv->config.persist_dir);
+    srv->kvb = cmq_kvb_create();
+    if (srv->kvb && srv->config.persist_dir && srv->config.persist_dir[0])
+        (void)cmq_kvb_set_persist(srv->kvb, srv->config.persist_dir);
     if (src.jwks_json && src.jwks_json[0]) {
         cmq_jwks_t *j = calloc(1, sizeof(*j));
         if (j && cmq_jwks_parse(src.jwks_json, j) == 0)
@@ -8470,6 +8484,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->txn) {
         cmq_txn_destroy(srv->txn);
         srv->txn = NULL;
+    }
+    if (srv->kvb) {
+        cmq_kvb_destroy(srv->kvb);
+        srv->kvb = NULL;
     }
     if (srv->otel) {
         cmq_otel_destroy(srv->otel);

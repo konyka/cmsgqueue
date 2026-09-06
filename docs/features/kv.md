@@ -1,4 +1,4 @@
-# KV last-value store (v0.5.58, D4 phase 2)
+# KV last-value store (v0.5.58–67, D4 phases 2 and 4)
 
 `cmq_kv` keeps one value per key. Default create is memory
 only. `cmq_kv_set_persist(dir, prefix)` opens a filestore and
@@ -22,15 +22,23 @@ KV prefix in this version (sealed `.1` is not replayed).
 Keys: `[A-Za-z0-9._-]`, max 256. Values: 1024 bytes.
 Slots: 256 (or fewer at create).
 
-## Not in this increment
+## Bucket PUBLISH path (v0.5.67)
 
-Object store and a partition / bucket server path.
+PUBLISH to `$KV.<bucket>.<key>` updates a named bucket
+(`cmq_kvb`). Empty payload deletes. Non-`$` subjects pay
+one byte compare. At most 8 buckets. Fanout still runs so
+watchers see the write. Optional persist is
+`{persist_dir}/kv_<bucket>` when `persist_dir` is set.
+
+Bucket names: `[A-Za-z0-9_-]`, max 32. Object-store
+subjects and REQUEST-get stay deferred.
 
 ## Tests
 
-`tests/test_kv.c`
+`tests/test_kv.c`, `tests/test_kvb.c`
 
 ## See also
 
 - `docs/reviews/v0.5.58.enumeration.md`
+- `docs/reviews/v0.5.67.enumeration.md`
 - `docs/features/persistence.md` (key compact)

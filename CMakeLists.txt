@@ -108,6 +108,7 @@ set(CMQ_STORE_SOURCES
     src/store/cmq_stream.c
     src/store/cmq_filestore.c
     src/store/cmq_kv.c
+    src/store/cmq_kvb.c
     src/store/cmq_obj.c
 )
 

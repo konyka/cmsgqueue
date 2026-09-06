@@ -1,10 +1,10 @@
-# Remaining unimplemented work (HEAD after v0.5.66)
+# Remaining unimplemented work (HEAD after v0.5.67)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
 cuts. Next cuts: D2 h2 state machine, D3 RSA/EC / base32 /
-ES256, D4 partition/bucket server path, D5 multi-node 2PC,
-or leaf/gateway e2e.
+ES256, D4 object-store PUBLISH / REQUEST-get, D5 multi-node
+2PC, or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -30,6 +30,7 @@ or leaf/gateway e2e.
 | v0.5.64 | D1 phase 2: OTLP/HTTP JSON exporter |
 | v0.5.65 | D3 phase 3: JWKS oct-key cache |
 | v0.5.66 | D2 phase 1: HPACK static codec |
+| v0.5.67 | D4 phase 4: KV bucket PUBLISH path |
 
 ## Deferred — detailed designs
 
@@ -53,11 +54,11 @@ HS256 JWT, Ed25519 nkey on CONNECT, and a static JWKS
 oct-key cache are live. **Remaining:** remote JWKS fetch,
 nkey seed/base32, RSA/EC, ES256. Still verify-only.
 
-### D4 JetStream / KV / Object Store — library shipped v0.5.56–59
+### D4 JetStream / KV / Object Store — phases 1–4 shipped
 
-Durable cursors, KV last-value, and named objects are
-library APIs. **Remaining:** a partition / bucket server
-path that wires them into PUBLISH.
+Durable cursors, KV last-value, named objects, and
+`$KV.<bucket>.<key>` on PUBLISH are live. **Remaining:**
+`$OBJ.<name>` on PUBLISH and REQUEST-get for KV.
 
 ### D5 Exactly-once / transactions — phases 1–2 shipped
 

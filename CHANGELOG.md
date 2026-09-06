@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.67 - 2026-09-06
+
+### Added
+- **KV bucket PUBLISH path (D4 phase 4)** — `$KV.<bucket>.<key>`
+  put/del on the server publish path. One `'$'` check for
+  other subjects. At most 8 buckets. Fanout unchanged.
+
+### Tests
+- `tests/test_kvb.c` — parse, put/get/del, isolate, reject
+  (+4).
+
+### Documentation
+- `docs/reviews/v0.5.67.enumeration.md`, `v0.5.67.plan.md`.
+- `docs/features/kv.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0567_{1,2}.txt`.
+
+### Test count
+- 259 tests (was 255 in v0.5.66; +4).
+
 ## 0.5.66 - 2026-09-06
 
 ### Added
