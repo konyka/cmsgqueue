@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.90)
+# Remaining unimplemented work (HEAD after v0.5.91)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -52,6 +52,7 @@ Required next cuts: none.
 | v0.5.88 | D6 tombstone TTL + dirty-ratio compact |
 | v0.5.89 | D1 consume spans |
 | v0.5.90 | D3 JWT HS256 issuing |
+| v0.5.91 | D3 JWT ES256 / RS256 issuing |
 
 ## Deferred — detailed designs
 
@@ -74,9 +75,9 @@ and TLS-wrapped accept (`cmq_h2_accept_tls`) are live.
 HS256 JWT, ES256 (P-256), RS256 (2048–4096), Ed25519 nkey
 on CONNECT (`U…` or 64 hex), static JWKS (oct/EC/RSA),
 HTTP/HTTPS `jwks_url` fetch, and periodic refresh
-(`jwks_refresh_sec`) are live. HS256 mint is
-`cmq_jwt_sign_hs256` (v0.5.90). ES256 / RS256 issuing
-needs private keys and is not in this cut.
+(`jwks_refresh_sec`) are live. Mint: `cmq_jwt_sign_hs256`,
+`cmq_jwt_sign_es256` (P-256 `d`), `cmq_jwt_sign_rs256`
+(`n`/`e`/`d`).
 
 ### D4 JetStream / KV / Object Store — phases 1–6 shipped
 
@@ -110,9 +111,7 @@ are live (v0.5.88).
 
 ## Optional follow-ups (not required next cuts)
 
-| Item | Notes |
-|---|---|
-| D3 ES256 / RS256 issuing | Needs private key material; HS256 mint shipped |
+None. Required next cuts are empty.
 
 ## TDD rule for every increment
 

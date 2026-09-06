@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.91 - 2026-09-06
+
+### Added
+- **JWT ES256 / RS256 issuing (D3 follow-up)** —
+  `cmq_jwt_sign_es256` (P-256 scalar, raw R||S) and
+  `cmq_jwt_sign_rs256` (`n`/`e`/`d`) mint tokens the
+  existing verify path accepts.
+
+### Tests
+- `tests/test_jwts.c` — ES256 / RS256 roundtrip, wrong
+  key, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.91.enumeration.md`, `v0.5.91.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v0591_{1,2}.txt`.
+
+### Test count
+- 355 tests (was 351 in v0.5.90; +4).
+
 ## 0.5.90 - 2026-09-06
 
 ### Added

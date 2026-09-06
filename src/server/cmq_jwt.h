@@ -60,6 +60,10 @@ int cmq_jwt_verify_es256(const char *token, const uint8_t x[CMQ_JWT_EC_XY_LEN],
                          const uint8_t y[CMQ_JWT_EC_XY_LEN],
                          const char *issuer, uint64_t now_sec,
                          unsigned leeway_sec, char *sub_out, size_t sub_len);
+/* v0.5.91: mint compact ES256 from P-256 scalar d. JWS is raw R||S. */
+int cmq_jwt_sign_es256(const uint8_t d[CMQ_JWT_EC_XY_LEN],
+                       const char *issuer, const char *sub, uint64_t exp_sec,
+                       char *out, size_t out_len);
 int cmq_jwks_parse(const char *json, cmq_jwks_t *out);
 int cmq_jwks_lookup(const cmq_jwks_t *j, const char *kid,
                     const uint8_t **secret, size_t *slen);
@@ -69,6 +73,12 @@ int cmq_jwt_verify_rs256(const char *token, const uint8_t *n, size_t nlen,
                          const uint8_t *e, size_t elen, const char *issuer,
                          uint64_t now_sec, unsigned leeway_sec,
                          char *sub_out, size_t sub_len);
+/* v0.5.91: mint compact RS256 from RSA n/e/d. */
+int cmq_jwt_sign_rs256(const uint8_t *n, size_t nlen,
+                       const uint8_t *e, size_t elen,
+                       const uint8_t *d, size_t dlen,
+                       const char *issuer, const char *sub, uint64_t exp_sec,
+                       char *out, size_t out_len);
 int cmq_jwks_lookup_rsa(const cmq_jwks_t *j, const char *kid,
                         const uint8_t **n, size_t *nlen,
                         const uint8_t **e, size_t *elen);

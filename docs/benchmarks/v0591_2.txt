@@ -1,0 +1,3 @@
+v0.5.91 bench 2:
+- ES256 JWS is 64 raw bytes (no DER on the wire).
+- RS256 signature size matches n (256–512).

@@ -255,6 +255,155 @@ int cmq_jwt_sign_hs256(const char *secret, const char *issuer,
     return 0;
 }
 
+static int jwt_make_signing(const char *alg, const char *issuer, const char *sub,
+                            uint64_t exp_sec, char *signing, size_t scap) {
+    if (!alg || !issuer || !sub || !signing || scap == 0)
+        return -1;
+    if (!jwt_claim_safe(issuer, 128) || !jwt_claim_safe(sub, 128))
+        return -1;
+    if (exp_sec == 0) return -1;
+    char hdr[48];
+    int hn = snprintf(hdr, sizeof(hdr), "{\"alg\":\"%s\",\"typ\":\"JWT\"}", alg);
+    if (hn < 0 || hn >= (int)sizeof(hdr)) return -1;
+    char pay[320];
+    int pn = snprintf(pay, sizeof(pay),
+                      "{\"iss\":\"%s\",\"sub\":\"%s\",\"exp\":%llu}",
+                      issuer, sub, (unsigned long long)exp_sec);
+    if (pn < 0 || pn >= (int)sizeof(pay)) return -1;
+    char hb[128], pb[256];
+    if (b64url_encode((const uint8_t *)hdr, (size_t)hn, hb, sizeof(hb)) != 0)
+        return -1;
+    if (b64url_encode((const uint8_t *)pay, (size_t)pn, pb, sizeof(pb)) != 0)
+        return -1;
+    int sn = snprintf(signing, scap, "%s.%s", hb, pb);
+    if (sn < 0 || (size_t)sn >= scap) return -1;
+    return 0;
+}
+
+static int jwt_finish_token(const char *signing, const uint8_t *sig, size_t sig_n,
+                            char *out, size_t out_len) {
+    if (!signing || !sig || sig_n == 0 || !out || out_len == 0)
+        return -1;
+    char sb[700];
+    if (b64url_encode(sig, sig_n, sb, sizeof(sb)) != 0)
+        return -1;
+    int n = snprintf(out, out_len, "%s.%s", signing, sb);
+    if (n < 0 || (size_t)n >= out_len || (size_t)n > CMQ_JWT_TOKEN_MAX)
+        return -1;
+    return 0;
+}
+
+int cmq_jwt_sign_es256(const uint8_t d[CMQ_JWT_EC_XY_LEN],
+                       const char *issuer, const char *sub, uint64_t exp_sec,
+                       char *out, size_t out_len) {
+    if (!d || !issuer || !sub || !out || out_len == 0) return -1;
+    char signing[400];
+    if (jwt_make_signing("ES256", issuer, sub, exp_sec, signing,
+                         sizeof(signing)) != 0)
+        return -1;
+
+    BIGNUM *bd = BN_bin2bn(d, CMQ_JWT_EC_XY_LEN, NULL);
+    EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+    OSSL_PARAM_BLD *bld = OSSL_PARAM_BLD_new();
+    OSSL_PARAM *params = NULL;
+    EVP_PKEY *pkey = NULL;
+    int rc = -1;
+    if (bd && !BN_is_zero(bd) && pctx && bld &&
+        EVP_PKEY_fromdata_init(pctx) == 1 &&
+        OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_GROUP_NAME,
+                                        "prime256v1", 0) &&
+        OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_PRIV_KEY, bd))
+        params = OSSL_PARAM_BLD_to_param(bld);
+    if (params &&
+        EVP_PKEY_fromdata(pctx, &pkey, EVP_PKEY_KEYPAIR, params) == 1 &&
+        pkey) {
+        EVP_MD_CTX *m = EVP_MD_CTX_new();
+        size_t sl = 0;
+        uint8_t der[144];
+        if (m &&
+            EVP_DigestSignInit(m, NULL, EVP_sha256(), NULL, pkey) == 1 &&
+            EVP_DigestSign(m, NULL, &sl, (const unsigned char *)signing,
+                           strlen(signing)) == 1 &&
+            sl > 0 && sl <= sizeof(der) &&
+            EVP_DigestSign(m, der, &sl, (const unsigned char *)signing,
+                           strlen(signing)) == 1) {
+            const unsigned char *pp = der;
+            ECDSA_SIG *es = d2i_ECDSA_SIG(NULL, &pp, (long)sl);
+            const BIGNUM *r = NULL, *s = NULL;
+            uint8_t raw[64];
+            if (es) {
+                ECDSA_SIG_get0(es, &r, &s);
+                if (r && s && BN_bn2binpad(r, raw, 32) == 32 &&
+                    BN_bn2binpad(s, raw + 32, 32) == 32)
+                    rc = jwt_finish_token(signing, raw, 64, out, out_len);
+                ECDSA_SIG_free(es);
+            }
+        }
+        EVP_MD_CTX_free(m);
+    }
+    OSSL_PARAM_free(params);
+    OSSL_PARAM_BLD_free(bld);
+    EVP_PKEY_free(pkey);
+    EVP_PKEY_CTX_free(pctx);
+    BN_free(bd);
+    return rc;
+}
+
+int cmq_jwt_sign_rs256(const uint8_t *n, size_t nlen,
+                       const uint8_t *e, size_t elen,
+                       const uint8_t *d, size_t dlen,
+                       const char *issuer, const char *sub, uint64_t exp_sec,
+                       char *out, size_t out_len) {
+    if (!n || !e || !d || !issuer || !sub || !out || out_len == 0)
+        return -1;
+    if (nlen < CMQ_JWT_RSA_N_MIN || nlen > CMQ_JWT_RSA_N_MAX) return -1;
+    if (elen == 0 || elen > CMQ_JWT_RSA_E_MAX) return -1;
+    if (dlen == 0 || dlen > CMQ_JWT_RSA_N_MAX) return -1;
+    char signing[400];
+    if (jwt_make_signing("RS256", issuer, sub, exp_sec, signing,
+                         sizeof(signing)) != 0)
+        return -1;
+
+    BIGNUM *bn = BN_bin2bn(n, (int)nlen, NULL);
+    BIGNUM *be = BN_bin2bn(e, (int)elen, NULL);
+    BIGNUM *bd = BN_bin2bn(d, (int)dlen, NULL);
+    EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+    OSSL_PARAM_BLD *bld = OSSL_PARAM_BLD_new();
+    OSSL_PARAM *params = NULL;
+    EVP_PKEY *pkey = NULL;
+    int rc = -1;
+    if (bn && be && bd && !BN_is_zero(bd) && pctx && bld &&
+        EVP_PKEY_fromdata_init(pctx) == 1 &&
+        OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_N, bn) &&
+        OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_E, be) &&
+        OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_RSA_D, bd))
+        params = OSSL_PARAM_BLD_to_param(bld);
+    if (params &&
+        EVP_PKEY_fromdata(pctx, &pkey, EVP_PKEY_KEYPAIR, params) == 1 &&
+        pkey) {
+        EVP_MD_CTX *m = EVP_MD_CTX_new();
+        size_t sl = 0;
+        uint8_t sig[CMQ_JWT_RSA_N_MAX];
+        if (m &&
+            EVP_DigestSignInit(m, NULL, EVP_sha256(), NULL, pkey) == 1 &&
+            EVP_DigestSign(m, NULL, &sl, (const unsigned char *)signing,
+                           strlen(signing)) == 1 &&
+            sl > 0 && sl <= sizeof(sig) &&
+            EVP_DigestSign(m, sig, &sl, (const unsigned char *)signing,
+                           strlen(signing)) == 1)
+            rc = jwt_finish_token(signing, sig, sl, out, out_len);
+        EVP_MD_CTX_free(m);
+    }
+    OSSL_PARAM_free(params);
+    OSSL_PARAM_BLD_free(bld);
+    EVP_PKEY_free(pkey);
+    EVP_PKEY_CTX_free(pctx);
+    BN_free(bn);
+    BN_free(be);
+    BN_free(bd);
+    return rc;
+}
+
 static int jwt_header_claim(const char *token, const char *key, char *out,
                             size_t out_len) {
     if (!token || !key || !out || out_len == 0) return -1;
