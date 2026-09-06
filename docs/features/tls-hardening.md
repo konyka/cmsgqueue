@@ -14,6 +14,9 @@ The TLS backend in v0.3.0 (`src/enterprise/cmq_tls.c`) had a single SSL_CTX per 
 `src/enterprise/cmq_tls.h`:
 - `cmq_tls_set_alpn(cfg, "h2,http/1.1")` — sets the ALPN protocol list (CSV).
 - `cmq_tls_reload(cfg)` — rebuilds the SSL_CTX from the current cert/key paths and atomically swaps.
+  `cmq_server_reload` (v0.5.117) updates live slot paths from
+  `tls_*` / `listener{1,2,3}_tls_*` then calls this on each
+  non-NULL slot. Empty/omitted paths keep the current files.
 
 `src/enterprise/cmq_tls.c`:
 - New `alpn_data[256]` field on `cmq_tls_config_t`.

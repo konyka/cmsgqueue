@@ -2,6 +2,7 @@
 #include "cmq_tls.h"
 #include "cmq_tls_session_cache.h"
 #include "cmq_log.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>

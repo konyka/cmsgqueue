@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.117 - 2026-09-06
+
+### Added
+- **Reload TLS cert/key** — `cmq_server_reload` updates
+  live slot paths from `tls_*` / `listener{1,2,3}_tls_*`
+  and calls `cmq_tls_reload`. Empty/omitted paths keep
+  the current files. A failed reload keeps the old CTX.
+
+### Tests
+- `tests/test_tlr.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.117.enumeration.md`, `v0.5.117.plan.md`.
+- `docs/features/tls-hardening.md`.
+- `docs/benchmarks/v05117_{1,2}.txt`.
+
+### Test count
+- 459 tests (was 455 in v0.5.116; +4).
+
 ## 0.5.116 - 2026-09-06
 
 ### Added

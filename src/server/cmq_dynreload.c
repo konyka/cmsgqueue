@@ -68,3 +68,37 @@ int cmq_reload_apply_dynamic(cmq_log_t *log, int *log_level,
     }
     return 0;
 }
+
+int cmq_reload_apply_tls(cmq_tls_config_t **slots, int nslots,
+                         const cmq_config_t *fresh) {
+    if (!slots || !fresh || nslots < 0 || nslots > 4) return -1;
+    for (int i = 0; i < nslots; i++) {
+        if (!slots[i]) continue;
+        const char *cert;
+        const char *key;
+        const char *ca;
+        int verify;
+        if (i == 0) {
+            cert = fresh->tls_cert;
+            key = fresh->tls_key;
+            ca = fresh->tls_ca;
+            verify = fresh->tls_verify_peer;
+        } else {
+            cert = fresh->listeners[i].tls_cert;
+            key = fresh->listeners[i].tls_key;
+            ca = fresh->listeners[i].tls_ca;
+            verify = fresh->listeners[i].tls_verify_peer;
+        }
+        if (cert && cert[0] && cmq_tls_set_cert(slots[i], cert) != 0)
+            return -1;
+        if (key && key[0] && cmq_tls_set_key(slots[i], key) != 0)
+            return -1;
+        if (ca && ca[0] && cmq_tls_set_ca(slots[i], ca) != 0)
+            return -1;
+        if (verify)
+            (void)cmq_tls_set_verify(slots[i], 1);
+        if (cmq_tls_reload(slots[i]) != 0)
+            return -1;
+    }
+    return 0;
+}
