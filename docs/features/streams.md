@@ -34,14 +34,26 @@ name is omitted on the next write.
 Message bodies are **not** durable here. After destroy the
 ring resets to seq 1; only the cursor file is reloaded.
 
+## Partitions (v0.5.87)
+
+Default `nparts=1`: `append` / `next` / `ack` unchanged.
+`cmq_stream_set_partitions(n)` (1–16) is allowed only while
+the stream is empty. `append_key` stores FNV-1a `% n` in a
+`max_msgs` sidecar. `next_part` / `ack_part` isolate
+watermarks. Wrong-part ack fails closed.
+
+Cursor file is `CMQC2` when n>1 (`name part seq`); `CMQC1`
+is unchanged.
+
 ## Not in this increment
 
-KV / object store and a partition model stay deferred.
+KV / object store stay on their own APIs.
 
 ## Tests
 
-`tests/test_stream_cursors.c`
+`tests/test_stream_cursors.c`, `tests/test_spart.c`
 
 ## See also
 
 - `docs/reviews/v0.5.56.enumeration.md`
+- `docs/reviews/v0.5.87.enumeration.md`

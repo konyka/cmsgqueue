@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.86)
+# Remaining unimplemented work (HEAD after v0.5.87)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -48,6 +48,7 @@ Required next cuts: none.
 | v0.5.84 | D1 phase 4: OTLP/gRPC |
 | v0.5.85 | D5 phase 4: route write retry |
 | v0.5.86 | Leaf/gateway CONNECT/CONNACK e2e |
+| v0.5.87 | D4 partitioned consume cursors |
 
 ## Deferred — detailed designs
 
@@ -75,9 +76,9 @@ HTTP/HTTPS `jwks_url` fetch, and periodic refresh
 ### D4 JetStream / KV / Object Store — phases 1–6 shipped
 
 Durable cursors, KV last-value, named objects,
-`$KV.<bucket>.<key>` / `$OBJ.<name>` PUBLISH and REQUEST-get
-are live. Partitioned consume cursors beyond the library API
-remain optional follow-ups.
+`$KV.<bucket>.<key>` / `$OBJ.<name>` PUBLISH and REQUEST-get,
+and partitioned consume cursors (1–16, `append_key` /
+`next_part` / `ack_part`, `CMQC2`) are live.
 
 ### D5 Exactly-once / transactions — phases 1–4 shipped
 
@@ -105,7 +106,6 @@ optional follow-ups.
 
 | Item | Notes |
 |---|---|
-| D4 partitioned consume cursors | Library cursors exist; no partitioned consumer API |
 | D6 tombstone TTL / dirty-ratio auto-trigger | Compact is explicit; no TTL sidecar |
 | D3 token issuing | Intentionally verify-only |
 | D1 consume spans | Only when caller offers `KIND_CONSUME` |

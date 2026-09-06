@@ -30,7 +30,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Key compaction (v0.5.53)**: `cmq_filestore_compact_keys` last-value-wins on sealed `.1` segments (live append unchanged)
 - **MQTT QoS 1 inflight (v0.5.54)**: 16-slot outbound window; local fanout + PUBACK (SUBSCRIBE still grants at most QoS 1)
 - **Idempotent publish (v0.5.55)**: `CMQI`+pid+seq sliding window drops retries before WAL (D5 phase 1)
-- **Durable stream cursors (v0.5.56)**: opt-in `{dir}/{name}.cursors` ack watermarks (D4 phase 1; append path unchanged)
+- **Durable stream cursors (v0.5.56 / v0.5.87)**: opt-in `{dir}/{name}.cursors` ack watermarks; 1–16 hash partitions via `append_key` / `next_part` / `ack_part` (D4)
 - **MQTT QoS 2 outbound (v0.5.57)**: grant 2; PUBLISH/PUBREC/PUBREL/PUBCOMP on the 16-slot window
 - **KV store (v0.5.58–70)**: last-value put/get/del; `$KV.<bucket>.<key>` PUBLISH + REQUEST-get
 - **Object store (v0.5.59–70)**: named blobs; `$OBJ.<name>` PUBLISH + REQUEST-get when persist_dir is set

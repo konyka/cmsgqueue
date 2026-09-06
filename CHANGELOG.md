@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.87 - 2026-09-06
+
+### Added
+- **Partitioned consume cursors (D4 follow-up)** — 1–16
+  hash partitions. `append_key` + `next_part` / `ack_part`
+  isolate watermarks. Default n=1 leaves append unchanged.
+  `CMQC2` when n>1; wrong-part ack fails closed.
+
+### Tests
+- `tests/test_spart.c` — isolate, reopen, n=1 compat,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.87.enumeration.md`, `v0.5.87.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v0587_{1,2}.txt`.
+
+### Test count
+- 339 tests (was 335 in v0.5.86; +4).
+
 ## 0.5.86 - 2026-09-06
 
 ### Added

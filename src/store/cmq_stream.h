@@ -27,9 +27,24 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
 int cmq_stream_read(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out);
 void cmq_stream_msg_release(cmq_stream_msg_t *msg);
 
+#define CMQ_STREAM_MAX_PARTS 16
+
 /* v0.5.56: persist consumer acks under dir/{name}.cursors.
  * Default create does no I/O. Missing file is empty. */
 int cmq_stream_set_cursor_path(cmq_stream_t *stream, const char *dir);
+
+/* v0.5.87: 1–16 hash partitions. Default 1 (append path unchanged).
+ * May change only while the stream is empty. */
+int cmq_stream_set_partitions(cmq_stream_t *stream, unsigned n);
+unsigned cmq_stream_partitions(cmq_stream_t *stream);
+unsigned cmq_stream_partition_of(const uint8_t *key, size_t klen, unsigned n);
+uint64_t cmq_stream_append_key(cmq_stream_t *stream, const uint8_t *key,
+                               size_t klen, const uint8_t *data, size_t len);
+uint64_t cmq_stream_consumer_next_part(cmq_stream_t *stream,
+                                       const char *consumer_name, unsigned part);
+int cmq_stream_consumer_ack_part(cmq_stream_t *stream,
+                                 const char *consumer_name, unsigned part,
+                                 uint64_t seq);
 
 int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name);
 /* Drop a consumer so a stopped ack watermark cannot pin retention forever. */
