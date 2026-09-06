@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.124 - 2026-09-06
+
+### Added
+- **Reload F14 quota / N1 subject RL** —
+  `cmq_server_reload` updates non-zero
+  `max_msgs_per_sec_per_account`,
+  `max_bytes_per_sec_per_account`,
+  `max_connections_per_account`, and
+  `max_msgs_per_sec_per_subject` in place. 0 / omitted
+  keeps the current caps. Create-without-quota can gain
+  an object.
+
+### Tests
+- `tests/test_qrl.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.124.enumeration.md`, `v0.5.124.plan.md`.
+- `docs/features/quota.md`.
+- `docs/benchmarks/v05124_{1,2}.txt`.
+
+### Test count
+- 487 tests (was 483 in v0.5.123; +4).
+
 ## 0.5.123 - 2026-09-06
 
 ### Added

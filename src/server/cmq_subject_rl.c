@@ -52,6 +52,22 @@ void cmq_subject_rl_free(cmq_subject_rl_t *rl) {
     free(rl);
 }
 
+uint32_t cmq_subject_rl_limit(const cmq_subject_rl_t *rl) {
+    return rl ? rl->max_per_sec : 0;
+}
+
+int cmq_subject_rl_reload(cmq_subject_rl_t **rl, int max_per_sec) {
+    if (!rl) return -1;
+    if (max_per_sec < 0 || max_per_sec > 1000000) return -1;
+    if (max_per_sec == 0) return 0;
+    if (!*rl) {
+        *rl = cmq_subject_rl_create((uint32_t)max_per_sec);
+        return *rl ? 0 : -1;
+    }
+    (*rl)->max_per_sec = (uint32_t)max_per_sec;
+    return 0;
+}
+
 int cmq_subject_rl_check(cmq_subject_rl_t *rl, const char *subject) {
     if (!rl || !subject || rl->max_per_sec == 0) return 1;
 

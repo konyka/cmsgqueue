@@ -57,6 +57,35 @@ void cmq_quota_free(cmq_quota_t *q) {
     free(q);
 }
 
+uint32_t cmq_quota_max_msgs(const cmq_quota_t *q) {
+    return q ? q->max_msgs : 0;
+}
+
+uint32_t cmq_quota_max_bytes(const cmq_quota_t *q) {
+    return q ? q->max_bytes : 0;
+}
+
+uint32_t cmq_quota_max_connects(const cmq_quota_t *q) {
+    return q ? q->max_connects : 0;
+}
+
+int cmq_quota_reload(cmq_quota_t **q, int msgs, int bytes, int conns) {
+    if (!q) return -1;
+    if (msgs < 0 || msgs > 10000000) return -1;
+    if (bytes < 0 || bytes > 1073741824) return -1;
+    if (conns < 0 || conns > 1000000) return -1;
+    if (msgs == 0 && bytes == 0 && conns == 0) return 0;
+    if (!*q) {
+        *q = cmq_quota_create((uint32_t)msgs, (uint32_t)bytes,
+                              (uint32_t)conns);
+        return *q ? 0 : -1;
+    }
+    if (msgs > 0) (*q)->max_msgs = (uint32_t)msgs;
+    if (bytes > 0) (*q)->max_bytes = (uint32_t)bytes;
+    if (conns > 0) (*q)->max_connects = (uint32_t)conns;
+    return 0;
+}
+
 static struct cmq_quota_slot *find_or_claim(cmq_quota_t *q,
                                              const char *acc) {
     uint64_t h = fnv1a(acc, CMQ_QUOTA_KEY_MAX);

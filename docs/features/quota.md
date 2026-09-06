@@ -63,7 +63,12 @@ Threats NOT closed:
 ## Limitations
 
 - Fixed-window (1 second) is not as smooth as token-bucket; bursts at second boundaries can briefly exceed the cap. For tighter smoothing, future work.
-- No quota APIs at runtime; operators must restart the server to change caps.
+- SIGHUP / `cmq_server_reload` updates non-zero
+  `max_msgs_per_sec_per_account`,
+  `max_bytes_per_sec_per_account`,
+  `max_connections_per_account`, and
+  `max_msgs_per_sec_per_subject` in place (v0.5.124).
+  0 / omitted keeps the current cap.
 
 ## See also
 
