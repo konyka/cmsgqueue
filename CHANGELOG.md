@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.153 - 2026-09-07
+
+### Added
+- **Apply TLS paths on reload** — SIGHUP copies non-empty
+  `tls_*` / `listener*_tls_*` onto the live config and
+  rejects `..` / `\` before updating a slot. Omitted /
+  empty keeps the current files. Existing SSL_CTX is
+  not remounted except via `cmq_tls_reload`.
+
+### Tests
+- `tests/test_tpa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.153.enumeration.md`, `v0.5.153.plan.md`.
+- `docs/features/tls-hardening.md`.
+- `docs/benchmarks/v05153_{1,2}.txt`.
+
+### Test count
+- 603 tests (was 599 in v0.5.152; +4).
+
 ## 0.5.152 - 2026-09-07
 
 ### Added

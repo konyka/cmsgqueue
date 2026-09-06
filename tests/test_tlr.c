@@ -59,6 +59,16 @@ TEST(tlr, reject) {
     cmq_tls_config_t *slots[4] = {0};
     ASSERT(cmq_reload_apply_tls(slots, 5, &fresh) != 0);
     ASSERT(cmq_reload_apply_tls(slots, -1, &fresh) != 0);
+    slots[0] = cmq_tls_config_create();
+    ASSERT(slots[0] != NULL);
+    ASSERT_EQ(cmq_tls_set_cert(slots[0], "/keep.pem"), 0);
+    ASSERT_EQ(cmq_tls_set_key(slots[0], "/keep.key"), 0);
+    fresh.tls_cert = "../evil.pem";
+    ASSERT(cmq_reload_apply_tls(slots, 4, &fresh) != 0);
+    char cert[256];
+    ASSERT_EQ(cmq_tls_cert_path(slots[0], cert, sizeof(cert)), 0);
+    ASSERT_STR_EQ(cert, "/keep.pem");
+    cmq_tls_config_destroy(slots[0]);
 }
 
 TEST_MAIN()

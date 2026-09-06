@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.152)
+# Remaining unimplemented work (HEAD after v0.5.153)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -33,7 +33,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `blocklist_file` | yes | `blocklist_h` | swap + attach |
 | `h2_port` | yes | listen | bind when none (no rebind) |
 | `js_partitions` / `js_msgs_rotate_bytes` | yes | `$JS` | `cmq_js_reload` |
-| `tls_*` / `listener*_tls_*` | yes | SSL_CTX slots | `apply_tls` + attach |
+| `tls_*` / `listener*_tls_*` | yes | SSL_CTX slots | `apply_tls` + live paths + attach |
 | `listener{1,2,3}_host/port` / count | yes | extra bind | bind empty slots (no rebind) |
 | `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync + F18 load (no remount / WAL replay) |
 | `mqtt_bridge_*` | yes | outbound bridge | attach + maps + endpoint |
@@ -159,6 +159,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.150 | load persisted subscriptions on reload |
 | v0.5.151 | set h2 ALPN on reload |
 | v0.5.152 | apply config_file on reload |
+| v0.5.153 | apply TLS paths on reload |
 
 ## Deferred — detailed designs
 
@@ -293,6 +294,7 @@ are live (v0.5.88).
 | load persisted subscriptions on reload | shipped v0.5.150 | — |
 | set h2 ALPN on reload | shipped v0.5.151 | — |
 | apply config_file on reload | shipped v0.5.152 | — |
+| apply TLS paths on reload | shipped v0.5.153 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -334,7 +336,8 @@ are live (v0.5.88).
   persist_load when persist was just attached shipped
   v0.5.150. h2 ALPN on an existing TLS slot shipped
   v0.5.151. `config_file` apply for the next SIGHUP
-  shipped v0.5.152. Create-time only: `persist_dir` remount,
+  shipped v0.5.152. TLS live path apply + fail-closed
+  `..` shipped v0.5.153. Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.
 

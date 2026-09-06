@@ -1,0 +1,3 @@
+v0.5.153 bench 1:
+- TLS live apply: one strcmp + strdup per changed path.
+- Same path: one strcmp, no heap.

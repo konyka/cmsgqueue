@@ -63,6 +63,9 @@ SSL_CTX is not remounted.
 v0.5.151: reload sets `h2` ALPN on a live slot that
 had none after `h2_port` binds. Existing ALPN is not
 remounted.
+v0.5.153: reload copies non-empty TLS paths onto the
+live config and rejects `..` / `\` before `set_*`.
+Omitted / empty keeps the current files.
 
 ## Limitations
 

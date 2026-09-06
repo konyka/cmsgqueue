@@ -9027,6 +9027,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (cmq_reload_apply_tls_live(&server->config, &fresh) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     {
         const char *alpn = (server->config.h2_port > 0 || server->h2_lfd >= 0)
                                ? "h2" : NULL;

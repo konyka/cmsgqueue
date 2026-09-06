@@ -6,6 +6,7 @@
 #include <string.h>
 
 static cmq_atomic_int cmq_sighup_pending;
+static int reload_path_ok(const char *path);
 
 static int apply_csv(cmq_acl_t *acl, int allow, const char *csv) {
     if (!csv || !csv[0]) return 0;
@@ -72,26 +73,39 @@ int cmq_reload_apply_dynamic(cmq_log_t *log, int *log_level,
     return 0;
 }
 
+static void tls_fresh_paths(const cmq_config_t *fresh, int i,
+                            const char **cert, const char **key,
+                            const char **ca, int *verify) {
+    if (i == 0) {
+        *cert = fresh->tls_cert;
+        *key = fresh->tls_key;
+        *ca = fresh->tls_ca;
+        *verify = fresh->tls_verify_peer;
+    } else {
+        *cert = fresh->listeners[i].tls_cert;
+        *key = fresh->listeners[i].tls_key;
+        *ca = fresh->listeners[i].tls_ca;
+        *verify = fresh->listeners[i].tls_verify_peer;
+    }
+}
+
 int cmq_reload_apply_tls(cmq_tls_config_t **slots, int nslots,
                          const cmq_config_t *fresh) {
     if (!slots || !fresh || nslots < 0 || nslots > 4) return -1;
     for (int i = 0; i < nslots; i++) {
         if (!slots[i]) continue;
-        const char *cert;
-        const char *key;
-        const char *ca;
+        const char *cert, *key, *ca;
         int verify;
-        if (i == 0) {
-            cert = fresh->tls_cert;
-            key = fresh->tls_key;
-            ca = fresh->tls_ca;
-            verify = fresh->tls_verify_peer;
-        } else {
-            cert = fresh->listeners[i].tls_cert;
-            key = fresh->listeners[i].tls_key;
-            ca = fresh->listeners[i].tls_ca;
-            verify = fresh->listeners[i].tls_verify_peer;
-        }
+        tls_fresh_paths(fresh, i, &cert, &key, &ca, &verify);
+        if (cert && cert[0] && !reload_path_ok(cert)) return -1;
+        if (key && key[0] && !reload_path_ok(key)) return -1;
+        if (ca && ca[0] && !reload_path_ok(ca)) return -1;
+    }
+    for (int i = 0; i < nslots; i++) {
+        if (!slots[i]) continue;
+        const char *cert, *key, *ca;
+        int verify;
+        tls_fresh_paths(fresh, i, &cert, &key, &ca, &verify);
         if (cert && cert[0] && cmq_tls_set_cert(slots[i], cert) != 0)
             return -1;
         if (key && key[0] && cmq_tls_set_key(slots[i], key) != 0)
@@ -103,6 +117,76 @@ int cmq_reload_apply_tls(cmq_tls_config_t **slots, int nslots,
         if (cmq_tls_reload(slots[i]) != 0)
             return -1;
     }
+    return 0;
+}
+
+static int tls_live_dup(const char *fresh, char **out) {
+    if (!fresh || !fresh[0]) {
+        *out = NULL;
+        return 0;
+    }
+    if (!reload_path_ok(fresh))
+        return -1;
+    *out = strdup(fresh);
+    return *out ? 0 : -1;
+}
+
+static int tls_live_take(const char **dst, char *neu) {
+    if (!neu)
+        return 0;
+    if (*dst && strcmp(*dst, neu) == 0) {
+        free(neu);
+        return 0;
+    }
+    free((void *)*dst);
+    *dst = neu;
+    return 0;
+}
+
+int cmq_reload_apply_tls_live(cmq_config_t *live, const cmq_config_t *fresh) {
+    if (!live || !fresh) return -1;
+    char *c0 = NULL, *k0 = NULL, *a0 = NULL;
+    char *c1 = NULL, *k1 = NULL, *a1 = NULL;
+    char *c2 = NULL, *k2 = NULL, *a2 = NULL;
+    char *c3 = NULL, *k3 = NULL, *a3 = NULL;
+    if (tls_live_dup(fresh->tls_cert, &c0) != 0 ||
+        tls_live_dup(fresh->tls_key, &k0) != 0 ||
+        tls_live_dup(fresh->tls_ca, &a0) != 0 ||
+        tls_live_dup(fresh->listeners[1].tls_cert, &c1) != 0 ||
+        tls_live_dup(fresh->listeners[1].tls_key, &k1) != 0 ||
+        tls_live_dup(fresh->listeners[1].tls_ca, &a1) != 0 ||
+        tls_live_dup(fresh->listeners[2].tls_cert, &c2) != 0 ||
+        tls_live_dup(fresh->listeners[2].tls_key, &k2) != 0 ||
+        tls_live_dup(fresh->listeners[2].tls_ca, &a2) != 0 ||
+        tls_live_dup(fresh->listeners[3].tls_cert, &c3) != 0 ||
+        tls_live_dup(fresh->listeners[3].tls_key, &k3) != 0 ||
+        tls_live_dup(fresh->listeners[3].tls_ca, &a3) != 0) {
+        free(c0); free(k0); free(a0);
+        free(c1); free(k1); free(a1);
+        free(c2); free(k2); free(a2);
+        free(c3); free(k3); free(a3);
+        return -1;
+    }
+    tls_live_take(&live->tls_cert, c0);
+    tls_live_take(&live->tls_key, k0);
+    tls_live_take(&live->tls_ca, a0);
+    tls_live_take(&live->listeners[1].tls_cert, c1);
+    tls_live_take(&live->listeners[1].tls_key, k1);
+    tls_live_take(&live->listeners[1].tls_ca, a1);
+    tls_live_take(&live->listeners[2].tls_cert, c2);
+    tls_live_take(&live->listeners[2].tls_key, k2);
+    tls_live_take(&live->listeners[2].tls_ca, a2);
+    tls_live_take(&live->listeners[3].tls_cert, c3);
+    tls_live_take(&live->listeners[3].tls_key, k3);
+    tls_live_take(&live->listeners[3].tls_ca, a3);
+    if (fresh->tls_verify_peer)
+        live->tls_verify_peer = 1;
+    if (fresh->listeners[1].tls_verify_peer)
+        live->listeners[1].tls_verify_peer = 1;
+    if (fresh->listeners[2].tls_verify_peer)
+        live->listeners[2].tls_verify_peer = 1;
+    if (fresh->listeners[3].tls_verify_peer)
+        live->listeners[3].tls_verify_peer = 1;
     return 0;
 }
 
@@ -176,7 +260,7 @@ int cmq_reload_apply_caps(cmq_config_t *live, const cmq_config_t *fresh) {
 }
 
 /* Same fail-closed rules as persist_dir_ok in cmq_config.c. */
-static int config_file_ok(const char *path) {
+static int reload_path_ok(const char *path) {
     if (!path || !path[0]) return 0;
     size_t n = strnlen(path, 512);
     if (n == 0 || n >= 512) return 0;
@@ -209,7 +293,7 @@ int cmq_reload_apply_config_file(const char **live, const char *fresh) {
         return 0;
     if (*live && strcmp(*live, fresh) == 0)
         return 0;
-    if (!config_file_ok(fresh))
+    if (!reload_path_ok(fresh))
         return -1;
     char *owned = strdup(fresh);
     if (!owned)

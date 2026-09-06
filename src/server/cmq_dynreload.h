@@ -14,9 +14,15 @@ int cmq_reload_apply_dynamic(cmq_log_t *log, int *log_level,
                              const cmq_config_t *fresh);
 
 /* Push fresh TLS paths onto live slots and cmq_tls_reload each.
- * Empty/omitted paths leave the slot's current files. nslots 0–4. */
+ * Empty/omitted paths leave the slot's current files. nslots 0–4.
+ * Non-empty `..` / `\` / controls fail closed before any set. */
 int cmq_reload_apply_tls(cmq_tls_config_t **slots, int nslots,
                          const cmq_config_t *fresh);
+
+/* Copy non-empty TLS paths onto the live config. Empty/omitted
+ * keeps the current strings. `..` / `\` fail closed. verify 1
+ * copies; 0 keeps. Same string is a no-op. */
+int cmq_reload_apply_tls_live(cmq_config_t *live, const cmq_config_t *fresh);
 
 /* Copy non-empty auth / JWT / nkey fields onto the live config.
  * Empty/omitted strings and jwt_leeway_sec 0 keep the current
