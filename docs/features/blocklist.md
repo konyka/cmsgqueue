@@ -17,6 +17,9 @@ A new `cmq_blocklist` module loads a file at startup. Format: one IP or CIDR per
 Empty lines and malformed entries are skipped. The blocklist is checked at `accept_cb` after the OS `accept()` returns. Banned IPs are closed immediately.
 
 The blocklist is reloadable at runtime via `cmq_blocklist_reload`. Updates are lock-protected.
+v0.5.149: SIGHUP attaches `blocklist_file` when create had none.
+Omitted / empty keeps off. Unsafe or missing file fail closed.
+An existing handle is still swapped, not remounted.
 
 The module is shipped as a library; the server-c-side wiring is a follow-up. The library API is complete and tested.
 

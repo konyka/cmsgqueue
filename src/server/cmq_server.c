@@ -8849,6 +8849,24 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
                 cmq_blocklist_free(bl);
             }
         }
+    } else if (!server->blocklist_h) {
+        cmq_blocklist_t *bl = NULL;
+        if (cmq_blocklist_reload_attach(&bl, &server->config.blocklist_file,
+                                        fresh.blocklist_file) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+        if (bl) {
+            cmq_rch_t *nh = cmq_rch_new(bl, (cmq_rch_free_fn)cmq_blocklist_free);
+            if (!nh) {
+                cmq_blocklist_free(bl);
+                cmq_config_free(&fresh);
+                return -1;
+            }
+            server->blocklist_h = nh;
+            cmq_log_info(server->log, "Blocklist attached: %s",
+                         server->config.blocklist_file);
+        }
     }
     if (fresh.persist_dir && server->filestore) {
         cmq_log_info(server->log, "Persist dir reload: %s", fresh.persist_dir);

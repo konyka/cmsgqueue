@@ -5,6 +5,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #define CMQ_BLOCKLIST_MAX_ENTRIES 4096
 
@@ -59,6 +60,60 @@ cmq_blocklist_t *cmq_blocklist_load(const char *path) {
     }
     fclose(f);
     return bl;
+}
+
+static int blocklist_path_ok(const char *path) {
+    if (!path || !path[0]) return 0;
+    size_t n = strnlen(path, 512);
+    if (n == 0 || n >= 512) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)path[i];
+        if (c == '\\' || c < 0x20 || c == 0x7f)
+            return 0;
+    }
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && path[i] == '/')
+            i++;
+        if (i >= n)
+            break;
+        size_t start = i;
+        while (i < n && path[i] != '/')
+            i++;
+        size_t len = i - start;
+        if (len == 1 && path[start] == '.')
+            return 0;
+        if (len == 2 && path[start] == '.' && path[start + 1] == '.')
+            return 0;
+    }
+    return 1;
+}
+
+int cmq_blocklist_reload_attach(cmq_blocklist_t **bl,
+                                const char **live_path,
+                                const char *fresh_path) {
+    if (!bl) return -1;
+    if (!fresh_path || !fresh_path[0])
+        return 0;
+    if (!blocklist_path_ok(fresh_path))
+        return -1;
+    if (*bl)
+        return 0;
+    if (access(fresh_path, R_OK) != 0)
+        return -1;
+    cmq_blocklist_t *n = cmq_blocklist_load(fresh_path);
+    if (!n) return -1;
+    if (live_path) {
+        char *owned = strdup(fresh_path);
+        if (!owned) {
+            cmq_blocklist_free(n);
+            return -1;
+        }
+        free((void *)*live_path);
+        *live_path = owned;
+    }
+    *bl = n;
+    return 0;
 }
 
 int cmq_blocklist_reload(cmq_blocklist_t *bl, const char *path) {

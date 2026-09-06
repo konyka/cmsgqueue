@@ -24,6 +24,12 @@ typedef struct cmq_blocklist cmq_blocklist_t;
 cmq_blocklist_t *cmq_blocklist_load(const char *path);
 void cmq_blocklist_free(cmq_blocklist_t *bl);
 int cmq_blocklist_reload(cmq_blocklist_t *bl, const char *path);
+/* v0.5.149: empty/omitted path keeps off. Unsafe / missing
+ * file fail closed. Creates when *bl is NULL. Existing list
+ * is left alone (no remount). */
+int cmq_blocklist_reload_attach(cmq_blocklist_t **bl,
+                                const char **live_path,
+                                const char *fresh_path);
 
 /* Returns 1 if IP is blocked, 0 if admitted. */
 int cmq_blocklist_check(const cmq_blocklist_t *bl, uint32_t ip_be);

@@ -1,0 +1,3 @@
+v0.5.149 bench 1:
+- Attach apply: one file read + rch wrap.
+- Existing handle: one pointer compare, then swap.

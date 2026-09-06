@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.149 - 2026-09-07
+
+### Added
+- **Attach blocklist on reload** — when create had no
+  `blocklist_file`, SIGHUP loads the file into a new
+  refcounted handle. Omitted / empty keeps off. Unsafe or
+  missing path fail closed. An existing handle is still
+  swapped, not remounted.
+
+### Tests
+- `tests/test_bla.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.149.enumeration.md`, `v0.5.149.plan.md`.
+- `docs/features/blocklist.md`.
+- `docs/benchmarks/v05149_{1,2}.txt`.
+
+### Test count
+- 587 tests (was 583 in v0.5.148; +4).
+
 ## 0.5.148 - 2026-09-07
 
 ### Added
