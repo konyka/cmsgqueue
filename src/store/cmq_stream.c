@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <time.h>
+#include <unistd.h>
+#include <errno.h>
 
 #define CMQ_MAX_CONSUMERS 64
 #define CMQ_MAX_NAME 128
@@ -25,6 +27,7 @@ struct cmq_stream {
     size_t max_msgs;
     size_t max_bytes;
     size_t total_bytes;
+    char cursor_path[600]; /* v0.5.56: empty = memory-only */
     cmq_mutex_t lock;
     atomic_int in_flight;
     atomic_int dying;
@@ -43,6 +46,120 @@ static int stream_begin_op(cmq_stream_t *stream) {
 
 static void stream_end_op(cmq_stream_t *stream) {
     atomic_fetch_sub_explicit(&stream->in_flight, 1, memory_order_acq_rel);
+}
+
+static int cursor_token_safe(const char *s) {
+    if (!s || !*s) return 0;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        unsigned char c = *p;
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')
+            continue;
+        return 0;
+    }
+    return 1;
+}
+
+static int cursor_dir_safe(const char *dir) {
+    if (!dir || !dir[0]) return 0;
+    size_t n = strnlen(dir, 512);
+    if (n == 0 || n >= 512) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)dir[i];
+        if (c == '\\' || c < 0x20 || c == 0x7f) return 0;
+    }
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && dir[i] == '/') i++;
+        if (i >= n) break;
+        size_t start = i;
+        while (i < n && dir[i] != '/') i++;
+        size_t len = i - start;
+        if (len == 1 && dir[start] == '.') return 0;
+        if (len == 2 && dir[start] == '.' && dir[start + 1] == '.') return 0;
+    }
+    return 1;
+}
+
+static int cursor_save_locked(cmq_stream_t *stream) {
+    if (!stream || !stream->cursor_path[0]) return 0;
+    char tmp[616];
+    if (snprintf(tmp, sizeof(tmp), "%s.tmp", stream->cursor_path) >=
+        (int)sizeof(tmp))
+        return -1;
+    FILE *fp = fopen(tmp, "wb");
+    if (!fp) return -1;
+    int ok = (fprintf(fp, "CMQC1\n") >= 0);
+    for (size_t i = 0; ok && i < stream->consumer_count; i++) {
+        if (!cursor_token_safe(stream->consumers[i].name))
+            continue;
+        if (fprintf(fp, "%s %llu\n", stream->consumers[i].name,
+                    (unsigned long long)stream->consumers[i].acked_seq) < 0)
+            ok = 0;
+    }
+    if (ok) ok = (fflush(fp) == 0 && fsync(fileno(fp)) == 0);
+    fclose(fp);
+    if (!ok) {
+        unlink(tmp);
+        return -1;
+    }
+    if (rename(tmp, stream->cursor_path) != 0) {
+        unlink(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+static int cursor_load_locked(cmq_stream_t *stream) {
+    if (!stream || !stream->cursor_path[0]) return 0;
+    FILE *fp = fopen(stream->cursor_path, "rb");
+    if (!fp) return 0;
+    char line[196];
+    if (!fgets(line, sizeof(line), fp) || strncmp(line, "CMQC1", 5) != 0) {
+        fclose(fp);
+        return -1;
+    }
+    while (fgets(line, sizeof(line), fp)) {
+        char name[CMQ_MAX_NAME];
+        unsigned long long seq = 0;
+        if (sscanf(line, "%127s %llu", name, &seq) != 2) continue;
+        if (!cursor_token_safe(name)) continue;
+        int found = 0;
+        for (size_t i = 0; i < stream->consumer_count; i++) {
+            if (strcmp(stream->consumers[i].name, name) == 0) {
+                if (seq > stream->consumers[i].acked_seq)
+                    stream->consumers[i].acked_seq = (uint64_t)seq;
+                found = 1;
+                break;
+            }
+        }
+        if (found || stream->consumer_count >= CMQ_MAX_CONSUMERS) continue;
+        cmq_consumer_entry_t *c = &stream->consumers[stream->consumer_count++];
+        snprintf(c->name, sizeof(c->name), "%s", name);
+        c->acked_seq = (uint64_t)seq;
+    }
+    fclose(fp);
+    return 0;
+}
+
+int cmq_stream_set_cursor_path(cmq_stream_t *stream, const char *dir) {
+    if (!stream || !cursor_dir_safe(dir) || !cursor_token_safe(stream->name))
+        return -1;
+    if (stream_begin_op(stream) != 0) return -1;
+    cmq_mutex_lock(&stream->lock);
+    int rc = -1;
+    if (snprintf(stream->cursor_path, sizeof(stream->cursor_path),
+                 "%s/%s.cursors", dir, stream->name) <
+        (int)sizeof(stream->cursor_path)) {
+        rc = cursor_load_locked(stream);
+        if (rc == 0)
+            rc = cursor_save_locked(stream);
+    } else {
+        stream->cursor_path[0] = '\0';
+    }
+    cmq_mutex_unlock(&stream->lock);
+    stream_end_op(stream);
+    return rc;
 }
 
 cmq_stream_t *cmq_stream_create(const char *name, size_t max_msgs, size_t max_bytes) {
@@ -377,7 +494,20 @@ int cmq_stream_read(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out) {
 int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name) {
     if (!stream || !consumer_name) return -1;
     if (stream_begin_op(stream) != 0) return -1;
+    cmq_mutex_lock(&stream->lock);
+    int durable = stream->cursor_path[0] != '\0';
+    cmq_mutex_unlock(&stream->lock);
+    if (durable && !cursor_token_safe(consumer_name)) {
+        stream_end_op(stream);
+        return -1;
+    }
     int rc = stream_add_consumer_impl(stream, consumer_name);
+    if (rc == 0) {
+        cmq_mutex_lock(&stream->lock);
+        if (stream->cursor_path[0])
+            (void)cursor_save_locked(stream);
+        cmq_mutex_unlock(&stream->lock);
+    }
     stream_end_op(stream);
     return rc;
 }
@@ -386,6 +516,12 @@ int cmq_stream_remove_consumer(cmq_stream_t *stream, const char *consumer_name) 
     if (!stream || !consumer_name) return -1;
     if (stream_begin_op(stream) != 0) return -1;
     int rc = stream_remove_consumer_impl(stream, consumer_name);
+    if (rc == 0) {
+        cmq_mutex_lock(&stream->lock);
+        if (stream->cursor_path[0])
+            (void)cursor_save_locked(stream);
+        cmq_mutex_unlock(&stream->lock);
+    }
     stream_end_op(stream);
     return rc;
 }
@@ -413,6 +549,12 @@ int cmq_stream_consumer_ack(cmq_stream_t *stream, const char *consumer_name,
     if (!stream || !consumer_name || seq == 0) return -1;
     if (stream_begin_op(stream) != 0) return -1;
     int rc = stream_consumer_ack_impl(stream, consumer_name, seq);
+    if (rc == 0) {
+        cmq_mutex_lock(&stream->lock);
+        if (stream->cursor_path[0])
+            (void)cursor_save_locked(stream);
+        cmq_mutex_unlock(&stream->lock);
+    }
     stream_end_op(stream);
     return rc;
 }

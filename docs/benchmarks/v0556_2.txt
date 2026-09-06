@@ -1,0 +1,3 @@
+v0.5.56 bench 2:
+- File is {dir}/{name}.cursors; tmp + fsync + rename.
+- Load on set_cursor_path; missing file is empty.

@@ -27,6 +27,10 @@ uint64_t cmq_stream_append(cmq_stream_t *stream, const uint8_t *data, size_t len
 int cmq_stream_read(cmq_stream_t *stream, uint64_t seq, cmq_stream_msg_t *out);
 void cmq_stream_msg_release(cmq_stream_msg_t *msg);
 
+/* v0.5.56: persist consumer acks under dir/{name}.cursors.
+ * Default create does no I/O. Missing file is empty. */
+int cmq_stream_set_cursor_path(cmq_stream_t *stream, const char *dir);
+
 int cmq_stream_add_consumer(cmq_stream_t *stream, const char *consumer_name);
 /* Drop a consumer so a stopped ack watermark cannot pin retention forever. */
 int cmq_stream_remove_consumer(cmq_stream_t *stream, const char *consumer_name);

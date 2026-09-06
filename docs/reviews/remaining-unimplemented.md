@@ -1,9 +1,10 @@
-# Remaining unimplemented work (HEAD after v0.5.55)
+# Remaining unimplemented work (HEAD after v0.5.56)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D6 is v0.5.53. MQTT QoS 1 inflight is
-v0.5.54. D5 phase 1 (idempotent publish) is v0.5.55. Next
-cuts: D1–D4, D5 txns, or leaf/gateway e2e.
+v0.5.54. D5 phase 1 (idempotent publish) is v0.5.55. D4
+phase 1 (durable stream cursors) is v0.5.56. Next cuts:
+D1–D3, D4 KV/object, D5 txns, MQTT QoS 2, or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -18,6 +19,7 @@ cuts: D1–D4, D5 txns, or leaf/gateway e2e.
 | v0.5.53 | D6 Kafka-style key compact on sealed `.1` |
 | v0.5.54 | MQTT QoS 1 outbound inflight + local fanout |
 | v0.5.55 | D5 phase 1: idempotent publish pid+seq window |
+| v0.5.56 | D4 phase 1: durable stream consumer cursors |
 
 ## Deferred — detailed designs
 
@@ -46,12 +48,12 @@ keys in config. CONNECT presents a token; verify off the accept
 hot path (worker). Reject on clock skew / issuer mismatch.
 Do not add a second crypto library.
 
-### D4 JetStream / KV / Object Store (XXL)
+### D4 JetStream / KV / Object Store — phase 1 shipped v0.5.56
 
-`cmq_stream` is a byte ring, not consumers. **Design (phased):**
-(1) durable consumer cursor per stream, (2) KV as a 1-key
-compacted subject, (3) object store last. Needs a partition
-model we do not have. Not a single version.
+In-memory consumers already existed. Durable cursors
+(`cmq_stream_set_cursor_path`) persist ack watermarks.
+**Remaining:** (2) KV as a 1-key compacted subject, (3)
+object store. Needs a partition model we do not have.
 
 ### D5 Exactly-once / transactions — phase 1 shipped v0.5.55
 

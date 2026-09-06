@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.56 - 2026-09-06
+
+### Added
+- **Durable stream consumer cursors (D4 phase 1)** —
+  `cmq_stream_set_cursor_path` persists ack watermarks to
+  `{dir}/{name}.cursors`. Default create does no I/O; append
+  is unchanged. Persist only on add / ack / remove.
+
+### Tests
+- `tests/test_stream_cursors.c` — no-path silent, reopen,
+  isolated, remove, bad dir, unsafe name (+6).
+
+### Documentation
+- `docs/reviews/v0.5.56.enumeration.md`, `v0.5.56.plan.md`.
+- `docs/features/streams.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0556_{1,2}.txt`.
+
+### Test count
+- 205 tests (was 199 in v0.5.55; +6).
+
 ## 0.5.55 - 2026-09-06
 
 ### Added
