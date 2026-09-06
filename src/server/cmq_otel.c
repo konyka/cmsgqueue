@@ -95,6 +95,12 @@ int cmq_otel_offer(cmq_otel_t *o, const uint8_t trace[16], uint8_t kind) {
     }
 }
 
+int cmq_otel_on_consume(cmq_otel_t *o, const uint8_t trace[16], int delivered) {
+    if (!o || !trace) return -1;
+    if (!delivered) return 0;
+    return cmq_otel_offer(o, trace, CMQ_OTEL_KIND_CONSUME);
+}
+
 int cmq_otel_poll(cmq_otel_t *o, cmq_otel_span_t *out) {
     if (!o || !out) return 0;
     uint64_t r = atomic_load_explicit(&o->rpos, memory_order_relaxed);

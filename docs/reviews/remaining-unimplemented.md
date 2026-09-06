@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.88)
+# Remaining unimplemented work (HEAD after v0.5.89)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -50,6 +50,7 @@ Required next cuts: none.
 | v0.5.86 | Leaf/gateway CONNECT/CONNACK e2e |
 | v0.5.87 | D4 partitioned consume cursors |
 | v0.5.88 | D6 tombstone TTL + dirty-ratio compact |
+| v0.5.89 | D1 consume spans |
 
 ## Deferred — detailed designs
 
@@ -57,8 +58,8 @@ Required next cuts: none.
 
 Span ring, sidecar, OTLP/HTTP JSON, OTLP HTTPS POST, and
 OTLP/gRPC (`grpc://`, protobuf Export over HTTP/2) are
-live. Consume spans are queued only when a caller offers
-`KIND_CONSUME`.
+live. A successful local fanout offers one `KIND_CONSUME`
+with the publisher trace (v0.5.89).
 
 ### D2 HTTP/2 listener — phases 1–7 shipped v0.5.66–73, 0.5.81, 0.5.83
 
@@ -109,7 +110,6 @@ are live (v0.5.88).
 | Item | Notes |
 |---|---|
 | D3 token issuing | Intentionally verify-only |
-| D1 consume spans | Only when caller offers `KIND_CONSUME` |
 
 ## TDD rule for every increment
 

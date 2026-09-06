@@ -1,0 +1,3 @@
+v0.5.89 bench 1:
+- Publish still one offer on ingress.
+- Consume: one extra offer only after fanout success.

@@ -1,4 +1,4 @@
-# OpenTelemetry (v0.5.61–64, 0.5.78, 0.5.84, D1 phases 1–4)
+# OpenTelemetry (v0.5.61–64, 0.5.78, 0.5.84, 0.5.89, D1)
 
 `cmq_otel` queues spans on a 256-slot ring. A sidecar thread
 drains them to an export hook. Offer never blocks.
@@ -7,6 +7,11 @@ drains them to an export hook. Offer never blocks.
 
 Trace id (16 bytes), kind (`PUBLISH` / `CONSUME` / `CONNECT`),
 timestamp. No subject, no payload.
+
+`handle_publish` offers `PUBLISH` on the ingress path. After a
+successful local fanout it offers one `CONSUME` with the same
+trace (`cmq_otel_on_consume`). Zero subscribers and failed
+deliver do not queue a consume span.
 
 ## Overflow
 
@@ -33,7 +38,7 @@ No endpoint: the export hook stays NULL.
 ## Tests
 
 `tests/test_otel.c`, `tests/test_otlp.c`, `tests/test_otlps.c`,
-`tests/test_otlpg.c`
+`tests/test_otlpg.c`, `tests/test_otc.c`
 
 ## See also
 
@@ -41,4 +46,5 @@ No endpoint: the export hook stays NULL.
 - `docs/reviews/v0.5.64.enumeration.md`
 - `docs/reviews/v0.5.78.enumeration.md`
 - `docs/reviews/v0.5.84.enumeration.md`
+- `docs/reviews/v0.5.89.enumeration.md`
 - `docs/features/tracing.md`

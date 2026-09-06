@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.89 - 2026-09-06
+
+### Added
+- **Consume spans (D1 follow-up)** — successful local
+  fanout offers one `KIND_CONSUME` with the publisher
+  trace. Zero subscribers and failed deliver skip it.
+
+### Tests
+- `tests/test_otc.c` — delivered, skipped, isolated,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.89.enumeration.md`, `v0.5.89.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v0589_{1,2}.txt`.
+
+### Test count
+- 347 tests (was 343 in v0.5.88; +4).
+
 ## 0.5.88 - 2026-09-06
 
 ### Added

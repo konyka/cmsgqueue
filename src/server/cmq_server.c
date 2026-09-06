@@ -3571,6 +3571,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         } else {
             /* Async accepted or sync-fallback delivered — align BATCH. */
             credit_msgs_in(srv, c, frame);
+            if (srv->otel)
+                (void)cmq_otel_on_consume(srv->otel, c->trace_id, 1);
         }
         goto pub_done;
     }
@@ -3587,6 +3589,8 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_error(c, "delivery failed");
     } else {
         credit_msgs_in(srv, c, frame);
+        if (srv->otel)
+            (void)cmq_otel_on_consume(srv->otel, c->trace_id, 1);
     }
     free(tgts);
 pub_done:
