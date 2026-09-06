@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.119 - 2026-09-06
+
+### Added
+- **Reload auth / JWT / nkey** — `cmq_server_reload`
+  copies non-empty `auth_*`, `jwt_issuer`,
+  `jwt_hmac_secret`, `nkey_pub`, `jwt_ec_pub`, and
+  `jwt_rsa_n` / `jwt_rsa_e` onto the live config.
+  `jwt_leeway_sec` 1–3600 applies. Empty/omitted keys
+  keep the current secrets.
+
+### Tests
+- `tests/test_ath.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.119.enumeration.md`, `v0.5.119.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v05119_{1,2}.txt`.
+
+### Test count
+- 467 tests (was 463 in v0.5.118; +4).
+
 ## 0.5.118 - 2026-09-06
 
 ### Added

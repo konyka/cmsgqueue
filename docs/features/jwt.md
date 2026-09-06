@@ -69,6 +69,16 @@ signature of `CMQNK1|<username>`.
 `cmq_nkey_verify` remains raw Ed25519 (32-byte pub, 64-byte
 sig). JWT wins if both JWT and nkey are configured.
 
+## Reload (v0.5.119)
+
+SIGHUP / `cmq_server_reload` copies non-empty
+`auth_username`, `auth_password`, `jwt_issuer`,
+`jwt_hmac_secret`, `nkey_pub`, `jwt_ec_pub`, and
+`jwt_rsa_n` / `jwt_rsa_e` onto the live config.
+`jwt_leeway_sec` 1–3600 replaces the stored leeway.
+Empty or omitted keys keep the current values.
+JWKS cache and `jwks_url` refresh stay create-time.
+
 ## Performance
 
 No secret / JWKS / EC / RSA / `nkey_pub`: one pointer check on CONNECT.

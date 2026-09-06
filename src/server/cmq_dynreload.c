@@ -106,6 +106,55 @@ int cmq_reload_apply_tls(cmq_tls_config_t **slots, int nslots,
     return 0;
 }
 
+static int auth_dup(const char *fresh, char **out) {
+    if (!fresh || !fresh[0]) {
+        *out = NULL;
+        return 0;
+    }
+    *out = strdup(fresh);
+    return *out ? 0 : -1;
+}
+
+int cmq_reload_apply_auth(cmq_config_t *live, const cmq_config_t *fresh) {
+    if (!live || !fresh) return -1;
+    if (fresh->jwt_leeway_sec < 0 || fresh->jwt_leeway_sec > 3600)
+        return -1;
+
+    char *username = NULL, *password = NULL, *issuer = NULL;
+    char *hmac = NULL, *nkey = NULL, *ec = NULL, *rsan = NULL, *rsae = NULL;
+    if (auth_dup(fresh->auth_username, &username) != 0 ||
+        auth_dup(fresh->auth_password, &password) != 0 ||
+        auth_dup(fresh->jwt_issuer, &issuer) != 0 ||
+        auth_dup(fresh->jwt_hmac_secret, &hmac) != 0 ||
+        auth_dup(fresh->nkey_pub, &nkey) != 0 ||
+        auth_dup(fresh->jwt_ec_pub, &ec) != 0 ||
+        auth_dup(fresh->jwt_rsa_n, &rsan) != 0 ||
+        auth_dup(fresh->jwt_rsa_e, &rsae) != 0) {
+        free(username); free(password); free(issuer); free(hmac);
+        free(nkey); free(ec); free(rsan); free(rsae);
+        return -1;
+    }
+
+#define TAKE(dst, neu) do { \
+        if (neu) { \
+            free((void *)(dst)); \
+            (dst) = neu; \
+        } \
+    } while (0)
+    TAKE(live->auth_username, username);
+    TAKE(live->auth_password, password);
+    TAKE(live->jwt_issuer, issuer);
+    TAKE(live->jwt_hmac_secret, hmac);
+    TAKE(live->nkey_pub, nkey);
+    TAKE(live->jwt_ec_pub, ec);
+    TAKE(live->jwt_rsa_n, rsan);
+    TAKE(live->jwt_rsa_e, rsae);
+#undef TAKE
+    if (fresh->jwt_leeway_sec > 0)
+        live->jwt_leeway_sec = fresh->jwt_leeway_sec;
+    return 0;
+}
+
 void cmq_sighup_note(void) {
     cmq_atomic_store_int(&cmq_sighup_pending, 1, CMQ_ATOMIC_RELEASE);
 }

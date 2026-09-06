@@ -18,6 +18,11 @@ int cmq_reload_apply_dynamic(cmq_log_t *log, int *log_level,
 int cmq_reload_apply_tls(cmq_tls_config_t **slots, int nslots,
                          const cmq_config_t *fresh);
 
+/* Copy non-empty auth / JWT / nkey fields onto the live config.
+ * Empty/omitted strings and jwt_leeway_sec 0 keep the current
+ * values. jwt_leeway_sec must be 0–3600. All-or-nothing. */
+int cmq_reload_apply_auth(cmq_config_t *live, const cmq_config_t *fresh);
+
 /* Async-signal-safe SIGHUP latch. note() from the handler; take()
  * from the event loop. */
 void cmq_sighup_note(void);

@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.118)
+# Remaining unimplemented work (HEAD after v0.5.119)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -80,6 +80,7 @@ Required next cuts: none.
 | v0.5.116 | reload log_level and acl_deny |
 | v0.5.117 | reload TLS cert/key |
 | v0.5.118 | SIGHUP / config_file |
+| v0.5.119 | reload auth / JWT / nkey |
 
 ## Deferred — detailed designs
 
@@ -180,13 +181,16 @@ are live (v0.5.88).
 | reload log_level and acl_deny | shipped v0.5.116 | — |
 | reload TLS cert/key | shipped v0.5.117 | — |
 | SIGHUP / config_file | shipped v0.5.118 | — |
+| reload auth / JWT / nkey | shipped v0.5.119 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
 
 - Slot 0 TLS stays the legacy `tls_*` keys. Extra-listener
   host/port shipped v0.5.115 (omit = `127.0.0.1:port+li`).
-  `config_file` / SIGHUP shipped v0.5.118.
+  `config_file` / SIGHUP shipped v0.5.118. Auth / JWT /
+  nkey reload shipped v0.5.119 (JWKS cache still
+  create-time).
 
 ## TDD rule for every increment
 
