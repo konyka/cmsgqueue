@@ -36,6 +36,11 @@ int cmq_otlp_reload_ca(cmq_otlp_url_t *url, const char **live_ca,
  * Does not POST. Exporter start stays create-time. */
 int cmq_otlp_reload_url(cmq_otlp_url_t *url, const char **live_ep,
                         const char *fresh_ep);
+/* v0.5.139: empty/omitted keeps. Bad URL fails closed.
+ * Allocates a live exporter when *url is NULL. Existing
+ * exporter is left alone (reload_url already applied).
+ * Does not POST. */
+int cmq_otlp_reload_attach(cmq_otlp_url_t **url, const char *fresh_ep);
 /* Bytes written (no NUL); -1 on error. */
 int cmq_otlp_encode_json(const cmq_otel_span_t *spans, size_t n,
                          char *out, size_t out_len);

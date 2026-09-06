@@ -1,0 +1,3 @@
+v0.5.139 bench 1:
+- Attach apply: parse + calloc of url struct. No POST.
+- Existing exporter: one NULL check, no alloc.

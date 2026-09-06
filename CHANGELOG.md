@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.139 - 2026-09-06
+
+### Added
+- **Attach OTLP exporter on reload** — when create had no
+  `otlp_endpoint`, SIGHUP allocates the live URL and hooks
+  `cmq_otlp_export`. Omitted / empty keeps off. A bad URL
+  fails closed. An existing exporter is left to v0.5.138.
+  Does not POST.
+
+### Tests
+- `tests/test_ota.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.139.enumeration.md`, `v0.5.139.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v05139_{1,2}.txt`.
+
+### Test count
+- 547 tests (was 543 in v0.5.138; +4).
+
 ## 0.5.138 - 2026-09-06
 
 ### Added

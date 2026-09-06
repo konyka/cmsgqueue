@@ -47,7 +47,10 @@ exporter URL. Omitted / empty keeps the current path.
 v0.5.138: reload applies a non-empty `otlp_endpoint` to the
 live exporter (host/path/port/tls/grpc). Omitted / empty
 keeps the current URL. A bad URL fails closed. CA is
-preserved. Does not POST. Exporter start stays create-time.
+preserved. Does not POST.
+v0.5.139: reload attaches an exporter when create had none
+(`cmq_otlp_reload_attach` + `cmq_otel_set_export`). Existing
+exporters are left to v0.5.138. Does not POST.
 
 HTTP/TLS failures are ignored. The ring never waits on I/O.
 No endpoint: the export hook stays NULL.
@@ -57,7 +60,7 @@ No endpoint: the export hook stays NULL.
 `tests/test_otel.c`, `tests/test_otlp.c`, `tests/test_otlps.c`,
 `tests/test_otlpg.c`, `tests/test_otc.c`, `tests/test_otn.c`,
 `tests/test_otr.c`, `tests/test_ots.c`, `tests/test_otd.c`,
-`tests/test_oca.c`, `tests/test_oeu.c`
+`tests/test_oca.c`, `tests/test_oeu.c`, `tests/test_ota.c`
 
 ## See also
 

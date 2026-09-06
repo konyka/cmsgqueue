@@ -8991,6 +8991,16 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    {
+        int had_otlp = server->otlp != NULL;
+        if (cmq_otlp_reload_attach((cmq_otlp_url_t **)&server->otlp,
+                                   fresh.otlp_endpoint) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+        if (!had_otlp && server->otlp && server->otel)
+            cmq_otel_set_export(server->otel, cmq_otlp_export, server->otlp);
+    }
     if (cmq_otlp_reload_ca((cmq_otlp_url_t *)server->otlp,
                            &server->config.otlp_ca, fresh.otlp_ca) != 0) {
         cmq_config_free(&fresh);

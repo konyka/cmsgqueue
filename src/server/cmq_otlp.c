@@ -94,6 +94,24 @@ int cmq_otlp_reload_url(cmq_otlp_url_t *url, const char **live_ep,
     return 0;
 }
 
+int cmq_otlp_reload_attach(cmq_otlp_url_t **url, const char *fresh_ep) {
+    if (!url)
+        return -1;
+    if (!fresh_ep || !fresh_ep[0])
+        return 0;
+    if (*url)
+        return 0;
+    cmq_otlp_url_t tmp;
+    if (cmq_otlp_parse_url(fresh_ep, &tmp) != 0)
+        return -1;
+    cmq_otlp_url_t *u = calloc(1, sizeof(*u));
+    if (!u)
+        return -1;
+    *u = tmp;
+    *url = u;
+    return 0;
+}
+
 int cmq_otlp_parse_url(const char *url, cmq_otlp_url_t *out) {
     if (!url || !out) return -1;
     memset(out, 0, sizeof(*out));
