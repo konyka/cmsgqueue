@@ -1,0 +1,3 @@
+v0.5.138 bench 2:
+- Reload omitted: no store.
+- Reject ftp:// and path .. : no store; live URL stays.

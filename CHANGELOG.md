@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.138 - 2026-09-06
+
+### Added
+- **Reload `otlp_endpoint`** — `cmq_server_reload` parses a
+  non-empty URL onto the live OTLP exporter. Host / path /
+  port / tls / grpc update; CA is preserved. Omitted /
+  empty keeps the current URL. A bad URL fails closed.
+  Does not POST. Exporter start stays create-time.
+
+### Tests
+- `tests/test_oeu.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.138.enumeration.md`, `v0.5.138.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v05138_{1,2}.txt`.
+
+### Test count
+- 543 tests (was 539 in v0.5.137; +4).
+
 ## 0.5.137 - 2026-09-06
 
 ### Added

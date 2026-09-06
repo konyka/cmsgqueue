@@ -1,0 +1,3 @@
+v0.5.138 bench 1:
+- Reload apply: parse + copy of url (host/path/port/tls/grpc).
+- CA bytes memcpy from live slot; no POST.

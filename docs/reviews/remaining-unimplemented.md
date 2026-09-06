@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.137)
+# Remaining unimplemented work (HEAD after v0.5.138)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -99,6 +99,7 @@ Required next cuts: none.
 | v0.5.135 | reload otlp_ca |
 | v0.5.136 | reload MQTT bridge addr/port |
 | v0.5.137 | reload jwks_url |
+| v0.5.138 | reload otlp_endpoint |
 
 ## Deferred — detailed designs
 
@@ -218,6 +219,7 @@ are live (v0.5.88).
 | reload otlp_ca | shipped v0.5.135 | — |
 | reload MQTT bridge addr/port | shipped v0.5.136 | — |
 | reload jwks_url | shipped v0.5.137 | — |
+| reload otlp_endpoint | shipped v0.5.138 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -226,8 +228,7 @@ are live (v0.5.88).
   host/port shipped v0.5.115 (omit = `127.0.0.1:port+li`).
   `config_file` / SIGHUP shipped v0.5.118. Auth / JWT /
   nkey reload shipped v0.5.119. Static `jwks_json` cache
-  reload shipped v0.5.120 (`jwks_url` refresh stays
-  create-time). `persist_sync_interval_ms` reload shipped
+  reload shipped v0.5.120. `persist_sync_interval_ms` reload shipped
   v0.5.121. Live rate / timeout scalars shipped v0.5.122.
   Payload / sub / client caps shipped v0.5.123. F14
   quota / N1 subject RL reload shipped v0.5.124.
@@ -238,15 +239,16 @@ are live (v0.5.88).
   `log_to_stdout` defaults to 1 (v0.5.128). Audit file
   from `persist_dir` shipped v0.5.129. `$JS` partitions /
   rotate reload shipped v0.5.130. `jwks_refresh_sec`
-  interval reload shipped v0.5.131 (`jwks_url` fetch
-  stays create-time). Empty `host` is NULL / IPv4 only
+  interval reload shipped v0.5.131. Empty `host` is NULL / IPv4 only
   (v0.5.132). Empty `log_file` / slot-0 TLS store NULL
   (v0.5.133). `jwks_ca` reload shipped v0.5.134.
   `otlp_ca` reload shipped v0.5.135. MQTT addr/port
   reload shipped v0.5.136. `jwks_url` apply on a live
   sidecar shipped v0.5.137 (first GET / start stays
-  create-time). Create-time only: JWKS sidecar start,
-  OTLP endpoint, `persist_dir` remount, `h2_port` rebind.
+  create-time). `otlp_endpoint` apply on a live exporter
+  shipped v0.5.138 (start stays create-time). Create-time
+  only: JWKS sidecar start, OTLP exporter start,
+  `persist_dir` remount, `h2_port` rebind.
 
 ## TDD rule for every increment
 

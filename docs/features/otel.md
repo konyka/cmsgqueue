@@ -43,7 +43,11 @@ optional PEM; otherwise the system CA store is used.
 HTTP endpoints skip the handshake.
 v0.5.135: reload applies a non-empty `otlp_ca` to the live
 exporter URL. Omitted / empty keeps the current path.
-`..` fails closed. The endpoint URL stays create-time.
+`..` fails closed.
+v0.5.138: reload applies a non-empty `otlp_endpoint` to the
+live exporter (host/path/port/tls/grpc). Omitted / empty
+keeps the current URL. A bad URL fails closed. CA is
+preserved. Does not POST. Exporter start stays create-time.
 
 HTTP/TLS failures are ignored. The ring never waits on I/O.
 No endpoint: the export hook stays NULL.
@@ -52,7 +56,8 @@ No endpoint: the export hook stays NULL.
 
 `tests/test_otel.c`, `tests/test_otlp.c`, `tests/test_otlps.c`,
 `tests/test_otlpg.c`, `tests/test_otc.c`, `tests/test_otn.c`,
-`tests/test_otr.c`, `tests/test_ots.c`, `tests/test_otd.c`
+`tests/test_otr.c`, `tests/test_ots.c`, `tests/test_otd.c`,
+`tests/test_oca.c`, `tests/test_oeu.c`
 
 ## See also
 
