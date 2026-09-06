@@ -61,7 +61,7 @@ typedef struct cmq_server cmq_server_t;
  * Zero-initialize and set fields as needed.
  */
 typedef struct cmq_config {
-    const char *host;              /* Bind host (default: "0.0.0.0") */
+    const char *host;              /* Bind host; NULL/empty = 0.0.0.0 */
     int port;                      /* Bind port (default: 7654) */
     int num_threads;               /* Worker threads (default: auto) */
     int max_clients;               /* Max concurrent clients */

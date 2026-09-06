@@ -246,6 +246,16 @@ static int parse_int_range(const char *value, int min, int max, int *out) {
 
 static int parse_key_value(const char *key, const char *value, cmq_config_t *config) {
     if (strcmp(key, "host") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->host);
+            config->host = NULL;
+            return 0;
+        }
+        {
+            struct in_addr ha;
+            if (inet_pton(AF_INET, value, &ha) != 1)
+                return -1;
+        }
         return cfg_set_str(&config->host, value);
     } else if (strcmp(key, "port") == 0) {
         return parse_int_range(value, 0, 65535, &config->port);

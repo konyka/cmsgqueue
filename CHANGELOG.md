@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.132 - 2026-09-06
+
+### Added
+- **Empty `host` is NULL / IPv4 only** — load stores
+  NULL for an omitted or empty `host` so create binds
+  `0.0.0.0`. Non-IPv4 values fail closed at load, same
+  as extra-listener hosts.
+
+### Tests
+- `tests/test_hst.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.132.enumeration.md`, `v0.5.132.plan.md`.
+- `docs/benchmarks/v05132_{1,2}.txt`.
+
+### Test count
+- 519 tests (was 515 in v0.5.131; +4).
+
 ## 0.5.131 - 2026-09-06
 
 ### Added
