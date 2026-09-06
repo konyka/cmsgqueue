@@ -380,7 +380,7 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         return CMQ_ERR_INVALID_ARG;
     if (config->nkey_pub && config->nkey_pub[0]) {
         uint8_t pub[32];
-        if (cmq_nkey_hex_decode(config->nkey_pub, pub, 32) != 0)
+        if (cmq_nkey_pub_decode(config->nkey_pub, pub) != 0)
             return CMQ_ERR_INVALID_ARG;
     }
     if (config->otlp_endpoint && config->otlp_endpoint[0]) {

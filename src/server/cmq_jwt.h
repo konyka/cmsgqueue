@@ -63,6 +63,13 @@ int cmq_nkey_hex_decode(const char *hex, uint8_t *out, size_t out_len);
 /* Password is 128 hex chars over message CMQNK1|<user>. */
 int cmq_nkey_verify_user(const uint8_t pub[CMQ_NKEY_PUB_LEN],
                          const char *user, const char *sig_hex);
+/* NATS nkey: 64 hex or U… public; SU… seed. */
+int cmq_nkey_pub_decode(const char *s, uint8_t pub[CMQ_NKEY_PUB_LEN]);
+int cmq_nkey_pub_encode(const uint8_t pub[CMQ_NKEY_PUB_LEN], char *out,
+                        size_t cap);
+int cmq_nkey_seed_decode(const char *s, uint8_t seed[CMQ_NKEY_PUB_LEN]);
+int cmq_nkey_seed_to_pub(const uint8_t seed[CMQ_NKEY_PUB_LEN],
+                         uint8_t pub[CMQ_NKEY_PUB_LEN]);
 
 #ifdef __cplusplus
 }

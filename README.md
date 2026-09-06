@@ -36,7 +36,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Object store (v0.5.59–70)**: named blobs; `$OBJ.<name>` PUBLISH + REQUEST-get when persist_dir is set
 - **Transactions (v0.5.60)**: `CMQT` begin/add/commit/abort coordinator (D5 phase 2)
 - **OTel / OTLP (v0.5.61–64)**: lock-free 256-slot sidecar; OTLP/HTTP JSON POST when `otlp_endpoint` is set (D1 phases 1–2)
-- **JWT / NKEY / JWKS (v0.5.62–65, 0.5.74)**: HS256 / ES256 JWT on CONNECT; Ed25519 nkey of `CMQNK1|<user>`; JWKS oct/EC `kid` cache (D3 phases 1–4)
+- **JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–75)**: HS256 / ES256 JWT on CONNECT; Ed25519 nkey of `CMQNK1|<user>` (`nkey_pub` is 64 hex or NATS `U…`); JWKS oct/EC `kid` cache (D3 phases 1–5)
 - **HTTP/2 (v0.5.66–73)**: HPACK static + Huffman + 4 KiB dynamic table + preface/SETTINGS/32-stream machine + loopback prior-knowledge listener (D2 phases 1–5; no `h2` advertise)
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback

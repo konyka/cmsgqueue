@@ -439,3 +439,129 @@ int cmq_nkey_verify_user(const uint8_t pub[CMQ_NKEY_PUB_LEN],
     if (n < 0 || (size_t)n >= sizeof(msg)) return -1;
     return cmq_nkey_verify(pub, (const uint8_t *)msg, (size_t)n, sig);
 }
+
+#define CMQ_NKEY_PFX_USER ((uint8_t)(20u << 3))
+#define CMQ_NKEY_PFX_SEED ((uint8_t)(18u << 3))
+
+static uint16_t nkey_crc16(const uint8_t *data, size_t n) {
+    uint16_t crc = 0;
+    for (size_t i = 0; i < n; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (int b = 0; b < 8; b++)
+            crc = (crc & 0x8000u)
+                      ? (uint16_t)((crc << 1) ^ 0x1021u)
+                      : (uint16_t)(crc << 1);
+    }
+    return crc;
+}
+
+static int nkey_b32_val(int c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a';
+    if (c >= '2' && c <= '7') return c - '2' + 26;
+    return -1;
+}
+
+static int nkey_b32_decode(const char *in, uint8_t *out, size_t cap,
+                           size_t *out_len) {
+    if (!in || !out || !out_len) return -1;
+    size_t n = strnlen(in, 80);
+    if (n < 8 || n > 64) return -1;
+    unsigned acc = 0;
+    int bits = 0;
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        int v = nkey_b32_val((unsigned char)in[i]);
+        if (v < 0) return -1;
+        acc = (acc << 5) | (unsigned)v;
+        bits += 5;
+        if (bits >= 8) {
+            bits -= 8;
+            if (o >= cap) return -1;
+            out[o++] = (uint8_t)((acc >> bits) & 0xff);
+        }
+    }
+    *out_len = o;
+    return 0;
+}
+
+static int nkey_b32_encode(const uint8_t *in, size_t in_len, char *out,
+                           size_t cap) {
+    static const char t[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    if (!in || !out || in_len == 0 || cap == 0) return -1;
+    unsigned acc = 0;
+    int bits = 0;
+    size_t o = 0;
+    for (size_t i = 0; i < in_len; i++) {
+        acc = (acc << 8) | in[i];
+        bits += 8;
+        while (bits >= 5) {
+            bits -= 5;
+            if (o + 1 >= cap) return -1;
+            out[o++] = t[(acc >> bits) & 31];
+        }
+    }
+    if (bits > 0) {
+        if (o + 1 >= cap) return -1;
+        out[o++] = t[(acc << (5 - bits)) & 31];
+    }
+    out[o] = '\0';
+    return 0;
+}
+
+int cmq_nkey_pub_encode(const uint8_t pub[CMQ_NKEY_PUB_LEN], char *out,
+                        size_t cap) {
+    if (!pub || !out) return -1;
+    uint8_t raw[35];
+    raw[0] = CMQ_NKEY_PFX_USER;
+    memcpy(raw + 1, pub, CMQ_NKEY_PUB_LEN);
+    uint16_t crc = nkey_crc16(raw, 33);
+    raw[33] = (uint8_t)(crc & 0xff);
+    raw[34] = (uint8_t)(crc >> 8);
+    return nkey_b32_encode(raw, sizeof(raw), out, cap);
+}
+
+int cmq_nkey_pub_decode(const char *s, uint8_t pub[CMQ_NKEY_PUB_LEN]) {
+    if (!s || !pub) return -1;
+    size_t n = strnlen(s, 80);
+    if (n == 64) return cmq_nkey_hex_decode(s, pub, CMQ_NKEY_PUB_LEN);
+    uint8_t raw[40];
+    size_t rn = 0;
+    if (nkey_b32_decode(s, raw, sizeof(raw), &rn) != 0 || rn != 35)
+        return -1;
+    uint16_t got = (uint16_t)raw[33] | ((uint16_t)raw[34] << 8);
+    if (nkey_crc16(raw, 33) != got) return -1;
+    if (raw[0] != CMQ_NKEY_PFX_USER) return -1;
+    memcpy(pub, raw + 1, CMQ_NKEY_PUB_LEN);
+    return 0;
+}
+
+int cmq_nkey_seed_decode(const char *s, uint8_t seed[CMQ_NKEY_PUB_LEN]) {
+    if (!s || !seed) return -1;
+    uint8_t raw[40];
+    size_t rn = 0;
+    if (nkey_b32_decode(s, raw, sizeof(raw), &rn) != 0 || rn != 36)
+        return -1;
+    uint16_t got = (uint16_t)raw[34] | ((uint16_t)raw[35] << 8);
+    if (nkey_crc16(raw, 34) != got) return -1;
+    uint8_t b1 = (uint8_t)(raw[0] & 248u);
+    uint8_t role = (uint8_t)(((raw[0] & 7u) << 5) | ((raw[1] & 248u) >> 3));
+    if (b1 != CMQ_NKEY_PFX_SEED || role != CMQ_NKEY_PFX_USER) return -1;
+    memcpy(seed, raw + 2, CMQ_NKEY_PUB_LEN);
+    return 0;
+}
+
+int cmq_nkey_seed_to_pub(const uint8_t seed[CMQ_NKEY_PUB_LEN],
+                         uint8_t pub[CMQ_NKEY_PUB_LEN]) {
+    if (!seed || !pub) return -1;
+    EVP_PKEY *pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, seed,
+                                                  CMQ_NKEY_PUB_LEN);
+    if (!pkey) return -1;
+    size_t n = CMQ_NKEY_PUB_LEN;
+    int rc = EVP_PKEY_get_raw_public_key(pkey, pub, &n) == 1 &&
+                     n == CMQ_NKEY_PUB_LEN
+                 ? 0
+                 : -1;
+    EVP_PKEY_free(pkey);
+    return rc;
+}

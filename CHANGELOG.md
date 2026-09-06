@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.75 - 2026-09-06
+
+### Added
+- **nkey seed / base32 (D3 phase 5)** — NATS `U…` publics and
+  `SU…` seeds. `nkey_pub` accepts 64 hex or a user public.
+  CONNECT password stays 128 hex. CRC-16/XMODEM checked.
+
+### Tests
+- `tests/test_nkeyb32.c` — U/SU vectors, seed→pub, hex,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.75.enumeration.md`, `v0.5.75.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v0575_{1,2}.txt`.
+
+### Test count
+- 291 tests (was 287 in v0.5.74; +4).
+
 ## 0.5.74 - 2026-09-06
 
 ### Added

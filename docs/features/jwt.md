@@ -30,18 +30,20 @@ be ES256 on this path (no HS256 confusion).
 tokens with `kid` select that key. Unknown `kid` fails.
 Missing `kid` may use `jwt_hmac_secret` or `jwt_ec_pub`.
 
-HTTP JWKS fetch, RSA, and nkey seed/base32 stay deferred.
+HTTP JWKS fetch and RSA stay deferred.
 
 ## NKEY on CONNECT (v0.5.63)
 
-When `nkey_pub` is set (64 hex chars) and JWT is not,
-CONNECT username is required and the password is 128 hex
-chars: Ed25519 signature of `CMQNK1|<username>`.
+When `nkey_pub` is set and JWT is not, CONNECT username is
+required and the password is 128 hex chars: Ed25519
+signature of `CMQNK1|<username>`.
+
+`nkey_pub` is 64 hex chars **or** a NATS `U…` user public
+(v0.5.75). `cmq_nkey_seed_decode` accepts `SU…` seeds
+(derive pub only; the server does not store seeds).
 
 `cmq_nkey_verify` remains raw Ed25519 (32-byte pub, 64-byte
 sig). JWT wins if both JWT and nkey are configured.
-
-Seed / base32 nkey codec stays deferred.
 
 ## Performance
 
@@ -52,7 +54,7 @@ JWKS is parsed once at create; lookup is ≤8 compares.
 ## Tests
 
 `tests/test_jwt.c`, `tests/test_nkey_auth.c`, `tests/test_jwks.c`,
-`tests/test_es256.c`
+`tests/test_es256.c`, `tests/test_nkeyb32.c`
 
 ## See also
 
@@ -60,3 +62,4 @@ JWKS is parsed once at create; lookup is ≤8 compares.
 - `docs/reviews/v0.5.63.enumeration.md`
 - `docs/reviews/v0.5.65.enumeration.md`
 - `docs/reviews/v0.5.74.enumeration.md`
+- `docs/reviews/v0.5.75.enumeration.md`

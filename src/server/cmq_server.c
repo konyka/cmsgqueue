@@ -5100,8 +5100,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             }
             if (nkey_mode && !malformed) {
                 uint8_t npub[CMQ_NKEY_PUB_LEN];
-                if (cmq_nkey_hex_decode(srv->config.nkey_pub, npub,
-                                        CMQ_NKEY_PUB_LEN) != 0 ||
+                if (cmq_nkey_pub_decode(srv->config.nkey_pub, npub) != 0 ||
                     cmq_nkey_verify_user(npub, uname, passwd) != 0)
                     nkey_fail = 1;
             }

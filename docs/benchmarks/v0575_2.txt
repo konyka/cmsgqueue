@@ -1,0 +1,3 @@
+v0.5.75 bench 2:
+- Seed decode is test/helper only; CONNECT never stores SU… seeds.
+- Public encode is not on the CONNECT hot path.
