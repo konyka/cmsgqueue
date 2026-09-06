@@ -32,6 +32,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Idempotent publish (v0.5.55)**: `CMQI`+pid+seq sliding window drops retries before WAL (D5 phase 1)
 - **Durable stream cursors (v0.5.56)**: opt-in `{dir}/{name}.cursors` ack watermarks (D4 phase 1; append path unchanged)
 - **MQTT QoS 2 outbound (v0.5.57)**: grant 2; PUBLISH/PUBREC/PUBREL/PUBCOMP on the 16-slot window
+- **KV store (v0.5.58)**: last-value put/get/del; optional `CMQK` WAL persist (D4 phase 2)
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
 - **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability

@@ -102,6 +102,7 @@ set(CMQ_STORE_SOURCES
     src/store/cmq_store.c
     src/store/cmq_stream.c
     src/store/cmq_filestore.c
+    src/store/cmq_kv.c
 )
 
 set(CMQ_CLUSTER_SOURCES

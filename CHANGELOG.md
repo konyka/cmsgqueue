@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.58 - 2026-09-06
+
+### Added
+- **KV last-value store (D4 phase 2)** — `cmq_kv` put/get/del
+  on a fixed table. Opt-in persist uses `CMQK` on a live WAL.
+  Delete is a tombstone. Default create does no I/O.
+
+### Tests
+- `tests/test_kv.c` — overwrite, del/isolate, no-path, reopen,
+  tombstone, unsafe/full (+6).
+
+### Documentation
+- `docs/reviews/v0.5.58.enumeration.md`, `v0.5.58.plan.md`.
+- `docs/features/kv.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0558_{1,2}.txt`.
+
+### Test count
+- 217 tests (was 211 in v0.5.57; +6).
+
 ## 0.5.57 - 2026-09-06
 
 ### Added

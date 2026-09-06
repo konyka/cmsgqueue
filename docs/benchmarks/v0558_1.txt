@@ -1,0 +1,3 @@
+v0.5.58 bench 1:
+- Memory-only put/get: mutex + linear probe of <=256 slots.
+- No I/O unless set_persist is called.
