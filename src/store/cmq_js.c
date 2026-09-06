@@ -48,6 +48,52 @@ int cmq_js_parse(const char *subject, char *name, size_t ncap) {
     return 0;
 }
 
+int cmq_js_parse_cons(const char *subject, char *name, size_t ncap,
+                      char *cons, size_t ccap) {
+    if (!subject) return -1;
+    if (subject[0] != '$') return -1;
+    if (strncmp(subject, CMQ_JS_PREFIX, 4) != 0) return -1;
+    const char *rest = subject + 4;
+    if (!rest[0]) return -2;
+    const char *dot = strchr(rest, '.');
+    if (!dot || !dot[1] || strchr(dot + 1, '.')) return -2;
+    size_t nlen = (size_t)(dot - rest);
+    size_t clen = strlen(dot + 1);
+    if (!name_ok(rest, nlen) || !name_ok(dot + 1, clen)) return -2;
+    if (name && ncap) {
+        if (nlen >= ncap) return -2;
+        memcpy(name, rest, nlen);
+        name[nlen] = '\0';
+    }
+    if (cons && ccap) {
+        if (clen >= ccap) return -2;
+        memcpy(cons, dot + 1, clen + 1);
+    }
+    return 0;
+}
+
+static void js_put_be64(uint8_t *p, uint64_t v) {
+    for (int i = 7; i >= 0; i--) {
+        p[i] = (uint8_t)v;
+        v >>= 8;
+    }
+}
+
+static uint64_t js_get_be64(const uint8_t *p) {
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++)
+        v = (v << 8) | p[i];
+    return v;
+}
+
+static cmq_stream_t *js_find(cmq_js_t *j, const char *name) {
+    for (int i = 0; i < j->n; i++) {
+        if (strcmp(j->slots[i].name, name) == 0)
+            return j->slots[i].st;
+    }
+    return NULL;
+}
+
 cmq_js_t *cmq_js_create(void) {
     cmq_js_t *j = calloc(1, sizeof(*j));
     if (!j) return NULL;
@@ -108,16 +154,30 @@ int cmq_js_publish(cmq_js_t *j, const char *subject,
     char name[CMQ_JS_NAME_MAX];
     int pr = cmq_js_parse(subject, name, sizeof(name));
     if (pr == -1) return 0;
-    if (pr != 0) return -1;
-    if (len == 0 || !val) return -1;
+    if (pr == 0) {
+        if (len == 0 || !val) return -1;
+        cmq_mutex_lock(&j->lock);
+        cmq_stream_t *st = js_get_or_create(j, name);
+        int rc;
+        if (!st)
+            rc = -2;
+        else if (cmq_stream_append(st, val, len) == 0)
+            rc = -1;
+        else
+            rc = 1;
+        cmq_mutex_unlock(&j->lock);
+        return rc;
+    }
+    char cons[CMQ_JS_NAME_MAX];
+    if (cmq_js_parse_cons(subject, name, sizeof(name), cons, sizeof(cons)) != 0)
+        return -1;
+    if (!val || len != 8) return -1;
+    uint64_t seq = js_get_be64(val);
+    if (seq == 0) return -1;
     cmq_mutex_lock(&j->lock);
-    cmq_stream_t *st = js_get_or_create(j, name);
-    int rc;
-    if (!st)
-        rc = -2;
-    else if (cmq_stream_append(st, val, len) == 0)
-        rc = -1;
-    else
+    cmq_stream_t *st = js_find(j, name);
+    int rc = -1;
+    if (st && cmq_stream_consumer_ack(st, cons, seq) == 0)
         rc = 1;
     cmq_mutex_unlock(&j->lock);
     return rc;
@@ -171,4 +231,34 @@ int cmq_js_request(cmq_js_t *j, const char *subject, uint8_t *out,
         return 1;
     *out_len = 0;
     return 0;
+}
+
+int cmq_js_consume(cmq_js_t *j, const char *subject, uint8_t *out,
+                   size_t out_sz, size_t *out_len) {
+    if (!out_len) return -1;
+    *out_len = 0;
+    if (!j || !subject || !out) return -1;
+    char name[CMQ_JS_NAME_MAX], cons[CMQ_JS_NAME_MAX];
+    if (cmq_js_parse_cons(subject, name, sizeof(name), cons, sizeof(cons)) != 0)
+        return -1;
+    cmq_mutex_lock(&j->lock);
+    cmq_stream_t *st = js_find(j, name);
+    int rc = 0;
+    if (st && cmq_stream_add_consumer(st, cons) == 0) {
+        uint64_t seq = cmq_stream_consumer_next(st, cons);
+        cmq_stream_msg_t msg;
+        memset(&msg, 0, sizeof(msg));
+        if (seq > 0 && cmq_stream_read(st, seq, &msg) == 0) {
+            if (8 + msg.len <= out_sz) {
+                js_put_be64(out, seq);
+                if (msg.len)
+                    memcpy(out + 8, msg.data, msg.len);
+                *out_len = 8 + msg.len;
+                rc = 1;
+            }
+            cmq_stream_msg_release(&msg);
+        }
+    }
+    cmq_mutex_unlock(&j->lock);
+    return rc;
 }

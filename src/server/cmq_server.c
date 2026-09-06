@@ -4326,6 +4326,9 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                 }
             }
             hit = cmq_js_request(srv->js, subject, big, CMQ_JS_VAL_MAX, &vn);
+            if (hit < 0)
+                hit = cmq_js_consume(srv->js, subject, big, CMQ_JS_VAL_MAX,
+                                     &vn);
             obuf = big;
         }
         if (hit >= 0) {

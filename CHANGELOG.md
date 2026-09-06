@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.95 - 2026-09-06
+
+### Added
+- **Stream consume / ack (D4 follow-up)** — REQUEST
+  `$JS.<name>.<consumer>` pulls the next seq (8-byte BE
+  prefix). PUBLISH with that seq acks. `$JS.<name>`
+  append / get-last unchanged.
+
+### Tests
+- `tests/test_jsc.c` — consume+ack, isolate, miss,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.95.enumeration.md`, `v0.5.95.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v0595_{1,2}.txt`.
+
+### Test count
+- 371 tests (was 367 in v0.5.94; +4).
+
 ## 0.5.94 - 2026-09-06
 
 ### Added

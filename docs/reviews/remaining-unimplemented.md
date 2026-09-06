@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.94)
+# Remaining unimplemented work (HEAD after v0.5.95)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -56,6 +56,7 @@ Required next cuts: none.
 | v0.5.92 | D1 connect spans |
 | v0.5.93 | D4 `$JS.<name>` stream PUBLISH path |
 | v0.5.94 | D4 `$JS.<name>` REQUEST-get |
+| v0.5.95 | D4 `$JS.<name>.<consumer>` consume / ack |
 
 ## Deferred — detailed designs
 
@@ -87,9 +88,9 @@ HTTP/HTTPS `jwks_url` fetch, and periodic refresh
 
 Durable cursors, KV last-value, named objects,
 `$KV.<bucket>.<key>` / `$OBJ.<name>` / `$JS.<name>` PUBLISH
-and REQUEST-get, and partitioned consume cursors (1–16,
-`append_key` / `next_part` / `ack_part`, `CMQC2`) are live.
-Stream consume/ack stays library-only.
+and REQUEST-get, `$JS.<name>.<consumer>` pull consume / ack,
+and partitioned consume cursors (1–16, `append_key` /
+`next_part` / `ack_part`, `CMQC2`) are live.
 
 ### D5 Exactly-once / transactions — phases 1–4 shipped
 
@@ -116,7 +117,7 @@ are live (v0.5.88).
 | Bridge WAL recover | shipped v0.5.40 (`replay_one_record` CMQB) | — |
 | `$JS.<name>` PUBLISH | shipped v0.5.93 | — |
 | `$JS.<name>` REQUEST-get | shipped v0.5.94 | — |
-| Stream consume/ack | REQUEST returns last; pull consumer stays library-only | Optional |
+| `$JS.<name>.<consumer>` consume / ack | shipped v0.5.95 | — |
 | COMPRESSED on PUBLISH | still rejected (F11); BATCH-only (F2) | Optional |
 
 ## Optional follow-ups (not required next cuts)

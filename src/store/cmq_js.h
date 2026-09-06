@@ -21,6 +21,9 @@ int cmq_js_set_persist(cmq_js_t *j, const char *dir);
 
 /* 0 parsed; -1 not $JS; -2 malformed. */
 int cmq_js_parse(const char *subject, char *name, size_t ncap);
+/* 0 parsed stream+consumer; -1 not $JS; -2 malformed. */
+int cmq_js_parse_cons(const char *subject, char *name, size_t ncap,
+                      char *cons, size_t ccap);
 
 /* 1 applied; 0 not $JS; -1 malformed / append fail; -2 table full. */
 int cmq_js_publish(cmq_js_t *j, const char *subject,
@@ -29,6 +32,9 @@ int cmq_js_last(cmq_js_t *j, const char *subject, uint8_t *out,
                 size_t out_sz, size_t *out_len, uint64_t *out_seq);
 /* 1 hit; 0 miss (out_len=0); -1 not $JS / bad args. */
 int cmq_js_request(cmq_js_t *j, const char *subject, uint8_t *out,
+                   size_t out_sz, size_t *out_len);
+/* 1 hit (8-byte BE seq + payload); 0 miss; -1 not consume subject. */
+int cmq_js_consume(cmq_js_t *j, const char *subject, uint8_t *out,
                    size_t out_sz, size_t *out_len);
 
 #ifdef __cplusplus
