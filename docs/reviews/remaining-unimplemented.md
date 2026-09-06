@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.143)
+# Remaining unimplemented work (HEAD after v0.5.144)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -105,6 +105,7 @@ Required next cuts: none.
 | v0.5.141 | attach JWKS refresh on reload |
 | v0.5.142 | attach MQTT bridge on reload |
 | v0.5.143 | attach cluster on reload |
+| v0.5.144 | attach persist_dir on reload |
 
 ## Deferred — detailed designs
 
@@ -230,6 +231,7 @@ are live (v0.5.88).
 | attach JWKS refresh on reload | shipped v0.5.141 | — |
 | attach MQTT bridge on reload | shipped v0.5.142 | — |
 | attach cluster on reload | shipped v0.5.143 | — |
+| attach persist_dir on reload | shipped v0.5.144 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -261,9 +263,10 @@ are live (v0.5.88).
   shipped v0.5.140. JWKS refresh attach when create had a
   cache shipped v0.5.141. MQTT attach when create had none
   shipped v0.5.142. Cluster attach when create had none
-  shipped v0.5.143. Create-time only: JWKS first GET,
-  `persist_dir` remount, `h2_port` rebind, route redial,
-  extra-listener rebind.
+  shipped v0.5.143. Persist attach when create had none
+  shipped v0.5.144. Create-time only: JWKS first GET,
+  `persist_dir` remount, WAL replay, `h2_port` rebind,
+  route redial, extra-listener rebind.
 
 ## TDD rule for every increment
 

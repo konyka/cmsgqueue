@@ -1,0 +1,3 @@
+v0.5.144 bench 1:
+- Attach apply: mkdir + cmq.data/idx fopen. No replay.
+- Existing WAL: one pointer check, no remount.

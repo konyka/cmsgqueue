@@ -8857,6 +8857,37 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (!server->filestore) {
+        if (cmq_filestore_reload_attach(&server->filestore,
+                                        &server->config.persist_dir,
+                                        fresh.persist_dir) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+        if (server->filestore && server->config.persist_dir) {
+            const char *dir = server->config.persist_dir;
+            if (server->config.persist_sync_interval_ms > 0)
+                cmq_filestore_set_sync_interval(server->filestore,
+                    server->config.persist_sync_interval_ms);
+            if (!server->persist)
+                server->persist = cmq_sublist_persist_open(dir);
+            if (server->txn)
+                (void)cmq_txn_set_log(server->txn, dir);
+            if (server->kvb)
+                (void)cmq_kvb_set_persist(server->kvb, dir);
+            if (server->js)
+                (void)cmq_js_set_persist(server->js, dir);
+            if (!server->obj) {
+                char odir[600];
+                int n = snprintf(odir, sizeof(odir), "%s/obj", dir);
+                if (n > 0 && (size_t)n < sizeof(odir)) {
+                    (void)mkdir(odir, 0755);
+                    server->obj = cmq_obj_create(odir);
+                }
+            }
+            cmq_log_info(server->log, "Persistence enabled: dir=%s", dir);
+        }
+    }
     if (cmq_filestore_reload_sync(server->filestore,
                                   &server->config.persist_sync_interval_ms,
                                   fresh.persist_sync_interval_ms) != 0) {

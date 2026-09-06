@@ -1498,6 +1498,30 @@ int cmq_filestore_reload_sync(cmq_filestore_t *fs, unsigned *live_ms,
     return 0;
 }
 
+int cmq_filestore_reload_attach(cmq_filestore_t **fs, const char **live_dir,
+                                const char *fresh_dir) {
+    if (!fs) return -1;
+    if (!fresh_dir || !fresh_dir[0])
+        return 0;
+    if (*fs)
+        return 0;
+    if (!dir_safe(fresh_dir))
+        return -1;
+    cmq_filestore_t *n = cmq_filestore_create(fresh_dir, "cmq");
+    if (!n) return -1;
+    if (live_dir) {
+        char *owned = strdup(fresh_dir);
+        if (!owned) {
+            cmq_filestore_destroy(n);
+            return -1;
+        }
+        free((void *)*live_dir);
+        *live_dir = owned;
+    }
+    *fs = n;
+    return 0;
+}
+
 void cmq_filestore_set_max_payload_size(cmq_filestore_t *fs, size_t bytes) {
     if (!fs) return;
     fs->max_payload_bytes = bytes;

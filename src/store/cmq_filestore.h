@@ -46,6 +46,11 @@ unsigned cmq_filestore_sync_interval(const cmq_filestore_t *fs);
  * fs may be NULL (no WAL); live_ms is still updated. */
 int cmq_filestore_reload_sync(cmq_filestore_t *fs, unsigned *live_ms,
                               unsigned fresh_ms);
+/* v0.5.144: empty/omitted keeps off. Unsafe dir fails closed.
+ * Opens prefix "cmq" when *fs is NULL. Existing WAL is left
+ * alone (no remount / replay). */
+int cmq_filestore_reload_attach(cmq_filestore_t **fs, const char **live_dir,
+                                const char *fresh_dir);
 
 /* P1: enable async WAL writes via SPSC ring + worker thread.
  * queue_capacity: max in-flight writes (each ~4 KiB avg). 0 = off.

@@ -22,6 +22,11 @@ installs `cmq_filestore_set_sync_interval` at create.
 SIGHUP / `cmq_server_reload` applies a non-zero interval
 to the live filestore (v0.5.121). 0 / omitted keeps the
 current policy.
+v0.5.144: reload opens the WAL and persist sidecars
+(audit already applied, sublist / txn / kv / `$JS` / obj)
+when create had no `persist_dir`. Omitted / empty keeps
+off. Unsafe paths fail closed. An existing filestore is
+not remounted and WAL replay stays create-time.
 
 The wiring is **best-effort**: a failed append increments
 `stat_persist_fail` but does not block delivery. This matches
@@ -60,6 +65,8 @@ single-threaded; future work can parallelize.
 - `src/server/cmq_server.c` — create/destroy lifecycle, `credit_msgs_in` append.
 
 ## Tests
+
+`tests/test_psa.c` — attach, omitted, empty, reject (v0.5.144).
 
 `tests/test_persist_unit.c`:
 - `filestore_not_opened_when_null` — server starts without any

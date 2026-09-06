@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.144 - 2026-09-06
+
+### Added
+- **Attach `persist_dir` on reload** — when create had no
+  WAL, SIGHUP opens prefix `cmq` and wires sublist / txn /
+  kv / `$JS` / obj persist. Omitted / empty keeps off.
+  Unsafe paths fail closed. An existing filestore is not
+  remounted. WAL replay stays create-time.
+
+### Tests
+- `tests/test_psa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.144.enumeration.md`, `v0.5.144.plan.md`.
+- `docs/features/persistence.md`.
+- `docs/benchmarks/v05144_{1,2}.txt`.
+
+### Test count
+- 567 tests (was 563 in v0.5.143; +4).
+
 ## 0.5.143 - 2026-09-06
 
 ### Added
