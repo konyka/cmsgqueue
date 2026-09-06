@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.104 - 2026-09-06
+
+### Added
+- **Durable `$JS` history (D4 follow-up)** — when
+  `persist_dir` is set, PUBLISH `$JS.<name>` appends
+  `{persist_dir}/js/{name}.msgs` (`CMQM`). Reopen
+  replays onto the ring so pull consume survives.
+  Last-payload `.last` is unchanged.
+
+### Tests
+- `tests/test_jsh.c` — reopen consume, no-persist,
+  isolate, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.104.enumeration.md`, `v0.5.104.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v05104_{1,2}.txt`.
+
+### Test count
+- 407 tests (was 403 in v0.5.103; +4).
+
 ## 0.5.103 - 2026-09-06
 
 ### Added

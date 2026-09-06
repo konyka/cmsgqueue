@@ -17,7 +17,7 @@ extern "C" {
 
 cmq_js_t *cmq_js_create(void);
 void cmq_js_destroy(cmq_js_t *j);
-/* Cursors: {dir}/js/{name}.cursors. Last body: {dir}/js/{name}.last */
+/* Cursors: {dir}/js/{name}.cursors. Last: {name}.last. History: {name}.msgs */
 int cmq_js_set_persist(cmq_js_t *j, const char *dir);
 
 /* 0 parsed; -1 not $JS; -2 malformed. */

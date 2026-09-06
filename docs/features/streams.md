@@ -58,8 +58,10 @@ Names: `[A-Za-z0-9_-]`, max 32, no dots.
 Optional cursors: `{persist_dir}/js/{name}.cursors`
 when `persist_dir` is set. The last payload is also
 written to `{persist_dir}/js/{name}.last` (`CMQL`,
-v0.5.103) so REQUEST-get survives reopen. Earlier
-bodies stay on the ring (not durable).
+v0.5.103) so REQUEST-get survives reopen. History
+is appended to `{persist_dir}/js/{name}.msgs`
+(`CMQM`, v0.5.104) and replayed onto the ring on
+open so pull consume survives reopen.
 
 REQUEST `$JS.<name>` (v0.5.94) returns the last payload
 to reply-to, or an empty body on miss. Oversized last
@@ -81,7 +83,7 @@ or consumer fails closed (does not append).
 
 `tests/test_stream_cursors.c`, `tests/test_spart.c`,
 `tests/test_js.c`, `tests/test_jsr.c`, `tests/test_jsc.c`,
-`tests/test_jsl.c`
+`tests/test_jsl.c`, `tests/test_jsh.c`
 
 ## See also
 
@@ -91,3 +93,4 @@ or consumer fails closed (does not append).
 - `docs/reviews/v0.5.94.enumeration.md`
 - `docs/reviews/v0.5.95.enumeration.md`
 - `docs/reviews/v0.5.103.enumeration.md`
+- `docs/reviews/v0.5.104.enumeration.md`

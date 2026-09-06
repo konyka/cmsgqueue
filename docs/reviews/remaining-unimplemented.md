@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.103)
+# Remaining unimplemented work (HEAD after v0.5.104)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -65,6 +65,7 @@ Required next cuts: none.
 | v0.5.101 | D1 response spans |
 | v0.5.102 | D1 disconnect spans |
 | v0.5.103 | D4 durable `$JS` last payload |
+| v0.5.104 | D4 durable `$JS` history WAL |
 
 ## Deferred — detailed designs
 
@@ -104,7 +105,9 @@ and REQUEST-get, `$JS.<name>.<consumer>` pull consume / ack,
 and partitioned consume cursors (1–16, `append_key` /
 `next_part` / `ack_part`, `CMQC2`) are live. The last
 `$JS` payload is durable (`{persist_dir}/js/{name}.last`,
-v0.5.103). Earlier bodies stay on the ring.
+v0.5.103). History is a `CMQM` append WAL
+(`{persist_dir}/js/{name}.msgs`, v0.5.104) replayed on
+open.
 
 ### D5 Exactly-once / transactions — phases 1–4 shipped
 
@@ -140,6 +143,7 @@ are live (v0.5.88).
 | RESPONSE spans | shipped v0.5.101 | — |
 | DISCONNECT spans | shipped v0.5.102 | — |
 | `$JS` last payload persist | shipped v0.5.103 | — |
+| `$JS` history WAL | shipped v0.5.104 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
