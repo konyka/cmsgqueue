@@ -62,6 +62,10 @@ v0.5.103) so REQUEST-get survives reopen. History
 is appended to `{persist_dir}/js/{name}.msgs`
 (`CMQM`, v0.5.104) and replayed onto the ring on
 open so pull consume survives reopen.
+`cmq_js_set_msgs_rotate_bytes` / config
+`js_msgs_rotate_bytes` (v0.5.108, 0 = off) rewrites
+`.msgs` to a tail that fits the cap (at most 1024
+records) after an append that crosses the size.
 
 ## Partitions (v0.5.105)
 
@@ -107,7 +111,7 @@ new opcode. Two-token consume is unchanged.
 `tests/test_stream_cursors.c`, `tests/test_spart.c`,
 `tests/test_js.c`, `tests/test_jsr.c`, `tests/test_jsc.c`,
 `tests/test_jsl.c`, `tests/test_jsh.c`, `tests/test_jsp.c`,
-`tests/test_jsq.c`, `tests/test_jsd.c`
+`tests/test_jsq.c`, `tests/test_jsd.c`, `tests/test_jsm.c`
 
 ## See also
 
@@ -121,3 +125,4 @@ new opcode. Two-token consume is unchanged.
 - `docs/reviews/v0.5.105.enumeration.md`
 - `docs/reviews/v0.5.106.enumeration.md`
 - `docs/reviews/v0.5.107.enumeration.md`
+- `docs/reviews/v0.5.108.enumeration.md`

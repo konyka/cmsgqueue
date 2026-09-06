@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.108 - 2026-09-06
+
+### Added
+- **`$JS` history WAL rotate (D4 follow-up)** —
+  `cmq_js_set_msgs_rotate_bytes` (0 = off) rewrites
+  `{name}.msgs` after an append that reaches the cap,
+  keeping a tail that fits the cap (at most 1024
+  records). Config `js_msgs_rotate_bytes` (0–1 GiB)
+  is wired at server create.
+
+### Tests
+- `tests/test_jsm.c` — rotate_keeps_tail, rotate_off,
+  no_persist, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.108.enumeration.md`, `v0.5.108.plan.md`.
+- `docs/features/streams.md`.
+- `docs/benchmarks/v05108_{1,2}.txt`.
+
+### Test count
+- 423 tests (was 419 in v0.5.107; +4).
+
 ## 0.5.107 - 2026-09-06
 
 ### Added

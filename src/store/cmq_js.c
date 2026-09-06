@@ -23,6 +23,7 @@ struct cmq_js {
     int n;
     char persist_dir[512];
     unsigned def_parts;
+    uint64_t rotate_bytes;
     cmq_mutex_t lock;
 };
 
@@ -32,6 +33,7 @@ static int js_append_msg(cmq_js_t *j, const char *name, uint64_t seq,
 static int js_msgs_exists(cmq_js_t *j, const char *name);
 static int js_load_parts(cmq_js_t *j, cmq_js_slot_t *s);
 static int js_save_parts(cmq_js_t *j, const cmq_js_slot_t *s);
+static int js_maybe_rotate_msgs(cmq_js_t *j, const char *name);
 static int js_parts_exists(cmq_js_t *j, const char *name);
 static unsigned js_parts_file_n(cmq_js_t *j, const char *name);
 static uint64_t js_stream_append(cmq_stream_t *st, const uint8_t *val,
@@ -456,6 +458,119 @@ static int js_replay_msgs(cmq_js_t *j, cmq_js_slot_t *s) {
     return 0;
 }
 
+#define CMQ_JS_MSGS_KEEP 1024
+
+static int js_copy_tail(const char *src, const char *dst, uint64_t start) {
+    FILE *in = fopen(src, "rb");
+    if (!in) return -1;
+    if (start > 0 && fseek(in, (long)start, SEEK_SET) != 0) {
+        fclose(in);
+        return -1;
+    }
+    FILE *out = fopen(dst, "wb");
+    if (!out) {
+        fclose(in);
+        return -1;
+    }
+    uint8_t buf[4096];
+    size_t n;
+    int ok = 1;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            ok = 0;
+            break;
+        }
+    }
+    if (ok)
+        ok = (fflush(out) == 0 && fsync(fileno(out)) == 0);
+    fclose(out);
+    fclose(in);
+    if (!ok) {
+        unlink(dst);
+        return -1;
+    }
+    return 0;
+}
+
+static int js_compact_msgs(cmq_js_t *j, const char *name) {
+    char path[640], tmp[648];
+    if (js_msgs_path(j, name, path, sizeof(path)) != 0) return -1;
+    uint64_t cap = j->rotate_bytes;
+    if (cap == 0) return 0;
+    int w = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    if (w < 0 || (size_t)w >= sizeof(tmp)) return -1;
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return 0;
+    typedef struct { uint64_t off; uint32_t rec; } rec_i;
+    rec_i hist[CMQ_JS_MSGS_KEEP];
+    size_t count = 0;
+    uint64_t off = 0;
+    for (;;) {
+        uint8_t hdr[16];
+        size_t nr = fread(hdr, 1, 16, fp);
+        if (nr == 0) break;
+        if (nr != 16 || memcmp(hdr, "CMQM", 4) != 0) {
+            fclose(fp);
+            return -1;
+        }
+        size_t len = ((size_t)hdr[12] << 24) | ((size_t)hdr[13] << 16) |
+                     ((size_t)hdr[14] << 8) | (size_t)hdr[15];
+        if (len == 0 || len > CMQ_JS_VAL_MAX ||
+            fseek(fp, (long)len, SEEK_CUR) != 0) {
+            fclose(fp);
+            return -1;
+        }
+        uint32_t rec = (uint32_t)(16 + len);
+        hist[count % CMQ_JS_MSGS_KEEP].off = off;
+        hist[count % CMQ_JS_MSGS_KEEP].rec = rec;
+        count++;
+        off += rec;
+    }
+    fclose(fp);
+    if (count == 0) return 0;
+
+    size_t keep_max = count < CMQ_JS_MSGS_KEEP ? count : CMQ_JS_MSGS_KEEP;
+    size_t newest = (count - 1) % CMQ_JS_MSGS_KEEP;
+    size_t take = 0;
+    uint64_t bytes = 0;
+    for (size_t i = 0; i < keep_max; i++) {
+        rec_i *r = &hist[(newest + CMQ_JS_MSGS_KEEP - i) % CMQ_JS_MSGS_KEEP];
+        if (take > 0 && bytes + r->rec > cap) break;
+        bytes += r->rec;
+        take++;
+    }
+    rec_i *oldest = &hist[(newest + CMQ_JS_MSGS_KEEP - (take - 1)) %
+                          CMQ_JS_MSGS_KEEP];
+    uint64_t start = oldest->off;
+    if (start == 0) return 0;
+    if (js_copy_tail(path, tmp, start) != 0) return -1;
+    unlink(path);
+    if (rename(tmp, path) != 0) {
+        unlink(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+static int js_maybe_rotate_msgs(cmq_js_t *j, const char *name) {
+    if (!j->rotate_bytes) return 0;
+    char path[640];
+    struct stat st;
+    if (js_msgs_path(j, name, path, sizeof(path)) != 0) return 0;
+    if (stat(path, &st) != 0) return 0;
+    if ((uint64_t)st.st_size < j->rotate_bytes) return 0;
+    return js_compact_msgs(j, name);
+}
+
+int cmq_js_set_msgs_rotate_bytes(cmq_js_t *j, uint64_t cap) {
+    if (!j) return -1;
+    cmq_mutex_lock(&j->lock);
+    j->rotate_bytes = cap;
+    cmq_mutex_unlock(&j->lock);
+    return 0;
+}
+
 int cmq_js_publish(cmq_js_t *j, const char *subject,
                    const uint8_t *val, size_t len) {
     if (!j) return -1;
@@ -478,8 +593,11 @@ int cmq_js_publish(cmq_js_t *j, const char *subject,
         else if (j->persist_dir[0] &&
                  js_append_msg(j, s->name, s->last_seq, val, len) != 0)
             rc = -1;
-        else
+        else {
+            if (j->persist_dir[0])
+                (void)js_maybe_rotate_msgs(j, s->name);
             rc = 1;
+        }
         cmq_mutex_unlock(&j->lock);
         return rc;
     }

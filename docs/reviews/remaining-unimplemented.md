@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.107)
+# Remaining unimplemented work (HEAD after v0.5.108)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -69,6 +69,7 @@ Required next cuts: none.
 | v0.5.105 | D4 `$JS` hash partitions |
 | v0.5.106 | D4 `$JS` consume-part subject |
 | v0.5.107 | D4 `$JS` default partitions |
+| v0.5.108 | D4 `$JS` history WAL rotate |
 
 ## Deferred — detailed designs
 
@@ -116,7 +117,9 @@ open. `$JS` hash partitions (`cmq_js_set_partitions`,
 `$JS.<name>.<consumer>.<part>` reaches `consume_part`
 via `cmq_js_consume` (v0.5.106). New streams inherit
 `js_partitions` / `cmq_js_set_default_partitions` when no
-`.parts` file exists (v0.5.107).
+`.parts` file exists (v0.5.107). History WAL rotate
+(`js_msgs_rotate_bytes`, v0.5.108) rewrites `.msgs` to a
+bounded tail.
 
 ### D5 Exactly-once / transactions — phases 1–4 shipped
 
@@ -156,6 +159,7 @@ are live (v0.5.88).
 | `$JS` hash partitions | shipped v0.5.105 | — |
 | `$JS` consume-part subject | shipped v0.5.106 | — |
 | `$JS` default partitions | shipped v0.5.107 | — |
+| `$JS` history WAL rotate | shipped v0.5.108 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)

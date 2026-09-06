@@ -106,6 +106,9 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return parse_int_range(value, 0, 65535, &config->h2_port);
     } else if (strcmp(key, "js_partitions") == 0) {
         return parse_int_range(value, 0, 16, &config->js_partitions);
+    } else if (strcmp(key, "js_msgs_rotate_bytes") == 0) {
+        return parse_int_range(value, 0, 1073741824,
+                               &config->js_msgs_rotate_bytes);
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
         return parse_int_range(value, 0, 64, &config->num_threads);
     } else if (strcmp(key, "max_clients") == 0) {
@@ -343,6 +346,9 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->h2_port < 0 || config->h2_port > 65535)
         return CMQ_ERR_INVALID_ARG;
     if (config->js_partitions < 0 || config->js_partitions > 16)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->js_msgs_rotate_bytes < 0 ||
+        config->js_msgs_rotate_bytes > 1073741824)
         return CMQ_ERR_INVALID_ARG;
     if (config->max_payload_size < 0) return CMQ_ERR_INVALID_ARG;
     /* Must fit CMQ_WRITE_BUF_LIMIT after framing — else deliver force-closes. */

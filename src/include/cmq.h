@@ -111,6 +111,7 @@ typedef struct cmq_config {
     const char *blocklist_file;
     int h2_port;                   /* v0.5.81: loopback HTTP/2; 0 = off */
     int js_partitions;             /* v0.5.107: default $JS nparts; 0/1 = 1 */
+    int js_msgs_rotate_bytes;      /* v0.5.108: $JS .msgs cap; 0 = off */
     int tls_enabled;
     const char *tls_cert;
     const char *tls_key;
