@@ -1,0 +1,3 @@
+v0.5.136 bench 2:
+- Reload omitted: no dial.
+- Reject localhost / 65536: no dial; live endpoint stays.

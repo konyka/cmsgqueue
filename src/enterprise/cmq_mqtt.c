@@ -522,6 +522,51 @@ int cmq_mqtt_reload_maps(cmq_mqtt_bridge_t *br,
     return 0;
 }
 
+static int mqtt_reload_addr_ok(const char *addr) {
+    if (!addr || !addr[0]) return 0;
+    size_t n = strnlen(addr, 64);
+    if (n == 0 || n >= 64) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)addr[i];
+        if (c < 0x21 || c > 0x7e || c == '/' || c == '\\')
+            return 0;
+    }
+    struct in_addr ha;
+    return inet_pton(AF_INET, addr, &ha) == 1;
+}
+
+int cmq_mqtt_reload_endpoint(cmq_mqtt_bridge_t *br,
+                             const char **live_addr, int *live_port,
+                             const char *fresh_addr, int fresh_port) {
+    if (!live_port) return -1;
+    if (fresh_port < 0 || fresh_port > 65535) return -1;
+    if (fresh_addr && fresh_addr[0] && !mqtt_reload_addr_ok(fresh_addr))
+        return -1;
+    if ((!fresh_addr || !fresh_addr[0]) && fresh_port == 0)
+        return 0;
+
+    const char *use_addr = (fresh_addr && fresh_addr[0])
+                               ? fresh_addr
+                               : (live_addr ? *live_addr : NULL);
+    int use_port = fresh_port > 0 ? fresh_port : *live_port;
+    if (!use_addr || !use_addr[0] || use_port <= 0)
+        return 0;
+    if (!mqtt_reload_addr_ok(use_addr))
+        return -1;
+    if (br && cmq_mqtt_bridge_connect(br, use_addr, use_port) != 0)
+        return -1;
+    if (fresh_addr && fresh_addr[0] && live_addr) {
+        char *owned = strdup(fresh_addr);
+        if (!owned)
+            return -1;
+        free((void *)*live_addr);
+        *live_addr = owned;
+    }
+    if (fresh_port > 0)
+        *live_port = fresh_port;
+    return 0;
+}
+
 int cmq_mqtt_bridge_publish(cmq_mqtt_bridge_t *br, const char *subject,
                             const uint8_t *payload, size_t len) {
     if (!br || !subject || !subject[0]) return -1;

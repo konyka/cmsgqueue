@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.136 - 2026-09-06
+
+### Added
+- **Reload MQTT bridge addr/port** — `cmq_server_reload`
+  applies a non-empty `mqtt_bridge_addr` and/or non-zero
+  `mqtt_bridge_port` via `cmq_mqtt_bridge_connect`.
+  Same-endpoint live peer is a no-op. Omitted / empty
+  keeps the current endpoint. Non-IPv4 and bad port fail
+  closed.
+
+### Tests
+- `tests/test_mqe.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.136.enumeration.md`, `v0.5.136.plan.md`.
+- `docs/features/mqtt-bridge.md`.
+- `docs/benchmarks/v05136_{1,2}.txt`.
+
+### Test count
+- 535 tests (was 531 in v0.5.135; +4).
+
 ## 0.5.135 - 2026-09-06
 
 ### Added

@@ -29,8 +29,12 @@ A matching CMQ PUBLISH is written as MQTT PUBLISH
 (`cmq_mqtt_bridge_publish`). Route ingress, WAL replay, and
 `mqtt_bridge*` accounts are not re-bridged.
 SIGHUP replaces a non-empty map table on the live bridge
-(v0.5.126). Omitted maps keep the current table. Addr/port
-stay create-time.
+(v0.5.126). Omitted maps keep the current table.
+v0.5.136: reload applies a non-empty `mqtt_bridge_addr`
+and/or non-zero `mqtt_bridge_port` via
+`cmq_mqtt_bridge_connect` (same-endpoint live peer is a
+no-op). Omitted / empty keeps the current endpoint.
+Non-IPv4 and out-of-range port fail closed.
 
 ## Files touched
 

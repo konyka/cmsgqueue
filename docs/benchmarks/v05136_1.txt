@@ -1,0 +1,3 @@
+v0.5.136 bench 1:
+- Same-endpoint reload: one fd-alive probe (existing connect).
+- New endpoint: one TCP CONNECT + MQTT CONNACK.
