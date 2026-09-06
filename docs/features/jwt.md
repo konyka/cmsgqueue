@@ -55,6 +55,9 @@ Mutually exclusive with `jwks_json`.
 v0.5.131: reload applies a non-zero interval to a live
 sidecar. Omitted / 0 keeps the current interval. The URL
 itself stays create-time.
+v0.5.134: reload applies a non-empty `jwks_ca` to the live
+sidecar URL. Omitted / empty keeps the current path.
+`..` fails closed. The next refresh uses the new CA.
 A failed GET keeps the previous ping-pong slot. CONNECT
 copies key bytes out of the live slot so a later refresh
 cannot overwrite material mid-verify.

@@ -60,6 +60,11 @@ unsigned cmq_jwks_refresh_interval(cmq_jwks_refresher_t *r);
  * stays create-time. */
 int cmq_jwks_refresh_reload(cmq_jwks_refresher_t *r, int *live_sec,
                             int fresh_sec);
+int cmq_jwks_refresh_ca(cmq_jwks_refresher_t *r, char *out, size_t cap);
+/* v0.5.134: empty/omitted keeps. Invalid path fails closed.
+ * Does not re-GET jwks_url. */
+int cmq_jwks_refresh_reload_ca(cmq_jwks_refresher_t *r, const char **live_ca,
+                               const char *fresh_ca);
 
 #ifdef __cplusplus
 }

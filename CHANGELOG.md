@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.134 - 2026-09-06
+
+### Added
+- **Reload `jwks_ca`** — `cmq_server_reload` copies a
+  non-empty CA path onto the live JWKS sidecar. Omitted /
+  empty keeps the current path. `..` fails closed. The
+  URL itself stays create-time.
+
+### Tests
+- `tests/test_jca.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.134.enumeration.md`, `v0.5.134.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v05134_{1,2}.txt`.
+
+### Test count
+- 527 tests (was 523 in v0.5.133; +4).
+
 ## 0.5.133 - 2026-09-06
 
 ### Added

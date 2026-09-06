@@ -309,6 +309,7 @@ struct cmq_jwks_refresher {
     atomic_uint interval_sec;
     uint64_t last_ms;
     atomic_int run;
+    cmq_mutex_t lock;
     cmq_thread_t thr;
     int started;
 };
@@ -419,7 +420,11 @@ static void *jwks_refresh_thr(void *arg) {
         uint64_t now = jwks_now_ms();
         unsigned iv = atomic_load_explicit(&r->interval_sec,
                                            memory_order_acquire);
-        (void)cmq_jwks_refresh_step(&r->url, r->cache, &r->last_ms, now, iv);
+        cmq_jwks_url_t snap;
+        cmq_mutex_lock(&r->lock);
+        snap = r->url;
+        cmq_mutex_unlock(&r->lock);
+        (void)cmq_jwks_refresh_step(&snap, r->cache, &r->last_ms, now, iv);
         for (int i = 0; i < 10 &&
              atomic_load_explicit(&r->run, memory_order_acquire); i++) {
             struct timespec ts = {0, 100000000L};
@@ -441,7 +446,12 @@ cmq_jwks_refresher_t *cmq_jwks_refresh_start(const cmq_jwks_url_t *url,
     atomic_init(&r->interval_sec, interval_sec);
     r->last_ms = jwks_now_ms();
     atomic_init(&r->run, 1);
+    if (cmq_mutex_init(&r->lock) != 0) {
+        free(r);
+        return NULL;
+    }
     if (cmq_thread_create(&r->thr, jwks_refresh_thr, r) != 0) {
+        cmq_mutex_destroy(&r->lock);
         free(r);
         return NULL;
     }
@@ -456,6 +466,7 @@ void cmq_jwks_refresh_stop(cmq_jwks_refresher_t *r) {
         cmq_thread_join(r->thr);
         r->started = 0;
     }
+    cmq_mutex_destroy(&r->lock);
     free(r);
 }
 
@@ -477,5 +488,38 @@ int cmq_jwks_refresh_reload(cmq_jwks_refresher_t *r, int *live_sec,
         atomic_store_explicit(&r->interval_sec, (unsigned)fresh_sec,
                               memory_order_release);
     *live_sec = fresh_sec;
+    return 0;
+}
+
+int cmq_jwks_refresh_ca(cmq_jwks_refresher_t *r, char *out, size_t cap) {
+    if (!r || !out || cap == 0) return -1;
+    cmq_mutex_lock(&r->lock);
+    snprintf(out, cap, "%s", r->url.ca);
+    cmq_mutex_unlock(&r->lock);
+    return 0;
+}
+
+int cmq_jwks_refresh_reload_ca(cmq_jwks_refresher_t *r, const char **live_ca,
+                               const char *fresh_ca) {
+    if (!fresh_ca || !fresh_ca[0])
+        return 0;
+    cmq_jwks_url_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    if (cmq_jwks_set_ca(&tmp, fresh_ca) != 0)
+        return -1;
+    if (r) {
+        cmq_mutex_lock(&r->lock);
+        int rc = cmq_jwks_set_ca(&r->url, fresh_ca);
+        cmq_mutex_unlock(&r->lock);
+        if (rc != 0)
+            return -1;
+    }
+    if (live_ca) {
+        char *owned = strdup(fresh_ca);
+        if (!owned)
+            return -1;
+        free((void *)*live_ca);
+        *live_ca = owned;
+    }
     return 0;
 }
