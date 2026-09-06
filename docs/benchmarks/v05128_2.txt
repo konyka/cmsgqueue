@@ -1,0 +1,3 @@
+v0.5.128 bench 2:
+- Explicit 0: one parse, no stdout appender.
+- Empty key: store 0, no extra work.

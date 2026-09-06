@@ -357,6 +357,10 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "log_level") == 0) {
         return parse_log_level(value, &config->log_level);
     } else if (strcmp(key, "log_to_stdout") == 0) {
+        if (!value[0]) {
+            config->log_to_stdout = 0;
+            return 0;
+        }
         return parse_int_range(value, 0, 1, &config->log_to_stdout);
     } else if (strcmp(key, "log_to_file") == 0) {
         return parse_int_range(value, 0, 1, &config->log_to_file);
@@ -528,6 +532,8 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
     cfg_saw_config_file = 0;
     /* Omitted log_level key → INFO (0 is TRACE when explicitly set). */
     config->log_level = 2;
+    /* Omitted log_to_stdout → on (cmq.h default 1; 0 is explicit off). */
+    config->log_to_stdout = 1;
 
     FILE *fp = fopen(path, "r");
     if (!fp) return CMQ_ERR_IO;

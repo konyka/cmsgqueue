@@ -1,0 +1,3 @@
+v0.5.128 bench 1:
+- Load: one extra store of 1 after memset.
+- Create with 1: same add_stdout as an explicit key.

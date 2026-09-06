@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.128 - 2026-09-06
+
+### Added
+- **Omitted `log_to_stdout` defaults to 1** — load seeds
+  the documented default. Explicit `0` or an empty value
+  disables stdout. Programmatic zero-init is unchanged.
+
+### Tests
+- `tests/test_lso.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.128.enumeration.md`, `v0.5.128.plan.md`.
+- `docs/benchmarks/v05128_{1,2}.txt`.
+
+### Test count
+- 503 tests (was 499 in v0.5.127; +4).
+
 ## 0.5.127 - 2026-09-06
 
 ### Added
