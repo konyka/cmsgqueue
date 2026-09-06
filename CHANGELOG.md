@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.97 - 2026-09-06
+
+### Added
+- **COMPRESSED on MESSAGE (F2 follow-up)** — inbound zstd
+  MESSAGE inflates, converts to PUBLISH, then fans out
+  plaintext. Uncompressed MESSAGE stays unknown-op.
+  REQUEST still rejected (F11).
+
+### Tests
+- `tests/test_msgc.c` — accept MESSAGE, reject REQUEST,
+  to-publish, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.97.enumeration.md`, `v0.5.97.plan.md`.
+- `docs/features/wire-compression.md`, `flag-rejection.md`.
+- `docs/benchmarks/v0597_{1,2}.txt`.
+
+### Test count
+- 379 tests (was 375 in v0.5.96; +4).
+
 ## 0.5.96 - 2026-09-06
 
 ### Added

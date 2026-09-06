@@ -50,6 +50,10 @@ ssize_t cmq_decompress_bound(const uint8_t *src, size_t src_len);
 int cmq_inflate(const uint8_t *src, size_t src_len,
                 uint8_t **out, size_t *out_len);
 
+/* MESSAGE body → PUBLISH body. 0 ok (*out malloc); -1 malformed. */
+int cmq_message_to_publish(const uint8_t *src, size_t src_len,
+                           uint8_t **out, size_t *out_len, uint8_t *out_flags);
+
 #ifdef __cplusplus
 }
 #endif

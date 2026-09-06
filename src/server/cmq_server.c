@@ -3137,6 +3137,35 @@ static int txn_2pc_commit(cmq_server_t *srv, uint64_t tid,
 }
 
 static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
+                            const cmq_frame_t *frame);
+
+static void handle_message_compressed(cmq_server_t *srv, cmq_client_t *c,
+                                      const cmq_frame_t *frame) {
+    uint8_t *decoded = NULL;
+    size_t dlen = 0;
+    if (cmq_inflate(frame->payload, frame->payload_len, &decoded, &dlen) != 0) {
+        cmq_send_error(c, "compressed message rejected");
+        return;
+    }
+    uint8_t *pub = NULL;
+    size_t plen = 0;
+    uint8_t pflags = 0;
+    if (cmq_message_to_publish(decoded, dlen, &pub, &plen, &pflags) != 0) {
+        free(decoded);
+        cmq_send_error(c, "compressed message rejected");
+        return;
+    }
+    free(decoded);
+    cmq_frame_t pf = *frame;
+    pf.hdr.op = CMQ_OP_PUBLISH;
+    pf.hdr.flags = pflags;
+    pf.payload = pub;
+    pf.payload_len = plen;
+    handle_publish(srv, c, &pf);
+    free(pub);
+}
+
+static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                             const cmq_frame_t *frame) {
     (void)c;
     if (!client_account_live(srv, c)) {
@@ -5646,6 +5675,17 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             handle_unsubscribe(srv, c, frame);
         else
             handle_batch(srv, c, frame);
+        break;
+    case CMQ_OP_MESSAGE:
+        if (!client_account_live(srv, c)) {
+            cmq_send_error(c, "account inactive");
+            client_set_state(c, CMQ_CLIENT_CLOSING);
+            break;
+        }
+        if (frame->hdr.flags & CMQ_FLAG_COMPRESSED)
+            handle_message_compressed(srv, c, frame);
+        else
+            cmq_send_error(c, "unknown op");
         break;
     case CMQ_OP_DISCONNECT:
         /* Unmark route so broadcast/live_count skip during graceful flush. */

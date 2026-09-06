@@ -254,11 +254,12 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
             return parser_have_frames(p, produced);
         }
 
-        /* F2 / v0.5.96: COMPRESSED is BATCH or PUBLISH. MESSAGE and
-         * other opcodes still fail closed (F11 garbage fanout). */
+        /* F2 / v0.5.97: COMPRESSED is BATCH, PUBLISH, or MESSAGE.
+         * REQUEST and other opcodes still fail closed. */
         if ((hb[3] & (uint8_t)CMQ_FLAG_COMPRESSED) &&
             hb[4] != (uint8_t)CMQ_OP_BATCH &&
-            hb[4] != (uint8_t)CMQ_OP_PUBLISH) {
+            hb[4] != (uint8_t)CMQ_OP_PUBLISH &&
+            hb[4] != (uint8_t)CMQ_OP_MESSAGE) {
             p->pending_error = 1;
             return parser_have_frames(p, produced);
         }
