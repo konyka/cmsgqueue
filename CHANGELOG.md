@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.154 - 2026-09-07
+
+### Added
+- **Apply blocklist path on reload** — SIGHUP reloads an
+  existing `blocklist_h` from a new `blocklist_file`,
+  copies the path onto the live config, and rejects
+  `..` / `\` / a missing file. Omitted / empty keeps
+  the current list. In-flight readers keep the old
+  handle until the rch swap.
+
+### Tests
+- `tests/test_bls.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.154.enumeration.md`, `v0.5.154.plan.md`.
+- `docs/features/blocklist.md`.
+- `docs/benchmarks/v05154_{1,2}.txt`.
+
+### Test count
+- 607 tests (was 603 in v0.5.153; +4).
+
 ## 0.5.153 - 2026-09-07
 
 ### Added

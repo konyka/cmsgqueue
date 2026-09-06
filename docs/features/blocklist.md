@@ -19,7 +19,9 @@ Empty lines and malformed entries are skipped. The blocklist is checked at `acce
 The blocklist is reloadable at runtime via `cmq_blocklist_reload`. Updates are lock-protected.
 v0.5.149: SIGHUP attaches `blocklist_file` when create had none.
 Omitted / empty keeps off. Unsafe or missing file fail closed.
-An existing handle is still swapped, not remounted.
+v0.5.154: an existing handle is swapped through
+`cmq_blocklist_reload_swap` (fail-closed + live path).
+In-flight readers keep the old list until the rch swap.
 
 The module is shipped as a library; the server-c-side wiring is a follow-up. The library API is complete and tested.
 

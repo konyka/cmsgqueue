@@ -8837,17 +8837,23 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
     /* P1: blocklist reload is refcounted swap. The old handle's object is
      * freed only when the last in-flight reader drops its reference. */
     if (server->blocklist_h && fresh.blocklist_file) {
-        cmq_blocklist_t *bl = cmq_blocklist_load(fresh.blocklist_file);
+        cmq_blocklist_t *bl = NULL;
+        if (cmq_blocklist_reload_swap(&bl, &server->config.blocklist_file,
+                                      fresh.blocklist_file) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
         if (bl) {
             cmq_rch_t *nh = cmq_rch_new(bl, (cmq_rch_free_fn)cmq_blocklist_free);
-            if (nh) {
-                cmq_rch_t *old = cmq_rch_swap(&server->blocklist_h, nh);
-                if (old) cmq_rch_release_owner(old);
-                cmq_log_info(server->log, "Reloaded blocklist: %s",
-                             fresh.blocklist_file);
-            } else {
+            if (!nh) {
                 cmq_blocklist_free(bl);
+                cmq_config_free(&fresh);
+                return -1;
             }
+            cmq_rch_t *old = cmq_rch_swap(&server->blocklist_h, nh);
+            if (old) cmq_rch_release_owner(old);
+            cmq_log_info(server->log, "Reloaded blocklist: %s",
+                         server->config.blocklist_file);
         }
     } else if (!server->blocklist_h) {
         cmq_blocklist_t *bl = NULL;

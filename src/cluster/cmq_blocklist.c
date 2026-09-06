@@ -116,6 +116,35 @@ int cmq_blocklist_reload_attach(cmq_blocklist_t **bl,
     return 0;
 }
 
+int cmq_blocklist_reload_swap(cmq_blocklist_t **out,
+                              const char **live_path,
+                              const char *fresh_path) {
+    if (!out) return -1;
+    if (!fresh_path || !fresh_path[0])
+        return 0;
+    if (!blocklist_path_ok(fresh_path))
+        return -1;
+    if (access(fresh_path, R_OK) != 0)
+        return -1;
+    cmq_blocklist_t *n = cmq_blocklist_load(fresh_path);
+    if (!n) return -1;
+    if (live_path) {
+        if (*live_path && strcmp(*live_path, fresh_path) == 0) {
+            *out = n;
+            return 0;
+        }
+        char *owned = strdup(fresh_path);
+        if (!owned) {
+            cmq_blocklist_free(n);
+            return -1;
+        }
+        free((void *)*live_path);
+        *live_path = owned;
+    }
+    *out = n;
+    return 0;
+}
+
 int cmq_blocklist_reload(cmq_blocklist_t *bl, const char *path) {
     if (!bl) return -1;
     cmq_blocklist_t *fresh = cmq_blocklist_load(path);
