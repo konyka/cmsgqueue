@@ -1,0 +1,3 @@
+v0.5.127 bench 1:
+- Write path still snapshots appenders under the log lock.
+- Reload same file: strcmp, no fopen.

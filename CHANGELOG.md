@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.127 - 2026-09-06
+
+### Added
+- **Reload log sinks** — `cmq_server_reload` applies
+  `log_to_stdout` / `log_to_file` / `log_file` via
+  `cmq_log_reload_sinks`. Same file path is a no-op.
+  Empty/omitted keeps the current sinks.
+
+### Tests
+- `tests/test_lsk.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.127.enumeration.md`, `v0.5.127.plan.md`.
+- `docs/benchmarks/v05127_{1,2}.txt`.
+
+### Test count
+- 499 tests (was 495 in v0.5.126; +4).
+
 ## 0.5.126 - 2026-09-06
 
 ### Added

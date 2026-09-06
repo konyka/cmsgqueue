@@ -8950,6 +8950,24 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (cmq_log_reload_sinks(server->log, fresh.log_to_stdout,
+                             fresh.log_file, fresh.log_to_file) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
+    if (fresh.log_to_stdout)
+        server->config.log_to_stdout = 1;
+    if (fresh.log_to_file)
+        server->config.log_to_file = 1;
+    if (fresh.log_to_file && fresh.log_file && fresh.log_file[0]) {
+        char *nf = strdup(fresh.log_file);
+        if (!nf) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+        free((void *)server->config.log_file);
+        server->config.log_file = nf;
+    }
     cmq_log_info(server->log, "Config reloaded: %s", config_path);
     cmq_config_free(&fresh);
     return 0;

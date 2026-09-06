@@ -24,6 +24,14 @@ cmq_log_level_t cmq_log_get_level(const cmq_log_t *log);
 int cmq_log_add_appender(cmq_log_t *log, cmq_log_appender_fn fn, void *ctx);
 void cmq_log_add_file(cmq_log_t *log, const char *path);
 void cmq_log_add_stdout(cmq_log_t *log);
+/* v0.5.127: idempotent sink apply. stdout_on/file_on must be 0 or 1.
+ * 1 ensures the sink; 0 keeps the current sink. A non-empty file_path
+ * with file_on=1 replaces the file appender (same path is a no-op). */
+int cmq_log_reload_sinks(cmq_log_t *log, int stdout_on,
+                         const char *file_path, int file_on);
+int cmq_log_has_stdout(const cmq_log_t *log);
+int cmq_log_file_path(const cmq_log_t *log, char *out, size_t cap);
+size_t cmq_log_appender_count(const cmq_log_t *log);
 void cmq_log_write(cmq_log_t *log, cmq_log_level_t level, const char *file, int line, const char *fmt, ...);
 void cmq_log_flush(cmq_log_t *log);
 

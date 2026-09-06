@@ -11,6 +11,7 @@
 
 #define CMQ_LOG_MAX_APPENDERS 8
 #define CMQ_LOG_MSG_SIZE 1024
+#define CMQ_LOG_PATH_MAX 512
 
 /* Borrowed 32-char hex or NULL. Per-worker; no lock. */
 static _Thread_local const char *g_log_trace;
@@ -48,6 +49,7 @@ struct cmq_log {
     size_t appender_count;
     atomic_int in_flight; /* dispatch + set_level/add_appender vs destroy */
     atomic_int dying;     /* destroy claimed — no new dispatch */
+    char file_path[CMQ_LOG_PATH_MAX];
 };
 
 static int log_begin_op(cmq_log_t *log) {
@@ -133,6 +135,7 @@ cmq_log_t *cmq_log_create(cmq_log_level_t level) {
     if (!log) return NULL;
     log->level = level;
     log->appender_count = 0;
+    log->file_path[0] = '\0';
     atomic_init(&log->in_flight, 0);
     atomic_init(&log->dying, 0);
     if (pthread_mutex_init(&log->lock, NULL) != 0) {
@@ -208,6 +211,7 @@ void cmq_log_add_file(cmq_log_t *log, const char *path) {
         log->appenders[log->appender_count].fn = cmq_log_file_appender;
         log->appenders[log->appender_count].ctx = f;
         log->appender_count++;
+        snprintf(log->file_path, sizeof(log->file_path), "%s", path);
         rc = 0;
     }
     pthread_mutex_unlock(&log->lock);
@@ -219,6 +223,124 @@ void cmq_log_add_file(cmq_log_t *log, const char *path) {
 void cmq_log_add_stdout(cmq_log_t *log) {
     if (!log) return;
     cmq_log_add_appender(log, cmq_log_stdout_appender, NULL);
+}
+
+int cmq_log_has_stdout(const cmq_log_t *log) {
+    if (!log) return 0;
+    pthread_mutex_lock((pthread_mutex_t *)&log->lock);
+    int has = 0;
+    for (size_t i = 0; i < log->appender_count; i++) {
+        if (log->appenders[i].fn == cmq_log_stdout_appender) {
+            has = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock((pthread_mutex_t *)&log->lock);
+    return has;
+}
+
+int cmq_log_file_path(const cmq_log_t *log, char *out, size_t cap) {
+    if (!log || !out || cap == 0) return -1;
+    pthread_mutex_lock((pthread_mutex_t *)&log->lock);
+    int rc = -1;
+    if (log->file_path[0]) {
+        snprintf(out, cap, "%s", log->file_path);
+        rc = 0;
+    }
+    pthread_mutex_unlock((pthread_mutex_t *)&log->lock);
+    return rc;
+}
+
+size_t cmq_log_appender_count(const cmq_log_t *log) {
+    if (!log) return 0;
+    pthread_mutex_lock((pthread_mutex_t *)&log->lock);
+    size_t n = log->appender_count;
+    pthread_mutex_unlock((pthread_mutex_t *)&log->lock);
+    return n;
+}
+
+int cmq_log_reload_sinks(cmq_log_t *log, int stdout_on,
+                         const char *file_path, int file_on) {
+    if (!log) return -1;
+    if (stdout_on < 0 || stdout_on > 1) return -1;
+    if (file_on < 0 || file_on > 1) return -1;
+    if (file_on && file_path && file_path[0] &&
+        strnlen(file_path, CMQ_LOG_PATH_MAX) >= CMQ_LOG_PATH_MAX)
+        return -1;
+
+    if (stdout_on) {
+        if (log_begin_op(log) != 0) return -1;
+        pthread_mutex_lock(&log->lock);
+        int has = 0;
+        for (size_t i = 0; i < log->appender_count; i++) {
+            if (log->appenders[i].fn == cmq_log_stdout_appender) {
+                has = 1;
+                break;
+            }
+        }
+        if (!has && log->appender_count < CMQ_LOG_MAX_APPENDERS) {
+            log->appenders[log->appender_count].fn = cmq_log_stdout_appender;
+            log->appenders[log->appender_count].ctx = NULL;
+            log->appender_count++;
+        } else if (!has) {
+            pthread_mutex_unlock(&log->lock);
+            log_end_op(log);
+            return -1;
+        }
+        pthread_mutex_unlock(&log->lock);
+        log_end_op(log);
+    }
+
+    if (!file_on || !file_path || !file_path[0])
+        return 0;
+
+    if (log_begin_op(log) != 0) return -1;
+    pthread_mutex_lock(&log->lock);
+    if (log->file_path[0] && strcmp(log->file_path, file_path) == 0) {
+        pthread_mutex_unlock(&log->lock);
+        log_end_op(log);
+        return 0;
+    }
+    pthread_mutex_unlock(&log->lock);
+
+    FILE *f = fopen(file_path, "a");
+    if (!f) {
+        log_end_op(log);
+        return -1;
+    }
+    FILE *old = NULL;
+    pthread_mutex_lock(&log->lock);
+    int placed = 0;
+    for (size_t i = 0; i < log->appender_count; i++) {
+        if (log->appenders[i].fn == cmq_log_file_appender) {
+            old = (FILE *)log->appenders[i].ctx;
+            log->appenders[i].ctx = f;
+            placed = 1;
+            break;
+        }
+    }
+    if (!placed) {
+        if (log->appender_count >= CMQ_LOG_MAX_APPENDERS) {
+            pthread_mutex_unlock(&log->lock);
+            fclose(f);
+            log_end_op(log);
+            return -1;
+        }
+        log->appenders[log->appender_count].fn = cmq_log_file_appender;
+        log->appenders[log->appender_count].ctx = f;
+        log->appender_count++;
+    }
+    snprintf(log->file_path, sizeof(log->file_path), "%s", file_path);
+    pthread_mutex_unlock(&log->lock);
+    if (old) {
+        while (atomic_load_explicit(&log->in_flight, memory_order_acquire) > 1) {
+            struct timespec ts = {0, 1000000L};
+            nanosleep(&ts, NULL);
+        }
+        fclose(old);
+    }
+    log_end_op(log);
+    return 0;
 }
 
 void cmq_log_write(cmq_log_t *log, cmq_log_level_t level, const char *file, int line, const char *fmt, ...) {
