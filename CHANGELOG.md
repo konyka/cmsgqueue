@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.125 - 2026-09-06
+
+### Added
+- **Reload account_max_* defaults** —
+  `cmq_server_reload` updates non-zero
+  `account_max_connections`, `account_max_subscriptions`,
+  `account_max_payload`, and `account_max_bytes_live` on
+  the account manager. New accounts inherit the new
+  defaults. 0 / omitted keeps the current fields.
+
+### Tests
+- `tests/test_acd.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.125.enumeration.md`, `v0.5.125.plan.md`.
+- `docs/features/accounts.md`.
+- `docs/benchmarks/v05125_{1,2}.txt`.
+
+### Test count
+- 491 tests (was 487 in v0.5.124; +4).
+
 ## 0.5.124 - 2026-09-06
 
 ### Added

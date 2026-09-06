@@ -76,6 +76,16 @@ void cmq_account_set_limits(cmq_account_t *acc, uint32_t max_conn,
 int cmq_account_check_payload(const cmq_account_t *acc, uint64_t bytes);
 void cmq_account_manager_set_default_bytes_live(cmq_account_manager_t *mgr,
                                                 uint64_t max_bytes);
+uint32_t cmq_account_manager_default_connections(const cmq_account_manager_t *mgr);
+uint32_t cmq_account_manager_default_subscriptions(const cmq_account_manager_t *mgr);
+uint64_t cmq_account_manager_default_payload(const cmq_account_manager_t *mgr);
+uint64_t cmq_account_manager_default_bytes_live(const cmq_account_manager_t *mgr);
+/* v0.5.125: update manager defaults in place. 0 keeps the current
+ * field. conn/sub 0–1000000; payload 0–CMQ_MAX_PAYLOAD_LIMIT;
+ * bytes_live 0–1073741824. New accounts inherit the new defaults. */
+int cmq_account_reload_defaults(cmq_account_manager_t *mgr,
+                                int max_conn, int max_sub,
+                                int max_payload, int max_bytes_live);
 void cmq_account_set_max_bytes_live(cmq_account_t *acc, uint64_t max_bytes);
 /* 0 credited; -1 stale; -2 over max_bytes_live. n==0 or max==0 is a no-op. */
 int cmq_account_credit_bytes_live(cmq_account_t *acc, uint32_t epoch,

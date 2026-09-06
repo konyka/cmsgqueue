@@ -8889,6 +8889,25 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
     if (fresh.max_msgs_per_sec_per_subject > 0)
         server->config.max_msgs_per_sec_per_subject =
             fresh.max_msgs_per_sec_per_subject;
+    if (cmq_account_reload_defaults(server->accounts,
+                                    fresh.account_max_connections,
+                                    fresh.account_max_subscriptions,
+                                    fresh.account_max_payload,
+                                    fresh.account_max_bytes_live) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
+    if (fresh.account_max_connections > 0)
+        server->config.account_max_connections =
+            fresh.account_max_connections;
+    if (fresh.account_max_subscriptions > 0)
+        server->config.account_max_subscriptions =
+            fresh.account_max_subscriptions;
+    if (fresh.account_max_payload > 0)
+        server->config.account_max_payload = fresh.account_max_payload;
+    if (fresh.account_max_bytes_live > 0)
+        server->config.account_max_bytes_live =
+            fresh.account_max_bytes_live;
     if (cmq_reload_apply_tls(server->tls_config_slots, CMQ_MAX_LISTENERS,
                              &fresh) != 0) {
         cmq_config_free(&fresh);

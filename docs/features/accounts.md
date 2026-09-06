@@ -35,6 +35,10 @@ int cmq_account_check_payload(acc, bytes); /* 0 ok, -1 over */
 
 Defaults copy onto **new** accounts only. Soft-delete +
 `cmq_account_create` of the same name keeps the previous limits.
+SIGHUP / `cmq_server_reload` updates non-zero `account_max_*`
+defaults in place (v0.5.125). 0 / omitted keeps the current
+field. Already-created accounts and CONNECT-cached caps are
+unchanged.
 
 `cmq_account_inc_connections` / `inc_subscriptions` return:
 

@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_account.h"
+#include "cmq.h"
 #include "cmq_thread.h"
 #include <errno.h>
 #include <pthread.h>
@@ -156,6 +157,51 @@ void cmq_account_manager_set_default_bytes_live(cmq_account_manager_t *mgr,
                                                 uint64_t max_bytes) {
     if (!mgr) return;
     __atomic_store_n(&mgr->default_max_bytes_live, max_bytes, __ATOMIC_RELEASE);
+}
+
+uint32_t cmq_account_manager_default_connections(const cmq_account_manager_t *mgr) {
+    return mgr ? __atomic_load_n(&mgr->default_max_connections, __ATOMIC_ACQUIRE) : 0;
+}
+
+uint32_t cmq_account_manager_default_subscriptions(const cmq_account_manager_t *mgr) {
+    return mgr ? __atomic_load_n(&mgr->default_max_subscriptions, __ATOMIC_ACQUIRE) : 0;
+}
+
+uint64_t cmq_account_manager_default_payload(const cmq_account_manager_t *mgr) {
+    return mgr ? __atomic_load_n(&mgr->default_max_payload, __ATOMIC_ACQUIRE) : 0;
+}
+
+uint64_t cmq_account_manager_default_bytes_live(const cmq_account_manager_t *mgr) {
+    return mgr ? __atomic_load_n(&mgr->default_max_bytes_live, __ATOMIC_ACQUIRE) : 0;
+}
+
+int cmq_account_reload_defaults(cmq_account_manager_t *mgr,
+                                int max_conn, int max_sub,
+                                int max_payload, int max_bytes_live) {
+    if (max_conn < 0 || max_conn > 1000000) return -1;
+    if (max_sub < 0 || max_sub > 1000000) return -1;
+    if (max_payload < 0 || max_payload > CMQ_MAX_PAYLOAD_LIMIT) return -1;
+    if (max_bytes_live < 0 || max_bytes_live > 1073741824) return -1;
+    if (!mgr) return (max_conn == 0 && max_sub == 0 &&
+                      max_payload == 0 && max_bytes_live == 0) ? 0 : -1;
+    if (max_conn == 0 && max_sub == 0 && max_payload == 0 &&
+        max_bytes_live == 0)
+        return 0;
+    uint32_t conn = max_conn > 0
+        ? (uint32_t)max_conn
+        : cmq_account_manager_default_connections(mgr);
+    uint32_t sub = max_sub > 0
+        ? (uint32_t)max_sub
+        : cmq_account_manager_default_subscriptions(mgr);
+    uint64_t pay = max_payload > 0
+        ? (uint64_t)max_payload
+        : cmq_account_manager_default_payload(mgr);
+    uint64_t liveb = max_bytes_live > 0
+        ? (uint64_t)max_bytes_live
+        : cmq_account_manager_default_bytes_live(mgr);
+    cmq_account_manager_set_defaults(mgr, conn, sub, pay);
+    cmq_account_manager_set_default_bytes_live(mgr, liveb);
+    return 0;
 }
 
 void cmq_account_set_max_bytes_live(cmq_account_t *acc, uint64_t max_bytes) {
