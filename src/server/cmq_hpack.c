@@ -313,3 +313,179 @@ int cmq_hpack_hdr_decode(const uint8_t *in, size_t in_len, char *name,
     if (consumed) *consumed = used;
     return 0;
 }
+
+void cmq_hpack_dyn_init(cmq_hpack_dyn_t *t) {
+    if (!t) return;
+    memset(t, 0, sizeof(*t));
+    t->max = CMQ_HPACK_DYN_MAX;
+}
+
+unsigned cmq_hpack_dyn_size(const cmq_hpack_dyn_t *t) {
+    return t ? t->size : 0;
+}
+
+unsigned cmq_hpack_dyn_count(const cmq_hpack_dyn_t *t) {
+    return t ? t->n : 0;
+}
+
+static void cmq_hpack_dyn_evict_oldest(cmq_hpack_dyn_t *t) {
+    if (!t || t->n == 0) return;
+    unsigned last = t->n - 1;
+    t->size -= (unsigned)t->e[last].nlen + (unsigned)t->e[last].vlen + 32u;
+    t->n--;
+    uint8_t tmp[CMQ_HPACK_DYN_MAX];
+    unsigned u = 0;
+    for (unsigned i = 0; i < t->n; i++) {
+        memcpy(tmp + u, t->buf + t->e[i].noff, t->e[i].nlen);
+        t->e[i].noff = (uint16_t)u;
+        u += t->e[i].nlen;
+        memcpy(tmp + u, t->buf + t->e[i].voff, t->e[i].vlen);
+        t->e[i].voff = (uint16_t)u;
+        u += t->e[i].vlen;
+    }
+    if (u > 0) memcpy(t->buf, tmp, u);
+    t->used = u;
+}
+
+int cmq_hpack_dyn_set_max(cmq_hpack_dyn_t *t, unsigned max) {
+    if (!t || max > CMQ_HPACK_DYN_MAX) return -1;
+    t->max = max;
+    while (t->n > 0 && t->size > t->max)
+        cmq_hpack_dyn_evict_oldest(t);
+    return 0;
+}
+
+int cmq_hpack_dyn_add(cmq_hpack_dyn_t *t, const char *name, const char *value) {
+    if (!t || !name || !value) return -1;
+    size_t nl = strlen(name);
+    size_t vl = strlen(value);
+    if (nl == 0 || vl == 0 || nl > CMQ_HPACK_STR_MAX || vl > CMQ_HPACK_STR_MAX)
+        return -1;
+    unsigned es = (unsigned)nl + (unsigned)vl + 32u;
+    while (t->n > 0 && (t->size + es > t->max || t->n >= CMQ_HPACK_DYN_SLOTS))
+        cmq_hpack_dyn_evict_oldest(t);
+    if (es > t->max) return 0;
+    if (t->used + nl + vl > CMQ_HPACK_DYN_MAX) return -1;
+    if (t->n > 0)
+        memmove(&t->e[1], &t->e[0], t->n * sizeof(t->e[0]));
+    t->e[0].noff = (uint16_t)t->used;
+    t->e[0].nlen = (uint16_t)nl;
+    memcpy(t->buf + t->used, name, nl);
+    t->used += (unsigned)nl;
+    t->e[0].voff = (uint16_t)t->used;
+    t->e[0].vlen = (uint16_t)vl;
+    memcpy(t->buf + t->used, value, vl);
+    t->used += (unsigned)vl;
+    t->n++;
+    t->size += es;
+    return 0;
+}
+
+int cmq_hpack_dyn_get(const cmq_hpack_dyn_t *t, unsigned newest_off,
+                      const char **name, size_t *nlen, const char **value,
+                      size_t *vlen) {
+    if (!t || !name || !nlen || !value || !vlen || newest_off >= t->n)
+        return -1;
+    *name = (const char *)(t->buf + t->e[newest_off].noff);
+    *nlen = t->e[newest_off].nlen;
+    *value = (const char *)(t->buf + t->e[newest_off].voff);
+    *vlen = t->e[newest_off].vlen;
+    return 0;
+}
+
+static int cmq_hpack_copy_nv(const char *n, size_t nl, const char *v, size_t vl,
+                             char *name, size_t ncap, char *value, size_t vcap) {
+    if (nl >= ncap || vl >= vcap) return -1;
+    memcpy(name, n, nl);
+    name[nl] = '\0';
+    memcpy(value, v, vl);
+    value[vl] = '\0';
+    return 0;
+}
+
+static int cmq_hpack_lookup(const cmq_hpack_dyn_t *t, unsigned idx, char *name,
+                            size_t ncap, char *value, size_t vcap) {
+    if (idx == 0) return -1;
+    if (idx <= CMQ_HPACK_STATIC_MAX) {
+        const char *n = NULL, *v = NULL;
+        if (cmq_hpack_static_get(idx, &n, &v) != 0) return -1;
+        return cmq_hpack_copy_nv(n, strlen(n), v, strlen(v), name, ncap, value,
+                                 vcap);
+    }
+    const char *n = NULL, *v = NULL;
+    size_t nl = 0, vl = 0;
+    unsigned off = idx - (CMQ_HPACK_STATIC_MAX + 1u);
+    if (cmq_hpack_dyn_get(t, off, &n, &nl, &v, &vl) != 0) return -1;
+    return cmq_hpack_copy_nv(n, nl, v, vl, name, ncap, value, vcap);
+}
+
+int cmq_hpack_hdr_encode_inc(cmq_hpack_dyn_t *t, const char *name,
+                             const char *value, uint8_t *out, size_t cap) {
+    if (!t || !name || !value || !out || cap == 0) return -1;
+    int n = cmq_hpack_int_encode(0, 6, 0x40, out, cap);
+    if (n < 0) return -1;
+    int n2 = cmq_hpack_str_encode(name, out + n, cap - (size_t)n);
+    if (n2 < 0) return -1;
+    int n3 = cmq_hpack_str_encode(value, out + n + n2,
+                                  cap - (size_t)n - (size_t)n2);
+    if (n3 < 0) return -1;
+    if (cmq_hpack_dyn_add(t, name, value) != 0) return -1;
+    return n + n2 + n3;
+}
+
+int cmq_hpack_hdr_decode_dyn(cmq_hpack_dyn_t *t, const uint8_t *in,
+                             size_t in_len, char *name, size_t ncap,
+                             char *value, size_t vcap, size_t *consumed) {
+    if (!t || !in || !name || !value || in_len == 0 || ncap == 0 || vcap == 0)
+        return -1;
+    uint8_t b = in[0];
+    size_t used = 0;
+    if ((b & 0x80) != 0) {
+        uint32_t idx = 0;
+        if (cmq_hpack_int_decode(in, in_len, 7, &idx, &used) != 0) return -1;
+        if (cmq_hpack_lookup(t, (unsigned)idx, name, ncap, value, vcap) != 0)
+            return -1;
+        if (consumed) *consumed = used;
+        return 0;
+    }
+    if ((b & 0xe0) == 0x20) {
+        uint32_t sz = 0;
+        if (cmq_hpack_int_decode(in, in_len, 5, &sz, &used) != 0) return -1;
+        if (cmq_hpack_dyn_set_max(t, sz) != 0) return -1;
+        if (consumed) *consumed = used;
+        return 1;
+    }
+    int incremental = 0;
+    unsigned nbits = 0;
+    if ((b & 0xc0) == 0x40) {
+        incremental = 1;
+        nbits = 6;
+    } else if ((b & 0xf0) == 0x00 || (b & 0xf0) == 0x10) {
+        nbits = 4;
+    } else {
+        return -1;
+    }
+    uint32_t nidx = 0;
+    if (cmq_hpack_int_decode(in, in_len, nbits, &nidx, &used) != 0) return -1;
+    if (used > in_len) return -1;
+    if (nidx == 0) {
+        size_t sl = 0;
+        if (cmq_hpack_str_decode(in + used, in_len - used, name, ncap, &sl)
+            != 0)
+            return -1;
+        used += sl;
+    } else {
+        char dummy[CMQ_HPACK_STR_MAX + 1];
+        if (cmq_hpack_lookup(t, (unsigned)nidx, name, ncap, dummy,
+                             sizeof(dummy)) != 0)
+            return -1;
+    }
+    if (used > in_len) return -1;
+    size_t sl = 0;
+    if (cmq_hpack_str_decode(in + used, in_len - used, value, vcap, &sl) != 0)
+        return -1;
+    used += sl;
+    if (incremental && cmq_hpack_dyn_add(t, name, value) != 0) return -1;
+    if (consumed) *consumed = used;
+    return 0;
+}

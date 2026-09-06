@@ -1,0 +1,3 @@
+v0.5.72 bench 2:
+- Slot cap 128 (4096/32). Evict oldest until the new entry fits.
+- Size update above 4096 is rejected before any evict walk.

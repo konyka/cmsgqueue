@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.72 - 2026-09-06
+
+### Added
+- **HPACK 4 KiB dynamic table (D2 phase 4)** — incremental
+  literals populate a 4 KiB table; indexed fields resolve
+  static or dynamic names. Size updates above 4096 fail
+  closed. h2 listener stays deferred.
+
+### Tests
+- `tests/test_hdyn.c` — RFC C.2.1, C.3.1–C.3.2, evict,
+  reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.72.enumeration.md`, `v0.5.72.plan.md`.
+- `docs/features/hpack.md`, `http2.md`.
+- `docs/benchmarks/v0572_{1,2}.txt`.
+
+### Test count
+- 279 tests (was 275 in v0.5.71; +4).
+
 ## 0.5.71 - 2026-09-06
 
 ### Added
