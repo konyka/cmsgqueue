@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.123 - 2026-09-06
+
+### Added
+- **Reload payload / sub / client caps** —
+  `cmq_server_reload` copies non-zero `max_payload_size`,
+  `max_subs_per_client`, and `max_clients`. 0 / omitted
+  keeps the current caps.
+
+### Tests
+- `tests/test_cap.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.123.enumeration.md`, `v0.5.123.plan.md`.
+- `docs/benchmarks/v05123_{1,2}.txt`.
+
+### Test count
+- 483 tests (was 479 in v0.5.122; +4).
+
 ## 0.5.122 - 2026-09-06
 
 ### Added

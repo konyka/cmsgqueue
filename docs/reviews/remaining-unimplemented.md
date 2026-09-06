@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.122)
+# Remaining unimplemented work (HEAD after v0.5.123)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -84,6 +84,7 @@ Required next cuts: none.
 | v0.5.120 | reload JWKS cache from jwks_json |
 | v0.5.121 | reload persist_sync_interval_ms |
 | v0.5.122 | reload live rate / timeout scalars |
+| v0.5.123 | reload payload / sub / client caps |
 
 ## Deferred — detailed designs
 
@@ -188,6 +189,7 @@ are live (v0.5.88).
 | reload JWKS cache from jwks_json | shipped v0.5.120 | — |
 | reload persist_sync_interval_ms | shipped v0.5.121 | — |
 | reload live rate / timeout scalars | shipped v0.5.122 | — |
+| reload payload / sub / client caps | shipped v0.5.123 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -199,6 +201,7 @@ are live (v0.5.88).
   reload shipped v0.5.120 (`jwks_url` refresh stays
   create-time). `persist_sync_interval_ms` reload shipped
   v0.5.121. Live rate / timeout scalars shipped v0.5.122.
+  Payload / sub / client caps shipped v0.5.123.
 
 ## TDD rule for every increment
 

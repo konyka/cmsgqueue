@@ -155,6 +155,26 @@ int cmq_reload_apply_auth(cmq_config_t *live, const cmq_config_t *fresh) {
     return 0;
 }
 
+int cmq_reload_apply_caps(cmq_config_t *live, const cmq_config_t *fresh) {
+    if (!live || !fresh) return -1;
+    if (fresh->max_payload_size < 0 ||
+        fresh->max_payload_size > CMQ_MAX_PAYLOAD_LIMIT)
+        return -1;
+    if (fresh->max_subs_per_client < 0 ||
+        fresh->max_subs_per_client > CMQ_DEFAULT_MAX_SUBS_PER_CLIENT)
+        return -1;
+    if (fresh->max_clients < 0 ||
+        fresh->max_clients > CMQ_MAX_CLIENTS_LIMIT)
+        return -1;
+    if (fresh->max_payload_size > 0)
+        live->max_payload_size = fresh->max_payload_size;
+    if (fresh->max_subs_per_client > 0)
+        live->max_subs_per_client = fresh->max_subs_per_client;
+    if (fresh->max_clients > 0)
+        live->max_clients = fresh->max_clients;
+    return 0;
+}
+
 int cmq_reload_apply_limits(cmq_config_t *live, const cmq_config_t *fresh) {
     if (!live || !fresh) return -1;
     if (fresh->max_connects_per_sec < 0 ||

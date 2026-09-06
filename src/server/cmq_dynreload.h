@@ -28,6 +28,11 @@ int cmq_reload_apply_auth(cmq_config_t *live, const cmq_config_t *fresh);
  * ping / write timeout 0–86400000. All-or-nothing. */
 int cmq_reload_apply_limits(cmq_config_t *live, const cmq_config_t *fresh);
 
+/* Copy non-zero payload / sub / client caps. 0 keeps current.
+ * max_payload_size 0–CMQ_MAX_PAYLOAD_LIMIT;
+ * max_subs_per_client 0–1024; max_clients 0–CMQ_MAX_CLIENTS_LIMIT. */
+int cmq_reload_apply_caps(cmq_config_t *live, const cmq_config_t *fresh);
+
 /* Async-signal-safe SIGHUP latch. note() from the handler; take()
  * from the event loop. */
 void cmq_sighup_note(void);
