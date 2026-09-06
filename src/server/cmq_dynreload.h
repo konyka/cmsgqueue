@@ -18,4 +18,9 @@ int cmq_reload_apply_dynamic(cmq_log_t *log, int *log_level,
 int cmq_reload_apply_tls(cmq_tls_config_t **slots, int nslots,
                          const cmq_config_t *fresh);
 
+/* Async-signal-safe SIGHUP latch. note() from the handler; take()
+ * from the event loop. */
+void cmq_sighup_note(void);
+int cmq_sighup_take(void);
+
 #endif

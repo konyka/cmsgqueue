@@ -88,6 +88,8 @@ static int parse_log_level(const char *value, int *out) {
 }
 
 /* Match filestore dir_safe: no '\', controls, or "."/".." components. */
+static int cfg_saw_config_file;
+
 static int persist_dir_ok(const char *dir) {
     if (!dir || !dir[0]) return 0;
     size_t n = strnlen(dir, 512);
@@ -254,6 +256,15 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "js_msgs_rotate_bytes") == 0) {
         return parse_int_range(value, 0, 1073741824,
                                &config->js_msgs_rotate_bytes);
+    } else if (strcmp(key, "config_file") == 0) {
+        cfg_saw_config_file = 1;
+        if (!value[0]) {
+            cfg_free_owned(config->config_file);
+            config->config_file = NULL;
+            return 0;
+        }
+        if (!persist_dir_ok(value)) return -1;
+        return cfg_set_str(&config->config_file, value);
     } else if (strcmp(key, "persist_dir") == 0) {
         if (!value[0]) {
             cfg_free_owned(config->persist_dir);
@@ -448,6 +459,7 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->acl_allow);
     cfg_free_owned(config->acl_deny);
     cfg_free_owned(config->blocklist_file);
+    cfg_free_owned(config->config_file);
     cfg_free_owned(config->persist_dir);
     cfg_free_owned(config->mqtt_bridge_addr);
     for (int i = 0; i < 4; i++) {
@@ -495,6 +507,7 @@ void cmq_config_free(cmq_config_t *config) {
     config->acl_allow = NULL;
     config->acl_deny = NULL;
     config->blocklist_file = NULL;
+    config->config_file = NULL;
     config->persist_dir = NULL;
     config->mqtt_bridge_addr = NULL;
     for (int i = 0; i < 8; i++) {
@@ -512,6 +525,7 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
        be zeroed or previously load/free'd — same contract as error paths). */
     cmq_config_free(config);
     memset(config, 0, sizeof(*config));
+    cfg_saw_config_file = 0;
     /* Omitted log_level key → INFO (0 is TRACE when explicitly set). */
     config->log_level = 2;
 
@@ -562,6 +576,8 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
     }
 
     fclose(fp);
+    if (!cfg_saw_config_file && persist_dir_ok(path))
+        (void)cfg_set_str(&config->config_file, path);
     return CMQ_OK;
 }
 

@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.117)
+# Remaining unimplemented work (HEAD after v0.5.118)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -79,6 +79,7 @@ Required next cuts: none.
 | v0.5.115 | extra-listener bind host/port |
 | v0.5.116 | reload log_level and acl_deny |
 | v0.5.117 | reload TLS cert/key |
+| v0.5.118 | SIGHUP / config_file |
 
 ## Deferred — detailed designs
 
@@ -178,13 +179,14 @@ are live (v0.5.88).
 | extra-listener bind host/port | shipped v0.5.115 | — |
 | reload log_level and acl_deny | shipped v0.5.116 | — |
 | reload TLS cert/key | shipped v0.5.117 | — |
+| SIGHUP / config_file | shipped v0.5.118 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
 
 - Slot 0 TLS stays the legacy `tls_*` keys. Extra-listener
   host/port shipped v0.5.115 (omit = `127.0.0.1:port+li`).
-  `config_file` is unused meta.
+  `config_file` / SIGHUP shipped v0.5.118.
 
 ## TDD rule for every increment
 

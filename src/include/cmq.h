@@ -69,7 +69,7 @@ typedef struct cmq_config {
     int max_subs_per_client;       /* Max subscriptions per client */
     int ping_interval_ms;          /* Ping interval in milliseconds */
     int write_timeout_ms;          /* Write timeout in milliseconds */
-    const char *config_file;       /* Path to config file (optional) */
+    const char *config_file;       /* v0.5.118: SIGHUP reload path; NULL = off */
     const char *log_file;          /* Path to log file (optional) */
     int log_level;                 /* Log level: 0=trace,1=debug,2=info,3=warn,4=error,5=fatal */
     int log_to_stdout;             /* Log to stdout (default: 1) */

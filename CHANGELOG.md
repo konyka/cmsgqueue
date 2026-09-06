@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.118 - 2026-09-06
+
+### Added
+- **SIGHUP / `config_file`** — load stores the path when
+  `config_file` is omitted; empty disables. Create `strdup`s
+  it. A SIGHUP handler latches; the event-loop post-tick
+  calls `cmq_server_reload`. `..` / `\\` fail closed.
+
+### Tests
+- `tests/test_hup.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.118.enumeration.md`, `v0.5.118.plan.md`.
+- `docs/benchmarks/v05118_{1,2}.txt`.
+
+### Test count
+- 463 tests (was 459 in v0.5.117; +4).
+
 ## 0.5.117 - 2026-09-06
 
 ### Added

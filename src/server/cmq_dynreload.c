@@ -1,8 +1,11 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_dynreload.h"
 #include "cmq_acl.h"
+#include "cmq_atomic.h"
 #include <stdlib.h>
 #include <string.h>
+
+static cmq_atomic_int cmq_sighup_pending;
 
 static int apply_csv(cmq_acl_t *acl, int allow, const char *csv) {
     if (!csv || !csv[0]) return 0;
@@ -101,4 +104,14 @@ int cmq_reload_apply_tls(cmq_tls_config_t **slots, int nslots,
             return -1;
     }
     return 0;
+}
+
+void cmq_sighup_note(void) {
+    cmq_atomic_store_int(&cmq_sighup_pending, 1, CMQ_ATOMIC_RELEASE);
+}
+
+int cmq_sighup_take(void) {
+    int expected = 1;
+    return cmq_atomic_cas_int(&cmq_sighup_pending, &expected, 0,
+                              CMQ_ATOMIC_ACQ_REL) ? 1 : 0;
 }

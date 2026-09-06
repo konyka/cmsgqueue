@@ -31,6 +31,7 @@
 #include "cmq_h2.h"
 #include <sys/stat.h>
 #include <unistd.h>
+#include <signal.h>
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -38,6 +39,13 @@
 #endif
 
 static __thread int cmq_current_worker_id = -1;
+
+#ifdef SIGHUP
+static void cmq_on_sighup(int sig) {
+    (void)sig;
+    cmq_sighup_note();
+}
+#endif
 
 /* v0.5.32: per-listener TLS slot lookup. Returns the slot index whose
  * listen fd matches, or 0 (the default slot) if no match. Linear
@@ -7799,6 +7807,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     /* Copy scalars; strings are duplicated below so server owns them. */
     srv->config = src;
     srv->config.host = NULL;
+    srv->config.config_file = NULL;
     srv->config.log_file = NULL;
     srv->config.auth_username = NULL;
     srv->config.auth_password = NULL;
@@ -7853,6 +7862,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             if (!(dst)) { cmq_config_free(&srv->config); free(srv); return CMQ_ERR_NO_MEMORY; } \
         } \
     } while (0)
+    OWN(srv->config.config_file, src.config_file);
     OWN(srv->config.log_file, src.log_file);
     OWN(srv->config.auth_username, src.auth_username);
     OWN(srv->config.auth_password, src.auth_password);
@@ -8400,6 +8410,17 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
        remains (see worker_push_msg). */
     srv->msg_payload_pool = cmq_mpool_create(64 * 1024);
 
+#ifdef SIGHUP
+    {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = cmq_on_sighup;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        (void)sigaction(SIGHUP, &sa, NULL);
+    }
+#endif
+
     *server = srv;
     return CMQ_OK;
 }
@@ -8799,7 +8820,10 @@ static void acceptor_process_drain(cmq_server_t *srv) {
 }
 
 static void acceptor_post_tick(void *data) {
-    acceptor_process_drain((cmq_server_t *)data);
+    cmq_server_t *srv = (cmq_server_t *)data;
+    acceptor_process_drain(srv);
+    if (cmq_sighup_take() && srv->config.config_file)
+        (void)cmq_server_reload(srv, srv->config.config_file);
 }
 
 int cmq_server_reload(cmq_server_t *server, const char *config_path) {
