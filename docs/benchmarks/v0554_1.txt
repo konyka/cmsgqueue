@@ -1,0 +1,3 @@
+v0.5.54 bench 1:
+- Offer is a slot scan of 16 + memcpy; no malloc.
+- CMQ handle_publish is unchanged.

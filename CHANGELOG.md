@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.54 - 2026-09-06
+
+### Added
+- **MQTT QoS 1 outbound inflight** — 16-slot per-session window.
+  Local subscribers matching a PUBLISH receive a packet-id
+  frame; PUBACK frees the slot. Full window skips that dest.
+  Live CMQ PUBLISH path is unchanged.
+
+### Tests
+- `tests/test_mqtt_inflight.c` — offer/ack/full/encode/ids,
+  socketpair fanout+ack, full skip (+7).
+
+### Documentation
+- `docs/reviews/v0.5.54.enumeration.md`, `v0.5.54.plan.md`.
+- `docs/features/mqtt-server-stub.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0554_{1,2}.txt`.
+
+### Test count
+- 191 tests (was 184 in v0.5.53; +7).
+
 ## 0.5.53 - 2026-09-06
 
 ### Added

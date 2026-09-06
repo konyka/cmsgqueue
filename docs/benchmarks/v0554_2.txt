@@ -1,0 +1,3 @@
+v0.5.54 bench 2:
+- Fanout encodes under the session lock, send() after unlock.
+- Full window skips the dest instead of blocking the publisher.

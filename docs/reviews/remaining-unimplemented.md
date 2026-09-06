@@ -1,9 +1,8 @@
-# Remaining unimplemented work (HEAD after v0.5.53)
+# Remaining unimplemented work (HEAD after v0.5.54)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
-P3 D7/D8 are shipped. F14 connect-rate is v0.5.50. Audit events
-are v0.5.51. Outstanding-byte caps are v0.5.52. D6 key
-compaction is v0.5.53. Next cuts: MQTT QoS inflight or D1–D5.
+P3 D7/D8 are shipped. D6 is v0.5.53. MQTT QoS 1 outbound
+inflight is v0.5.54. Next cuts: D1–D5 or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -16,6 +15,7 @@ compaction is v0.5.53. Next cuts: MQTT QoS inflight or D1–D5.
 | v0.5.51 | Audit auth / persist / TLS events |
 | v0.5.52 | Per-account outstanding-byte (`bytes_live`) cap |
 | v0.5.53 | D6 Kafka-style key compact on sealed `.1` |
+| v0.5.54 | MQTT QoS 1 outbound inflight + local fanout |
 
 ## Deferred — detailed designs
 
@@ -67,7 +67,7 @@ optional follow-ups.
 
 | Item | Evidence | Next cut |
 |---|---|---|
-| MQTT QoS 1/2 inflight | Listener is QoS 0 + will | Inflight mqueue |
+| MQTT outbound QoS 2 | SUBSCRIBE grants at most 1 | PUBREL window |
 | ALPN `h2` | Comment example only; server never calls `set_alpn` | Ship D2 or leave unset |
 | Leaf/gateway e2e | Library exists, no multi-process test | Test-only increment |
 

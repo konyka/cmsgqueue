@@ -29,6 +29,15 @@ Username `0x80`, Password `0x40`). A stored will fires on
 `recv <= 0`, not on DISCONNECT. Clean Session=0 restores up to
 8 filters per client id (32 slots).
 
+## QoS 1 inflight (v0.5.54)
+
+Each live session has a 16-slot outbound window. Matching
+local subscribers receive `PUBLISH` with QoS 1 and a packet
+id. `PUBACK` frees the slot. A full window skips that dest
+(the publisher is not blocked). Payload over 1024 bytes is
+not tracked (offer returns `-3`). Outbound QoS 2 is not
+granted (SUBSCRIBE still caps at 1).
+
 ## Tests
 
 `tests/test_mqtt_props.c` — empty list, content-type, truncated,
@@ -37,8 +46,12 @@ unknown id, qos0 3.1.1 offset, qos0/qos1 v5 offset.
 `tests/test_mqtt_will.c` — CONNECT parse, will take-once / fire+retain,
 session save/load/drop.
 
+`tests/test_mqtt_inflight.c` — offer/ack/full/encode, socketpair
+fanout + PUBACK, full window skips.
+
 ## See also
 
 - `docs/reviews/v0.5.43.enumeration.md`
 - `docs/reviews/v0.5.46.enumeration.md`
+- `docs/reviews/v0.5.54.enumeration.md`
 - `docs/features/mqtt-bridge.md`
