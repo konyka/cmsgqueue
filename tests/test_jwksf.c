@@ -61,6 +61,11 @@ TEST(jwksf, parse_url) {
     ASSERT_EQ(cmq_jwks_parse_url("http://keys.local", &u), 0);
     ASSERT_EQ(u.port, CMQ_JWKS_DEFAULT_PORT);
     ASSERT_STR_EQ(u.path, "/.well-known/jwks.json");
+    ASSERT_EQ(u.tls, 0);
+    ASSERT_EQ(cmq_jwks_parse_url("https://keys.local/jwks.json", &u), 0);
+    ASSERT_EQ(u.tls, 1);
+    ASSERT_EQ(u.port, CMQ_JWKS_TLS_PORT);
+    ASSERT_STR_EQ(u.path, "/jwks.json");
 }
 
 TEST(jwksf, build_get) {
@@ -98,7 +103,7 @@ TEST(jwksf, http_get) {
 TEST(jwksf, reject) {
     cmq_jwks_url_t u;
     ASSERT(cmq_jwks_parse_url(NULL, &u) != 0);
-    ASSERT(cmq_jwks_parse_url("https://127.0.0.1/jwks.json", &u) != 0);
+    ASSERT(cmq_jwks_parse_url("ftp://127.0.0.1/jwks.json", &u) != 0);
     ASSERT(cmq_jwks_parse_url("http://user:pass@127.0.0.1/x", &u) != 0);
     ASSERT(cmq_jwks_parse_url("http://127.0.0.1/../jwks", &u) != 0);
     ASSERT(cmq_jwks_http_get(NULL, NULL) != 0);

@@ -1,8 +1,8 @@
-# Remaining unimplemented work (HEAD after v0.5.78)
+# Remaining unimplemented work (HEAD after v0.5.79)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
-cuts. Next cuts: D5 multi-node 2PC, HTTPS JWKS, OTLP/gRPC,
+cuts. Next cuts: D5 multi-node 2PC, OTLP/gRPC, ALPN `h2`,
 or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
@@ -41,6 +41,7 @@ or leaf/gateway e2e.
 | v0.5.76 | D3 phase 6: remote JWKS HTTP GET |
 | v0.5.77 | D3 phase 7: JWT RS256 + JWKS RSA |
 | v0.5.78 | D1 phase 3: OTLP HTTPS POST |
+| v0.5.79 | D3 phase 8: HTTPS JWKS GET |
 
 ## Deferred — detailed designs
 
@@ -58,12 +59,12 @@ prior-knowledge listener are live. **Remaining:** ALPN `h2`
 on TLS (server still never calls `cmq_tls_set_alpn`) and
 server `h2_port` wiring.
 
-### D3 JWT / NKEY / JWKS — phases 1–7 shipped v0.5.62–65, 0.5.74–77
+### D3 JWT / NKEY / JWKS — phases 1–8 shipped v0.5.62–65, 0.5.74–79
 
 HS256 JWT, ES256 (P-256), RS256 (2048–4096), Ed25519 nkey
 on CONNECT (`U…` or 64 hex), static JWKS (oct/EC/RSA), and
-HTTP `jwks_url` fetch are live.
-**Remaining:** HTTPS JWKS. Still verify-only.
+HTTP/HTTPS `jwks_url` fetch are live.
+**Remaining:** JWKS refresh. Still verify-only.
 
 ### D4 JetStream / KV / Object Store — phases 1–6 shipped
 

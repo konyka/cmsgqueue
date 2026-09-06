@@ -7456,6 +7456,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.nkey_pub = NULL;
     srv->config.jwks_json = NULL;
     srv->config.jwks_url = NULL;
+    srv->config.jwks_ca = NULL;
     srv->config.jwt_ec_pub = NULL;
     srv->config.jwt_rsa_n = NULL;
     srv->config.jwt_rsa_e = NULL;
@@ -7491,6 +7492,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.nkey_pub, src.nkey_pub);
     OWN(srv->config.jwks_json, src.jwks_json);
     OWN(srv->config.jwks_url, src.jwks_url);
+    OWN(srv->config.jwks_ca, src.jwks_ca);
     OWN(srv->config.jwt_ec_pub, src.jwt_ec_pub);
     OWN(srv->config.jwt_rsa_n, src.jwt_rsa_n);
     OWN(srv->config.jwt_rsa_e, src.jwt_rsa_e);
@@ -7838,6 +7840,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         cmq_jwks_url_t u;
         cmq_jwks_t *j = calloc(1, sizeof(*j));
         if (j && cmq_jwks_parse_url(src.jwks_url, &u) == 0 &&
+            (!src.jwks_ca || !src.jwks_ca[0] ||
+             cmq_jwks_set_ca(&u, src.jwks_ca) == 0) &&
             cmq_jwks_http_get(&u, j) == 0)
             srv->jwks = j;
         else

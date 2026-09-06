@@ -1,4 +1,4 @@
-# JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–77, D3 phases 1–7)
+# JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–79, D3 phases 1–8)
 
 CONNECT may present a compact JWT in the password field
 when `jwt_issuer` is set with `jwt_hmac_secret`,
@@ -38,10 +38,11 @@ accepted. CONNECT tokens with `kid` select that key.
 Unknown `kid` fails. Missing `kid` may use
 `jwt_hmac_secret`, `jwt_ec_pub`, or `jwt_rsa_n`/`jwt_rsa_e`.
 
-`jwks_url` (v0.5.76) GETs an HTTP JWKS document at server
-create (`/.well-known/jwks.json` if the path is omitted).
-Mutually exclusive with `jwks_json`. HTTPS and refresh stay
-deferred.
+`jwks_url` (v0.5.76 / v0.5.79) GETs an HTTP or HTTPS JWKS
+document at server create (`/.well-known/jwks.json` if the
+path is omitted). Default HTTPS port is 443. `jwks_ca` is
+an optional PEM; otherwise the system CA store is used.
+Mutually exclusive with `jwks_json`. Refresh stays deferred.
 
 ## NKEY on CONNECT (v0.5.63)
 
@@ -66,7 +67,7 @@ JWKS is parsed once at create; lookup is ≤8 compares.
 
 `tests/test_jwt.c`, `tests/test_nkey_auth.c`, `tests/test_jwks.c`,
 `tests/test_es256.c`, `tests/test_nkeyb32.c`, `tests/test_jwksf.c`,
-`tests/test_rs256.c`
+`tests/test_rs256.c`, `tests/test_jwkss.c`
 
 ## See also
 
@@ -77,3 +78,4 @@ JWKS is parsed once at create; lookup is ≤8 compares.
 - `docs/reviews/v0.5.75.enumeration.md`
 - `docs/reviews/v0.5.76.enumeration.md`
 - `docs/reviews/v0.5.77.enumeration.md`
+- `docs/reviews/v0.5.79.enumeration.md`

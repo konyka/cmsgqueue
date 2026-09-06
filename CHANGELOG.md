@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.79 - 2026-09-06
+
+### Added
+- **HTTPS JWKS (D3 phase 8)** — `jwks_url` accepts
+  `https://`; create-time GET over TLS with peer verify.
+  Optional `jwks_ca` PEM; default port 443. `http://`
+  path unchanged. Refresh deferred.
+
+### Tests
+- `tests/test_jwkss.c` — HTTPS parse, TLS GET, missing
+  CA fail, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.79.enumeration.md`, `v0.5.79.plan.md`.
+- `docs/features/jwt.md`.
+- `docs/benchmarks/v0579_{1,2}.txt`.
+
+### Test count
+- 307 tests (was 303 in v0.5.78; +4).
+
 ## 0.5.78 - 2026-09-06
 
 ### Added
