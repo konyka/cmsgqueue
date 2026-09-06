@@ -29,6 +29,7 @@ int cmq_tls_set_server_name(cmq_tls_config_t *cfg, const char *name);
 /* F12: ALPN protocol list. Comma-separated (e.g. "h2,http/1.1").
  * Set BEFORE cmq_tls_load. NULL clears. */
 int cmq_tls_set_alpn(cmq_tls_config_t *cfg, const char *protos_csv);
+int cmq_tls_alpn_has(cmq_tls_config_t *cfg, const char *proto);
 
 /* F12: Reload the SSL_CTX from the current cert/key paths.
  * Atomically swaps; existing sessions continue with the old CTX

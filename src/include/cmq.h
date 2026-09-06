@@ -108,6 +108,7 @@ typedef struct cmq_config {
     const char *acl_deny;
     /* F15: connection blocklist file. NULL disables. */
     const char *blocklist_file;
+    int h2_port;                   /* v0.5.81: loopback HTTP/2; 0 = off */
     int tls_enabled;
     const char *tls_cert;
     const char *tls_key;

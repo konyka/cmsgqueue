@@ -219,6 +219,7 @@ struct cmq_server {
     struct cmq_obj *obj;       /* v0.5.68: D4 $OBJ.name; persist_dir only */
     void *otlp;                /* v0.5.64: cmq_otlp_url_t*; NULL = off */
     void *jwks;                /* v0.5.65: cmq_jwks_t*; NULL = off */
+    int h2_lfd;                /* v0.5.81: HTTP/2 listen fd; -1 = off */
     /* F16: ACL. NULL handle = no ACL. Refcounted for reload safety (P1). */
     struct cmq_rch *acl_h;
     /* F15: blocklist. NULL handle = no blocklist. Refcounted for reload. */
@@ -272,6 +273,9 @@ int srv_find_tls_slot(cmq_server_t *srv, int lfd);
 int cmq_server_publish(cmq_server_t *srv, const char *subject,
                        const uint8_t *payload, size_t payload_len,
                        const char *account_name);
+int cmq_server_h2_fd(const cmq_server_t *srv);
+int cmq_server_h2_port(const cmq_server_t *srv);
+int cmq_server_h2_accept(cmq_server_t *srv, const char *account);
 
 /* v0.5.39: bridge-specific WAL persist. Builds a self-describing
  * frame (magic 'CMQB' + version + topic_len + topic + payload)

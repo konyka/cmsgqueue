@@ -1,9 +1,9 @@
-# Remaining unimplemented work (HEAD after v0.5.80)
+# Remaining unimplemented work (HEAD after v0.5.81)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
 P3 D7/D8 are shipped. D1/D2/D3/D4/D5 have library or phase
-cuts. Next cuts: OTLP/gRPC, ALPN `h2`, JWKS refresh, or
-leaf/gateway e2e.
+cuts. Next cuts: OTLP/gRPC, JWKS refresh, or leaf/gateway
+e2e.
 
 ## Shipped (do not re-open)
 
@@ -43,6 +43,7 @@ leaf/gateway e2e.
 | v0.5.78 | D1 phase 3: OTLP HTTPS POST |
 | v0.5.79 | D3 phase 8: HTTPS JWKS GET |
 | v0.5.80 | D5 phase 3: multi-node 2PC |
+| v0.5.81 | D2 phase 6: ALPN h2 + h2_port |
 
 ## Deferred — detailed designs
 
@@ -52,13 +53,13 @@ Span ring, sidecar, OTLP/HTTP JSON, and OTLP HTTPS POST
 are live. **Remaining:** OTLP/gRPC collectors. Consume
 spans are queued only when a caller offers `KIND_CONSUME`.
 
-### D2 HTTP/2 listener — phases 1–5 shipped v0.5.66–73
+### D2 HTTP/2 listener — phases 1–6 shipped v0.5.66–73, 0.5.81
 
 HPACK static codec, Huffman, the 4 KiB dynamic table, the
-preface/SETTINGS/32-stream machine, and a loopback
-prior-knowledge listener are live. **Remaining:** ALPN `h2`
-on TLS (server still never calls `cmq_tls_set_alpn`) and
-server `h2_port` wiring.
+preface/SETTINGS/32-stream machine, a loopback
+prior-knowledge listener, `h2_port` bind, and TLS ALPN
+`h2` are live. **Remaining:** TLS-wrapped h2 bytes on the
+same accept path (prior-knowledge on the h2 fd still).
 
 ### D3 JWT / NKEY / JWKS — phases 1–8 shipped v0.5.62–65, 0.5.74–79
 
@@ -93,7 +94,7 @@ optional follow-ups.
 | Item | Evidence | Next cut |
 |---|---|---|
 | MQTT outbound QoS 2 | shipped v0.5.57 | — |
-| ALPN `h2` | Listener is prior-knowledge; server never calls `set_alpn` | Advertise only after TLS h2 slot |
+| ALPN `h2` | shipped v0.5.81 (`h2_port` + `set_alpn`) | TLS-wrapped h2 I/O |
 | Leaf/gateway e2e | Library exists, no multi-process test | Test-only increment |
 
 ## TDD rule for every increment

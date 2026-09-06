@@ -1,4 +1,4 @@
-# HTTP/2 (v0.5.66–73, D2 phases 1–5)
+# HTTP/2 (v0.5.66–73, 0.5.81, D2 phases 1–6)
 
 HPACK static + Huffman + 4 KiB dynamic table plus an
 HTTP/2 connection state machine and a loopback listener.
@@ -16,13 +16,15 @@ loopback prior-knowledge listener is v0.5.73 (`cmq_h2_listen`
 / `cmq_h2_session` / `cmq_h2_accept`). Bind is 127.0.0.1 only.
 POST `:path` `/subject` plus DATA becomes subject + payload.
 
-The server still does not call `cmq_tls_set_alpn` and does
-not advertise `h2`.
+`h2_port` (v0.5.81) binds that listener on the server
+(loopback only). When TLS is also enabled, the server calls
+`cmq_tls_set_alpn("h2")` before `cmq_tls_load` so the CTX
+advertises `h2`. `h2_port` 0 leaves both off.
 
 ## Tests
 
 `tests/test_hpack.c`, `tests/test_huff.c`, `tests/test_hdyn.c`,
-`tests/test_h2.c`, `tests/test_h2l.c`
+`tests/test_h2.c`, `tests/test_h2l.c`, `tests/test_h2p.c`
 
 ## See also
 
@@ -31,3 +33,4 @@ not advertise `h2`.
 - `docs/reviews/v0.5.71.enumeration.md`
 - `docs/reviews/v0.5.72.enumeration.md`
 - `docs/reviews/v0.5.73.enumeration.md`
+- `docs/reviews/v0.5.81.enumeration.md`

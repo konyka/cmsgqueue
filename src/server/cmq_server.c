@@ -26,7 +26,9 @@
 #include "cmq_kvb.h"
 #include "cmq_kv.h"
 #include "cmq_obj.h"
+#include "cmq_h2.h"
 #include <sys/stat.h>
+#include <unistd.h>
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -3640,6 +3642,28 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
     account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
                            live_held);
     return 0;
+}
+
+int cmq_server_h2_fd(const cmq_server_t *srv) {
+    if (!srv) return -1;
+    return srv->h2_lfd;
+}
+
+int cmq_server_h2_port(const cmq_server_t *srv) {
+    if (!srv || srv->h2_lfd < 0) return -1;
+    return cmq_h2_listen_port(srv->h2_lfd);
+}
+
+int cmq_server_h2_accept(cmq_server_t *srv, const char *account) {
+    if (!srv || srv->h2_lfd < 0) return -1;
+    char subject[CMQ_H2_SUBJECT_MAX];
+    uint8_t payload[CMQ_H2_MAX_FRAME];
+    size_t plen = 0;
+    if (cmq_h2_accept(srv->h2_lfd, subject, sizeof(subject), payload,
+                      sizeof(payload), &plen) != 0)
+        return -1;
+    const char *acc = (account && account[0]) ? account : "$default";
+    return cmq_server_publish(srv, subject, payload, plen, acc);
 }
 
 /* v0.5.39: bridge-specific WAL persist. Routes through
@@ -7584,6 +7608,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
 
     cmq_server_t *srv = calloc(1, sizeof(cmq_server_t));
     if (!srv) return CMQ_ERR_NO_MEMORY;
+    srv->h2_lfd = -1;
 
     cmq_config_t src = {0};
     if (config) src = *config;
@@ -7807,6 +7832,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         if (srv->config.tls_verify_peer) {
             cmq_tls_set_verify(srv->tls_config_slots[0], 1);
         }
+        if (srv->config.h2_port > 0)
+            (void)cmq_tls_set_alpn(srv->tls_config_slots[0], "h2");
         if (cmq_tls_load(srv->tls_config_slots[0]) != 0) {
             cmq_log_error(srv->log,
                 "TLS cert/key load failed — refusing plaintext");
@@ -7849,6 +7876,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         if (srv->config.listeners[li].tls_verify_peer) {
             cmq_tls_set_verify(srv->tls_config_slots[li], 1);
         }
+        if (srv->config.h2_port > 0)
+            (void)cmq_tls_set_alpn(srv->tls_config_slots[li], "h2");
         if (cmq_tls_load(srv->tls_config_slots[li]) != 0) {
             cmq_log_warn(srv->log,
                 "v0.5.31: tls slot %d load failed; listener falls back to slot 0",
@@ -8004,6 +8033,15 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     }
     if (srv->otel)
         (void)cmq_otel_start(srv->otel);
+    if (srv->config.h2_port > 0) {
+        srv->h2_lfd = cmq_h2_listen("127.0.0.1", srv->config.h2_port);
+        if (srv->h2_lfd < 0) {
+            cmq_log_error(srv->log, "h2_port bind failed");
+            cmq_server_destroy(srv);
+            *server = NULL;
+            return CMQ_ERR_INVALID_ARG;
+        }
+    }
 
     /* F14: per-account quota. */
     if (srv->config.max_msgs_per_sec_per_account > 0 ||
@@ -8855,6 +8893,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->cluster) {
         cmq_cluster_destroy(srv->cluster);
         srv->cluster = NULL;
+    }
+    if (srv->h2_lfd >= 0) {
+        close(srv->h2_lfd);
+        srv->h2_lfd = -1;
     }
     for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
         if (srv->tls_config_slots[i]) {

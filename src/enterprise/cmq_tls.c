@@ -128,6 +128,14 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     SSL_CTX_set_cipher_list(cfg->ssl_ctx, ciphers);
     /* CRIME/BREACH mitigation: disable TLS-level compression. */
     SSL_CTX_set_options(cfg->ssl_ctx, SSL_OP_NO_COMPRESSION);
+    if (cfg->alpn_len > 0) {
+        if (SSL_CTX_set_alpn_protos(cfg->ssl_ctx, cfg->alpn_data,
+                                     cfg->alpn_len) != 0) {
+            SSL_CTX_free(cfg->ssl_ctx);
+            cfg->ssl_ctx = NULL;
+            return -1;
+        }
+    }
     /* Best-effort defaults. */
     SSL_CTX_set_mode(cfg->ssl_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER |
                                     SSL_MODE_ENABLE_PARTIAL_WRITE);
@@ -347,6 +355,25 @@ int cmq_tls_set_alpn(cmq_tls_config_t *cfg, const char *protos_csv) {
     }
     tls_end_op(cfg);
     return 0;
+}
+
+int cmq_tls_alpn_has(cmq_tls_config_t *cfg, const char *proto) {
+    if (!cfg || !proto || !proto[0]) return 0;
+    size_t plen = strlen(proto);
+    if (tls_begin_op(cfg) != 0) return 0;
+    unsigned int i = 0;
+    int rc = 0;
+    while (i < cfg->alpn_len) {
+        unsigned int n = cfg->alpn_data[i++];
+        if (i + n > cfg->alpn_len) break;
+        if (n == plen && memcmp(cfg->alpn_data + i, proto, n) == 0) {
+            rc = 1;
+            break;
+        }
+        i += n;
+    }
+    tls_end_op(cfg);
+    return rc;
 }
 
 /* F12: Reload the SSL_CTX from the current cert/key paths.

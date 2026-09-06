@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.81 - 2026-09-06
+
+### Added
+- **ALPN h2 + h2_port (D2 phase 6)** — `h2_port` binds the
+  loopback HTTP/2 listener. TLS slots call
+  `cmq_tls_set_alpn("h2")` before load. `h2_port` 0 leaves
+  both off. Prior-knowledge POST unchanged.
+
+### Tests
+- `tests/test_h2p.c` — ALPN h2, listen, clear, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.81.enumeration.md`, `v0.5.81.plan.md`.
+- `docs/features/http2.md`.
+- `docs/benchmarks/v0581_{1,2}.txt`.
+
+### Test count
+- 315 tests (was 311 in v0.5.80; +4).
+
 ## 0.5.80 - 2026-09-06
 
 ### Added
