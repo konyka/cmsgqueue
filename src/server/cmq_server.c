@@ -6411,41 +6411,13 @@ static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
     return 0;
 }
 
-static void accept_cb(int fd, int events, void *data) {
-    cmq_server_t *srv = (cmq_server_t *)data;
-    if (!(events & CMQ_EV_READ)) return;
-    /* Drain/stop: never admit new sessions (covers backlog race after listen close). */
-    if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
-        cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
-        return;
-
-    /* Drain the listen backlog — one accept per epoll wake stalls under bursts.
-       Cap per wake so keepalive / existing clients stay responsive. */
-    enum { CMQ_ACCEPT_PER_WAKE = 64 };
-    int accepted = 0;
-    for (;;) {
-        if (accepted >= CMQ_ACCEPT_PER_WAKE)
-            return;
-        if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
-            cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
-            return;
-        struct sockaddr_in addr;
-        socklen_t addrlen = sizeof(addr);
-        int client_fd = accept(fd, (struct sockaddr *)&addr, &addrlen);
-        if (client_fd < 0) {
-            if (errno == EINTR) continue;
-            return; /* EAGAIN / EWOULDBLOCK / fatal */
-        }
-        accepted++;
-        if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
-            cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
-            close(client_fd);
-            return;
-        }
-
+/* v0.5.42: shared admit path for accept_cb and accept_thread_func.
+ * Takes ownership of client_fd. Returns 1 if the session is live. */
+static int admit_one_client(cmq_server_t *srv, int listen_fd,
+                             int client_fd, const struct sockaddr_in *addr) {
         if (set_nonblocking(client_fd) != 0) {
             close(client_fd);
-            continue;
+            return 0;
         }
 
         if (srv->config.max_clients > 0) {
@@ -6465,7 +6437,7 @@ static void accept_cb(int fd, int events, void *data) {
             }
             if (!admitted) {
                 close(client_fd);
-                continue;
+                return 0;
             }
         } else {
             cmq_atomic_fetch_add_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
@@ -6477,8 +6449,8 @@ static void accept_cb(int fd, int events, void *data) {
          * shares the same source address with itself). The cap is
          * uniform across all IPs. rate_lock is per-server, initialized
          * in cmq_server_create. */
-        if (srv->config.max_connects_per_sec > 0 && addr.sin_family == AF_INET) {
-            uint32_t ip = (uint32_t)addr.sin_addr.s_addr;
+        if (srv->config.max_connects_per_sec > 0 && addr->sin_family == AF_INET) {
+            uint32_t ip = (uint32_t)addr->sin_addr.s_addr;
             int admitted_rate = 0;
             struct timespec ts_now;
             clock_gettime(CLOCK_MONOTONIC, &ts_now);
@@ -6511,7 +6483,7 @@ static void accept_cb(int fd, int events, void *data) {
                 cmq_atomic_fetch_add_u32(&srv->active_clients, -1,
                                           CMQ_ATOMIC_RELAXED);
                 close(client_fd);
-                continue;
+                return 0;
             }
         }
 
@@ -6528,7 +6500,7 @@ static void accept_cb(int fd, int events, void *data) {
         if (cid == 0) {
             close(client_fd);
             cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-            continue;
+            return 0;
         }
 
         if (srv->workers && srv->num_workers > 0) {
@@ -6541,21 +6513,21 @@ static void accept_cb(int fd, int events, void *data) {
             if (!client) {
                 close(client_fd);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
+                return 0;
             }
             client->worker_id = idx;
-            client->tls_slot = srv_find_tls_slot(srv, fd);
+            client->tls_slot = srv_find_tls_slot(srv, listen_fd);
             if (client_tls_handshake(srv, client) != 0) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
+                return 0;
             }
             /* stop()/drain may race during TLS handshake — reject late admits. */
             if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
                 cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
+                return 0;
             }
 
             /* Hold clients_lock through idmap publish + ev_add so TEARDOWN /
@@ -6567,7 +6539,7 @@ static void accept_cb(int fd, int events, void *data) {
                     cmq_mutex_unlock(&w->clients_lock);
                     cmq_client_destroy(client);
                     cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                    continue;
+                    return 0;
                 }
             }
             w->clients[w->clients_count++] = client;
@@ -6576,7 +6548,7 @@ static void accept_cb(int fd, int events, void *data) {
                 cmq_mutex_unlock(&w->clients_lock);
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
+                return 0;
             }
             if (cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
                            client) != 0) {
@@ -6585,7 +6557,7 @@ static void accept_cb(int fd, int events, void *data) {
                 cmq_mutex_unlock(&w->clients_lock);
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
+                return 0;
             }
             cmq_mutex_unlock(&w->clients_lock);
         } else {
@@ -6594,20 +6566,20 @@ static void accept_cb(int fd, int events, void *data) {
             if (!client) {
                 close(client_fd);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
+                return 0;
             }
             client->worker_id = -1;
-            client->tls_slot = srv_find_tls_slot(srv, fd);
+            client->tls_slot = srv_find_tls_slot(srv, listen_fd);
             if (client_tls_handshake(srv, client) != 0) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
+                return 0;
             }
             if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
                 cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
+                return 0;
             }
 
             cmq_mutex_lock(&srv->clients_lock);
@@ -6616,7 +6588,7 @@ static void accept_cb(int fd, int events, void *data) {
                     cmq_mutex_unlock(&srv->clients_lock);
                     cmq_client_destroy(client);
                     cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                    continue;
+                    return 0;
                 }
             }
             srv->clients[srv->clients_count++] = client;
@@ -6625,7 +6597,7 @@ static void accept_cb(int fd, int events, void *data) {
                 cmq_mutex_unlock(&srv->clients_lock);
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
+                return 0;
             }
             if (cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
                            client) != 0) {
@@ -6634,10 +6606,46 @@ static void accept_cb(int fd, int events, void *data) {
                 cmq_mutex_unlock(&srv->clients_lock);
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
-                continue;
+                return 0;
             }
             cmq_mutex_unlock(&srv->clients_lock);
         }
+        return 1;
+}
+
+static void accept_cb(int fd, int events, void *data) {
+    cmq_server_t *srv = (cmq_server_t *)data;
+    if (!(events & CMQ_EV_READ)) return;
+    /* Drain/stop: never admit new sessions (covers backlog race after listen close). */
+    if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+        cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
+        return;
+
+    /* Drain the listen backlog — one accept per epoll wake stalls under bursts.
+       Cap per wake so keepalive / existing clients stay responsive. */
+    enum { CMQ_ACCEPT_PER_WAKE = 64 };
+    int accepted = 0;
+    for (;;) {
+        if (accepted >= CMQ_ACCEPT_PER_WAKE)
+            return;
+        if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+            cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
+            return;
+        struct sockaddr_in addr;
+        socklen_t addrlen = sizeof(addr);
+        int client_fd = accept(fd, (struct sockaddr *)&addr, &addrlen);
+        if (client_fd < 0) {
+            if (errno == EINTR) continue;
+            return; /* EAGAIN / EWOULDBLOCK / fatal */
+        }
+        accepted++;
+        if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+            cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
+            close(client_fd);
+            return;
+        }
+
+        (void)admit_one_client(srv, fd, client_fd, &addr);
     }
 }
 
@@ -6761,60 +6769,57 @@ typedef struct {
     int worker_id;
 } replay_worker_ctx_t;
 
-/* P1 v0.5.17: multi-thread accept helper. The second accept
- * thread runs its own epoll loop on listen_fds[1..N-1]. Only
- * activated when num_threads > 1 (test_server uses 1 by default).
- *
- * Implementation note: this duplicates the core of accept_cb (lines
- * 6342-6467). Sharing the code would require extracting an
- * handle_connection() helper — deferred to v0.5.18+. The
- * duplication is bounded (a few dozen lines) and the guard
- * (num_threads > 1) keeps it from firing on existing tests. */
+/* v0.5.42: aux accept thread. Parallel accept() on every listen
+ * fd; admit via the same helper as accept_cb. Waits for running=1
+ * so workers exist, then loops until stop/drain. */
 static void *accept_thread_func(void *arg) {
     cmq_server_t *srv = (cmq_server_t *)arg;
     int efd = epoll_create1(0);
     if (efd < 0) return NULL;
-    for (int i = 1; i < CMQ_MAX_LISTENERS; i++) {
+    for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
         if (srv->listen_fds[i] >= 0) {
             struct epoll_event ev = {0};
             ev.events = EPOLLIN;
             ev.data.fd = srv->listen_fds[i];
-            epoll_ctl(efd, EPOLL_CTL_ADD, srv->listen_fds[i], &ev);
+            (void)epoll_ctl(efd, EPOLL_CTL_ADD, srv->listen_fds[i], &ev);
         }
     }
-    struct epoll_event events[16];
     while (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) &&
+           !cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
+        struct timespec ts = {0, 10000000L};
+        nanosleep(&ts, NULL);
+    }
+    struct epoll_event events[16];
+    while (cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) &&
            !cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
         int n = epoll_wait(efd, events, 16, 100);
         if (n <= 0) continue;
         for (int i = 0; i < n; i++) {
             int lfd = events[i].data.fd;
+            int accepted = 0;
             for (;;) {
+                if (accepted >= 64) break;
+                if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+                    cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
+                    break;
                 struct sockaddr_in addr;
                 socklen_t addrlen = sizeof(addr);
                 int client_fd = accept(lfd,
                     (struct sockaddr *)&addr, &addrlen);
                 if (client_fd < 0) {
                     if (errno == EINTR) continue;
-                    break; /* EAGAIN / EWOULDBLOCK / fatal */
+                    break;
                 }
-                if (!cmq_atomic_load_int(&srv->running,
-                        CMQ_ATOMIC_ACQUIRE) ||
-                    cmq_atomic_load_int(&srv->acceptor_drain,
-                        CMQ_ATOMIC_ACQUIRE)) {
+                accepted++;
+                if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+                    cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
                     close(client_fd);
                     continue;
                 }
-                if (set_nonblocking(client_fd) != 0) {
-                    close(client_fd);
-                    continue;
+                if (admit_one_client(srv, lfd, client_fd, &addr) == 1) {
+                    cmq_atomic_fetch_add_u64(&srv->stat_accept_aux, 1,
+                                              CMQ_ATOMIC_RELAXED);
                 }
-                /* Rate-limit + client setup + handoff (simplified
-                 * from accept_cb). Real implementation would extract
-                 * a helper; for v0.5.17 we just close + accept next. */
-                cmq_log_info(srv->log,
-                    "v0.5.17: multi-thread accept fd=%d", client_fd);
-                close(client_fd);
             }
         }
     }
@@ -6932,7 +6937,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         return CMQ_ERR_INVALID_ARG;
     }
 
-    srv->listen_fds[0] = -1;
+    for (int i = 0; i < CMQ_MAX_LISTENERS; i++)
+        srv->listen_fds[i] = -1;
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
     cmq_atomic_store_int(&srv->run_active, 0, CMQ_ATOMIC_SEQ_CST);
 
@@ -7379,18 +7385,6 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             }
         }
     }
-    /* P1 v0.5.17: multi-thread accept. Only activate when
-     * num_threads > 1 (test_server uses 1 by default). The second
-     * pthread runs its own epoll loop on listen_fds[1..N-1]. */
-    if (srv->config.num_threads > 1) {
-        pthread_t atid;
-        if (pthread_create(&atid, NULL, accept_thread_func, srv) == 0) {
-            cmq_log_info(srv->log,
-                "v0.5.17: multi-thread accept thread started");
-            pthread_detach(atid);
-        }
-    }
-
     /* Acceptor-thread drain of local clients (single-thread / num_threads<=1). */
     cmq_ev_set_post_tick(srv->ev_loop, acceptor_post_tick, srv);
 
@@ -7559,6 +7553,10 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         }
         srv->workers_joinable = nthreads;
         cmq_log_info(srv->log, "CMQ server started with %d worker threads", nthreads);
+        if (cmq_thread_create(&srv->accept_thr, accept_thread_func, srv) == 0) {
+            srv->accept_thr_started = 1;
+            cmq_log_info(srv->log, "v0.5.42: aux accept thread started");
+        }
     }
 
     cmq_atomic_store_int(&srv->running, 1, CMQ_ATOMIC_SEQ_CST);
@@ -7595,6 +7593,8 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     cmq_ev_run(srv->ev_loop, -1);
 
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
+    if (__atomic_exchange_n(&srv->accept_thr_started, 0, __ATOMIC_ACQ_REL))
+        cmq_thread_join(srv->accept_thr);
     /* Claim+join — destroy may race; only one caller joins. */
     if (__atomic_exchange_n(&srv->route_reconn_started, 0, __ATOMIC_ACQ_REL))
         cmq_thread_join(srv->route_reconn_thr);
@@ -7914,6 +7914,8 @@ void cmq_server_destroy(cmq_server_t *srv) {
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
     }
+    if (__atomic_exchange_n(&srv->accept_thr_started, 0, __ATOMIC_ACQ_REL))
+        cmq_thread_join(srv->accept_thr);
     if (__atomic_exchange_n(&srv->route_reconn_started, 0, __ATOMIC_ACQ_REL))
         cmq_thread_join(srv->route_reconn_thr);
     {

@@ -1,0 +1,4 @@
+v0.5.42 bench 1:
+- Admit path extracted; uncompressed publish unchanged.
+- Aux accept thread only when num_threads > 1.
+- 100ms epoll timeout on stop; join before listen-fd close.

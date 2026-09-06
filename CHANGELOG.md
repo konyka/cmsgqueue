@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.42 - 2026-09-06
+
+### Changed
+- **Aux accept thread admits** — `accept_thread_func` no longer
+  `close()`s new clients. It waits for `running=1`, then
+  `accept()` + `admit_one_client` (same max_clients / rate-limit /
+  TLS path as `accept_cb`) on every listen fd. The thread is
+  joinable. `stat_accept_aux` counts its successful admits.
+  `listen_fds[1..]` are initialized to `-1` (were 0 / stdin).
+
+### Tests
+- `tests/test_multi_thread_accept.c` — `aux_thread_admits` bursts
+  32 connects with `num_threads=2` and asserts `stat_accept_aux >= 1`
+  plus a CONNECT handshake.
+
+### Documentation
+- `docs/reviews/v0.5.42.enumeration.md`, `v0.5.42.plan.md`.
+- `docs/benchmarks/v0542_{1,2}.txt`.
+
+### Test count
+- 121 tests (was 120 in v0.5.41; +1 aux_thread_admits).
+
 ## 0.5.41 - 2026-09-06
 
 ### Added

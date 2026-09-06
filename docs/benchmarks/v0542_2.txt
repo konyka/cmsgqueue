@@ -1,0 +1,5 @@
+v0.5.42 aux-accept micro-note:
+- Two threads accept() on the same listen fd (Linux-safe).
+- Per-admit work is identical to accept_cb (shared helper).
+- Hot data path (PUBLISH fan-out) not touched.
+- stat_accept_aux is a relaxed counter; not on the msg/s path.

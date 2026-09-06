@@ -238,9 +238,12 @@ struct cmq_server {
     cmq_atomic_u64 stat_messages_dropped;   /* worker queue full / push OOM */
     cmq_atomic_u64 stat_persist_fail;       /* F5: filestore append failures */
     cmq_atomic_u64 qg_rr_counter;           /* queue-group round-robin pick */
+    cmq_atomic_u64 stat_accept_aux;         /* v0.5.42: admits from accept_thread_func */
 
     cmq_thread_t route_reconn_thr;
     int route_reconn_started;               /* 1 if thread joinable */
+    cmq_thread_t accept_thr;                /* v0.5.42: aux accept thread */
+    int accept_thr_started;                 /* 1 if joinable */
     int workers_joinable;                   /* n worker threads still to join */
     cmq_atomic_int run_active;              /* 1 while cmq_server_run owns lifecycle */
 };
