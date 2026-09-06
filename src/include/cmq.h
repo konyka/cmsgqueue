@@ -85,6 +85,11 @@ typedef struct cmq_config {
     int max_msgs_per_sec_per_subject;
     int max_bytes_per_sec_per_account;
     int max_connections_per_account;
+    /* v0.5.48: concurrent / per-message hard caps (0 = unlimited).
+       Distinct from max_connections_per_account (F14 connect-rate). */
+    int account_max_connections;
+    int account_max_subscriptions;
+    int account_max_payload;
     /* F16 ACL: CSV patterns. NULL disables. */
     const char *acl_allow;
     const char *acl_deny;

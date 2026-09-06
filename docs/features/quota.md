@@ -10,7 +10,10 @@ A new `cmq_quota` module implements per-account token-bucket caps. Configuration
 
 - `max_msgs_per_sec` — cap on messages/sec per account.
 - `max_bytes_per_sec` — cap on bytes/sec per account.
-- `max_connections` — cap on simultaneous connections per account.
+- `max_connections` — **connects per second** per account (fixed
+  1s window). Concurrent connection / subscription / payload
+  ceilings are `account_max_*` on the account object (v0.5.48);
+  see `docs/features/accounts.md`.
 
 The check is on the `credit_msgs_in` path (F5) and at CONNECT time. On exceed, the publish is rejected with `cmq_send_error("quota exceeded")`. The check uses a fixed-window (1 second) with reset on window expiry.
 

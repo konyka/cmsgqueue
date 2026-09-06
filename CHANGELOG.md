@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.48 - 2026-09-06
+
+### Added
+- **Per-account concurrent limits** — `max_connections` /
+  `max_subscriptions` / `max_payload` on `cmq_account_t`. `0`
+  is unlimited (one extra compare on the inc path). Credit uses
+  CAS when a cap is set so two CONNECTs cannot both pass.
+  `inc_*` returns `-2` at the cap. SUBSCRIBE stays connected
+  and SUBACK 1s; CONNECT still CONNACK 1s. Config:
+  `account_max_connections`, `account_max_subscriptions`,
+  `account_max_payload`. Distinct from F14
+  `max_connections_per_account` (connect-rate window).
+
+### Tests
+- `tests/test_account_limits.c` — unlimited, conn/sub caps,
+  payload, defaults, reactivate keeps overrides, isolation.
+
+### Documentation
+- `docs/reviews/v0.5.48.enumeration.md`, `v0.5.48.plan.md`.
+- `docs/features/accounts.md`, `docs/features/quota.md`.
+- `docs/benchmarks/v0548_{1,2}.txt`.
+
+### Test count
+- 158 tests (was 151 in v0.5.47; +7).
+
 ## 0.5.47 - 2026-09-06
 
 ### Added

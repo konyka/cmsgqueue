@@ -47,6 +47,18 @@ static int auth_configured(const cmq_server_t *srv) {
     return (u && u[0] != '\0') || (p && p[0] != '\0');
 }
 
+/* Global max_payload_size and the CONNECT-cached account cap. */
+static int payload_exceeds_caps(const cmq_server_t *srv, const cmq_client_t *c,
+                                size_t msg_len) {
+    if (srv->config.max_payload_size > 0 &&
+        msg_len > (size_t)srv->config.max_payload_size)
+        return 1;
+    if (c && c->account_max_payload > 0 &&
+        msg_len > (size_t)c->account_max_payload)
+        return 1;
+    return 0;
+}
+
 /* Soft-deleted then reactivated accounts bump epoch — old sessions stay denied. */
 static int client_account_live(cmq_server_t *srv, const cmq_client_t *c) {
     if (!srv || !c || !c->account_name[0]) return 0;
@@ -3012,8 +3024,7 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         msg_len = data_len;
     }
 
-    if (srv->config.max_payload_size > 0 &&
-        msg_len > (size_t)srv->config.max_payload_size) {
+    if (payload_exceeds_caps(srv, c, msg_len)) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
@@ -3525,8 +3536,10 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     int pre_credited = 0;
     if (!replacing) {
         pre_acc = cmq_account_get(srv->accounts, c->account_name, NULL);
-        if (!pre_acc ||
-            cmq_account_inc_subscriptions(pre_acc, c->account_epoch) != 0) {
+        int sub_credit = pre_acc
+            ? cmq_account_inc_subscriptions(pre_acc, c->account_epoch)
+            : -1;
+        if (sub_credit != 0) {
             if (pre_acc) cmq_account_release(srv->accounts, pre_acc);
             free(heap_deads);
             free(ref);
@@ -3534,7 +3547,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
             cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
             cmq_send_suback(c, sub_id, 1);
-            client_set_state(c, CMQ_CLIENT_CLOSING);
+            /* -2 = at account sub cap; stay connected. */
+            if (sub_credit != -2)
+                client_set_state(c, CMQ_CLIENT_CLOSING);
             return;
         }
         pre_credited = 1;
@@ -3854,8 +3869,7 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
 
-    if (srv->config.max_payload_size > 0 &&
-        msg_len > (size_t)srv->config.max_payload_size) {
+    if (payload_exceeds_caps(srv, c, msg_len)) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
@@ -4016,8 +4030,7 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
 
-    if (srv->config.max_payload_size > 0 &&
-        msg_len > (size_t)srv->config.max_payload_size) {
+    if (payload_exceeds_caps(srv, c, msg_len)) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
@@ -4333,8 +4346,7 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_error(c, "invalid batch");
             return;
         }
-        if (srv->config.max_payload_size > 0 &&
-            payload_len > (uint32_t)srv->config.max_payload_size) {
+        if (payload_exceeds_caps(srv, c, (size_t)payload_len)) {
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
             cmq_send_error(c, "payload too large");
@@ -4818,6 +4830,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             client_set_state(c, CMQ_CLIENT_CLOSING);
             break;
         }
+        c->account_max_payload =
+            __atomic_load_n(&acc->max_payload, __ATOMIC_ACQUIRE);
         if (!client_account_live(srv, c)) {
             cmq_account_dec_connections(acc, aep);
             cmq_account_release(srv->accounts, acc);
@@ -6363,6 +6377,8 @@ static int route_bind_egress_reader(cmq_server_t *srv, const char *nid) {
         return -1;
     }
     client->account_epoch = aep;
+    client->account_max_payload =
+        __atomic_load_n(&acc->max_payload, __ATOMIC_ACQUIRE);
     cmq_account_release(srv->accounts, acc);
 
     if (cmq_route_adopt_fd(srv->routes, fd, nid) != 0) {
@@ -7111,6 +7127,16 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     }
 
     srv->accounts = cmq_account_manager_create();
+    if (srv->accounts) {
+        cmq_account_manager_set_defaults(
+            srv->accounts,
+            (uint32_t)(srv->config.account_max_connections > 0
+                           ? srv->config.account_max_connections : 0),
+            (uint32_t)(srv->config.account_max_subscriptions > 0
+                           ? srv->config.account_max_subscriptions : 0),
+            (uint64_t)(srv->config.account_max_payload > 0
+                           ? srv->config.account_max_payload : 0));
+    }
     if (!srv->accounts ||
         cmq_account_create(srv->accounts, "$default") != 0) {
         if (srv->accounts) cmq_account_manager_destroy(srv->accounts);

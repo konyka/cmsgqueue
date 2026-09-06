@@ -22,6 +22,10 @@ typedef struct {
     int active;
     uint32_t epoch; /* bumps on soft-delete reactivate; stale clients must not revive */
     uint32_t clear_gen; /* bumps on clear_counters; pairs with stale-inc undo */
+    /* v0.5.48: concurrent / per-message hard caps. 0 = unlimited. */
+    uint32_t max_connections;
+    uint32_t max_subscriptions;
+    uint64_t max_payload;
 } cmq_account_t;
 
 typedef struct {
@@ -52,10 +56,20 @@ void cmq_account_release(cmq_account_manager_t *mgr, cmq_account_t *acc);
 size_t cmq_account_count(cmq_account_manager_t *mgr);
 
 void cmq_account_inc_stat(cmq_account_t *acc, size_t field_offset, uint64_t delta);
-/* Returns 0 if the connection credit stuck on this epoch; -1 if inactive/raced. */
+/* Defaults copy onto newly created / reclaimed slots only. */
+void cmq_account_manager_set_defaults(cmq_account_manager_t *mgr,
+                                      uint32_t max_conn, uint32_t max_sub,
+                                      uint64_t max_payload);
+void cmq_account_set_limits(cmq_account_t *acc, uint32_t max_conn,
+                            uint32_t max_sub, uint64_t max_payload);
+/* 0 if admitted; -1 if acc is NULL or bytes exceed max_payload. */
+int cmq_account_check_payload(const cmq_account_t *acc, uint64_t bytes);
+/* Returns 0 if the connection credit stuck on this epoch; -1 if
+   inactive/raced; -2 if at max_connections. */
 int cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch);
 void cmq_account_dec_connections(cmq_account_t *acc, uint32_t epoch);
-/* Returns 0 if the subscription credit stuck on this epoch; -1 otherwise. */
+/* Returns 0 if the subscription credit stuck on this epoch; -1 if
+   inactive/raced; -2 if at max_subscriptions. */
 int cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch);
 void cmq_account_dec_subscriptions(cmq_account_t *acc, uint32_t epoch);
 void cmq_account_inc_msgs_in(cmq_account_t *acc, uint32_t epoch, uint64_t bytes);

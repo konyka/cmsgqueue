@@ -1,0 +1,5 @@
+v0.5.48 bench 1:
+- Unlimited CONNECT/SUBSCRIBE: one atomic load + compare, then
+  the same fetch_add as v0.5.47.
+- PUBLISH: one extra integer compare when account_max_payload is 0.
+- No extra manager lock, no heap on the check.

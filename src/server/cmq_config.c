@@ -119,6 +119,15 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "max_connections_per_account") == 0) {
         return parse_int_range(value, 0, 1000000,
                               &config->max_connections_per_account);
+    } else if (strcmp(key, "account_max_connections") == 0) {
+        return parse_int_range(value, 0, 1000000,
+                              &config->account_max_connections);
+    } else if (strcmp(key, "account_max_subscriptions") == 0) {
+        return parse_int_range(value, 0, 1000000,
+                              &config->account_max_subscriptions);
+    } else if (strcmp(key, "account_max_payload") == 0) {
+        return parse_int_range(value, 0, CMQ_MAX_PAYLOAD_LIMIT,
+                              &config->account_max_payload);
     } else if (strcmp(key, "max_msgs_per_sec_per_subject") == 0) {
         return parse_int_range(value, 0, 1000000,
                               &config->max_msgs_per_sec_per_subject);
@@ -286,6 +295,11 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->max_msgs_per_sec_per_account < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_bytes_per_sec_per_account < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_connections_per_account < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->account_max_connections < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->account_max_subscriptions < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->account_max_payload < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->account_max_payload > CMQ_MAX_PAYLOAD_LIMIT)
+        return CMQ_ERR_INVALID_ARG;
     if (config->max_msgs_per_sec_per_subject < 0) return CMQ_ERR_INVALID_ARG;
     if (config->ping_interval_ms < 0) return CMQ_ERR_INVALID_ARG;
     /* Cap so keepalive timeout_ms = interval*2 cannot overflow int. */
