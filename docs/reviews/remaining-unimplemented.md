@@ -1,8 +1,53 @@
 # Remaining unimplemented work (HEAD after v0.5.149)
 
-Evidence-checked against source on 2026-09-06. P2 (R1–R7)
-and P3 D1–D8 phase cuts in this catalog are shipped.
+Evidence-checked against `src/include/cmq.h`,
+`src/server/cmq_config.c`, `cmq_server.c` create/reload,
+and attach helpers on 2026-09-07. P2 (R1–R7) and P3
+D1–D8 phase cuts in this catalog are shipped.
 Required next cuts: none.
+
+## Current-state config / production wiring audit
+
+Every `cmq_config_t` field has a parse key. Create
+`OWN`s every owned string. Reload either applies the
+value, attaches when create had none, or is an
+intentional create-time remount / rebind / redial /
+replay (unsafe on a live WAL / accept / route fd).
+
+| Field | Parse | Create / run | Reload |
+|---|---|---|---|
+| `host` / `port` | IPv4 / 0–65535 | slot-0 bind | rebind stays create-time |
+| `num_threads` | 0–64 | workers at run | remount stays create-time |
+| `max_clients` / payload / subs | yes | defaults + gates | `apply_caps` |
+| `ping` / `write_timeout` | yes | defaults + loop | `apply_limits` |
+| `max_connects_per_sec` / `inbox_max_pending` | yes | accept / REQUEST | `apply_limits` |
+| `config_file` | yes; load path if omitted | SIGHUP | live path; retarget is remount-like |
+| `log_*` | yes | sinks | `apply_dynamic` + `reload_sinks` |
+| `auth_*` / `jwt_*` / `nkey_pub` | yes | CONNECT | `apply_auth` |
+| `jwks_json` / `jwks_url` / `jwks_ca` / refresh | yes | cache / GET / sidecar | cache + url/ca/sec + fetch + attach |
+| `otlp_endpoint` / `otlp_ca` | yes | exporter | url/ca + attach |
+| `cluster_name` / `cluster_node_id` | yes | cluster + empty pool | attach |
+| `route=` | IPv4 `addr:port` | run dial | attach empty slots (no redial) |
+| quota / subject RL / `account_max_*` | yes | objects / defaults | reload (creates if none) |
+| `acl_allow` / `acl_deny` | yes | `acl_h` | `apply_dynamic` (creates if none) |
+| `blocklist_file` | yes | `blocklist_h` | swap + attach |
+| `h2_port` | yes | listen | bind when none (no rebind) |
+| `js_partitions` / `js_msgs_rotate_bytes` | yes | `$JS` | `cmq_js_reload` |
+| `tls_*` / `listener*_tls_*` | yes | SSL_CTX slots | `apply_tls` + attach |
+| `listener{1,2,3}_host/port` / count | yes | extra bind | bind empty slots (no rebind) |
+| `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync (no remount / replay) |
+| `mqtt_bridge_*` | yes | outbound bridge | attach + maps + endpoint |
+
+Intentional / out of scope (not unused create/conf paths):
+
+- MQTT inbound listen is API opt-in, default-off, `127.0.0.1:1883`.
+- COMPRESSED stays off CONNECT / SUBSCRIBE.
+- `cmq_tls_set_crl`, `cmq_jwt_sign_*`, encryption at rest,
+  group-commit fsync, `filestore_set_max_payload` /
+  `set_async` / `set_rotate_bytes` — library / out of scope.
+- Leaf / gateway are library APIs (no server conf keys).
+- Route TLS `sess` is unused (F17); do not invent a key.
+- README TLS stub / sublist-persist STUB heading — doc drift.
 
 ## Shipped (do not re-open)
 
