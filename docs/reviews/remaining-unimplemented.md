@@ -1,8 +1,9 @@
-# Remaining unimplemented work (HEAD after v0.5.54)
+# Remaining unimplemented work (HEAD after v0.5.55)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7) and
-P3 D7/D8 are shipped. D6 is v0.5.53. MQTT QoS 1 outbound
-inflight is v0.5.54. Next cuts: D1–D5 or leaf/gateway e2e.
+P3 D7/D8 are shipped. D6 is v0.5.53. MQTT QoS 1 inflight is
+v0.5.54. D5 phase 1 (idempotent publish) is v0.5.55. Next
+cuts: D1–D4, D5 txns, or leaf/gateway e2e.
 
 ## Shipped (do not re-open)
 
@@ -16,6 +17,7 @@ inflight is v0.5.54. Next cuts: D1–D5 or leaf/gateway e2e.
 | v0.5.52 | Per-account outstanding-byte (`bytes_live`) cap |
 | v0.5.53 | D6 Kafka-style key compact on sealed `.1` |
 | v0.5.54 | MQTT QoS 1 outbound inflight + local fanout |
+| v0.5.55 | D5 phase 1: idempotent publish pid+seq window |
 
 ## Deferred — detailed designs
 
@@ -51,11 +53,11 @@ Do not add a second crypto library.
 compacted subject, (3) object store last. Needs a partition
 model we do not have. Not a single version.
 
-### D5 Exactly-once / transactions (XL)
+### D5 Exactly-once / transactions — phase 1 shipped v0.5.55
 
-No PID+seq, no txn coordinator. **Design:** idempotent publish
-first (client PID + seq in a header, server sliding window per
-PID). Transactions need a coordinator log — after D4.
+Idempotent publish (`CMQI` + pid + seq, 64-wide window, 256
+pids) is live on `handle_publish` before WAL. A transaction
+coordinator still needs D4's log.
 
 ### D6 Kafka-style key compaction — shipped v0.5.53
 

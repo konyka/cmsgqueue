@@ -212,6 +212,7 @@ struct cmq_server {
     /* P5: per-listener SSL_CTX slots. tls_config_count entries used. */
     /* F14: quota. NULL = no quota. */
     struct cmq_quota *quota;
+    struct cmq_idempo *idempo; /* v0.5.55: D5 pid+seq window; always on */
     /* F16: ACL. NULL handle = no ACL. Refcounted for reload safety (P1). */
     struct cmq_rch *acl_h;
     /* F15: blocklist. NULL handle = no blocklist. Refcounted for reload. */

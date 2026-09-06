@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.55 - 2026-09-06
+
+### Added
+- **Idempotent publish (D5 phase 1)** — optional `CMQI`+pid+seq
+  header. A 64-wide sliding window per pid drops duplicates
+  before WAL/fanout. No header: PUBLISH path unchanged.
+  New pid when 256 slots are full is rejected.
+
+### Tests
+- `tests/test_idempo.c` — parse, first/dup, window, ooo,
+  isolated pids, table full (+8).
+
+### Documentation
+- `docs/reviews/v0.5.55.enumeration.md`, `v0.5.55.plan.md`.
+- `docs/features/idempo.md`, `remaining-unimplemented.md`.
+- `docs/benchmarks/v0555_{1,2}.txt`.
+
+### Test count
+- 199 tests (was 191 in v0.5.54; +8).
+
 ## 0.5.54 - 2026-09-06
 
 ### Added

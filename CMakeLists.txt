@@ -95,6 +95,7 @@ set(CMQ_SERVER_SOURCES
     src/server/cmq_sublist_persist.c
     src/server/cmq_subject_rl.c
     src/server/cmq_monitor.c
+    src/server/cmq_idempo.c
 )
 
 set(CMQ_STORE_SOURCES

@@ -17,6 +17,7 @@
 #include "cmq_sublist_persist.h"
 #include "cmq_mqtt_server.h"
 #include "cmq_monitor.h"
+#include "cmq_idempo.h"
 #include <poll.h>
 #ifdef CMQ_OS_LINUX
 #include <sys/eventfd.h>
@@ -3106,6 +3107,24 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "permission denied");
         return;
+    }
+
+    /* v0.5.55: drop duplicate pid+seq before WAL / fanout. */
+    if ((frame->hdr.flags & CMQ_FLAG_HEADERS) && srv->idempo && headers &&
+        headers_len >= CMQ_IDEMPO_HDR_LEN) {
+        uint32_t ipid = 0;
+        uint64_t iseq = 0;
+        if (cmq_idempo_parse(headers, headers_len, &ipid, &iseq) == 0) {
+            int st = cmq_idempo_check(srv->idempo, ipid, iseq);
+            if (st == 0)
+                return;
+            if (st < 0) {
+                cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                          CMQ_ATOMIC_RELAXED);
+                cmq_send_error(c, "idempo full");
+                return;
+            }
+        }
     }
 
     /* F5: persist to WAL BEFORE sublist match. We persist validated
@@ -7510,6 +7529,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         }
     }
 
+    srv->idempo = cmq_idempo_create();
+
     /* F14: per-account quota. */
     if (srv->config.max_msgs_per_sec_per_account > 0 ||
         srv->config.max_bytes_per_sec_per_account > 0 ||
@@ -8299,6 +8320,10 @@ void cmq_server_destroy(cmq_server_t *srv) {
     if (srv->quota) {
         cmq_quota_free(srv->quota);
         srv->quota = NULL;
+    }
+    if (srv->idempo) {
+        cmq_idempo_destroy(srv->idempo);
+        srv->idempo = NULL;
     }
     if (srv->acl_h) {
         cmq_rch_release_owner(srv->acl_h);

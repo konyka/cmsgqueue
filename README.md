@@ -29,6 +29,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Outstanding-byte cap (v0.5.52)**: `account_max_bytes_live` bounds concurrent in-flight ingress per account (`0` = unlimited)
 - **Key compaction (v0.5.53)**: `cmq_filestore_compact_keys` last-value-wins on sealed `.1` segments (live append unchanged)
 - **MQTT QoS 1 inflight (v0.5.54)**: 16-slot outbound window; local fanout + PUBACK (SUBSCRIBE still grants at most QoS 1)
+- **Idempotent publish (v0.5.55)**: `CMQI`+pid+seq sliding window drops retries before WAL (D5 phase 1)
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
 - **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability
