@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.99)
+# Remaining unimplemented work (HEAD after v0.5.100)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -61,6 +61,7 @@ Required next cuts: none.
 | v0.5.97 | F2 COMPRESSED on MESSAGE |
 | v0.5.98 | F2 COMPRESSED on REQUEST |
 | v0.5.99 | F2 COMPRESSED on RESPONSE |
+| v0.5.100 | D1 request spans |
 
 ## Deferred — detailed designs
 
@@ -70,7 +71,8 @@ Span ring, sidecar, OTLP/HTTP JSON, OTLP HTTPS POST, and
 OTLP/gRPC (`grpc://`, protobuf Export over HTTP/2) are
 live. A successful local fanout offers one `KIND_CONSUME`
 with the publisher trace (v0.5.89). CONNACK 0 offers
-`KIND_CONNECT` (v0.5.92).
+`KIND_CONNECT` (v0.5.92). A successful local REQUEST
+answer offers `KIND_REQUEST` (v0.5.100).
 
 ### D2 HTTP/2 listener — phases 1–7 shipped v0.5.66–73, 0.5.81, 0.5.83
 
@@ -126,6 +128,7 @@ are live (v0.5.88).
 | COMPRESSED on MESSAGE | shipped v0.5.97 | — |
 | COMPRESSED on REQUEST | shipped v0.5.98 | — |
 | COMPRESSED on RESPONSE | shipped v0.5.99 | — |
+| REQUEST spans | shipped v0.5.100 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)

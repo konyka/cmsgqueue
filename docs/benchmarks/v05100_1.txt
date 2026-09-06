@@ -1,0 +1,4 @@
+v0.5.100 bench 1:
+- REQUEST local store reply: one extra offer after send.
+- REQUEST local fanout n>0: one extra offer after PUBACK.
+- No responders / encode fail: ring untouched.

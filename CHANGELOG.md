@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.100 - 2026-09-06
+
+### Added
+- **Request spans (D1 follow-up)** — a successful local
+  REQUEST answer (store reply or fanout `n > 0`) offers
+  one `KIND_REQUEST` with the accept trace. No responders
+  and route-only forward skip it.
+
+### Tests
+- `tests/test_otr.c` — ok, skipped, isolated, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.100.enumeration.md`, `v0.5.100.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v05100_{1,2}.txt`.
+
+### Test count
+- 391 tests (was 387 in v0.5.99; +4).
+
 ## 0.5.99 - 2026-09-06
 
 ### Added

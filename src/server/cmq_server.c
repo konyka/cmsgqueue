@@ -4421,6 +4421,8 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                 size_t alen = cmq_frame_encode(ack, sizeof(ack),
                                                CMQ_OP_PUBACK, 0, NULL, 0);
                 if (alen > 0) cmq_client_send(c, ack, alen);
+                if (srv->otel)
+                    (void)cmq_otel_on_request(srv->otel, c->trace_id, 1);
             }
             if (cmq_atomic_load_int(&c->inbox_pending, CMQ_ATOMIC_RELAXED) > 0)
                 cmq_atomic_fetch_sub_int(&c->inbox_pending, 1,
@@ -4494,6 +4496,8 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
             uint8_t ack[4] = {0};
             size_t ack_len = cmq_frame_encode(ack, sizeof(ack), CMQ_OP_PUBACK, 0, NULL, 0);
             if (ack_len > 0) cmq_client_send(c, ack, ack_len);
+            if (srv->otel)
+                (void)cmq_otel_on_request(srv->otel, c->trace_id, 1);
         } else if (ambiguous) {
             /* Claimed abandon or buffered-but-drain-fail — local wire may
                still complete; do not also fan out to the cluster. */

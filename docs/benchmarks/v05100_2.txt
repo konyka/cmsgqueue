@@ -1,0 +1,3 @@
+v0.5.100 bench 2:
+- Offer stays lock-free; drop-newest unchanged (256).
+- OTLP name "request"; SpanKind SERVER (2).
