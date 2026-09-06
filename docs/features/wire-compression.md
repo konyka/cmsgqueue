@@ -26,14 +26,18 @@ BATCH frame:
 
 The header frame's `payload_len` is the COMPRESSED size. The
 zstd frame format is self-describing; the decompressed size is
-read from the frame header.
+read with `ZSTD_getFrameContentSize` (`cmq_decompress_bound`).
 
-`handle_batch` (`src/server/cmq_server.c:3957`) checks the flag
-**before** pass-1 validation. If set, it allocates a buffer
-(`cmq_compress_bound` worst case), decompresses, and recurses with a
-local `cmq_frame_t` whose `payload` points to the decoded buffer.
-The original `frame->payload` remains owned by the parser; the
-decoded buffer is freed on this return path.
+`handle_batch` checks the flag **before** pass-1 validation. If set,
+it allocates exactly the content size (capped at 16 MiB),
+decompresses, clears `CMQ_FLAG_COMPRESSED` on a local frame, and
+recurses once. The original `frame->payload` remains owned by the
+parser; the decoded buffer is freed on this return path.
+
+**Parser (v0.5.41):** `CMQ_FLAG_COMPRESSED` is accepted only when
+`op == CMQ_OP_BATCH`. Any other opcode with the bit set is still
+`pending_error` (F11). Before v0.5.41 the parser rejected the bit
+on every opcode, so this path was dead.
 
 ### Threshold policy
 
@@ -91,10 +95,14 @@ baseline.
 ## Security
 
 Threats closed:
-- **Decompression bomb** — `handle_batch` caps `bound` at 16 MiB
-  before allocation; ZSTD's own dst_cap check is the inner guard.
-- **Memory exhaustion** — the cap prevents a tiny frame from
-  claiming gigabytes.
+- **Decompression bomb** — `cmq_decompress_bound` requires a known
+  zstd content size and rejects anything above 16 MiB before
+  `malloc`. ZSTD's `dst_cap` check is the inner guard. A 16× ratio
+  cap is **not** used: a 4 KiB JSON payload at zstd-1 is ~30 B
+  (~130×) and is a supported happy path.
+- **Memory exhaustion** — the 16 MiB cap is the allocator ceiling.
+- **F11 interop** — COMPRESSED on non-BATCH opcodes is still
+  rejected in the parser.
 
 Threats NOT closed (covered by TLS in F1):
 - Active tampering of compressed data. The CRC32C trailing checksum

@@ -44,7 +44,7 @@ The forward-compatibility plan is:
 | Field | Value today | After F1 | After F2 |
 |---|---|---|---|
 | `tls` | `false` | `true` (when configured) | unchanged |
-| `compression` | `"none"` | `"none"` | `"zstd"` |
+| `compression` | `"zstd"` (BATCH, v0.5.41) | unchanged | `"zstd"` |
 | `checksum` | `"crc32c"` | unchanged | unchanged |
 | `headers` | `true` | unchanged | unchanged |
 | `batch` | `true` | unchanged | unchanged |

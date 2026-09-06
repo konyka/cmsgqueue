@@ -254,12 +254,10 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
             return parser_have_frames(p, produced);
         }
 
-        /* F11: Reject unknown flag bits pre-CONNACK. CMQ_FLAG_COMPRESSED (0x01)
-         * is reserved but not yet implemented on the wire. Accepting it
-         * silently round-trips garbage to subscribers. CMQ_FLAG_CHECKSUM
-         * (0x02) is now implemented (F3) — see handle_publish() for the
-         * trailing-4-byte verification. */
-        if (hb[3] & (uint8_t)CMQ_FLAG_COMPRESSED) {
+        /* F2: COMPRESSED is implemented for BATCH only. Per-message
+         * compression is still the F11 interop bug — reject it. */
+        if ((hb[3] & (uint8_t)CMQ_FLAG_COMPRESSED) &&
+            hb[4] != (uint8_t)CMQ_OP_BATCH) {
             p->pending_error = 1;
             return parser_have_frames(p, produced);
         }

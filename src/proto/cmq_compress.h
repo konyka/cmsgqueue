@@ -41,6 +41,11 @@ ssize_t cmq_decompress(const uint8_t *src, size_t src_len,
 /* Recommended destination buffer size when compressing. */
 size_t cmq_compress_bound(size_t src_len);
 
+/* Exact decompressed size of a zstd frame, or -1.
+ * Fail-closed: UNKNOWN/ERROR content size, size 0, or size > 16 MiB
+ * returns -1. No allocation. */
+ssize_t cmq_decompress_bound(const uint8_t *src, size_t src_len);
+
 #ifdef __cplusplus
 }
 #endif

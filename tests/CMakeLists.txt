@@ -17,6 +17,7 @@ set(CMQ_TCP_TESTS
   test_server_ops
   test_stress
   test_worker
+  test_compress_wire
 )
 
 foreach(TEST_SRC ${TEST_SOURCES})

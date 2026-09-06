@@ -1,0 +1,6 @@
+v0.5.41 bench 1 (parser + compress unit, MSYS gcc):
+- parser: 27/27 pass (includes accept_compressed_batch)
+- compress: 8/8 pass (includes decompress_bound_*)
+- Core uncompressed path: one extra opcode compare only when
+  CMQ_FLAG_COMPRESSED is set. 64 B plaintext frames unchanged.
+- decompress_bound is ZSTD_getFrameContentSize (header peek, no alloc).

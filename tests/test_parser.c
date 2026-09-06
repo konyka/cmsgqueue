@@ -430,21 +430,35 @@ TEST(parser, hard_cap_keeps_queued) {
     cmq_parser_destroy(p);
 }
 
-/* F11: Reject unknown CMQ_FLAG_* bits pre-CONNACK.
- * The flags 0x01 (CMQ_FLAG_COMPRESSED) and 0x02 (CMQ_FLAG_CHECKSUM) are
- * reserved but not yet implemented on the wire. A peer setting them
- * currently gets garbage fanned out — interop bug. Parser must mark
- * pending_error so the server tears down the connection.
+/* F11 + F2: COMPRESSED is BATCH-only. A PUBLISH with the bit set
+ * would still fan out opaque bytes — reject it. BATCH with the bit
+ * set is the F2 wire path (v0.5.41).
  */
 TEST(parser, reject_flag_compressed) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
-    /* Encode with flags=CMQ_FLAG_COMPRESSED (0x01) */
+    /* Encode with flags=CMQ_FLAG_COMPRESSED (0x01) on PUBLISH */
     size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
                                 CMQ_FLAG_COMPRESSED, NULL, 0);
     ASSERT(n > 0);
     (void)cmq_parser_feed(p, buf, n);
     ASSERT_EQ(cmq_parser_pending_error(p), 1);
+    cmq_parser_destroy(p);
+}
+
+TEST(parser, accept_compressed_batch) {
+    cmq_parser_t *p = cmq_parser_create();
+    uint8_t buf[32];
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_BATCH,
+                                CMQ_FLAG_COMPRESSED, NULL, 0);
+    ASSERT(n > 0);
+    int rc = cmq_parser_feed(p, buf, n);
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 0);
+    const cmq_frame_t *f = cmq_parser_frame(p);
+    ASSERT_NOT_NULL(f);
+    ASSERT_EQ(f->hdr.op, CMQ_OP_BATCH);
+    ASSERT_EQ(f->hdr.flags, CMQ_FLAG_COMPRESSED);
     cmq_parser_destroy(p);
 }
 

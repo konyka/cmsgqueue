@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.41 - 2026-09-06
+
+### Added
+- **F2 BATCH compression on the wire** — the parser now accepts
+  `CMQ_FLAG_COMPRESSED` on `CMQ_OP_BATCH` only. `handle_batch`
+  decompresses via `cmq_decompress_bound` (`ZSTD_getFrameContentSize`,
+  16 MiB hard cap) instead of `ZSTD_compressBound(compressed_len)`,
+  which was the wrong dest size and would fail any high-ratio payload.
+  COMPRESSED on PUBLISH/MESSAGE is still rejected (F11).
+
+### Tests
+- `tests/test_parser.c` — `accept_compressed_batch`; existing
+  `reject_flag_compressed` still covers PUBLISH.
+- `tests/test_compress.c` — `decompress_bound_exact`,
+  `decompress_bound_high_ratio`, `decompress_bound_corrupt`.
+- `tests/test_compress_wire.c` — parser + e2e high-ratio BATCH
+  delivery (4 KiB of `'A'`).
+
+### Documentation
+- `docs/reviews/v0.5.41.enumeration.md` — remaining-gap catalog.
+- `docs/reviews/v0.5.41.plan.md` — this-round WBS.
+- `docs/features/wire-compression.md`, `flag-rejection.md`,
+  `info-frame.md` — parser rule and bomb bound.
+- `docs/benchmarks/v0541_{1,2}.txt` — bench transcripts.
+
+### Test count
+- 120 tests (was 114 in v0.5.40; +6: accept_compressed_batch,
+  decompress_bound_{exact,high_ratio,corrupt},
+  compress_wire parser + e2e).
+
 ## 0.5.40 - 2026-09-03
 
 ### Changed

@@ -4204,31 +4204,31 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
 
-    /* F2: zstd decompression for batch-level compression. The flag
-     * must be on a BATCH frame; per-message compression was rejected
-     * by F11. Decompression bomb cap: 16x compressed size, 16 MiB max. */
+    /* F2: zstd decompression for batch-level compression. Dest size
+     * comes from the zstd content-size header (capped at 16 MiB).
+     * Recurse once with the flag cleared so a nested flag cannot loop. */
     if (frame->hdr.flags & CMQ_FLAG_COMPRESSED) {
-        size_t bound = cmq_compress_bound(frame->payload_len);
-        if (bound > 16u * 1024u * 1024u) {
-            cmq_send_error(c, "compressed batch too large");
+        ssize_t bound = cmq_decompress_bound(frame->payload,
+                                              frame->payload_len);
+        if (bound < 0) {
+            cmq_send_error(c, "compressed batch rejected");
             return;
         }
-        uint8_t *decoded = malloc(bound);
+        uint8_t *decoded = malloc((size_t)bound);
         if (!decoded) {
             cmq_send_error(c, "decompress oom");
             return;
         }
         ssize_t dlen = cmq_decompress(frame->payload, frame->payload_len,
-                                        decoded, bound);
+                                        decoded, (size_t)bound);
         if (dlen < 0) {
             free(decoded);
             cmq_send_error(c, "decompress failed");
             return;
         }
-        /* Recurse with a local frame whose payload is the decoded buffer.
-         * frame->payload remains owned by the parser; decoded is freed
-         * on this return path. */
         cmq_frame_t dec_frame = *frame;
+        dec_frame.hdr.flags =
+            (cmq_u8_t)(dec_frame.hdr.flags & ~(cmq_u8_t)CMQ_FLAG_COMPRESSED);
         dec_frame.payload = decoded;
         dec_frame.payload_len = (size_t)dlen;
         handle_batch(srv, c, &dec_frame);

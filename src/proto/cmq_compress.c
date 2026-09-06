@@ -21,6 +21,17 @@ ssize_t cmq_compress(const uint8_t *src, size_t src_len,
     return (ssize_t)rc;
 }
 
+#define CMQ_DECOMPRESS_MAX_BYTES (16u * 1024u * 1024u)
+
+ssize_t cmq_decompress_bound(const uint8_t *src, size_t src_len) {
+    if (!src || src_len == 0) return -1;
+    unsigned long long sz = ZSTD_getFrameContentSize(src, src_len);
+    if (sz == ZSTD_CONTENTSIZE_UNKNOWN || sz == ZSTD_CONTENTSIZE_ERROR)
+        return -1;
+    if (sz == 0 || sz > CMQ_DECOMPRESS_MAX_BYTES) return -1;
+    return (ssize_t)sz;
+}
+
 ssize_t cmq_decompress(const uint8_t *src, size_t src_len,
                         uint8_t *dst, size_t dst_cap) {
     if (!src || src_len == 0) return -1;
@@ -28,7 +39,7 @@ ssize_t cmq_decompress(const uint8_t *src, size_t src_len,
     size_t rc = ZSTD_decompress(dst, dst_cap, src, src_len);
     if (ZSTD_isError(rc)) return -1;
     /* Bomb protection is provided by dst_cap: ZSTD refuses to write
-     * past it. Callers must size dst_cap to a sane upper bound
-     * (e.g., 16 MiB for BATCH frames). */
+     * past it. Callers must size dst_cap via cmq_decompress_bound
+     * (content size, capped at 16 MiB). */
     return (ssize_t)rc;
 }
