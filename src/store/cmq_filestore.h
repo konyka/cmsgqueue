@@ -40,6 +40,12 @@ uint64_t cmq_filestore_async_enqueued_count(cmq_filestore_t *fs);
  * interval_ms milliseconds. */
 void cmq_filestore_set_sync_interval(cmq_filestore_t *fs,
                                        unsigned interval_ms);
+unsigned cmq_filestore_sync_interval(const cmq_filestore_t *fs);
+/* v0.5.121: apply a fresh persist_sync_interval_ms.
+ * 0 keeps the current interval. >86400000 fails closed.
+ * fs may be NULL (no WAL); live_ms is still updated. */
+int cmq_filestore_reload_sync(cmq_filestore_t *fs, unsigned *live_ms,
+                              unsigned fresh_ms);
 
 /* P1: enable async WAL writes via SPSC ring + worker thread.
  * queue_capacity: max in-flight writes (each ~4 KiB avg). 0 = off.

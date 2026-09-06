@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.121 - 2026-09-06
+
+### Added
+- **Reload persist_sync_interval_ms** —
+  `cmq_server_reload` pushes a non-zero interval onto the
+  live filestore. 0 / omitted keeps the current policy.
+  Values above 86400000 fail closed.
+
+### Tests
+- `tests/test_rsy.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.121.enumeration.md`, `v0.5.121.plan.md`.
+- `docs/features/persistence.md`.
+- `docs/benchmarks/v05121_{1,2}.txt`.
+
+### Test count
+- 475 tests (was 471 in v0.5.120; +4).
+
 ## 0.5.120 - 2026-09-06
 
 ### Added

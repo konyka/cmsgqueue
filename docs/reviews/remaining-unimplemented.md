@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.120)
+# Remaining unimplemented work (HEAD after v0.5.121)
 
 Evidence-checked against source on 2026-09-06. P2 (R1–R7)
 and P3 D1–D8 phase cuts in this catalog are shipped.
@@ -82,6 +82,7 @@ Required next cuts: none.
 | v0.5.118 | SIGHUP / config_file |
 | v0.5.119 | reload auth / JWT / nkey |
 | v0.5.120 | reload JWKS cache from jwks_json |
+| v0.5.121 | reload persist_sync_interval_ms |
 
 ## Deferred — detailed designs
 
@@ -184,6 +185,7 @@ are live (v0.5.88).
 | SIGHUP / config_file | shipped v0.5.118 | — |
 | reload auth / JWT / nkey | shipped v0.5.119 | — |
 | reload JWKS cache from jwks_json | shipped v0.5.120 | — |
+| reload persist_sync_interval_ms | shipped v0.5.121 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -193,7 +195,8 @@ are live (v0.5.88).
   `config_file` / SIGHUP shipped v0.5.118. Auth / JWT /
   nkey reload shipped v0.5.119. Static `jwks_json` cache
   reload shipped v0.5.120 (`jwks_url` refresh stays
-  create-time).
+  create-time). `persist_sync_interval_ms` reload shipped
+  v0.5.121.
 
 ## TDD rule for every increment
 

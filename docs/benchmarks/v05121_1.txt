@@ -1,0 +1,3 @@
+v0.5.121 bench 1:
+- Idle append with interval 0: maybe_fsync returns immediately.
+- Reload: one unsigned store. No extra fsync on the tick.

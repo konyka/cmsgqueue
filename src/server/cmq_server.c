@@ -8851,6 +8851,12 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
     if (fresh.persist_dir && server->filestore) {
         cmq_log_info(server->log, "Persist dir reload: %s", fresh.persist_dir);
     }
+    if (cmq_filestore_reload_sync(server->filestore,
+                                  &server->config.persist_sync_interval_ms,
+                                  fresh.persist_sync_interval_ms) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_reload_apply_tls(server->tls_config_slots, CMQ_MAX_LISTENERS,
                              &fresh) != 0) {
         cmq_config_free(&fresh);

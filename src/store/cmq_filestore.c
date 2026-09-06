@@ -1483,6 +1483,21 @@ void cmq_filestore_set_sync_interval(cmq_filestore_t *fs,
     fs->fsync_interval_ms = interval_ms;
 }
 
+unsigned cmq_filestore_sync_interval(const cmq_filestore_t *fs) {
+    return fs ? fs->fsync_interval_ms : 0;
+}
+
+int cmq_filestore_reload_sync(cmq_filestore_t *fs, unsigned *live_ms,
+                              unsigned fresh_ms) {
+    if (!live_ms) return -1;
+    if (fresh_ms > 86400000u) return -1;
+    if (fresh_ms == 0) return 0;
+    *live_ms = fresh_ms;
+    if (fs)
+        cmq_filestore_set_sync_interval(fs, fresh_ms);
+    return 0;
+}
+
 void cmq_filestore_set_max_payload_size(cmq_filestore_t *fs, size_t bytes) {
     if (!fs) return;
     fs->max_payload_bytes = bytes;

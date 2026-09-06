@@ -19,6 +19,9 @@ match — so a publish with no subscribers is still persisted.
 
 `persist_sync_interval_ms` (v0.5.110, 0 = off, max 86400000)
 installs `cmq_filestore_set_sync_interval` at create.
+SIGHUP / `cmq_server_reload` applies a non-zero interval
+to the live filestore (v0.5.121). 0 / omitted keeps the
+current policy.
 
 The wiring is **best-effort**: a failed append increments
 `stat_persist_fail` but does not block delivery. This matches
