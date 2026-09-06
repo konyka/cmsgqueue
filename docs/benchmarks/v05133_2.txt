@@ -1,0 +1,3 @@
+v0.5.133 bench 2:
+- Create with log_file NULL: skip add_file (no fopen).
+- Reject ../evil: no store.

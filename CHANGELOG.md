@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.133 - 2026-09-06
+
+### Added
+- **Empty `log_file` / slot-0 TLS store NULL** — load
+  disables an empty `log_file` so create does not
+  `fopen("")`. `..` / `\` / controls fail closed.
+  Empty `tls_cert` / `tls_key` match extra-listener TLS.
+  Auth empty strings still reject at validate.
+
+### Tests
+- `tests/test_lgf.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.133.enumeration.md`, `v0.5.133.plan.md`.
+- `docs/features/tls-hardening.md`.
+- `docs/benchmarks/v05133_{1,2}.txt`.
+
+### Test count
+- 523 tests (was 519 in v0.5.132; +4).
+
 ## 0.5.132 - 2026-09-06
 
 ### Added

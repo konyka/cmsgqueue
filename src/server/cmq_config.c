@@ -363,6 +363,12 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "write_timeout") == 0 || strcmp(key, "write_timeout_ms") == 0) {
         return parse_int_range(value, 0, 86400000, &config->write_timeout_ms);
     } else if (strcmp(key, "log_file") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->log_file);
+            config->log_file = NULL;
+            return 0;
+        }
+        if (!persist_dir_ok(value)) return -1;
         return cfg_set_str(&config->log_file, value);
     } else if (strcmp(key, "log_level") == 0) {
         return parse_log_level(value, &config->log_level);
@@ -379,42 +385,42 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "auth_password") == 0) {
         return cfg_set_str(&config->auth_password, value);
     } else if (strcmp(key, "jwt_issuer") == 0) {
-        return cfg_set_str(&config->jwt_issuer, value);
+        return cfg_set_str_empty(&config->jwt_issuer, value);
     } else if (strcmp(key, "jwt_hmac_secret") == 0) {
-        return cfg_set_str(&config->jwt_hmac_secret, value);
+        return cfg_set_str_empty(&config->jwt_hmac_secret, value);
     } else if (strcmp(key, "jwt_leeway_sec") == 0) {
         return parse_int_range(value, 0, 3600, &config->jwt_leeway_sec);
     } else if (strcmp(key, "nkey_pub") == 0) {
-        return cfg_set_str(&config->nkey_pub, value);
+        return cfg_set_str_empty(&config->nkey_pub, value);
     } else if (strcmp(key, "jwks_json") == 0) {
-        return cfg_set_str(&config->jwks_json, value);
+        return cfg_set_str_empty(&config->jwks_json, value);
     } else if (strcmp(key, "jwks_url") == 0) {
-        return cfg_set_str(&config->jwks_url, value);
+        return cfg_set_str_empty(&config->jwks_url, value);
     } else if (strcmp(key, "jwks_ca") == 0) {
-        return cfg_set_str(&config->jwks_ca, value);
+        return cfg_set_str_empty(&config->jwks_ca, value);
     } else if (strcmp(key, "jwks_refresh_sec") == 0) {
         return parse_int_range(value, 0, CMQ_JWKS_REFRESH_MAX,
                                &config->jwks_refresh_sec);
     } else if (strcmp(key, "jwt_ec_pub") == 0) {
-        return cfg_set_str(&config->jwt_ec_pub, value);
+        return cfg_set_str_empty(&config->jwt_ec_pub, value);
     } else if (strcmp(key, "jwt_rsa_n") == 0) {
-        return cfg_set_str(&config->jwt_rsa_n, value);
+        return cfg_set_str_empty(&config->jwt_rsa_n, value);
     } else if (strcmp(key, "jwt_rsa_e") == 0) {
-        return cfg_set_str(&config->jwt_rsa_e, value);
+        return cfg_set_str_empty(&config->jwt_rsa_e, value);
     } else if (strcmp(key, "otlp_endpoint") == 0) {
-        return cfg_set_str(&config->otlp_endpoint, value);
+        return cfg_set_str_empty(&config->otlp_endpoint, value);
     } else if (strcmp(key, "otlp_ca") == 0) {
-        return cfg_set_str(&config->otlp_ca, value);
+        return cfg_set_str_empty(&config->otlp_ca, value);
     } else if (strcmp(key, "cluster_name") == 0) {
-        return cfg_set_str(&config->cluster_name, value);
+        return cfg_set_str_empty(&config->cluster_name, value);
     } else if (strcmp(key, "cluster_node_id") == 0) {
-        return cfg_set_str(&config->cluster_node_id, value);
+        return cfg_set_str_empty(&config->cluster_node_id, value);
     } else if (strcmp(key, "tls_enabled") == 0) {
         return parse_int_range(value, 0, 1, &config->tls_enabled);
     } else if (strcmp(key, "tls_cert") == 0) {
-        return cfg_set_str(&config->tls_cert, value);
+        return cfg_set_str_empty(&config->tls_cert, value);
     } else if (strcmp(key, "tls_key") == 0) {
-        return cfg_set_str(&config->tls_key, value);
+        return cfg_set_str_empty(&config->tls_key, value);
     } else if (strcmp(key, "tls_ca") == 0) {
         if (!value[0]) {
             cfg_free_owned(config->tls_ca);

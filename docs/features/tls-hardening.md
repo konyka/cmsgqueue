@@ -45,7 +45,9 @@ The TLS backend in v0.3.0 (`src/enterprise/cmq_tls.c`) had a single SSL_CTX per 
 `listener{1,2,3}_tls_cert`, `_tls_key`, `_tls_ca`,
 `_tls_verify_peer` load into `cfg.listeners[1..3]`. Empty
 path disables that string. Slot 0 remains `tls_cert` /
-`tls_key` / `tls_ca` / `tls_verify_peer`. Create `strdup`s
+`tls_key` / `tls_ca` / `tls_verify_peer`. v0.5.133: empty
+slot-0 `tls_cert` / `tls_key` store NULL, same as
+`tls_ca` and extra-listener paths. Create `strdup`s
 every listener string so destroy owns them.
 
 `listener{1,2,3}_host` (IPv4) and `_port` (v0.5.115) select
