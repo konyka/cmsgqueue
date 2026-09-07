@@ -1,0 +1,3 @@
+v0.5.158 bench 1:
+- Obj attach: mkdir + calloc when *obj is NULL.
+- Existing handle: one pointer check, no remount.

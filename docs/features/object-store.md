@@ -18,13 +18,17 @@ When `persist_dir` is set, the server opens `{persist_dir}/obj`
 and applies `$OBJ.<name>` on PUBLISH: non-empty payload puts,
 empty payload deletes. Fanout still runs. Without
 `persist_dir`, `$OBJ.` is a normal subject.
+v0.5.158: SIGHUP also opens `{persist_dir}/obj` when
+create left obj NULL. Empty / omitted keeps off. An
+existing handle is not remounted. `..` / `\` fail closed.
 
 REQUEST `$OBJ.<name>` (v0.5.70) returns the blob to reply-to,
 or an empty body on miss.
 
 ## Tests
 
-`tests/test_obj.c`, `tests/test_objp.c`, `tests/test_kvreq.c`
+`tests/test_obj.c`, `tests/test_objp.c`, `tests/test_kvreq.c`,
+`tests/test_ora.c`
 
 ## See also
 

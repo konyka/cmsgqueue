@@ -13,6 +13,11 @@ typedef struct cmq_obj cmq_obj_t;
 cmq_obj_t *cmq_obj_create(const char *dir);
 void cmq_obj_destroy(cmq_obj_t *obj);
 
+/* Open persist_dir/obj when create left obj NULL.
+ * Empty / omitted dir keeps off. Existing *obj is left
+ * alone (no remount). `..` / `\` fail closed. */
+int cmq_obj_reload_attach(cmq_obj_t **obj, const char *persist_dir);
+
 /* 0 ok; -1 bad name/args; -2 value too large; -3 I/O. */
 int cmq_obj_put(cmq_obj_t *obj, const char *name, const uint8_t *data,
                 size_t len);

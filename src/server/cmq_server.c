@@ -8899,14 +8899,6 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
                 (void)cmq_kvb_set_persist(server->kvb, dir);
             if (server->js)
                 (void)cmq_js_set_persist(server->js, dir);
-            if (!server->obj) {
-                char odir[600];
-                int n = snprintf(odir, sizeof(odir), "%s/obj", dir);
-                if (n > 0 && (size_t)n < sizeof(odir)) {
-                    (void)mkdir(odir, 0755);
-                    server->obj = cmq_obj_create(odir);
-                }
-            }
             cmq_log_info(server->log, "Persistence enabled: dir=%s", dir);
         }
     }
@@ -8927,6 +8919,11 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
                 return -1;
             }
         }
+    }
+    if (cmq_obj_reload_attach(&server->obj,
+                              server->config.persist_dir) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
     }
     if (cmq_filestore_reload_sync(server->filestore,
                                   &server->config.persist_sync_interval_ms,

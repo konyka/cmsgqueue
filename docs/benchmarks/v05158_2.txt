@@ -1,0 +1,3 @@
+v0.5.158 bench 2:
+- Empty / omitted: one length check, keep obj off.
+- Reject: obj_dir_safe rules, *obj unchanged.

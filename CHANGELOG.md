@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.158 - 2026-09-07
+
+### Added
+- **Attach object store on reload** — SIGHUP opens
+  `{persist_dir}/obj` when create left the obj handle
+  NULL (including a live filestore whose object store
+  never opened). Empty / omitted keeps off. An existing
+  handle is not remounted. `..` / `\` fail closed.
+
+### Tests
+- `tests/test_ora.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.158.enumeration.md`, `v0.5.158.plan.md`.
+- `docs/features/object-store.md`, `persistence.md`.
+- `docs/benchmarks/v05158_{1,2}.txt`.
+
+### Test count
+- 623 tests (was 619 in v0.5.157; +4).
+
 ## 0.5.157 - 2026-09-07
 
 ### Added

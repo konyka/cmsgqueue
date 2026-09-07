@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/stat.h>
 
 struct cmq_obj {
     char dir[512];
@@ -65,6 +66,26 @@ cmq_obj_t *cmq_obj_create(const char *dir) {
     snprintf(o->dir, sizeof(o->dir), "%s", dir);
     cmq_mutex_init(&o->lock);
     return o;
+}
+
+int cmq_obj_reload_attach(cmq_obj_t **obj, const char *persist_dir) {
+    if (!obj) return -1;
+    if (!persist_dir || !persist_dir[0])
+        return 0;
+    if (*obj)
+        return 0;
+    if (!obj_dir_safe(persist_dir))
+        return -1;
+    char odir[512];
+    int n = snprintf(odir, sizeof(odir), "%s/obj", persist_dir);
+    if (n <= 0 || (size_t)n >= sizeof(odir) || !obj_dir_safe(odir))
+        return -1;
+    (void)mkdir(odir, 0755);
+    cmq_obj_t *o = cmq_obj_create(odir);
+    if (!o)
+        return 0;
+    *obj = o;
+    return 0;
 }
 
 void cmq_obj_destroy(cmq_obj_t *obj) {
