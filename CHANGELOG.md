@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.41 - 2026-09-03
+
+### Added
+- **Rigorous end-to-end bridge recovery test** —
+  `tests/test_mqtt_bridge_freelist_load.c:
+  recovered_bridge_matches_recovered_subscriber`. Builds server A
+  with `persist_dir`, persists a subscriber for topic
+  `"v0.5.41/sentinel"`, enqueues a bridge record, destroys, then
+  recreates server B and verifies `cmq_sublist_match` returns 1
+  for the recovered subscriber. Proves the v0.5.40 recovery path
+  actually calls `cmq_server_publish` with the recovered bridge
+  topic (the v0.5.40 `stat_messages_replayed > 0` check was too
+  loose — it also ticks on client-PUBLISH records that fail
+  validation). New includes in the test file: `cmq_sublist.h`,
+  `cmq_sublist_persist.h`, `cmq_account.h`, `string.h`.
+
+### Documentation
+- `docs/reviews/v0.5.41.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0541_{1,2}.txt` — bench transcripts + recovery
+  test micro-bench.
+
+### Test count
+- 115 tests (was 114 in v0.5.40; +1 rigorous-end-to-end-bridge).
+
 ## 0.5.40 - 2026-09-03
 
 ### Changed

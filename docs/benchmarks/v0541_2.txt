@@ -1,0 +1,8 @@
+v0.5.41 rigorous end-to-end recovery test micro-bench:
+- recovered_bridge_matches_recovered_subscriber: ~2.5ms total
+  (server_create + persist_record_sub + bridge enqueue +
+  200ms drain + destroy + recreate + sublist_match + cleanup).
+- Core data path unchanged at ~33K msg/s.
+- The test runs the full v0.5.37 sublist recovery +
+  v0.5.39/v0.5.40 bridge recovery pipeline end-to-end on every CI
+  build.

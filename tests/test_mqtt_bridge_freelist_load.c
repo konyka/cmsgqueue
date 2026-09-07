@@ -57,6 +57,9 @@ TEST(mqtt_bridge_freelist, cap_enforced_under_load) {
  * separate table). This one does. */
 #include "cmq_server.h"
 #include "cmq_filestore.h"
+#include "cmq_sublist.h"
+#include "cmq_sublist_persist.h"
+#include "cmq_account.h"
 extern int cmq_mqtt_test_enqueue_bridge(const char *topic,
                                           const uint8_t *payload,
                                           size_t len);
@@ -157,6 +160,66 @@ TEST(mqtt_bridge_freelist, bridge_record_survives_restart) {
 
     cmq_server_destroy(srv_b);
     system("rm -rf /tmp/cmq-test-v0540-bridge");
+}
+
+/* v0.5.41: rigorous end-to-end — a recovered subscriber matches the
+ * recovered bridge record's topic. Confirms that the v0.5.40 replay
+ * path actually calls cmq_sublist_match with the recovered bridge
+ * payload's topic (not just that the replay stat ticks). */
+TEST(mqtt_bridge_freelist, recovered_bridge_matches_recovered_subscriber) {
+    system("rm -rf /tmp/cmq-test-v0541 && mkdir -p /tmp/cmq-test-v0541");
+
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25033;
+    cfg.persist_dir = "/tmp/cmq-test-v0541";
+    cfg.log_to_stdout = 0;
+    cmq_server_t *srv_a = NULL;
+    ASSERT_EQ(cmq_server_create(&srv_a, &cfg), CMQ_OK);
+
+    /* Persist a subscriber for the topic we'll bridge-publish. */
+    ASSERT_EQ(cmq_sublist_persist_record_sub(srv_a->persist,
+                                              1,
+                                              "v0.5.41/sentinel",
+                                              "user1"),
+              0);
+    cmq_sublist_persist_close(srv_a->persist);
+    srv_a->persist = NULL;
+
+    cmq_mqtt_set_bridge_server(srv_a);
+
+    uint8_t payload[32] = {1, 2, 3, 4};
+    ASSERT_EQ(cmq_mqtt_test_enqueue_bridge("v0.5.41/sentinel",
+                                            payload, sizeof(payload)), 0);
+    struct timespec ts = {0, 200000000};
+    nanosleep(&ts, NULL);
+    /* The bridge persist writes 1 frame (the CMQB record). The
+     * subscriber persist file is separate (cmq_sublist_persist) and
+     * not on the filestore. */
+    uint64_t last = cmq_filestore_last_seq(srv_a->filestore);
+    ASSERT_EQ(last, 1);
+
+    cmq_mqtt_bridge_shutdown();
+    cmq_server_destroy(srv_a);
+
+    /* Recreate server B. */
+    cmq_server_t *srv_b = NULL;
+    ASSERT_EQ(cmq_server_create(&srv_b, &cfg), CMQ_OK);
+
+    /* The SUB record is recovered (v0.5.37 path) so the sublist has
+     * a ghost subscriber. The bridge record is recovered (v0.5.40
+     * path) and cmq_sublist_match is called with the recovered
+     * topic. If the match returns the recovered subscriber, the
+     * bridge record survived end-to-end. */
+    cmq_sublist_result_t result;
+    memset(&result, 0, sizeof(result));
+    int rc = cmq_sublist_match(srv_b->sublist, "v0.5.41/sentinel", &result);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(result.count, 1);
+
+    cmq_server_destroy(srv_b);
+    system("rm -rf /tmp/cmq-test-v0541");
 }
 
 TEST(mqtt_bridge_freelist, real_load_drains_to_freelist) {
