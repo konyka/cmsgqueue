@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.5.43 - 2026-09-03
+
+### Added
+- **Test-only retained-message dispatch helper** —
+  `cmq_mqtt_dispatch_retained(topic, payload, payload_len, cb, user)`
+  in `cmq_mqtt_server.{c,h}` walks the subscriber list registered
+  via `cmq_mqtt_record_subscriber` and invokes `cb` for each whose
+  topic_filter matches the given topic. Mirrors what
+  `mqtt_handle_client` does on a real SUBSCRIBE. Production code
+  must not call this.
+- **Test-only subscriber list reset** —
+  `cmq_mqtt_subs_reset_test()` clears `g_mqtt_sub_count` so
+  multiple tests can run on the same global state without
+  cross-contamination. Production code must not call this.
+
+### Tests
+- `tests/test_mqtt_retained_wildcard.c` — new file with 3 tests:
+  - `plus_matches_and_delivers`: stored topic "sensors/temp",
+    registered "sensors/+" subscriber, dispatch invokes the
+    callback.
+  - `hash_matches_and_delivers`: registered "sensors/#" subscriber,
+    dispatch invokes the callback.
+  - `non_matching_topic_does_not_deliver`: registered "events/+"
+    subscriber for "sensors/temp" topic — no match, callback not
+    invoked.
+
+### Documentation
+- `docs/reviews/v0.5.43.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0543_{1,2}.txt` — bench transcripts + retained
+  + wildcard dispatch micro-bench.
+
+### Test count
+- 123 tests (was 120 in v0.5.42; +3 retained + wildcard tests).
+
 ## 0.5.42 - 2026-09-03
 
 ### Added

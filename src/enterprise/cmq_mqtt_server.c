@@ -527,6 +527,29 @@ int cmq_mqtt_subscriber_count(void) {
     return n;
 }
 
+/* v0.5.43: test-only retained-message dispatch. Walks the
+ * subscriber list and invokes cb for each whose topic_filter
+ * matches the published topic. Mirrors the SUBSCRIBE dispatch
+ * loop without driving a real MQTT client. */
+void cmq_mqtt_dispatch_retained(const char *topic, const uint8_t *payload,
+                                  size_t payload_len,
+                                  cmq_mqtt_test_dispatch_cb cb,
+                                  void *user) {
+    if (!topic || !cb) return;
+    pthread_mutex_lock(&g_mqtt_sub_lock);
+    for (int i = 0; i < g_mqtt_sub_count; i++) {
+        if (cmq_mqtt_topic_match(g_mqtt_sub_topics[i], topic) == 1) {
+            /* cb may invoke test-only inspection helpers; release
+             * the lock first to avoid any nested-locking hazards. */
+            const char *sub_topic = g_mqtt_sub_topics[i];
+            pthread_mutex_unlock(&g_mqtt_sub_lock);
+            cb(i, sub_topic, payload, payload_len, user);
+            pthread_mutex_lock(&g_mqtt_sub_lock);
+        }
+    }
+    pthread_mutex_unlock(&g_mqtt_sub_lock);
+}
+
 int cmq_mqtt_get_subscribed_topic(int index, char *out, size_t out_len) {
     if (!out || out_len == 0 || index < 0) return -1;
     pthread_mutex_lock(&g_mqtt_sub_lock);
@@ -537,6 +560,14 @@ int cmq_mqtt_get_subscribed_topic(int index, char *out, size_t out_len) {
     }
     pthread_mutex_unlock(&g_mqtt_sub_lock);
     return rc;
+}
+
+/* v0.5.43: test-only reset of the subscriber list. Production code
+ * must not call this. */
+void cmq_mqtt_subs_reset_test(void) {
+    pthread_mutex_lock(&g_mqtt_sub_lock);
+    g_mqtt_sub_count = 0;
+    pthread_mutex_unlock(&g_mqtt_sub_lock);
 }
 
 /* P4 (v0.5.2): retained-message store. Last retained payload per

@@ -1,0 +1,6 @@
+v0.5.43 MQTT retained + wildcard dispatch micro-bench:
+- test_mqtt_retained_wildcard: ~30us total (3 tests, see cache
+  isolation).
+- Core data path unchanged at ~33K msg/s. The test-only
+  cmq_mqtt_dispatch_retained walks g_mqtt_sub_topics[] and calls
+  cmq_mqtt_topic_match — sub-microsecond per subscriber.

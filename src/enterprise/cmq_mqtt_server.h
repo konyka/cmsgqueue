@@ -107,6 +107,28 @@ int cmq_mqtt_qos2_get_phase_test(uint16_t packet_id);
 /* v0.5.42: test-only reset. Clears the QoS2 retransmit table.
  * Production code must not call this. */
 void cmq_mqtt_qos2_reset_test(void);
+
+/* v0.5.43: test-only retained-message dispatch helper. Walks the
+ * subscriber list registered via cmq_mqtt_record_subscriber and
+ * invokes cb for each whose topic_filter matches the given topic.
+ * Mirrors what mqtt_handle_client does on a real SUBSCRIBE.
+ * Production code must not call this. */
+typedef void (*cmq_mqtt_test_dispatch_cb)(int subscriber_idx,
+                                          const char *topic,
+                                          const uint8_t *payload,
+                                          size_t payload_len,
+                                          void *user);
+void cmq_mqtt_dispatch_retained(const char *topic,
+                                  const uint8_t *payload,
+                                  size_t payload_len,
+                                  cmq_mqtt_test_dispatch_cb cb,
+                                  void *user);
+
+/* v0.5.43: test-only. Clears the subscriber list (g_mqtt_sub_count)
+ * so tests start with a clean slate. Production code must not
+ * call this. */
+void cmq_mqtt_subs_reset_test(void);
+
 int cmq_mqtt_subscriber_count(void);
 int cmq_mqtt_get_subscribed_topic(int index, char *out, size_t out_len);
 
