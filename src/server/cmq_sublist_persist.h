@@ -59,6 +59,12 @@ int cmq_sublist_persist_reload_load(cmq_sublist_persist_t *p,
                                     int *loaded,
                                     cmq_sublist_persist_cb cb, void *ctx);
 
+/* Open cmq-subs.wal when create left persist NULL.
+ * Empty / omitted dir keeps off. Existing *p is left
+ * alone (no remount). `..` / `\` fail closed. */
+int cmq_sublist_persist_reload_attach(cmq_sublist_persist_t **p,
+                                      const char *dir);
+
 #ifdef __cplusplus
 }
 #endif

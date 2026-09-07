@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.157 - 2026-09-07
+
+### Added
+- **Attach subscription persist on reload** — SIGHUP
+  opens `cmq-subs.wal` when create left the persist
+  handle NULL (including a live filestore whose F18
+  file never opened). Empty / omitted keeps off.
+  An existing handle is not remounted. `..` / `\`
+  fail closed. A just-opened file is loaded once
+  (v0.5.150). WAL message replay stays create-time.
+
+### Tests
+- `tests/test_spa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.157.enumeration.md`, `v0.5.157.plan.md`.
+- `docs/features/persistence.md`.
+- `docs/benchmarks/v05157_{1,2}.txt`.
+
+### Test count
+- 619 tests (was 615 in v0.5.156; +4).
+
 ## 0.5.156 - 2026-09-07
 
 ### Added

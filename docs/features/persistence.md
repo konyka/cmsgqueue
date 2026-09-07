@@ -30,6 +30,10 @@ not remounted and WAL replay stays create-time.
 v0.5.150: the just-opened `cmq-subs.wal` is loaded
 once into ghost SUB refs. A second load is skipped.
 WAL message replay stays create-time.
+v0.5.157: reload also opens `cmq-subs.wal` when
+create left persist NULL (live filestore, missing
+F18 handle). Empty / omitted keeps off. An existing
+handle is not remounted. `..` / `\` fail closed.
 
 The wiring is **best-effort**: a failed append increments
 `stat_persist_fail` but does not block delivery. This matches

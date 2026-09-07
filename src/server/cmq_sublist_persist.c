@@ -88,6 +88,49 @@ int cmq_sublist_persist_record_unsub(cmq_sublist_persist_t *p,
     return rc;
 }
 
+static int persist_dir_ok(const char *dir) {
+    if (!dir || !dir[0]) return 0;
+    size_t n = strnlen(dir, 512);
+    if (n == 0 || n >= 512) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)dir[i];
+        if (c == '\\' || c < 0x20 || c == 0x7f)
+            return 0;
+    }
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && dir[i] == '/')
+            i++;
+        if (i >= n)
+            break;
+        size_t start = i;
+        while (i < n && dir[i] != '/')
+            i++;
+        size_t len = i - start;
+        if (len == 1 && dir[start] == '.')
+            return 0;
+        if (len == 2 && dir[start] == '.' && dir[start + 1] == '.')
+            return 0;
+    }
+    return 1;
+}
+
+int cmq_sublist_persist_reload_attach(cmq_sublist_persist_t **p,
+                                      const char *dir) {
+    if (!p) return -1;
+    if (!dir || !dir[0])
+        return 0;
+    if (*p)
+        return 0;
+    if (!persist_dir_ok(dir))
+        return -1;
+    cmq_sublist_persist_t *n = cmq_sublist_persist_open(dir);
+    if (!n)
+        return 0;
+    *p = n;
+    return 0;
+}
+
 int cmq_sublist_persist_reload_load(cmq_sublist_persist_t *p,
                                     int *loaded,
                                     cmq_sublist_persist_cb cb, void *ctx) {

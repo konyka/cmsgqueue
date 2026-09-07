@@ -8893,19 +8893,6 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
             if (server->config.persist_sync_interval_ms > 0)
                 cmq_filestore_set_sync_interval(server->filestore,
                     server->config.persist_sync_interval_ms);
-            if (!server->persist) {
-                server->persist = cmq_sublist_persist_open(dir);
-                if (server->persist) {
-                    int loaded = 0;
-                    if (cmq_sublist_persist_reload_load(server->persist,
-                                                        &loaded,
-                                                        cmq_sublist_recover_cb,
-                                                        server) != 0) {
-                        cmq_config_free(&fresh);
-                        return -1;
-                    }
-                }
-            }
             if (server->txn)
                 (void)cmq_txn_set_log(server->txn, dir);
             if (server->kvb)
@@ -8921,6 +8908,24 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
                 }
             }
             cmq_log_info(server->log, "Persistence enabled: dir=%s", dir);
+        }
+    }
+    {
+        int persist_was = server->persist != NULL;
+        if (cmq_sublist_persist_reload_attach(&server->persist,
+                                              server->config.persist_dir) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+        if (server->persist && !persist_was) {
+            int loaded = 0;
+            if (cmq_sublist_persist_reload_load(server->persist,
+                                                &loaded,
+                                                cmq_sublist_recover_cb,
+                                                server) != 0) {
+                cmq_config_free(&fresh);
+                return -1;
+            }
         }
     }
     if (cmq_filestore_reload_sync(server->filestore,
