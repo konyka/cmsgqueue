@@ -96,6 +96,17 @@ int cmq_mqtt_topic_match(const char *pattern, const char *topic);
  * matching PUBLISH into cmq_sublist) is v0.6 work; today this only
  * maintains an internal record. */
 int cmq_mqtt_record_subscriber(const char *topic_filter);
+
+/* v0.5.42: test-only wrappers around the static QoS2 retransmit
+ * helpers (qos2_record_or_lookup / qos2_get_phase). Production code
+ * must not call these. */
+int cmq_mqtt_qos2_record_or_lookup_test(uint16_t packet_id,
+                                          int new_phase);
+int cmq_mqtt_qos2_get_phase_test(uint16_t packet_id);
+
+/* v0.5.42: test-only reset. Clears the QoS2 retransmit table.
+ * Production code must not call this. */
+void cmq_mqtt_qos2_reset_test(void);
 int cmq_mqtt_subscriber_count(void);
 int cmq_mqtt_get_subscribed_topic(int index, char *out, size_t out_len);
 

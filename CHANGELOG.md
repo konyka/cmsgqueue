@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.42 - 2026-09-03
+
+### Added
+- **Test-only helpers for MQTT QoS2 retransmit table** in
+  `cmq_mqtt_server.h`: `cmq_mqtt_qos2_record_or_lookup_test`,
+  `cmq_mqtt_qos2_get_phase_test`, and `cmq_mqtt_qos2_reset_test`.
+  These wrap the file-static helpers so unit tests can verify
+  table-management semantics without driving a real MQTT wire-format
+  client. Production code must not call them (documented in the
+  header).
+
+### Fixed
+- **MQTT QoS2 table overflow silent drop** — `qos2_record_or_lookup`
+  previously returned 0 (success) even when the table was full,
+  silently dropping the entry. v0.5.42 makes it return -1 in that
+  case so callers can detect overflow. The existing wire handler
+  ignores the return value, so this is a silent behavior fix that
+  doesn't break production.
+
+### Tests
+- `tests/test_mqtt_qos2.c` — new file with 5 tests:
+  - `empty_table_returns_phase_zero`: get on empty returns 0.
+  - `insert_new_returns_zero_and_sets_phase`: insert + get.
+  - `update_existing_returns_one`: second insert returns 1.
+  - `distinct_packet_ids_isolated`: packet_ids are independent.
+  - `table_overflow_returns_neg_one`: filling 128 entries then
+    inserting one more returns -1; existing entries remain
+    queryable.
+ All tests reset at the start to clear global state from prior
+ tests.
+
+### Documentation
+- `docs/reviews/v0.5.42.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0542_{1,2}.txt` — bench transcripts + QoS2 test
+  micro-bench.
+
+### Test count
+- 120 tests (was 115 in v0.5.41; +5 QoS2 tests).
+
 ## 0.5.41 - 2026-09-03
 
 ### Added

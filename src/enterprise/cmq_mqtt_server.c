@@ -445,23 +445,31 @@ static struct qos2_entry g_qos2[MQTT_QOS2_MAX];
 static int g_qos2_count = 0;
 static pthread_mutex_t g_qos2_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* v0.5.42: return 1 on update (entry existed), 0 on insert (new
+ * entry added), -1 on overflow (table full, entry NOT added). The
+ * previous implementation returned 0 on both insert and overflow,
+ * which made it impossible for callers to distinguish a successful
+ * new insert from a silently-dropped overflow case. */
 static int qos2_record_or_lookup(uint16_t packet_id, int new_phase) {
     pthread_mutex_lock(&g_qos2_lock);
-    int found = 0;
+    int rc = 0;
     for (int i = 0; i < g_qos2_count; i++) {
         if (g_qos2[i].packet_id == packet_id) {
             g_qos2[i].phase = new_phase;
-            found = 1;
-            break;
+            rc = 1;
+            goto out;
         }
     }
-    if (!found && g_qos2_count < MQTT_QOS2_MAX) {
-        g_qos2[g_qos2_count].packet_id = packet_id;
-        g_qos2[g_qos2_count].phase = new_phase;
-        g_qos2_count++;
+    if (g_qos2_count >= MQTT_QOS2_MAX) {
+        rc = -1;
+        goto out;
     }
+    g_qos2[g_qos2_count].packet_id = packet_id;
+    g_qos2[g_qos2_count].phase = new_phase;
+    g_qos2_count++;
+out:
     pthread_mutex_unlock(&g_qos2_lock);
-    return found;
+    return rc;
 }
 
 static int qos2_get_phase(uint16_t packet_id) {
@@ -475,6 +483,27 @@ static int qos2_get_phase(uint16_t packet_id) {
     }
     pthread_mutex_unlock(&g_qos2_lock);
     return phase;
+}
+
+/* v0.5.42: test-only wrappers. Forward to the static helpers.
+ * qos2_record_or_lookup / qos2_get_phase remain file-static so
+ * production code can't accidentally bypass the table. */
+int cmq_mqtt_qos2_record_or_lookup_test(uint16_t packet_id,
+                                          int new_phase) {
+    return qos2_record_or_lookup(packet_id, new_phase);
+}
+
+int cmq_mqtt_qos2_get_phase_test(uint16_t packet_id) {
+    return qos2_get_phase(packet_id);
+}
+
+/* v0.5.42: test-only reset. Wipes the global QoS2 retransmit
+ * table so tests start from a clean state. Production code must
+ * not call this. */
+void cmq_mqtt_qos2_reset_test(void) {
+    pthread_mutex_lock(&g_qos2_lock);
+    g_qos2_count = 0;
+    pthread_mutex_unlock(&g_qos2_lock);
 }
 
 int cmq_mqtt_record_subscriber(const char *topic_filter) {

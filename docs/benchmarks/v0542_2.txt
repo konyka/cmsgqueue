@@ -1,0 +1,5 @@
+v0.5.42 MQTT QoS2 retransmit helpers + test micro-bench:
+- test_mqtt_qos2: ~30us total (5 tests, see cache isolation).
+- Core data path unchanged at ~33K msg/s. The QoS2 table is on
+  the MQTT dispatch path (re-delivery tracking) but is sub-microsecond
+  per packet — bench impact negligible.
