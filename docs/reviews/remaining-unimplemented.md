@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.160)
+# Remaining unimplemented work (HEAD after v0.5.161)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -35,7 +35,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `js_partitions` / `js_msgs_rotate_bytes` | yes | `$JS` | `cmq_js_reload` |
 | `tls_*` / `listener*_tls_*` | yes | SSL_CTX slots | `apply_tls` + live paths + attach |
 | `listener{1,2,3}_host/port` / count | yes | extra bind | bind empty slots (no rebind) |
-| `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync + F18/obj/txn/kv attach (no remount / WAL replay) |
+| `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync + F18/obj/txn/kv/$JS attach (no remount / WAL replay) |
 | `mqtt_bridge_*` | yes | outbound bridge | attach + maps + endpoint + live maps |
 
 Intentional / out of scope (not unused create/conf paths):
@@ -167,6 +167,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.158 | attach object store on reload |
 | v0.5.159 | attach txn log on reload |
 | v0.5.160 | attach KV persist on reload |
+| v0.5.161 | attach $JS persist on reload |
 
 ## Deferred — detailed designs
 
@@ -309,6 +310,7 @@ are live (v0.5.88).
 | attach object store on reload | shipped v0.5.158 | — |
 | attach txn log on reload | shipped v0.5.159 | — |
 | attach KV persist on reload | shipped v0.5.160 | — |
+| attach $JS persist on reload | shipped v0.5.161 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -359,7 +361,8 @@ are live (v0.5.88).
   create left obj NULL shipped v0.5.158. Txn log
   attach when create left it unset shipped v0.5.159.
   KV persist attach when create left it unset shipped
-  v0.5.160.
+  v0.5.160. `$JS` persist attach when create left it
+  unset shipped v0.5.161.
   Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.

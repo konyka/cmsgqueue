@@ -62,6 +62,10 @@ v0.5.103) so REQUEST-get survives reopen. History
 is appended to `{persist_dir}/js/{name}.msgs`
 (`CMQM`, v0.5.104) and replayed onto the ring on
 open so pull consume survives reopen.
+v0.5.161: SIGHUP also enables `{persist_dir}/js` when
+create left `$JS` persist unset. Empty / omitted keeps
+off. An existing persist dir is not remounted. `..` /
+`\` fail closed.
 `cmq_js_set_msgs_rotate_bytes` / config
 `js_msgs_rotate_bytes` (v0.5.108, 0 = off) rewrites
 `.msgs` to a tail that fits the cap (at most 1024

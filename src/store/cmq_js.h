@@ -20,6 +20,11 @@ void cmq_js_destroy(cmq_js_t *j);
 /* Cursors: {dir}/js/{name}.cursors. Last: {name}.last.
  * History: {name}.msgs. Parts: {name}.parts */
 int cmq_js_set_persist(cmq_js_t *j, const char *dir);
+
+/* Enable persist_dir/js when create left $JS persist unset.
+ * Empty / omitted dir keeps off. An existing persist dir
+ * is left alone (no remount). `..` / `\` fail closed. */
+int cmq_js_reload_attach_persist(cmq_js_t *j, const char *dir);
 /* 1–16. Empty stream only. 0 ok; -1 bad args / not empty. */
 int cmq_js_set_partitions(cmq_js_t *j, const char *name, unsigned n);
 unsigned cmq_js_partitions(cmq_js_t *j, const char *name);

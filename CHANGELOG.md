@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.161 - 2026-09-07
+
+### Added
+- **Attach $JS persist on reload** — SIGHUP enables
+  `{persist_dir}/js` when create left `$JS` persist unset
+  (including a live filestore whose streams never opened
+  last/msgs/cursors). Empty / omitted keeps off. An
+  existing persist dir is not remounted. `..` / `\` fail
+  closed.
+
+### Tests
+- `tests/test_jsa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.161.enumeration.md`, `v0.5.161.plan.md`.
+- `docs/features/streams.md`, `persistence.md`.
+- `docs/benchmarks/v05161_{1,2}.txt`.
+
+### Test count
+- 635 tests (was 631 in v0.5.160; +4).
+
 ## 0.5.160 - 2026-09-07
 
 ### Added
