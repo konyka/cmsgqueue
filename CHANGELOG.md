@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.159 - 2026-09-07
+
+### Added
+- **Attach txn log on reload** — SIGHUP enables
+  `{persist_dir}/cmq.txn` when create left the txn log
+  unset (including a live filestore whose coordinator
+  never opened the log). Empty / omitted keeps off.
+  An existing log is not remounted. `..` / `\` fail
+  closed.
+
+### Tests
+- `tests/test_txa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.159.enumeration.md`, `v0.5.159.plan.md`.
+- `docs/features/txn.md`, `persistence.md`.
+- `docs/benchmarks/v05159_{1,2}.txt`.
+
+### Test count
+- 627 tests (was 623 in v0.5.158; +4).
+
 ## 0.5.158 - 2026-09-07
 
 ### Added

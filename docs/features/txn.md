@@ -41,6 +41,9 @@ still count as misses. Newest drop when the queue is full.
 enables this when `persist_dir` is set. Crash before the
 COMMIT record = not committed. Recover loads ids only
 (no re-fanout).
+v0.5.159: SIGHUP also enables the log when create left
+it unset. Empty / omitted keeps off. An existing log
+is not remounted. `..` / `\` fail closed.
 
 ## Performance
 
@@ -52,7 +55,8 @@ No live routes: COMMIT does not wait.
 
 ## Tests
 
-`tests/test_txn.c`, `tests/test_txn2.c`, `tests/test_rtry.c`
+`tests/test_txn.c`, `tests/test_txn2.c`, `tests/test_rtry.c`,
+`tests/test_txa.c`
 
 ## See also
 

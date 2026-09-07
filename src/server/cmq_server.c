@@ -8893,8 +8893,6 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
             if (server->config.persist_sync_interval_ms > 0)
                 cmq_filestore_set_sync_interval(server->filestore,
                     server->config.persist_sync_interval_ms);
-            if (server->txn)
-                (void)cmq_txn_set_log(server->txn, dir);
             if (server->kvb)
                 (void)cmq_kvb_set_persist(server->kvb, dir);
             if (server->js)
@@ -8922,6 +8920,11 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
     }
     if (cmq_obj_reload_attach(&server->obj,
                               server->config.persist_dir) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
+    if (cmq_txn_reload_attach_log(server->txn,
+                                  server->config.persist_dir) != 0) {
         cmq_config_free(&fresh);
         return -1;
     }

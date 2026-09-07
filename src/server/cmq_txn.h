@@ -31,6 +31,11 @@ void cmq_txn_destroy(cmq_txn_t *t);
 /* Opt-in durable log at dir/cmq.txn. Missing file is empty. */
 int cmq_txn_set_log(cmq_txn_t *t, const char *dir);
 
+/* Enable dir/cmq.txn when create left the log unset.
+ * Empty / omitted dir keeps off. An existing log is left
+ * alone (no remount). `..` / `\` fail closed. */
+int cmq_txn_reload_attach_log(cmq_txn_t *t, const char *dir);
+
 int cmq_txn_encode(uint8_t *out, size_t cap, uint64_t id, uint8_t op,
                    size_t *out_len);
 int cmq_txn_parse(const uint8_t *hdr, size_t n, uint64_t *id, uint8_t *op);

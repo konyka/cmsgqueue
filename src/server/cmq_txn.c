@@ -190,6 +190,24 @@ int cmq_txn_set_log(cmq_txn_t *t, const char *dir) {
     return rc;
 }
 
+int cmq_txn_reload_attach_log(cmq_txn_t *t, const char *dir) {
+    if (!t) {
+        if (!dir || !dir[0])
+            return 0;
+        return -1;
+    }
+    if (!dir || !dir[0])
+        return 0;
+    cmq_mutex_lock(&t->lock);
+    int have = t->log_path[0] != '\0';
+    cmq_mutex_unlock(&t->lock);
+    if (have)
+        return 0;
+    if (!txn_dir_safe(dir))
+        return -1;
+    return cmq_txn_set_log(t, dir);
+}
+
 int cmq_txn_encode(uint8_t *out, size_t cap, uint64_t id, uint8_t op,
                    size_t *out_len) {
     if (!out || cap < CMQ_TXN_HDR_LEN || !out_len || id == 0)
