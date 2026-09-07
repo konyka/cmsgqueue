@@ -29,6 +29,10 @@ PUBLISH to `$KV.<bucket>.<key>` updates a named bucket
 one byte compare. At most 8 buckets. Fanout still runs so
 watchers see the write. Optional persist is
 `{persist_dir}/kv_<bucket>` when `persist_dir` is set.
+v0.5.160: SIGHUP also enables that persist dir when
+create left it unset. Empty / omitted keeps off. An
+existing persist dir is not remounted. `..` / `\`
+fail closed.
 
 Bucket names: `[A-Za-z0-9_-]`, max 32.
 
@@ -37,7 +41,8 @@ reply-to, or an empty body on miss.
 
 ## Tests
 
-`tests/test_kv.c`, `tests/test_kvb.c`, `tests/test_kvreq.c`
+`tests/test_kv.c`, `tests/test_kvb.c`, `tests/test_kvreq.c`,
+`tests/test_kva.c`
 
 ## See also
 

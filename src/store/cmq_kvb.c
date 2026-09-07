@@ -71,6 +71,51 @@ void cmq_kvb_destroy(cmq_kvb_t *b) {
     free(b);
 }
 
+static int kvb_dir_safe(const char *dir) {
+    if (!dir || !dir[0]) return 0;
+    size_t n = strnlen(dir, sizeof(((cmq_kvb_t *)0)->persist_dir));
+    if (n == 0 || n >= sizeof(((cmq_kvb_t *)0)->persist_dir)) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)dir[i];
+        if (c == '\\' || c < 0x20 || c == 0x7f)
+            return 0;
+    }
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && dir[i] == '/')
+            i++;
+        if (i >= n)
+            break;
+        size_t start = i;
+        while (i < n && dir[i] != '/')
+            i++;
+        size_t len = i - start;
+        if (len == 1 && dir[start] == '.')
+            return 0;
+        if (len == 2 && dir[start] == '.' && dir[start + 1] == '.')
+            return 0;
+    }
+    return 1;
+}
+
+int cmq_kvb_reload_attach_persist(cmq_kvb_t *b, const char *dir) {
+    if (!b) {
+        if (!dir || !dir[0])
+            return 0;
+        return -1;
+    }
+    if (!dir || !dir[0])
+        return 0;
+    cmq_mutex_lock(&b->lock);
+    int have = b->persist_dir[0] != '\0';
+    cmq_mutex_unlock(&b->lock);
+    if (have)
+        return 0;
+    if (!kvb_dir_safe(dir))
+        return -1;
+    return cmq_kvb_set_persist(b, dir);
+}
+
 int cmq_kvb_set_persist(cmq_kvb_t *b, const char *dir) {
     if (!b || !dir || !dir[0]) return -1;
     size_t n = strnlen(dir, sizeof(b->persist_dir));

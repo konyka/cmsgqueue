@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.160 - 2026-09-07
+
+### Added
+- **Attach KV persist on reload** — SIGHUP enables
+  `{persist_dir}/kv_<bucket>` when create left KV persist
+  unset (including a live filestore whose buckets never
+  opened a WAL). Empty / omitted keeps off. An existing
+  persist dir is not remounted. `..` / `\` fail closed.
+
+### Tests
+- `tests/test_kva.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.160.enumeration.md`, `v0.5.160.plan.md`.
+- `docs/features/kv.md`, `persistence.md`.
+- `docs/benchmarks/v05160_{1,2}.txt`.
+
+### Test count
+- 631 tests (was 627 in v0.5.159; +4).
+
 ## 0.5.159 - 2026-09-07
 
 ### Added

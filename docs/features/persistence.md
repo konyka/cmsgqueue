@@ -39,6 +39,8 @@ create left the object-store handle NULL. Same
 empty / omitted / no-remount / fail-closed rules.
 v0.5.159: reload enables `{persist_dir}/cmq.txn`
 when create left the txn log unset. Same rules.
+v0.5.160: reload enables `{persist_dir}/kv_<bucket>`
+when create left KV persist unset. Same rules.
 
 The wiring is **best-effort**: a failed append increments
 `stat_persist_fail` but does not block delivery. This matches

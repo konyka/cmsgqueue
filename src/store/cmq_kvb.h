@@ -18,6 +18,11 @@ cmq_kvb_t *cmq_kvb_create(void);
 void cmq_kvb_destroy(cmq_kvb_t *b);
 int cmq_kvb_set_persist(cmq_kvb_t *b, const char *dir);
 
+/* Enable persist_dir when create left KV persist unset.
+ * Empty / omitted dir keeps off. An existing persist dir
+ * is left alone (no remount). `..` / `\` fail closed. */
+int cmq_kvb_reload_attach_persist(cmq_kvb_t *b, const char *dir);
+
 /* 0 parsed; -1 not $KV; -2 malformed. */
 int cmq_kvb_parse(const char *subject, char *bucket, size_t bcap,
                   char *key, size_t kcap);
