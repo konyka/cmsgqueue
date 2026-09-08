@@ -9294,6 +9294,14 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
                 server->route_reconn_started = 1;
         }
     }
+    {
+        int lvl = server->config.log_level;
+        if (lvl < 0 || lvl > 5) lvl = 2;
+        if (cmq_log_reload_attach(&server->log, lvl) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+    }
     if (cmq_reload_apply_dynamic(server->log, &server->config.log_level,
                                  &server->acl_h, &fresh) != 0) {
         cmq_config_free(&fresh);

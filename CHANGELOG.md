@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.168 - 2026-09-08
+
+### Added
+- **Attach log on reload** — SIGHUP creates the logger
+  when create left `log` NULL so sink reload does not
+  fail-close the whole apply. An existing logger is
+  not remounted.
+
+### Tests
+- `tests/test_laa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.168.enumeration.md`, `v0.5.168.plan.md`.
+- `docs/features/logging.md`.
+- `docs/benchmarks/v05168_{1,2}.txt`.
+
+### Test count
+- 663 tests (was 659 in v0.5.167; +4).
+
 ## 0.5.167 - 2026-09-08
 
 ### Added

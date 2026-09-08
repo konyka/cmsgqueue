@@ -145,6 +145,15 @@ cmq_log_t *cmq_log_create(cmq_log_level_t level) {
     return log;
 }
 
+int cmq_log_reload_attach(cmq_log_t **log, int level) {
+    if (!log) return -1;
+    if (level < 0 || level > 5) return -1;
+    if (*log)
+        return 0;
+    *log = cmq_log_create((cmq_log_level_t)level);
+    return *log ? 0 : -1;
+}
+
 void cmq_log_destroy(cmq_log_t *log) {
     if (!log) return;
     atomic_store_explicit(&log->dying, 1, memory_order_release);

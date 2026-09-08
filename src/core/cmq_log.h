@@ -18,6 +18,9 @@ typedef void (*cmq_log_appender_fn)(const char *msg, size_t len, void *ctx);
 
 cmq_log_t *cmq_log_create(cmq_log_level_t level);
 void cmq_log_destroy(cmq_log_t *log);
+/* v0.5.168: existing log is left alone (no remount).
+ * Creates when *log is NULL. level must be 0–5. */
+int cmq_log_reload_attach(cmq_log_t **log, int level);
 void cmq_log_set_level(cmq_log_t *log, cmq_log_level_t level);
 cmq_log_level_t cmq_log_get_level(const cmq_log_t *log);
 /* Returns 0 on success, -1 if full or invalid. */

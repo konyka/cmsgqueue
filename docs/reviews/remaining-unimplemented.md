@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.167)
+# Remaining unimplemented work (HEAD after v0.5.168)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -22,7 +22,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `ping` / `write_timeout` | yes | defaults + loop | `apply_limits` |
 | `max_connects_per_sec` / `inbox_max_pending` | yes | accept / REQUEST | `apply_limits` |
 | `config_file` | yes; load path if omitted | SIGHUP | `apply_config_file` (next SIGHUP; no fd remount) |
-| `log_*` | yes | sinks | `apply_dynamic` + `reload_sinks` |
+| `log_*` | yes | sinks | attach + `apply_dynamic` + `reload_sinks` |
 | `auth_*` / `jwt_*` / `nkey_pub` | yes | CONNECT | `apply_auth` |
 | `jwks_json` / `jwks_url` / `jwks_ca` / refresh | yes | cache / GET / sidecar | cache + url/ca/sec + fetch + attach |
 | `otlp_endpoint` / `otlp_ca` | yes | ring + exporter | otel attach + url/ca + attach + set_export |
@@ -48,6 +48,8 @@ Intentional / out of scope (not unused create/conf paths):
 - Leaf / gateway are library APIs (no server conf keys).
 - Route TLS `sess` is unused (F17); do not invent a key.
 - README TLS stub / sublist-persist STUB heading — doc drift.
+- `msg_payload_pool` create miss is a documented malloc
+  fallback (`worker_push_msg`); not a fail-closed SIGHUP.
 
 ## Shipped (do not re-open)
 
@@ -174,6 +176,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.165 | attach $JS manager on reload |
 | v0.5.166 | attach OTel ring on reload |
 | v0.5.167 | attach idempo window on reload |
+| v0.5.168 | attach log on reload |
 
 ## Deferred — detailed designs
 
@@ -323,6 +326,7 @@ are live (v0.5.88).
 | attach $JS manager on reload | shipped v0.5.165 | — |
 | attach OTel ring on reload | shipped v0.5.166 | — |
 | attach idempo window on reload | shipped v0.5.167 | — |
+| attach log on reload | shipped v0.5.168 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -383,7 +387,8 @@ are live (v0.5.88).
   NULL shipped v0.5.165. OTel ring attach when
   create left `otel` NULL shipped v0.5.166.
   Idempo window attach when create left `idempo`
-  NULL shipped v0.5.167.
+  NULL shipped v0.5.167. Log attach when create
+  left `log` NULL shipped v0.5.168.
   Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.
