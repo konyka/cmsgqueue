@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.169)
+# Remaining unimplemented work (HEAD after v0.5.170)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -178,6 +178,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.167 | attach idempo window on reload |
 | v0.5.168 | attach log on reload |
 | v0.5.169 | attach TLS session cache on reload |
+| v0.5.170 | wire WS permessage-deflate on upgrade |
 
 ## Deferred — detailed designs
 
@@ -329,6 +330,7 @@ are live (v0.5.88).
 | attach idempo window on reload | shipped v0.5.167 | — |
 | attach log on reload | shipped v0.5.168 | — |
 | attach TLS session cache on reload | shipped v0.5.169 | — |
+| wire WS permessage-deflate on upgrade | shipped v0.5.170 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -392,7 +394,8 @@ are live (v0.5.88).
   NULL shipped v0.5.167. Log attach when create
   left `log` NULL shipped v0.5.168. TLS session
   cache attach when load left it NULL shipped
-  v0.5.169.
+  v0.5.169. WS permessage-deflate on the live
+  upgrade / send / recv path shipped v0.5.170.
   Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.

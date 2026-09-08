@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.170 - 2026-09-08
+
+### Added
+- **Wire WS permessage-deflate on upgrade** — the live
+  handshake accepts RFC 7692 when the client offers it,
+  and send/recv compress data frames. Omitted extensions
+  keep the uncompressed path.
+
+### Tests
+- `tests/test_wsa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.170.enumeration.md`, `v0.5.170.plan.md`.
+- `docs/features/ws-permessage-deflate.md`.
+- `docs/benchmarks/v05170_{1,2}.txt`.
+
+### Test count
+- 671 tests (was 667 in v0.5.169; +4).
+
 ## 0.5.169 - 2026-09-08
 
 ### Added

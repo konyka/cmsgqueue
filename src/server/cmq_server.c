@@ -1699,14 +1699,45 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
     if (!c->is_websocket) {
         rc = cmq_client_send_direct(c, data, len);
     } else {
-        size_t hdr_len = (len <= 125) ? 2 : (len <= 65535) ? 4 : 10;
-        if (len > SIZE_MAX - hdr_len) {
+        const uint8_t *pay = data;
+        size_t pay_len = len;
+        uint8_t *comp = NULL;
+        int rsv1 = 0;
+        if (c->ws_deflate) {
+            if (len > SIZE_MAX / 2 - 64) {
+                client_force_closing(c);
+                return -1;
+            }
+            size_t cap = len * 2 + 64;
+            if (cap < 128) cap = 128;
+            comp = malloc(cap);
+            if (!comp) {
+                if (c->server)
+                    cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
+                                              CMQ_ATOMIC_RELAXED);
+                client_force_closing(c);
+                return -1;
+            }
+            int n = cmq_ws_deflate_message(data, len, comp, cap);
+            if (n < 0) {
+                free(comp);
+                client_force_closing(c);
+                return -1;
+            }
+            pay = comp;
+            pay_len = (size_t)n;
+            rsv1 = 1;
+        }
+        size_t hdr_len = (pay_len <= 125) ? 2 : (pay_len <= 65535) ? 4 : 10;
+        if (pay_len > SIZE_MAX - hdr_len) {
+            free(comp);
             client_force_closing(c);
             return -1;
         }
-        size_t total = hdr_len + len;
+        size_t total = hdr_len + pay_len;
         uint8_t *wsbuf = malloc(total);
         if (!wsbuf) {
+            free(comp);
             if (c->server)
                 cmq_atomic_fetch_add_u64(&c->server->stat_messages_dropped, 1,
                                           CMQ_ATOMIC_RELAXED);
@@ -1715,17 +1746,21 @@ static int cmq_client_send_local(cmq_client_t *c, const uint8_t *data, size_t le
             return -1;
         }
         cmq_ws_frame_t wf;
+        memset(&wf, 0, sizeof(wf));
         wf.fin = 1;
+        wf.rsv1 = rsv1;
         wf.opcode = CMQ_WS_OPCODE_BINARY;
-        wf.payload = data;
-        wf.payload_len = len;
+        wf.payload = pay;
+        wf.payload_len = pay_len;
         wf.mask_key = 0;
         wf.masked = 0;
         if (cmq_ws_frame_serialize(&wf, wsbuf, total) < 0) {
+            free(comp);
             free(wsbuf);
             return -1;
         }
         rc = cmq_client_send_direct(c, wsbuf, total);
+        free(comp);
         free(wsbuf);
     }
     /* Outbound keepalive refresh only for CONNECTED (INIT must stay frozen).
@@ -6378,15 +6413,26 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
         free(req);
         return -1;
     }
-    free(req);
+    char ext[192];
+    int want_deflate = cmq_ws_negotiate_deflate(req, hdr_end, ext, sizeof(ext));
+    if (want_deflate < 0) {
+        free(req);
+        return -1;
+    }
 
     char accept_key[64] = {0};
-    if (cmq_ws_accept_key(ws_key, accept_key, sizeof(accept_key)) != 0)
+    if (cmq_ws_accept_key(ws_key, accept_key, sizeof(accept_key)) != 0) {
+        free(req);
         return -1;
+    }
 
-    char response[512];
-    if (cmq_ws_build_response(accept_key, response, sizeof(response)) != 0)
+    char response[768];
+    if (cmq_ws_build_response_ext(accept_key, want_deflate ? ext : NULL,
+                                  response, sizeof(response)) != 0) {
+        free(req);
         return -1;
+    }
+    free(req);
 
     size_t resp_len = strlen(response);
     free(c->write_buf);
@@ -6400,6 +6446,7 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
 
     c->is_websocket = 1;
     c->ws_upgrade_done = 1;
+    c->ws_deflate = want_deflate ? 1 : 0;
     if (consumed) *consumed = hdr_end;
     return 0;
 }
@@ -6640,8 +6687,9 @@ static void client_read_cb(int fd, int events, void *data) {
         size_t offset = 0;
         while (offset < c->ws_recv_len) {
             cmq_ws_frame_t ws_frame;
-            int parsed = cmq_ws_frame_parse(c->ws_recv_buf + offset,
-                                             c->ws_recv_len - offset, &ws_frame);
+            int parsed = cmq_ws_frame_parse_ex(c->ws_recv_buf + offset,
+                                               c->ws_recv_len - offset, &ws_frame,
+                                               c->ws_deflate);
             if (parsed < 0) {
                 client_teardown(c); /* fatal WS framing */
                 return;
@@ -6693,6 +6741,7 @@ static void client_read_cb(int fd, int events, void *data) {
                     app = unmasked;
                 }
                 cmq_ws_frame_t pf;
+                memset(&pf, 0, sizeof(pf));
                 pf.fin = 1;
                 pf.opcode = CMQ_WS_OPCODE_PONG;
                 pf.payload = app;
@@ -6750,8 +6799,13 @@ static void client_read_cb(int fd, int events, void *data) {
                     client_teardown(c);
                     return;
                 }
-                if (ws_frame.opcode != CMQ_WS_OPCODE_CONTINUATION)
+                if (ws_frame.opcode != CMQ_WS_OPCODE_CONTINUATION) {
                     c->ws_msg_active = 1;
+                    c->ws_msg_rsv1 = ws_frame.rsv1;
+                } else if (ws_frame.rsv1) {
+                    client_teardown(c);
+                    return;
+                }
 
                 if (++c->ws_frag_count > 256) {
                     client_teardown(c);
@@ -6799,14 +6853,34 @@ static void client_read_cb(int fd, int events, void *data) {
 
                 if (ws_frame.fin) {
                     if (c->ws_msg_len > 0) {
-                        int rc = cmq_parser_feed(c->parser, c->ws_msg_buf,
-                                                  c->ws_msg_len);
+                        const uint8_t *feed = c->ws_msg_buf;
+                        size_t feed_len = c->ws_msg_len;
+                        uint8_t *plain = NULL;
+                        if (c->ws_deflate && c->ws_msg_rsv1) {
+                            size_t hard = cmq_client_frame_hard_cap(srv);
+                            if (hard < 64) hard = 64;
+                            plain = malloc(hard);
+                            if (!plain) { client_teardown(c); return; }
+                            int n = cmq_ws_inflate_message(c->ws_msg_buf,
+                                                           c->ws_msg_len,
+                                                           plain, hard);
+                            if (n < 0) {
+                                free(plain);
+                                client_teardown(c);
+                                return;
+                            }
+                            feed = plain;
+                            feed_len = (size_t)n;
+                        }
+                        int rc = cmq_parser_feed(c->parser, feed, feed_len);
+                        free(plain);
                         if (rc < 0) { client_teardown(c); return; }
                         if (client_dispatch_parser(srv, c, rc) != 0)
                             return;
                     }
                     c->ws_msg_len = 0;
                     c->ws_msg_active = 0;
+                    c->ws_msg_rsv1 = 0;
                     c->ws_frag_count = 0;
                 }
             }

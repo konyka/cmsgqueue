@@ -94,6 +94,8 @@ typedef struct cmq_client {
     int is_websocket;
     int is_route;                   /* 1 = cluster route peer (no re-forward) */
     int ws_upgrade_done;
+    int ws_deflate;                 /* v0.5.170: RFC 7692 negotiated */
+    int ws_msg_rsv1;                /* RSV1 on the current assembled message */
     int info_sent;
     int worker_id;
     uint64_t last_activity_ms;

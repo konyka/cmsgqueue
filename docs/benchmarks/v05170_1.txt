@@ -1,0 +1,3 @@
+v0.5.170 bench 1:
+- Negotiate miss: one header scan, no zlib.
+- Negotiated send: deflateInit2 + Z_SYNC_FLUSH per BINARY frame.

@@ -24,6 +24,7 @@ typedef enum {
 struct cmq_ws_frame {
     cmq_ws_opcode_t opcode;
     int fin;
+    int rsv1;                      /* RFC 7692: compressed data frame */
     const uint8_t *payload;
     size_t payload_len;
     uint32_t mask_key;
@@ -44,9 +45,14 @@ size_t cmq_ws_server_client_count(cmq_ws_server_t *srv);
 void cmq_ws_server_set_callback(cmq_ws_server_t *srv,
                                  cmq_ws_on_message_cb cb, void *ctx);
 
-/* Returns: >0 bytes consumed, 0 need more data, -1 fatal protocol error. */
+/* Returns: >0 bytes consumed, 0 need more data, -1 fatal protocol error.
+ * RSV1-3 stay rejected (RFC 6455). Use parse_ex to allow RSV1. */
 int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
                         cmq_ws_frame_t *out_frame);
+/* v0.5.170: allow_rsv1=1 accepts RSV1 on data frames (permessage-deflate).
+ * RSV2/RSV3 and RSV1 on control frames still fail closed. */
+int cmq_ws_frame_parse_ex(const uint8_t *buf, size_t buf_len,
+                           cmq_ws_frame_t *out_frame, int allow_rsv1);
 int cmq_ws_frame_serialize(const cmq_ws_frame_t *frame, uint8_t *buf,
                             size_t buf_len);
 
@@ -78,5 +84,14 @@ int cmq_ws_deflate_message(const uint8_t *in, size_t in_len,
                             uint8_t *out, size_t out_cap);
 int cmq_ws_inflate_message(const uint8_t *in, size_t in_len,
                             uint8_t *out, size_t out_cap);
+/* v0.5.170: 1 = client offered deflate (ext_out holds the response
+ * line), 0 = omitted/empty keeps off, -1 = bad params / unsupported
+ * extension tokens. */
+int cmq_ws_negotiate_deflate(const char *req, size_t req_len,
+                             char *ext_out, size_t ext_cap);
+/* Optional extra header line (already CRLF-terminated) before the
+ * final blank line. NULL/empty matches cmq_ws_build_response. */
+int cmq_ws_build_response_ext(const char *accept_key, const char *ext_line,
+                              char *out, size_t out_len);
 
 #endif

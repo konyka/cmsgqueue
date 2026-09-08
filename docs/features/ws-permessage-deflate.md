@@ -55,6 +55,16 @@ recover the original payload bytes.
 - Per-message boundary is self-describing (the trailing 0x00 0x00 0xFF 0xFF).
 - Concurrency: each connection has its own z_stream; no locks needed.
 
+## Production wire
+
+v0.5.22 shipped the codec and the extension parser.
+The live upgrade path never called them. v0.5.170:
+`cmq_ws_negotiate_deflate` accepts a client offer
+(omitted / empty keeps uncompressed; bad tokens fail
+closed). The 101 includes the extension line. Outbound
+BINARY frames are deflated with RSV1. Inbound RSV1
+data frames are inflated after reassembly.
+
 ## API
 
 ```c
@@ -64,6 +74,10 @@ int cmq_ws_deflate_message(const uint8_t *in, size_t in_len,
                             uint8_t *out, size_t out_cap);
 int cmq_ws_inflate_message(const uint8_t *in, size_t in_len,
                             uint8_t *out, size_t out_cap);
+int cmq_ws_negotiate_deflate(const char *req, size_t req_len,
+                             char *ext_out, size_t ext_cap);
+int cmq_ws_build_response_ext(const char *accept_key, const char *ext_line,
+                              char *out, size_t out_len);
 ```
 
 ## Files
@@ -71,6 +85,7 @@ int cmq_ws_inflate_message(const uint8_t *in, size_t in_len,
 - `src/enterprise/cmq_ws.h` — declarations.
 - `src/enterprise/cmq_ws.c` — implementation (zlib integration).
 - `tests/test_ws_deflate.c` — roundtrip + negotiation test (8 cases).
+- `tests/test_wsa.c` — upgrade negotiate (v0.5.170).
 - `CMakeLists.txt` — links `ZLIB::ZLIB` when found.
 
 ## Bench impact
