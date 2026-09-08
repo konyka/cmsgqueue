@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.171 - 2026-09-08
+
+### Added
+- **Verify CHECKSUM on REQUEST** — the live REQUEST path
+  strips and verifies the trailing CRC32C after inflate.
+  Omitted flag keeps the payload unchanged. PUBLISH uses
+  the same helper.
+
+### Tests
+- `tests/test_csa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.171.enumeration.md`, `v0.5.171.plan.md`.
+- `docs/features/wire-checksum.md`, `flag-rejection.md`.
+- `docs/benchmarks/v05171_{1,2}.txt`.
+
+### Test count
+- 675 tests (was 671 in v0.5.170; +4).
+
 ## 0.5.170 - 2026-09-08
 
 ### Added

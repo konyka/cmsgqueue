@@ -23,7 +23,8 @@ F3 wires it into the protocol.
 
 ### Wire format extension
 
-When `CMQ_FLAG_CHECKSUM` (bit 1) is set on a `PUBLISH` frame:
+When `CMQ_FLAG_CHECKSUM` (bit 1) is set on a `PUBLISH` or
+`REQUEST` frame (v0.5.171):
 
 ```
 +-----+--------+--------+----------+----------+
@@ -41,24 +42,21 @@ When `CMQ_FLAG_CHECKSUM` (bit 1) is set on a `PUBLISH` frame:
 
 ### Server-side verification
 
-In `handle_publish` (`src/server/cmq_server.c:2873`):
+`cmq_checksum_consume` (v0.5.171) is the single verify path.
+`handle_publish` and `handle_request` call it after inflate
+and before subject parse. Omitted flag keeps `*len`.
+Mismatch / short / NULL fail closed.
 
 ```c
-if (frame->hdr.flags & CMQ_FLAG_CHECKSUM) {
-    if (msg_len < 4) {
-        cmq_send_error(c, "checksum: payload too short");
-        return;
-    }
-    size_t data_len = msg_len - 4;
-    uint32_t expect = ...; // trailing 4 bytes, little-endian
-    uint32_t got = cmq_crc32c(0, payload, payload_len - 4);
-    if (expect != got) {
-        cmq_send_error(c, "checksum mismatch");
-        return;
-    }
-    msg_len = data_len;  // strip trailing 4 bytes from delivery
+if (cmq_checksum_consume(frame->hdr.flags, frame->payload,
+                         &frame->payload_len) != 0) {
+    cmq_send_error(c, "checksum mismatch");
+    return;
 }
 ```
+
+RESPONSE / BATCH still treat the trailer as body
+(later cuts).
 
 The verification cost is a single 64-bit CRC32C instruction per 8 bytes
 on hardware, plus the constant-time compare. Net hot-path overhead on
@@ -73,9 +71,13 @@ The F11 test `parser.reject_flag_checksum` was updated to assert
 
 ## Files touched
 
-- `src/server/cmq_server.c` — `handle_publish()` verifies trailing 4 bytes.
+- `src/core/cmq_crc32c.c` — `cmq_checksum_consume` (v0.5.171).
+- `src/server/cmq_server.c` — `handle_publish` / `handle_request`
+  consume after inflate.
 - `src/proto/cmq_parser.c` — flags check allows CHECKSUM, still rejects COMPRESSED.
-- `tests/test_checksum_wire.c` — 3 new tests.
+- `tests/test_checksum_wire.c` — 3 library CRC tests.
+- `tests/test_csa.c` — consume apply / omitted / empty / reject
+  (v0.5.171).
 - `tests/test_parser.c` — F11 `reject_flag_checksum` updated.
 - `docs/features/flag-rejection.md` — note the F3 follow-up.
 

@@ -37,8 +37,10 @@ silently round-trip garbage. Data-path opcodes inflate before use.
 - `CMQ_FLAG_ROUTE (0x10)` — used on CONNECT, not in the parser path.
 - `CMQ_FLAG_COMPRESSED (0x01)` — accepted on BATCH, PUBLISH,
   MESSAGE, REQUEST, RESPONSE; rejected on control ops (v0.5.99).
-- `CMQ_FLAG_CHECKSUM (0x02)` — accepted; verified in `handle_publish`
-  after inflate.
+- `CMQ_FLAG_CHECKSUM (0x02)` — accepted; verified in
+  `handle_publish` / `handle_request` after inflate
+  (`cmq_checksum_consume`, v0.5.171). RESPONSE / BATCH
+  still treat the trailer as body.
 - `COMPRESSED` on SUBSCRIBE / CONNECT and other control opcodes —
   rejected (F11).
 

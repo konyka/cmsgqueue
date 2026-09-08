@@ -3237,6 +3237,16 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         free(decoded);
         return;
     }
+    /* v0.5.171: verify trailing CRC32C after inflate, before subject parse. */
+    cmq_frame_t pub_ck = *frame;
+    if (cmq_checksum_consume((uint8_t)pub_ck.hdr.flags,
+                             pub_ck.payload, &pub_ck.payload_len) != 0) {
+        cmq_send_error(c, "checksum mismatch");
+        return;
+    }
+    pub_ck.hdr.flags =
+        (cmq_u8_t)(pub_ck.hdr.flags & ~(cmq_u8_t)CMQ_FLAG_CHECKSUM);
+    frame = &pub_ck;
     if (!frame->payload || frame->payload_len < 2) {
         cmq_send_error(c, "invalid publish");
         return;
@@ -3310,31 +3320,6 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     }
     const uint8_t *msg_payload = frame->payload + offset;
     size_t msg_len = frame->payload_len - offset;
-
-    /* F3: Wire checksum verification. When CMQ_FLAG_CHECKSUM is set on
-     * the PUBLISH, the trailing 4 bytes are the CRC32C (little-endian,
-     * standard form: init=0xFFFFFFFF, xorout=0xFFFFFFFF) of the wire
-     * payload excluding the trailing 4 bytes themselves. The checksum
-     * covers the entire wire payload (subject, reply-to, headers, body)
-     * so a single bit flip anywhere on the wire is detected. */
-    if (frame->hdr.flags & CMQ_FLAG_CHECKSUM) {
-        if (msg_len < 4) {
-            cmq_send_error(c, "checksum: payload too short");
-            return;
-        }
-        size_t data_len = msg_len - 4;
-        uint32_t expect = (uint32_t)msg_payload[data_len] |
-                          ((uint32_t)msg_payload[data_len + 1] << 8) |
-                          ((uint32_t)msg_payload[data_len + 2] << 16) |
-                          ((uint32_t)msg_payload[data_len + 3] << 24);
-        uint32_t got = cmq_crc32c(0, (const uint8_t *)frame->payload,
-                                    frame->payload_len - 4);
-        if (expect != got) {
-            cmq_send_error(c, "checksum mismatch");
-            return;
-        }
-        msg_len = data_len;
-    }
 
     if (payload_exceeds_caps(srv, c, msg_len)) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
@@ -4317,6 +4302,16 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
         free(decoded);
         return;
     }
+    /* v0.5.171: verify trailing CRC32C after inflate, before inbox/subject. */
+    cmq_frame_t req_ck = *frame;
+    if (cmq_checksum_consume((uint8_t)req_ck.hdr.flags,
+                             req_ck.payload, &req_ck.payload_len) != 0) {
+        cmq_send_error(c, "checksum mismatch");
+        return;
+    }
+    req_ck.hdr.flags =
+        (cmq_u8_t)(req_ck.hdr.flags & ~(cmq_u8_t)CMQ_FLAG_CHECKSUM);
+    frame = &req_ck;
     if (!frame->payload || frame->payload_len < 4) {
         cmq_send_error(c, "invalid request");
         return;

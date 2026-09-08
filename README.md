@@ -40,7 +40,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **HTTP/2 (v0.5.66–73, 0.5.81, 0.5.83)**: HPACK static + Huffman + 4 KiB dynamic table + preface/SETTINGS/32-stream machine + loopback listener + `h2_port` / ALPN `h2` + TLS-wrapped accept (D2 phases 1–7)
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
-- **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability
+- **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes on PUBLISH / REQUEST (v0.5.171); rejects bit-flips with 1 - 2⁻³² probability
 - **Capability Negotiation (F4)**: extended INFO frame advertises server_id, max_payload, auth, tls, compression, checksum, headers, batch
 - **Wire flags**: CMQ_FLAG_HEADERS, CMQ_FLAG_BATCH, CMQ_FLAG_ROUTE are implemented; **CMQ_FLAG_CHECKSUM is now implemented (F3)** with CRC32C verification (RFC 3309 / SSE4.2 HW-accelerated); **CMQ_FLAG_COMPRESSED is implemented for the data path (BATCH, PUBLISH, MESSAGE, REQUEST, RESPONSE; F2, v0.5.41 / v0.5.96–99)** — zstd, dest size from the frame content-size header, 16 MiB bomb cap. COMPRESSED on control opcodes is still rejected (F11 interop).
 - **v0.5.0 hot path**:
