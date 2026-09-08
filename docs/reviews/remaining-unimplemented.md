@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.165)
+# Remaining unimplemented work (HEAD after v0.5.166)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -25,7 +25,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `log_*` | yes | sinks | `apply_dynamic` + `reload_sinks` |
 | `auth_*` / `jwt_*` / `nkey_pub` | yes | CONNECT | `apply_auth` |
 | `jwks_json` / `jwks_url` / `jwks_ca` / refresh | yes | cache / GET / sidecar | cache + url/ca/sec + fetch + attach |
-| `otlp_endpoint` / `otlp_ca` | yes | exporter | url/ca + attach |
+| `otlp_endpoint` / `otlp_ca` | yes | ring + exporter | otel attach + url/ca + attach + set_export |
 | `cluster_name` / `cluster_node_id` | yes | cluster + empty pool | attach + empty pool if create left routes NULL |
 | `route=` | IPv4 `addr:port` | run dial | attach empty slots (no redial) |
 | quota / subject RL / `account_max_*` | yes | objects / defaults | reload (creates if none) |
@@ -172,6 +172,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.163 | attach txn coordinator on reload |
 | v0.5.164 | attach KV manager on reload |
 | v0.5.165 | attach $JS manager on reload |
+| v0.5.166 | attach OTel ring on reload |
 
 ## Deferred — detailed designs
 
@@ -319,6 +320,7 @@ are live (v0.5.88).
 | attach txn coordinator on reload | shipped v0.5.163 | — |
 | attach KV manager on reload | shipped v0.5.164 | — |
 | attach $JS manager on reload | shipped v0.5.165 | — |
+| attach OTel ring on reload | shipped v0.5.166 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -376,7 +378,8 @@ are live (v0.5.88).
   NULL shipped v0.5.163. KV manager attach when
   create left `kvb` NULL shipped v0.5.164.
   `$JS` manager attach when create left `js`
-  NULL shipped v0.5.165.
+  NULL shipped v0.5.165. OTel ring attach when
+  create left `otel` NULL shipped v0.5.166.
   Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.166 - 2026-09-08
+
+### Added
+- **Attach OTel ring on reload** — SIGHUP creates and
+  starts the span ring when create left `otel` NULL so
+  OTLP attach can `set_export`. An existing ring is not
+  remounted. Export is wired whenever both handles exist.
+
+### Tests
+- `tests/test_oea.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.166.enumeration.md`, `v0.5.166.plan.md`.
+- `docs/features/otel.md`.
+- `docs/benchmarks/v05166_{1,2}.txt`.
+
+### Test count
+- 655 tests (was 651 in v0.5.165; +4).
+
 ## 0.5.165 - 2026-09-08
 
 ### Added

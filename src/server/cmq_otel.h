@@ -24,6 +24,9 @@ typedef struct cmq_otel cmq_otel_t;
 
 cmq_otel_t *cmq_otel_create(void);
 void cmq_otel_destroy(cmq_otel_t *o);
+/* v0.5.166: existing ring is left alone (no remount).
+ * Creates when *o is NULL, then starts the sidecar. */
+int cmq_otel_reload_attach(cmq_otel_t **o);
 
 /* 0 enqueued; 1 dropped (full); -1 bad args. Never blocks. */
 int cmq_otel_offer(cmq_otel_t *o, const uint8_t trace[16], uint8_t kind);

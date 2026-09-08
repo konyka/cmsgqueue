@@ -45,6 +45,17 @@ cmq_otel_t *cmq_otel_create(void) {
     return o;
 }
 
+int cmq_otel_reload_attach(cmq_otel_t **o) {
+    if (!o) return -1;
+    if (!*o) {
+        *o = cmq_otel_create();
+        if (!*o) return -1;
+    }
+    if (!(*o)->started)
+        (void)cmq_otel_start(*o);
+    return 0;
+}
+
 static void *otel_sidecar(void *arg) {
     cmq_otel_t *o = arg;
     cmq_otel_span_t s;

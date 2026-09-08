@@ -51,6 +51,9 @@ preserved. Does not POST.
 v0.5.139: reload attaches an exporter when create had none
 (`cmq_otlp_reload_attach` + `cmq_otel_set_export`). Existing
 exporters are left to v0.5.138. Does not POST.
+v0.5.166: reload creates and starts the ring when create
+left `otel` NULL. `set_export` runs whenever both
+handles exist. An existing ring is not remounted.
 
 HTTP/TLS failures are ignored. The ring never waits on I/O.
 No endpoint: the export hook stays NULL.
@@ -60,7 +63,8 @@ No endpoint: the export hook stays NULL.
 `tests/test_otel.c`, `tests/test_otlp.c`, `tests/test_otlps.c`,
 `tests/test_otlpg.c`, `tests/test_otc.c`, `tests/test_otn.c`,
 `tests/test_otr.c`, `tests/test_ots.c`, `tests/test_otd.c`,
-`tests/test_oca.c`, `tests/test_oeu.c`, `tests/test_ota.c`
+`tests/test_oca.c`, `tests/test_oeu.c`, `tests/test_ota.c`,
+`tests/test_oea.c`
 
 ## See also
 

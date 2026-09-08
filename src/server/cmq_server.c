@@ -9148,6 +9148,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (cmq_otel_reload_attach(&server->otel) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_otlp_reload_url((cmq_otlp_url_t *)server->otlp,
                             &server->config.otlp_endpoint,
                             fresh.otlp_endpoint) != 0) {
@@ -9155,13 +9159,12 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         return -1;
     }
     {
-        int had_otlp = server->otlp != NULL;
         if (cmq_otlp_reload_attach((cmq_otlp_url_t **)&server->otlp,
                                    fresh.otlp_endpoint) != 0) {
             cmq_config_free(&fresh);
             return -1;
         }
-        if (!had_otlp && server->otlp && server->otel)
+        if (server->otlp && server->otel)
             cmq_otel_set_export(server->otel, cmq_otlp_export, server->otlp);
     }
     if (cmq_otlp_reload_ca((cmq_otlp_url_t *)server->otlp,
