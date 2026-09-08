@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.173 - 2026-09-09
+
+### Added
+- **Verify CHECKSUM on BATCH** — the live BATCH path
+  strips and verifies the trailing CRC32C after
+  decompress, before count parse. Omitted flag keeps
+  the payload unchanged.
+
+### Tests
+- `tests/test_bsc.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.173.enumeration.md`, `v0.5.173.plan.md`.
+- `docs/features/wire-checksum.md`, `flag-rejection.md`.
+- `docs/benchmarks/v05173_{1,2}.txt`.
+
+### Test count
+- 683 tests (was 679 in v0.5.172; +4).
+
 ## 0.5.172 - 2026-09-08
 
 ### Added

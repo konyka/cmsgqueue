@@ -1,12 +1,14 @@
-# Remaining unimplemented work (HEAD after v0.5.172)
+# Remaining unimplemented work (HEAD after v0.5.173)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
 and attach helpers on 2026-09-08. P2 (R1–R7) and P3
 D1–D8 phase cuts in this catalog are shipped.
-Required next cuts: CHECKSUM on BATCH (parser
-accepts the bit; PUBLISH / REQUEST / RESPONSE
-consume it).
+Required next cuts: none on the CHECKSUM data
+path (PUBLISH / REQUEST / RESPONSE / BATCH
+consume). Remaining items are create-time
+remount / rebind / redial / replay, or
+intentional out-of-scope library APIs.
 
 ## Current-state config / production wiring audit
 
@@ -183,6 +185,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.170 | wire WS permessage-deflate on upgrade |
 | v0.5.171 | verify CHECKSUM on REQUEST |
 | v0.5.172 | verify CHECKSUM on RESPONSE |
+| v0.5.173 | verify CHECKSUM on BATCH |
 
 ## Deferred — detailed designs
 
@@ -337,7 +340,7 @@ are live (v0.5.88).
 | wire WS permessage-deflate on upgrade | shipped v0.5.170 | — |
 | verify CHECKSUM on REQUEST | shipped v0.5.171 | — |
 | verify CHECKSUM on RESPONSE | shipped v0.5.172 | — |
-| CHECKSUM on BATCH | parser accepts; trailer is body | verify after inflate |
+| verify CHECKSUM on BATCH | shipped v0.5.173 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -405,6 +408,7 @@ are live (v0.5.88).
   upgrade / send / recv path shipped v0.5.170.
   CHECKSUM on REQUEST shipped v0.5.171.
   CHECKSUM on RESPONSE shipped v0.5.172.
+  CHECKSUM on BATCH shipped v0.5.173.
   Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.

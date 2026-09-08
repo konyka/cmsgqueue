@@ -4886,6 +4886,20 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         free(decoded);
         return;
     }
+    /* v0.5.173: verify trailing CRC32C after decompress, before count parse. */
+    cmq_frame_t bat_ck = *frame;
+    if (cmq_checksum_consume((uint8_t)bat_ck.hdr.flags,
+                             bat_ck.payload, &bat_ck.payload_len) != 0) {
+        cmq_send_error(c, "checksum mismatch");
+        return;
+    }
+    bat_ck.hdr.flags =
+        (cmq_u8_t)(bat_ck.hdr.flags & ~(cmq_u8_t)CMQ_FLAG_CHECKSUM);
+    frame = &bat_ck;
+    if (!frame->payload || frame->payload_len < 2) {
+        cmq_send_error(c, "invalid batch");
+        return;
+    }
     uint16_t count = ((uint16_t)frame->payload[0] << 8) | frame->payload[1];
     if (count == 0 || count > CMQ_BATCH_MAX) {
         cmq_send_error(c, "invalid batch");
