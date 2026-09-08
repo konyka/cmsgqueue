@@ -33,6 +33,9 @@ v0.5.160: SIGHUP also enables that persist dir when
 create left it unset. Empty / omitted keeps off. An
 existing persist dir is not remounted. `..` / `\`
 fail closed.
+v0.5.164: SIGHUP creates the manager when create
+left `kvb` NULL so persist attach is not fail-closed.
+An existing manager is not remounted.
 
 Bucket names: `[A-Za-z0-9_-]`, max 32.
 
@@ -42,7 +45,7 @@ reply-to, or an empty body on miss.
 ## Tests
 
 `tests/test_kv.c`, `tests/test_kvb.c`, `tests/test_kvreq.c`,
-`tests/test_kva.c`
+`tests/test_kva.c`, `tests/test_kba.c`
 
 ## See also
 

@@ -1,0 +1,3 @@
+v0.5.164 bench 1:
+- KV manager attach: calloc + mutex when kvb is NULL.
+- Existing manager: one pointer check, no remount.

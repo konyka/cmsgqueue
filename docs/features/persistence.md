@@ -44,6 +44,8 @@ create left `txn` NULL so persist attach is not
 fail-closed.
 v0.5.160: reload enables `{persist_dir}/kv_<bucket>`
 when create left KV persist unset. Same rules.
+v0.5.164: reload creates the manager when create
+left `kvb` NULL so persist attach is not fail-closed.
 v0.5.161: reload enables `{persist_dir}/js` when
 create left `$JS` persist unset. Same rules.
 

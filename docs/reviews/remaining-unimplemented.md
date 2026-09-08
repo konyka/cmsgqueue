@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.163)
+# Remaining unimplemented work (HEAD after v0.5.164)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -35,7 +35,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `js_partitions` / `js_msgs_rotate_bytes` | yes | `$JS` | `cmq_js_reload` |
 | `tls_*` / `listener*_tls_*` | yes | SSL_CTX slots | `apply_tls` + live paths + attach |
 | `listener{1,2,3}_host/port` / count | yes | extra bind | bind empty slots (no rebind) |
-| `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync + F18/obj/txn coordinator+log/kv/$JS attach (no remount / WAL replay) |
+| `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync + F18/obj/txn coordinator+log/kv manager+persist/$JS attach (no remount / WAL replay) |
 | `mqtt_bridge_*` | yes | outbound bridge | attach + maps + endpoint + live maps |
 
 Intentional / out of scope (not unused create/conf paths):
@@ -170,6 +170,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.161 | attach $JS persist on reload |
 | v0.5.162 | attach route pool on reload |
 | v0.5.163 | attach txn coordinator on reload |
+| v0.5.164 | attach KV manager on reload |
 
 ## Deferred — detailed designs
 
@@ -315,6 +316,7 @@ are live (v0.5.88).
 | attach $JS persist on reload | shipped v0.5.161 | — |
 | attach route pool on reload | shipped v0.5.162 | — |
 | attach txn coordinator on reload | shipped v0.5.163 | — |
+| attach KV manager on reload | shipped v0.5.164 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -369,7 +371,8 @@ are live (v0.5.88).
   unset shipped v0.5.161. Route pool attach when
   create left `routes` NULL shipped v0.5.162.
   Txn coordinator attach when create left `txn`
-  NULL shipped v0.5.163.
+  NULL shipped v0.5.163. KV manager attach when
+  create left `kvb` NULL shipped v0.5.164.
   Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.

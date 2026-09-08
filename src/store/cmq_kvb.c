@@ -63,6 +63,16 @@ cmq_kvb_t *cmq_kvb_create(void) {
     return b;
 }
 
+int cmq_kvb_reload_attach(cmq_kvb_t **b) {
+    if (!b) return -1;
+    if (*b)
+        return 0;
+    cmq_kvb_t *n = cmq_kvb_create();
+    if (!n) return -1;
+    *b = n;
+    return 0;
+}
+
 void cmq_kvb_destroy(cmq_kvb_t *b) {
     if (!b) return;
     for (int i = 0; i < b->n; i++)

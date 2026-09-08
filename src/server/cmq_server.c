@@ -8928,6 +8928,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (cmq_kvb_reload_attach(&server->kvb) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_kvb_reload_attach_persist(server->kvb,
                                       server->config.persist_dir) != 0) {
         cmq_config_free(&fresh);

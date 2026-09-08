@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.164 - 2026-09-08
+
+### Added
+- **Attach KV manager on reload** — SIGHUP creates the
+  bucket manager when create left `kvb` NULL so persist
+  attach is not fail-closed and in-memory `$KV` works.
+  An existing manager is not remounted.
+
+### Tests
+- `tests/test_kba.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.164.enumeration.md`, `v0.5.164.plan.md`.
+- `docs/features/kv.md`, `persistence.md`.
+- `docs/benchmarks/v05164_{1,2}.txt`.
+
+### Test count
+- 647 tests (was 643 in v0.5.163; +4).
+
 ## 0.5.163 - 2026-09-08
 
 ### Added

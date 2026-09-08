@@ -16,6 +16,9 @@ extern "C" {
 
 cmq_kvb_t *cmq_kvb_create(void);
 void cmq_kvb_destroy(cmq_kvb_t *b);
+/* v0.5.164: existing manager is left alone (no remount).
+ * Creates when *b is NULL. */
+int cmq_kvb_reload_attach(cmq_kvb_t **b);
 int cmq_kvb_set_persist(cmq_kvb_t *b, const char *dir);
 
 /* Enable persist_dir when create left KV persist unset.
