@@ -1,0 +1,3 @@
+v0.5.165 bench 1:
+- $JS manager attach: calloc + mutex when js is NULL.
+- Existing manager: one pointer check, no remount.

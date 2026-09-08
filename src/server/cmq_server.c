@@ -8937,6 +8937,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (cmq_js_reload_attach(&server->js) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_js_reload_attach_persist(server->js,
                                      server->config.persist_dir) != 0) {
         cmq_config_free(&fresh);

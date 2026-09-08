@@ -48,6 +48,8 @@ v0.5.164: reload creates the manager when create
 left `kvb` NULL so persist attach is not fail-closed.
 v0.5.161: reload enables `{persist_dir}/js` when
 create left `$JS` persist unset. Same rules.
+v0.5.165: reload creates the manager when create
+left `js` NULL so persist attach is not fail-closed.
 
 The wiring is **best-effort**: a failed append increments
 `stat_persist_fail` but does not block delivery. This matches

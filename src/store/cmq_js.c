@@ -243,6 +243,16 @@ cmq_js_t *cmq_js_create(void) {
     return j;
 }
 
+int cmq_js_reload_attach(cmq_js_t **j) {
+    if (!j) return -1;
+    if (*j)
+        return 0;
+    cmq_js_t *n = cmq_js_create();
+    if (!n) return -1;
+    *j = n;
+    return 0;
+}
+
 void cmq_js_destroy(cmq_js_t *j) {
     if (!j) return;
     for (int i = 0; i < j->n; i++) {

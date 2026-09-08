@@ -17,6 +17,9 @@ extern "C" {
 
 cmq_js_t *cmq_js_create(void);
 void cmq_js_destroy(cmq_js_t *j);
+/* v0.5.165: existing manager is left alone (no remount).
+ * Creates when *j is NULL. */
+int cmq_js_reload_attach(cmq_js_t **j);
 /* Cursors: {dir}/js/{name}.cursors. Last: {name}.last.
  * History: {name}.msgs. Parts: {name}.parts */
 int cmq_js_set_persist(cmq_js_t *j, const char *dir);

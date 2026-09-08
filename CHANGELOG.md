@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.165 - 2026-09-08
+
+### Added
+- **Attach $JS manager on reload** — SIGHUP creates the
+  stream manager when create left `js` NULL so persist
+  attach is not fail-closed and in-memory `$JS` works.
+  An existing manager is not remounted.
+
+### Tests
+- `tests/test_jma.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.165.enumeration.md`, `v0.5.165.plan.md`.
+- `docs/features/streams.md`, `persistence.md`.
+- `docs/benchmarks/v05165_{1,2}.txt`.
+
+### Test count
+- 651 tests (was 647 in v0.5.164; +4).
+
 ## 0.5.164 - 2026-09-08
 
 ### Added

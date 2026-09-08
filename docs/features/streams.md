@@ -66,6 +66,9 @@ v0.5.161: SIGHUP also enables `{persist_dir}/js` when
 create left `$JS` persist unset. Empty / omitted keeps
 off. An existing persist dir is not remounted. `..` /
 `\` fail closed.
+v0.5.165: SIGHUP creates the manager when create
+left `js` NULL so persist attach is not fail-closed.
+An existing manager is not remounted.
 `cmq_js_set_msgs_rotate_bytes` / config
 `js_msgs_rotate_bytes` (v0.5.108, 0 = off) rewrites
 `.msgs` to a tail that fits the cap (at most 1024
@@ -119,7 +122,8 @@ new opcode. Two-token consume is unchanged.
 `tests/test_stream_cursors.c`, `tests/test_spart.c`,
 `tests/test_js.c`, `tests/test_jsr.c`, `tests/test_jsc.c`,
 `tests/test_jsl.c`, `tests/test_jsh.c`, `tests/test_jsp.c`,
-`tests/test_jsq.c`, `tests/test_jsd.c`, `tests/test_jsm.c`
+`tests/test_jsq.c`, `tests/test_jsd.c`, `tests/test_jsm.c`,
+`tests/test_jsa.c`, `tests/test_jma.c`
 
 ## See also
 

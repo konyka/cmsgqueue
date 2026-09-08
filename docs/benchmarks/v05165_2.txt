@@ -1,0 +1,3 @@
+v0.5.165 bench 2:
+- test_jma: 4/4 pass (apply, omitted, empty, reject)
+- test_jsa: 4/4 pass (persist attach regression)
