@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.168)
+# Remaining unimplemented work (HEAD after v0.5.169)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -33,7 +33,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `blocklist_file` | yes | `blocklist_h` | swap (fail-closed + live path) + attach |
 | `h2_port` | yes | listen | bind when none (no rebind) |
 | `js_partitions` / `js_msgs_rotate_bytes` | yes | `$JS` | `cmq_js_reload` |
-| `tls_*` / `listener*_tls_*` | yes | SSL_CTX slots | `apply_tls` + live paths + attach |
+| `tls_*` / `listener*_tls_*` | yes | SSL_CTX slots | `apply_tls` + live paths + attach + session cache |
 | `listener{1,2,3}_host/port` / count | yes | extra bind | bind empty slots (no rebind) |
 | `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync + F18/obj/txn coordinator+log/kv manager+persist/$JS manager+persist (no remount / WAL replay) |
 | `mqtt_bridge_*` | yes | outbound bridge | attach + maps + endpoint + live maps |
@@ -177,6 +177,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.166 | attach OTel ring on reload |
 | v0.5.167 | attach idempo window on reload |
 | v0.5.168 | attach log on reload |
+| v0.5.169 | attach TLS session cache on reload |
 
 ## Deferred — detailed designs
 
@@ -327,6 +328,7 @@ are live (v0.5.88).
 | attach OTel ring on reload | shipped v0.5.166 | — |
 | attach idempo window on reload | shipped v0.5.167 | — |
 | attach log on reload | shipped v0.5.168 | — |
+| attach TLS session cache on reload | shipped v0.5.169 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -388,7 +390,9 @@ are live (v0.5.88).
   create left `otel` NULL shipped v0.5.166.
   Idempo window attach when create left `idempo`
   NULL shipped v0.5.167. Log attach when create
-  left `log` NULL shipped v0.5.168.
+  left `log` NULL shipped v0.5.168. TLS session
+  cache attach when load left it NULL shipped
+  v0.5.169.
   Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.

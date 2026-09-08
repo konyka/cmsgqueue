@@ -1,0 +1,3 @@
+v0.5.169 bench 1:
+- Session cache attach: calloc + mutex when cfg has none.
+- Existing cache: one pointer check, no remount.

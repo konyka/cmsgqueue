@@ -29,6 +29,7 @@
 #include "cmq_obj.h"
 #include "cmq_js.h"
 #include "cmq_h2.h"
+#include "cmq_tls_session_cache.h"
 #include <sys/stat.h>
 #include <unistd.h>
 #include <signal.h>
@@ -9106,6 +9107,15 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
             }
             if (!had && server->tls_config_slots[li])
                 server->tls_config_count++;
+        }
+    }
+    for (int ti = 0; ti < CMQ_MAX_LISTENERS; ti++) {
+        if (!server->tls_config_slots[ti])
+            continue;
+        if (cmq_tls_session_cache_reload_attach(
+                server->tls_config_slots[ti]) != 0) {
+            cmq_config_free(&fresh);
+            return -1;
         }
     }
     if (cmq_reload_apply_auth(&server->config, &fresh) != 0) {

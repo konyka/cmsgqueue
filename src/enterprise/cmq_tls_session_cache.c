@@ -65,6 +65,8 @@ static void cache_entry_free(cmq_tls_session_cache_entry_t *e) {
 
 int cmq_tls_session_cache_init(cmq_tls_config_t *cfg) {
     if (!cfg) return -1;
+    if (cmq_tls_get_session_cache_state(cfg))
+        return 0;
     cmq_tls_session_cache_t *cache =
         (cmq_tls_session_cache_t *)calloc(1, sizeof(*cache));
     if (!cache) return -1;
@@ -79,6 +81,13 @@ int cmq_tls_session_cache_init(cmq_tls_config_t *cfg) {
         return -1;
     }
     return 0;
+}
+
+int cmq_tls_session_cache_reload_attach(cmq_tls_config_t *cfg) {
+    if (!cfg) return -1;
+    if (cmq_tls_get_session_cache_state(cfg))
+        return 0;
+    return cmq_tls_session_cache_init(cfg);
 }
 
 void cmq_tls_session_cache_destroy(cmq_tls_config_t *cfg) {

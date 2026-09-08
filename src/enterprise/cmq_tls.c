@@ -242,6 +242,7 @@ void cmq_tls_config_destroy(cmq_tls_config_t *cfg) {
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
     }
+    cmq_tls_session_cache_destroy(cfg);
 #ifdef CMQ_TLS_OPENSSL
     if (cfg->ssl_ctx) {
         SSL_CTX_free(cfg->ssl_ctx);
@@ -278,8 +279,11 @@ int cmq_tls_load(cmq_tls_config_t *cfg) {
     if (tls_begin_op(cfg) != 0) return -1;
     int rc = tls_build_ssl_ctx(cfg);
     tls_end_op(cfg);
+    if (rc == 0)
+        (void)cmq_tls_session_cache_reload_attach(cfg);
     return rc;
 #else
+    (void)cmq_tls_session_cache_reload_attach(cfg);
     return 0;
 #endif
 }

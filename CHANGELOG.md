@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.169 - 2026-09-08
+
+### Added
+- **Attach TLS session cache on reload** — create and
+  SIGHUP create the per-slot resumption cache when load
+  left it NULL so reconnects can skip a full handshake.
+  An existing cache is not remounted.
+
+### Tests
+- `tests/test_tsa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.169.enumeration.md`, `v0.5.169.plan.md`.
+- `docs/features/tls-session-cache.md`.
+- `docs/benchmarks/v05169_{1,2}.txt`.
+
+### Test count
+- 667 tests (was 663 in v0.5.168; +4).
+
 ## 0.5.168 - 2026-09-08
 
 ### Added
