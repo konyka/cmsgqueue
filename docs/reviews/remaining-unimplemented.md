@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.166)
+# Remaining unimplemented work (HEAD after v0.5.167)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -173,6 +173,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.164 | attach KV manager on reload |
 | v0.5.165 | attach $JS manager on reload |
 | v0.5.166 | attach OTel ring on reload |
+| v0.5.167 | attach idempo window on reload |
 
 ## Deferred — detailed designs
 
@@ -321,6 +322,7 @@ are live (v0.5.88).
 | attach KV manager on reload | shipped v0.5.164 | — |
 | attach $JS manager on reload | shipped v0.5.165 | — |
 | attach OTel ring on reload | shipped v0.5.166 | — |
+| attach idempo window on reload | shipped v0.5.167 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -380,6 +382,8 @@ are live (v0.5.88).
   `$JS` manager attach when create left `js`
   NULL shipped v0.5.165. OTel ring attach when
   create left `otel` NULL shipped v0.5.166.
+  Idempo window attach when create left `idempo`
+  NULL shipped v0.5.167.
   Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.

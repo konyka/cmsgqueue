@@ -18,6 +18,8 @@ seqs inside the window are accepted once.
 
 256 pids. A new pid when the table is full is rejected
 (`"idempo full"`).
+v0.5.167: SIGHUP creates the window when create left
+`idempo` NULL. An existing window is not remounted.
 
 ## Performance
 
@@ -31,7 +33,7 @@ commits them after a durable log record.
 
 ## Tests
 
-`tests/test_idempo.c`
+`tests/test_idempo.c`, `tests/test_ida.c`
 
 ## See also
 

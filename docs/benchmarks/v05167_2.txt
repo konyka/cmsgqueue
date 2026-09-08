@@ -1,0 +1,3 @@
+v0.5.167 bench 2:
+- test_ida: 4/4 pass (apply, omitted, empty, reject)
+- test_idempo: 8/8 pass (window regression)

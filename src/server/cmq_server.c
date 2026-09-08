@@ -8946,6 +8946,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    if (cmq_idempo_reload_attach(&server->idempo) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
+    }
     if (cmq_filestore_reload_sync(server->filestore,
                                   &server->config.persist_sync_interval_ms,
                                   fresh.persist_sync_interval_ms) != 0) {

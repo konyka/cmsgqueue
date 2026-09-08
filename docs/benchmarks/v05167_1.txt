@@ -1,0 +1,3 @@
+v0.5.167 bench 1:
+- Idempo attach: calloc + mutex when idempo is NULL.
+- Existing window: one pointer check, no remount.

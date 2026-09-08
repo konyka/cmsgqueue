@@ -44,6 +44,16 @@ cmq_idempo_t *cmq_idempo_create(void) {
     return t;
 }
 
+int cmq_idempo_reload_attach(cmq_idempo_t **t) {
+    if (!t) return -1;
+    if (*t)
+        return 0;
+    cmq_idempo_t *n = cmq_idempo_create();
+    if (!n) return -1;
+    *t = n;
+    return 0;
+}
+
 void cmq_idempo_destroy(cmq_idempo_t *t) {
     if (!t) return;
     cmq_mutex_destroy(&t->lock);

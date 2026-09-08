@@ -13,6 +13,9 @@ typedef struct cmq_idempo cmq_idempo_t;
 
 cmq_idempo_t *cmq_idempo_create(void);
 void cmq_idempo_destroy(cmq_idempo_t *t);
+/* v0.5.167: existing window is left alone (no remount).
+ * Creates when *t is NULL. */
+int cmq_idempo_reload_attach(cmq_idempo_t **t);
 
 int cmq_idempo_encode(uint8_t *out, size_t cap, uint32_t pid, uint64_t seq,
                       size_t *out_len);

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.167 - 2026-09-08
+
+### Added
+- **Attach idempo window on reload** — SIGHUP creates the
+  pid/seq window when create left `idempo` NULL so CMQI
+  headers are not silently accepted as new. An existing
+  window is not remounted.
+
+### Tests
+- `tests/test_ida.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.167.enumeration.md`, `v0.5.167.plan.md`.
+- `docs/features/idempo.md`.
+- `docs/benchmarks/v05167_{1,2}.txt`.
+
+### Test count
+- 659 tests (was 655 in v0.5.166; +4).
+
 ## 0.5.166 - 2026-09-08
 
 ### Added
