@@ -1,8 +1,8 @@
-# Remaining unimplemented work (HEAD after v0.5.161)
+# Remaining unimplemented work (HEAD after v0.5.162)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
-and attach helpers on 2026-09-07. P2 (R1–R7) and P3
+and attach helpers on 2026-09-08. P2 (R1–R7) and P3
 D1–D8 phase cuts in this catalog are shipped.
 Required next cuts: none.
 
@@ -26,7 +26,7 @@ replay (unsafe on a live WAL / accept / route fd).
 | `auth_*` / `jwt_*` / `nkey_pub` | yes | CONNECT | `apply_auth` |
 | `jwks_json` / `jwks_url` / `jwks_ca` / refresh | yes | cache / GET / sidecar | cache + url/ca/sec + fetch + attach |
 | `otlp_endpoint` / `otlp_ca` | yes | exporter | url/ca + attach |
-| `cluster_name` / `cluster_node_id` | yes | cluster + empty pool | attach |
+| `cluster_name` / `cluster_node_id` | yes | cluster + empty pool | attach + empty pool if create left routes NULL |
 | `route=` | IPv4 `addr:port` | run dial | attach empty slots (no redial) |
 | quota / subject RL / `account_max_*` | yes | objects / defaults | reload (creates if none) |
 | `acl_allow` / `acl_deny` | yes | `acl_h` | `apply_dynamic` + live CSVs |
@@ -168,6 +168,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.159 | attach txn log on reload |
 | v0.5.160 | attach KV persist on reload |
 | v0.5.161 | attach $JS persist on reload |
+| v0.5.162 | attach route pool on reload |
 
 ## Deferred — detailed designs
 
@@ -311,6 +312,7 @@ are live (v0.5.88).
 | attach txn log on reload | shipped v0.5.159 | — |
 | attach KV persist on reload | shipped v0.5.160 | — |
 | attach $JS persist on reload | shipped v0.5.161 | — |
+| attach route pool on reload | shipped v0.5.162 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -362,7 +364,8 @@ are live (v0.5.88).
   attach when create left it unset shipped v0.5.159.
   KV persist attach when create left it unset shipped
   v0.5.160. `$JS` persist attach when create left it
-  unset shipped v0.5.161.
+  unset shipped v0.5.161. Route pool attach when
+  create left `routes` NULL shipped v0.5.162.
   Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.

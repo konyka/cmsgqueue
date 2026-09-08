@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.162 - 2026-09-08
+
+### Added
+- **Attach route pool on reload** — SIGHUP creates the
+  empty route pool when create left `routes` NULL
+  (cluster live, `cmq_route_pool_create` missed). Empty /
+  omitted cluster keeps off. An existing pool is not
+  remounted. Peer dial stays `cmq_route_reload_attach`
+  (empty slots only, no redial).
+
+### Tests
+- `tests/test_rpa.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.162.enumeration.md`, `v0.5.162.plan.md`.
+- `docs/features/leaf-gateway.md`.
+- `docs/benchmarks/v05162_{1,2}.txt`.
+
+### Test count
+- 639 tests (was 635 in v0.5.161; +4).
+
 ## 0.5.161 - 2026-09-07
 
 ### Added

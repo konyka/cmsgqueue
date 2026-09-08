@@ -35,6 +35,10 @@ recreated.
 when create left the live table empty (v0.5.147).
 Existing live peers are not redialed.
 
+`tests/test_rpa.c` covers SIGHUP create of the empty
+route pool when create left `routes` NULL (v0.5.162).
+An existing pool is not remounted.
+
 ## See also
 
 - `docs/reviews/v0.5.86.enumeration.md`

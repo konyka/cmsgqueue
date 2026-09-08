@@ -9221,12 +9221,11 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
             cmq_config_free(&fresh);
             return -1;
         }
-        if (server->cluster && !server->routes) {
-            server->routes = cmq_route_pool_create(server->cluster);
-            if (server->routes)
-                cmq_route_pool_set_dial_gate(server->routes,
-                                             &server->acceptor_drain);
-        }
+    }
+    if (cmq_route_pool_reload_attach(&server->routes, server->cluster,
+                                     &server->acceptor_drain) != 0) {
+        cmq_config_free(&fresh);
+        return -1;
     }
     if (fresh.route_count < 0 || fresh.route_count > 8) {
         cmq_config_free(&fresh);

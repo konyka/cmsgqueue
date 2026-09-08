@@ -557,6 +557,22 @@ void cmq_route_pool_set_dial_gate(cmq_route_pool_t *pool, cmq_atomic_int *gate) 
     route_end_op(pool);
 }
 
+int cmq_route_pool_reload_attach(cmq_route_pool_t **pool,
+                                 cmq_cluster_t *cluster,
+                                 cmq_atomic_int *gate) {
+    if (!pool) return -1;
+    if (*pool)
+        return 0;
+    if (!cluster)
+        return 0;
+    cmq_route_pool_t *p = cmq_route_pool_create(cluster);
+    if (!p) return -1;
+    if (gate)
+        cmq_route_pool_set_dial_gate(p, gate);
+    *pool = p;
+    return 0;
+}
+
 /* 1 if server drain (or similar) forbids installing a freshly dialed peer. */
 static int route_dial_gated(const cmq_route_pool_t *pool) {
     if (!pool || !pool->dial_gate) return 0;
