@@ -170,6 +170,16 @@ cmq_txn_t *cmq_txn_create(void) {
     return t;
 }
 
+int cmq_txn_reload_attach(cmq_txn_t **t) {
+    if (!t) return -1;
+    if (*t)
+        return 0;
+    cmq_txn_t *n = cmq_txn_create();
+    if (!n) return -1;
+    *t = n;
+    return 0;
+}
+
 void cmq_txn_destroy(cmq_txn_t *t) {
     if (!t) return;
     cmq_cond_destroy(&t->cv);

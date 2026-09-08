@@ -39,6 +39,9 @@ create left the object-store handle NULL. Same
 empty / omitted / no-remount / fail-closed rules.
 v0.5.159: reload enables `{persist_dir}/cmq.txn`
 when create left the txn log unset. Same rules.
+v0.5.163: reload creates the coordinator when
+create left `txn` NULL so persist attach is not
+fail-closed.
 v0.5.160: reload enables `{persist_dir}/kv_<bucket>`
 when create left KV persist unset. Same rules.
 v0.5.161: reload enables `{persist_dir}/js` when

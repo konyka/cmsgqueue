@@ -44,6 +44,9 @@ COMMIT record = not committed. Recover loads ids only
 v0.5.159: SIGHUP also enables the log when create left
 it unset. Empty / omitted keeps off. An existing log
 is not remounted. `..` / `\` fail closed.
+v0.5.163: SIGHUP creates the coordinator when create
+left `txn` NULL so persist attach is not fail-closed.
+An existing coordinator is not remounted.
 
 ## Performance
 

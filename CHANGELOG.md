@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.163 - 2026-09-08
+
+### Added
+- **Attach txn coordinator on reload** — SIGHUP creates
+  the coordinator when create left `txn` NULL so persist
+  attach is not fail-closed and in-memory BEGIN works.
+  An existing coordinator is not remounted.
+
+### Tests
+- `tests/test_tca.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.163.enumeration.md`, `v0.5.163.plan.md`.
+- `docs/features/txn.md`, `persistence.md`.
+- `docs/benchmarks/v05163_{1,2}.txt`.
+
+### Test count
+- 643 tests (was 639 in v0.5.162; +4).
+
 ## 0.5.162 - 2026-09-08
 
 ### Added

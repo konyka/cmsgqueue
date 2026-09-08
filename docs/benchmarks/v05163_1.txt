@@ -1,0 +1,3 @@
+v0.5.163 bench 1:
+- Txn coordinator attach: calloc + mutex/cond when txn is NULL.
+- Existing coordinator: one pointer check, no remount.

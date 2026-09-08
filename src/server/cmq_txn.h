@@ -27,6 +27,9 @@ typedef int (*cmq_txn_apply_fn)(void *ctx, const char *subject,
 
 cmq_txn_t *cmq_txn_create(void);
 void cmq_txn_destroy(cmq_txn_t *t);
+/* v0.5.163: existing coordinator is left alone (no remount).
+ * Creates when *t is NULL. */
+int cmq_txn_reload_attach(cmq_txn_t **t);
 
 /* Opt-in durable log at dir/cmq.txn. Missing file is empty. */
 int cmq_txn_set_log(cmq_txn_t *t, const char *dir);
