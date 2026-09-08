@@ -23,8 +23,8 @@ F3 wires it into the protocol.
 
 ### Wire format extension
 
-When `CMQ_FLAG_CHECKSUM` (bit 1) is set on a `PUBLISH` or
-`REQUEST` frame (v0.5.171):
+When `CMQ_FLAG_CHECKSUM` (bit 1) is set on a `PUBLISH`,
+`REQUEST` (v0.5.171), or `RESPONSE` (v0.5.172) frame:
 
 ```
 +-----+--------+--------+----------+----------+
@@ -43,9 +43,9 @@ When `CMQ_FLAG_CHECKSUM` (bit 1) is set on a `PUBLISH` or
 ### Server-side verification
 
 `cmq_checksum_consume` (v0.5.171) is the single verify path.
-`handle_publish` and `handle_request` call it after inflate
-and before subject parse. Omitted flag keeps `*len`.
-Mismatch / short / NULL fail closed.
+`handle_publish`, `handle_request`, and `handle_response`
+call it after inflate and before subject parse. Omitted
+flag keeps `*len`. Mismatch / short / NULL fail closed.
 
 ```c
 if (cmq_checksum_consume(frame->hdr.flags, frame->payload,
@@ -55,8 +55,7 @@ if (cmq_checksum_consume(frame->hdr.flags, frame->payload,
 }
 ```
 
-RESPONSE / BATCH still treat the trailer as body
-(later cuts).
+BATCH still treats the trailer as body (later cut).
 
 The verification cost is a single 64-bit CRC32C instruction per 8 bytes
 on hardware, plus the constant-time compare. Net hot-path overhead on
@@ -73,11 +72,12 @@ The F11 test `parser.reject_flag_checksum` was updated to assert
 
 - `src/core/cmq_crc32c.c` — `cmq_checksum_consume` (v0.5.171).
 - `src/server/cmq_server.c` — `handle_publish` / `handle_request`
-  consume after inflate.
+  / `handle_response` consume after inflate.
 - `src/proto/cmq_parser.c` — flags check allows CHECKSUM, still rejects COMPRESSED.
 - `tests/test_checksum_wire.c` — 3 library CRC tests.
 - `tests/test_csa.c` — consume apply / omitted / empty / reject
   (v0.5.171).
+- `tests/test_rsc.c` — RESPONSE-shaped consume (v0.5.172).
 - `tests/test_parser.c` — F11 `reject_flag_checksum` updated.
 - `docs/features/flag-rejection.md` — note the F3 follow-up.
 

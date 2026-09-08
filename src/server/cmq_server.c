@@ -4617,6 +4617,16 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         free(decoded);
         return;
     }
+    /* v0.5.172: verify trailing CRC32C after inflate, before inbox/subject. */
+    cmq_frame_t rsp_ck = *frame;
+    if (cmq_checksum_consume((uint8_t)rsp_ck.hdr.flags,
+                             rsp_ck.payload, &rsp_ck.payload_len) != 0) {
+        cmq_send_error(c, "checksum mismatch");
+        return;
+    }
+    rsp_ck.hdr.flags =
+        (cmq_u8_t)(rsp_ck.hdr.flags & ~(cmq_u8_t)CMQ_FLAG_CHECKSUM);
+    frame = &rsp_ck;
     if (!frame->payload || frame->payload_len < 4) {
         cmq_send_error(c, "invalid response");
         return;

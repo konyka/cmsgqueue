@@ -38,9 +38,9 @@ silently round-trip garbage. Data-path opcodes inflate before use.
 - `CMQ_FLAG_COMPRESSED (0x01)` — accepted on BATCH, PUBLISH,
   MESSAGE, REQUEST, RESPONSE; rejected on control ops (v0.5.99).
 - `CMQ_FLAG_CHECKSUM (0x02)` — accepted; verified in
-  `handle_publish` / `handle_request` after inflate
-  (`cmq_checksum_consume`, v0.5.171). RESPONSE / BATCH
-  still treat the trailer as body.
+  `handle_publish` / `handle_request` / `handle_response`
+  after inflate (`cmq_checksum_consume`, v0.5.171–172).
+  BATCH still treats the trailer as body.
 - `COMPRESSED` on SUBSCRIBE / CONNECT and other control opcodes —
   rejected (F11).
 

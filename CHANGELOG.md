@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.172 - 2026-09-08
+
+### Added
+- **Verify CHECKSUM on RESPONSE** — the live RESPONSE
+  path strips and verifies the trailing CRC32C after
+  inflate, before inbox decrement. Omitted flag keeps
+  the payload unchanged.
+
+### Tests
+- `tests/test_rsc.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.172.enumeration.md`, `v0.5.172.plan.md`.
+- `docs/features/wire-checksum.md`, `flag-rejection.md`.
+- `docs/benchmarks/v05172_{1,2}.txt`.
+
+### Test count
+- 679 tests (was 675 in v0.5.171; +4).
+
 ## 0.5.171 - 2026-09-08
 
 ### Added
