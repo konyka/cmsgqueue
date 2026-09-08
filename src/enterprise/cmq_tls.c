@@ -629,6 +629,11 @@ int cmq_tls_fd(cmq_tls_session_t *session) {
     return session ? session->fd : -1;
 }
 
+int cmq_tls_handshake_done(cmq_tls_session_t *session) {
+    if (!session) return -1;
+    return session->handshake_done ? 1 : 0;
+}
+
 /* v0.5.23: opaque accessors used by cmq_tls_session_cache.c. The cache
  * module needs to store its state on the config without making the
  * struct layout public. */

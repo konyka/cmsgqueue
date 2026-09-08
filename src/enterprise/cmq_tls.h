@@ -53,6 +53,10 @@ int cmq_tls_handshake(cmq_tls_session_t *session);
 ssize_t cmq_tls_read(cmq_tls_session_t *session, uint8_t *buf, size_t len);
 ssize_t cmq_tls_write(cmq_tls_session_t *session, const uint8_t *buf, size_t len);
 int cmq_tls_fd(cmq_tls_session_t *session);
+/* v0.5.45: 1 if the handshake has completed; 0 if still pending;
+ * -1 on bad input. Lets the server's read/write callbacks resume a
+ * non-blocking handshake across multiple wakeups. */
+int cmq_tls_handshake_done(cmq_tls_session_t *session);
 
 /* v0.5.23: opaque accessors for the session-resumption cache.
  * The cache owns the slot lifetime; cmq_tls_session_free_slot frees

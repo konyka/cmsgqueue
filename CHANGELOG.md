@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.5.45 - 2026-09-04
+
+### Fixed
+- **TLS handshake through `cmq_server_run` was broken in two ways**
+  (`src/server/cmq_server.c:6395-6422`). `client_tls_handshake`
+  treated `cmq_tls_handshake`'s return values incorrectly:
+  the success case (`rc == 1`) and the error case (`rc == -1`)
+  were both routed into `if (rc != 0) { destroy; return -1; }`,
+  so a handshake that completed synchronously on accept was
+  silently killed. The pending case (`rc == 0`,
+  WANT_READ/WANT_WRITE) set `client->tls` but never resumed the
+  state machine, so any handshake needing multiple round-trips
+  was accepted with a dead TLS session. Fixed by:
+  1. `client_tls_handshake` now only destroys + rejects on
+     `rc < 0`. `rc == 0` (pending) and `rc == 1` (success)
+     both attach the session to `client->tls`.
+  2. `client_read_cb` drives `cmq_tls_handshake` on every
+     `EV_READ` while `!cmq_tls_handshake_done(c->tls)`,
+     completing the handshake across multiple wakeups. After
+     completion, control falls through to the normal read path.
+- New accessor `cmq_tls_handshake_done(session)` in
+  `src/enterprise/cmq_tls.{c,h}` exposes the `handshake_done`
+  flag for use by the server's read/write callbacks.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c`** — real end-to-end TLS
+  handshake through `cmq_server_run`. Two tests:
+  1. `tls_e2e_handshake.single_listener` — single TLS listener,
+     full `SSL_connect` against port, asserts `SSL_do_handshake`
+     returns 1.
+  2. `tls_e2e_handshake.multi_listener_distinct_certs` — two
+     listeners (slot 0 + slot 1) with distinct self-signed
+     certs. Verifies port+0 trusts cert0, port+1 trusts cert1,
+     and the cross-check (connect to slot 1's port trusting
+     cert0) is correctly rejected by the client. This is the
+     first test that exercises v0.5.33's
+     `srv_find_tls_slot` → `client_tls_handshake` integration
+     in production (not just unit).
+- **`docs/reviews/v0.5.45.enumeration.md`** — design doc
+  covering the bug, the fix, and the test plan.
+- **`docs/features/tls-handshake-resume.md`** — feature doc.
+
+### Verified
+- `ctest -j1` (excluding `test_stress` and `test_bench_regression`):
+  88/88 pass.
+- Bench: ~33K msg/s end-to-end, p99 inter-arrival 99.0 µs.
+
 ## 0.5.43 - 2026-09-03
 
 ### Added

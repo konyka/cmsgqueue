@@ -5604,6 +5604,19 @@ static void client_read_cb(int fd, int events, void *data) {
         return;
     }
 
+    /* v0.5.45: resume a non-blocking TLS handshake across wakeups.
+     * cmq_tls_read refuses to read until handshake_done is true, so
+     * we must drive the state machine on every EV_READ until the
+     * handshake completes. Once done, fall through to the normal
+     * read path. WANT_READ/WANT_WRITE (rc == 0) just means "more
+     * round-trips needed"; bail out and wait for the next wakeup. */
+    if (c->tls && !cmq_tls_handshake_done(c->tls)) {
+        int hrc = cmq_tls_handshake(c->tls);
+        if (hrc < 0) { client_teardown(c); return; }
+        if (hrc == 0) return;
+        /* rc == 1 → handshake complete; fall through to read app data. */
+    }
+
     ssize_t n = client_sock_read(c, c->read_buf, sizeof(c->read_buf));
     if (n <= 0) {
         if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
@@ -6396,17 +6409,28 @@ static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
     /* v0.5.33: pick the TLS config slot matching the listen fd that
      * accepted this connection. client->tls_slot is set by accept_cb
      * via srv_find_tls_slot. Falls back to slot 0 if the index is
-     * out of range or the slot is NULL. */
+     * out of range or the slot is NULL.
+     *
+     * v0.5.45: cmq_tls_handshake returns 1 on success, 0 on
+     * WANT_READ/WANT_WRITE (still pending), -1 on error. The
+     * previous "if (rc != 0)" check destroyed the session on
+     * success too, which silently killed any handshake that
+     * completed synchronously and left a half-initialized
+     * client->tls for any handshake that needed more rounds. Only
+     * a real error (rc < 0) should destroy and reject. */
     int slot = client->tls_slot;
     if (slot < 0 || slot >= CMQ_MAX_LISTENERS) slot = 0;
     if (!srv->tls_config_slots[slot]) return 0;
     cmq_tls_session_t *tls = cmq_tls_server_session(srv->tls_config_slots[slot], client->fd);
     if (!tls) return -1;
     int rc = cmq_tls_handshake(tls);
-    if (rc != 0) {
+    if (rc < 0) {
         cmq_tls_session_destroy(tls);
         return -1;
     }
+    /* rc == 0 (pending) or rc == 1 (success) — both keep the
+     * session alive so client_read_cb can resume the handshake
+     * across wakeups via cmq_tls_handshake. */
     client->tls = tls;
     return 0;
 }
