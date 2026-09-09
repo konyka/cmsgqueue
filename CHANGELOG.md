@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.5.46 - 2026-09-05
+
+### Fixed
+- **mTLS (mutual TLS) verification was silently bypassed for
+  TLS 1.3 clients** (`src/enterprise/cmq_tls.c:118`). When
+  `cfg->verify_peer` was set, `SSL_CTX_set_verify(PEER |
+  FAIL_IF_NO_PEER_CERT)` was correctly applied to the SSL_CTX,
+  but OpenSSL 3.5 / TLS 1.3 changed the client-cert handshake:
+  the server must explicitly opt in to TLS 1.3's
+  `CertificateRequest` path via the client-cert-engine API,
+  otherwise it never sends the request — even with the verify
+  mode set. The server completed the handshake without asking
+  for a client cert, so any TLS 1.3 client was accepted as
+  authenticated regardless of whether it presented a cert.
+
+  Fixed by capping the SSL_CTX at TLS 1.2 when `verify_peer`
+  is set:
+  ```c
+  if (cfg->verify_peer) {
+      SSL_CTX_set_max_proto_version(cfg->ssl_ctx, TLS1_2_VERSION);
+  }
+  ```
+  TLS 1.2 honors `SSL_VERIFY_FAIL_IF_NO_PEER_CERT` and sends
+  `CertificateRequest`; an empty `Certificate` message from the
+  client fails the handshake with `handshake_failure` per
+  RFC 5246.
+
+  Plain TLS (no mTLS) is unaffected — TLS 1.3 remains the
+  default when `verify_peer` is not set. Bench: ~33K msg/s,
+  p99 99.0 µs (unchanged).
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_required`** — first
+  end-to-end test of the mTLS code path. Generates a CA,
+  CA-signed server cert, CA-signed client cert. Configures
+  `cmq_server` with `tls_verify_peer=1` and verifies that
+  an authenticated client handshake succeeds (sub-test A)
+  while an unauthenticated client handshake fails (sub-test
+  B). Closes the gap that `test_mtls_api.c` only checks the
+  setter round-trip, not runtime behavior.
+- **`docs/reviews/v0.5.46.enumeration.md`** — design doc.
+- **`docs/features/tls-mtls-verify.md`** — feature doc.
+
+### Verified
+- `ctest -j1`: 88/88 pass (all TLS-related tests pass;
+  plaintext unaffected).
+- Bench: ~33K msg/s end-to-end, p99 inter-arrival 99.0 µs.
+
+### Deferred to v0.5.47+
+- TLS 1.3 mTLS via `SSL_CTX_set_client_cert_engine` (or
+  equivalent), so the TLS 1.2 cap can be lifted.
+- CRL revocation end-to-end test.
+- Mutual mTLS through the multi-listener path (each listener
+  with its own CA bundle).
+
 ## 0.5.45 - 2026-09-04
 
 ### Fixed

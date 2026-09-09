@@ -116,6 +116,16 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     if (!cfg->ssl_ctx) return -1;
     /* TLS 1.2 floor; TLS 1.3 preferred. */
     SSL_CTX_set_min_proto_version(cfg->ssl_ctx, TLS1_2_VERSION);
+    /* v0.5.46: cap at TLS 1.2 when verify_peer is set. TLS 1.3
+     * changed the client-cert handshake: the server must
+     * explicitly send a CertificateRequest via the
+     * SSL_CTX_set_client_cert_engine path, otherwise
+     * SSL_VERIFY_FAIL_IF_NO_PEER_CERT is silently a no-op. Forcing
+     * TLS 1.2 keeps the verify flag's effect. Once we wire the
+     * TLS 1.3 client-cert path (v0.5.47+), this cap can lift. */
+    if (cfg->verify_peer) {
+        SSL_CTX_set_max_proto_version(cfg->ssl_ctx, TLS1_2_VERSION);
+    }
     /* AEAD-only cipher list: TLS 1.3 ciphers are fixed by the protocol
      * (AEAD-only). For TLS 1.2, restrict to AEAD suites. */
     const char *ciphers =

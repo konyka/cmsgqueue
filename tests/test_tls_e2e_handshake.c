@@ -41,6 +41,7 @@
 #include <time.h>
 
 #define TLS_DIR "/tmp/cmq-test-v0545"
+#define MTLS_DIR "/tmp/cmq-test-v0546"
 
 static void __attribute__((constructor)) install_sigpipe_handler(void) {
     signal(SIGPIPE, SIG_IGN);
@@ -161,6 +162,52 @@ static int drive_handshake(int fd, const char *ca_cert) {
     return rc;
 }
 
+/* v0.5.46: drive a TLS handshake where the client may present a
+ * cert + key (mTLS). Trusts `ca_cert` for the server's chain.
+ * Pass NULL for client_cert / client_key to skip client auth. */
+static int drive_handshake_with_client_cert(int fd, const char *ca_cert,
+                                             const char *client_cert,
+                                             const char *client_key) {
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    if (!cctx) return -1;
+    if (SSL_CTX_load_verify_file(cctx, ca_cert) != 1) {
+        SSL_CTX_free(cctx); return -1;
+    }
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+    if (client_cert && client_key) {
+        if (SSL_CTX_use_certificate_file(cctx, client_cert,
+                                          SSL_FILETYPE_PEM) != 1) {
+            SSL_CTX_free(cctx); return -1;
+        }
+        if (SSL_CTX_use_PrivateKey_file(cctx, client_key,
+                                         SSL_FILETYPE_PEM) != 1) {
+            SSL_CTX_free(cctx); return -1;
+        }
+    }
+    SSL *cssl = SSL_new(cctx);
+    if (!cssl) { SSL_CTX_free(cctx); return -1; }
+    SSL_set_fd(cssl, fd);
+    SSL_set_connect_state(cssl);
+
+    struct hs_arg carg = { cssl, fd, 0 };
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, hs_thread, &carg) != 0) {
+        SSL_free(cssl); SSL_CTX_free(cctx);
+        return -1;
+    }
+    pthread_join(tid, NULL);
+    int rc = carg.rc;
+    if (rc != 1) {
+        unsigned long e;
+        while ((e = ERR_get_error()))
+            fprintf(stderr, "v0.5.46 mtls handshake err: %s\n",
+                    ERR_reason_error_string(e));
+    }
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    return rc;
+}
+
 /* ---------- Test 1: single listener ---------- */
 
 TEST(tls_e2e_handshake, single_listener) {
@@ -253,6 +300,98 @@ TEST(tls_e2e_handshake, multi_listener_distinct_certs) {
     cmq_server_stop(srv);
     pthread_join(tid, NULL);
     cmq_server_destroy(srv);
+}
+
+/* ---------- Test 3 (v0.5.46): mTLS end-to-end ----------
+ *
+ * Server is configured with tls_verify_peer=1 and tls_ca=CA. A
+ * client with a valid CA-signed client cert must succeed; a
+ * client without a cert must be rejected. Closes the gap that
+ * test_mtls_api.c only checks the setter round-trip, not the
+ * runtime handshake behavior.
+ */
+static int mtls_run(const char *cmd) {
+    int rc = system(cmd);
+    return WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
+}
+
+static int mtls_gen_ca(const char *ca_cert, const char *ca_key) {
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "openssl req -x509 -newkey rsa:2048 -keyout %s -out %s "
+        "-days 1 -nodes -subj '/CN=cmq-test-ca' 2>/dev/null",
+        ca_key, ca_cert);
+    return mtls_run(cmd);
+}
+
+static int mtls_gen_signed(const char *ca_cert, const char *ca_key,
+                            const char *cert, const char *key,
+                            const char *cn) {
+    char subj[256], cmd[2048];
+    snprintf(subj, sizeof(subj), "/CN=%s", cn);
+    snprintf(cmd, sizeof(cmd),
+        "openssl req -newkey rsa:2048 -keyout %s -out %s.csr -nodes "
+        "-subj '%s' 2>/dev/null && "
+        "openssl x509 -req -in %s.csr -CA %s -CAkey %s -CAcreateserial "
+        "-out %s -days 1 2>/dev/null && rm -f %s.csr",
+        key, key, subj, key, ca_cert, ca_key, cert, key);
+    return mtls_run(cmd);
+}
+
+TEST(tls_e2e_handshake, mtls_required) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    (void)rc;
+    ASSERT_EQ(mtls_gen_ca(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server.pem", MTLS_DIR "/server.key",
+                                "v0546server"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/client.pem", MTLS_DIR "/client.key",
+                                "v0546client"), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25520;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/server.pem";
+    cfg.tls_key = MTLS_DIR "/server.key";
+    cfg.tls_ca = MTLS_DIR "/ca.pem";
+    cfg.tls_verify_peer = 1;  /* mTLS: require + verify client certs */
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Sub-test A: client WITH cert → handshake must succeed. */
+    int cfd_a = open_tcp(25520);
+    ASSERT(cfd_a >= 0);
+    int rc_a = drive_handshake_with_client_cert(cfd_a,
+        MTLS_DIR "/ca.pem",
+        MTLS_DIR "/client.pem",
+        MTLS_DIR "/client.key");
+    ASSERT_EQ(rc_a, 1);
+    close(cfd_a);
+
+    /* Sub-test B: client WITHOUT cert → handshake must FAIL.
+     * Server has tls_verify_peer=1 + SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+     * so an unauthenticated client is rejected. */
+    int cfd_b = open_tcp(25520);
+    ASSERT(cfd_b >= 0);
+    int rc_b = drive_handshake_with_client_cert(cfd_b,
+        MTLS_DIR "/ca.pem", NULL, NULL);
+    ASSERT(rc_b != 1);
+    close(cfd_b);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    rc = system("rm -rf " MTLS_DIR); (void)rc;
 }
 
 TEST_MAIN()
