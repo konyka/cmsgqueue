@@ -7059,6 +7059,11 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         if (srv->config.tls_ca) {
             cmq_tls_set_ca(srv->tls_config_slots[0], srv->config.tls_ca);
         }
+        /* v0.5.47: CRL revocation list. NULL disables; loaded into
+         * the SSL_CTX's X509_STORE at cmq_tls_load time. */
+        if (srv->config.tls_crl) {
+            cmq_tls_set_crl(srv->tls_config_slots[0], srv->config.tls_crl);
+        }
         if (srv->config.tls_verify_peer) {
             cmq_tls_set_verify(srv->tls_config_slots[0], 1);
         }
@@ -7100,6 +7105,11 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         const char *ca = srv->config.listeners[li].tls_ca;
         if (ca && ca[0] != '\0') {
             cmq_tls_set_ca(srv->tls_config_slots[li], ca);
+        }
+        /* v0.5.47: per-listener CRL. NULL disables. */
+        const char *crl = srv->config.listeners[li].tls_crl;
+        if (crl && crl[0] != '\0') {
+            cmq_tls_set_crl(srv->tls_config_slots[li], crl);
         }
         if (srv->config.listeners[li].tls_verify_peer) {
             cmq_tls_set_verify(srv->tls_config_slots[li], 1);

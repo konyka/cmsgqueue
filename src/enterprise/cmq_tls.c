@@ -166,7 +166,10 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     /* P1 (v0.5.3): load the CRL into the SSL_CTX's X509_STORE. OpenSSL
      * consults the store automatically when SSL_VERIFY_PEER is on.
      * Failure to load is logged + CRL check is skipped (we don't want
-     * a bad CRL file to refuse all handshakes). */
+     * a bad CRL file to refuse all handshakes). v0.5.47: also set
+     * X509_V_FLAG_CRL_CHECK on the store — without this flag, the
+     * verifier loads the CRL but never consults it (a silent
+     * no-op). */
     if (cfg->crl[0] != '\0') {
         BIO *crl_bio = BIO_new_file(cfg->crl, "r");
         if (crl_bio) {
@@ -176,6 +179,15 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
                 X509_STORE *store = SSL_CTX_get_cert_store(cfg->ssl_ctx);
                 if (store) {
                     X509_STORE_add_crl(store, crl_obj);
+                    /* v0.5.47: also flag the store to consult the
+                     * CRL during cert verification. Without the
+                     * flags, the verifier loads the CRL but never
+                     * checks against it. CRL_CHECK covers the leaf;
+                     * CRL_CHECK_ALL extends to the chain (the CA
+                     * itself may also be revoked). */
+                    X509_STORE_set_flags(store,
+                        X509_V_FLAG_CRL_CHECK |
+                        X509_V_FLAG_CRL_CHECK_ALL);
                     /* Lookups consult the CRL when verify_peer is on. */
                 } else {
                     X509_CRL_free(crl_obj);

@@ -39,9 +39,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <sys/stat.h>
 
 #define TLS_DIR "/tmp/cmq-test-v0545"
 #define MTLS_DIR "/tmp/cmq-test-v0546"
+#define CRL_DIR "/tmp/cmq-test-v0547"
 
 static void __attribute__((constructor)) install_sigpipe_handler(void) {
     signal(SIGPIPE, SIG_IGN);
@@ -338,6 +340,39 @@ static int mtls_gen_signed(const char *ca_cert, const char *ca_key,
     return mtls_run(cmd);
 }
 
+/* v0.5.47: same as mtls_gen_signed but adds a CRL Distribution
+ * Point extension pointing at file://path/to/crl.pem. Without the
+ * CDP, OpenSSL's X509_V_FLAG_CRL_CHECK is silently a no-op (the
+ * verifier has no way to know which CRL to consult). The file://
+ * URI lets the verifier read the CRL directly from disk. */
+static int mtls_gen_signed_with_cdp(const char *ca_cert, const char *ca_key,
+                                       const char *cert, const char *key,
+                                       const char *cn,
+                                       const char *crl_path) {
+    char subj[256], cnf_path[1024], cmd[4096];
+    snprintf(subj, sizeof(subj), "/CN=%s", cn);
+    snprintf(cnf_path, sizeof(cnf_path), "%s.ext.cnf", cert);
+    FILE *f = fopen(cnf_path, "w");
+    if (!f) return -1;
+    fprintf(f,
+        "[v3_client]\n"
+        "basicConstraints = CA:FALSE\n"
+        "extendedKeyUsage = clientAuth\n"
+        "subjectKeyIdentifier = hash\n"
+        "authorityKeyIdentifier = keyid,issuer\n"
+        "crlDistributionPoints = URI:file://%s\n",
+        crl_path);
+    fclose(f);
+    snprintf(cmd, sizeof(cmd),
+        "openssl req -newkey rsa:2048 -keyout %s -out %s.csr -nodes "
+        "-subj '%s' 2>/dev/null && "
+        "openssl x509 -req -in %s.csr -CA %s -CAkey %s -CAcreateserial "
+        "-out %s -days 1 -extfile %s -extensions v3_client 2>/dev/null && "
+        "rm -f %s.csr %s",
+        key, key, subj, key, ca_cert, ca_key, cert, cnf_path, key, cnf_path);
+    return mtls_run(cmd);
+}
+
 TEST(tls_e2e_handshake, mtls_required) {
     int rc __attribute__((unused)) = system(
         "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
@@ -392,6 +427,131 @@ TEST(tls_e2e_handshake, mtls_required) {
     pthread_join(tid, NULL);
     cmq_server_destroy(srv);
     rc = system("rm -rf " MTLS_DIR); (void)rc;
+}
+
+/* ---------- Test 4 (v0.5.47): CRL revocation end-to-end ----------
+ *
+ * Generates a CA + server cert + client cert, then revokes the
+ * client cert via openssl ca -gencrl. Configures cmq_server with
+ * tls_verify_peer=1, tls_ca=CA, tls_crl=CRL. A client presenting
+ * the (now revoked) client cert must be rejected by the server.
+ */
+static int crl_run(const char *cmd) {
+    int rc = system(cmd);
+    return WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
+}
+
+TEST(tls_e2e_handshake, mtls_revoked_client_rejected) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " CRL_DIR " && mkdir -p " CRL_DIR
+        " && mkdir -p " CRL_DIR "/ca_db"
+        " && touch " CRL_DIR "/ca_db/index.txt"
+        " && echo '01' > " CRL_DIR "/ca_db/serial");
+    (void)rc;
+    ASSERT_EQ(mtls_gen_ca(CRL_DIR "/ca.pem", CRL_DIR "/ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(CRL_DIR "/ca.pem", CRL_DIR "/ca.key",
+                                CRL_DIR "/server.pem", CRL_DIR "/server.key",
+                                "v0547server"), 0);
+
+    /* Write a minimal openssl.cnf for the CA database. The CA's
+     * private_key and certificate fields must point at the CA
+     * files so openssl ca can read them. */
+    FILE *cnf = fopen(CRL_DIR "/openssl.cnf", "w");
+    ASSERT_NOT_NULL(cnf);
+    fprintf(cnf,
+        "[ ca ]\n"
+        "default_ca = CMQ_CA\n"
+        "[ CMQ_CA ]\n"
+        "dir = %s/ca_db\n"
+        "database = %s/ca_db/index.txt\n"
+        "serial = %s/ca_db/serial\n"
+        "default_md = sha256\n"
+        "policy = CMQ_CA_POLICY\n"
+        "crl = %s/ca_db/crl.pem\n"
+        "crlnumber = %s/ca_db/crlnumber\n"
+        "private_key = %s/ca.key\n"
+        "certificate = %s/ca.pem\n"
+        "[ CMQ_CA_POLICY ]\n"
+        "commonName = supplied\n",
+        CRL_DIR, CRL_DIR, CRL_DIR, CRL_DIR, CRL_DIR,
+        CRL_DIR, CRL_DIR);
+    fclose(cnf);
+    /* Initialize crlnumber. */
+    FILE *fn = fopen(CRL_DIR "/ca_db/crlnumber", "w");
+    ASSERT_NOT_NULL(fn);
+    fprintf(fn, "01\n");
+    fclose(fn);
+
+    /* Generate the client cert WITH a CDP extension pointing at
+     * the CRL file path we'll generate next. The CDP must point
+     * at a real path; OpenSSL silently skips CRL check if the
+     * URI is unreachable. */
+    char crl_path[1024];
+    snprintf(crl_path, sizeof(crl_path), "%s/crl.pem", CRL_DIR);
+    ASSERT_EQ(mtls_gen_signed_with_cdp(CRL_DIR "/ca.pem", CRL_DIR "/ca.key",
+                                         CRL_DIR "/client.pem", CRL_DIR "/client.key",
+                                         "v0547client", crl_path), 0);
+
+    /* Generate a CRL that revokes client.pem. The CRL generation
+     * sequence must be: (1) empty CRL, (2) revoke, (3) re-emit CRL
+     * with the revocation in it. Doing -gencrl -revoke in a single
+     * invocation doesn't include the new revocation in the
+     * emitted CRL (observed quirk of openssl ca). */
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "openssl ca -config %s/openssl.cnf -gencrl -crldays 1 -out %s/crl.pem.tmp 2>/dev/null",
+        CRL_DIR, CRL_DIR);
+    ASSERT_EQ(crl_run(cmd), 0);
+    system("rm -f " CRL_DIR "/crl.pem.tmp");
+    snprintf(cmd, sizeof(cmd),
+        "openssl ca -config %s/openssl.cnf -revoke %s/client.pem 2>/dev/null",
+        CRL_DIR, CRL_DIR);
+    ASSERT_EQ(crl_run(cmd), 0);
+    snprintf(cmd, sizeof(cmd),
+        "openssl ca -config %s/openssl.cnf -gencrl -crldays 1 -out %s/crl.pem 2>/dev/null",
+        CRL_DIR, CRL_DIR);
+    ASSERT_EQ(crl_run(cmd), 0);
+
+    /* Sanity: CRL exists. */
+    struct stat st;
+    ASSERT_EQ(stat(CRL_DIR "/crl.pem", &st), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25521;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = CRL_DIR "/server.pem";
+    cfg.tls_key = CRL_DIR "/server.key";
+    cfg.tls_ca = CRL_DIR "/ca.pem";
+    cfg.tls_crl = CRL_DIR "/crl.pem";  /* v0.5.47: CRL file. */
+    cfg.tls_verify_peer = 1;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Client presents the (revoked) cert. Server must reject. */
+    int cfd = open_tcp(25521);
+    ASSERT(cfd >= 0);
+    int rc_hs = drive_handshake_with_client_cert(cfd,
+        CRL_DIR "/ca.pem",
+        CRL_DIR "/client.pem",
+        CRL_DIR "/client.key");
+    if (rc_hs == 1) {
+        fprintf(stderr, "v0.5.47: revoked cert was accepted (BUG)\n");
+    }
+    ASSERT(rc_hs != 1);  /* must fail: client cert is revoked */
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    rc = system("rm -rf " CRL_DIR); (void)rc;
 }
 
 TEST_MAIN()

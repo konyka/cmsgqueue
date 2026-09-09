@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.5.47 - 2026-09-05
+
+### Fixed
+- **CRL (Certificate Revocation List) was silently bypassed**
+  (`src/enterprise/cmq_tls.c:166-184`). The CRL was loaded into
+  the SSL_CTX's X509_STORE via `X509_STORE_add_crl`, but the
+  verifier never consulted it because
+  `X509_V_FLAG_CRL_CHECK` was never set on the store. A
+  "loaded" CRL was a silent no-op identical in severity to
+  the v0.5.46 mTLS bypass.
+
+  Fixed by setting both flags:
+  ```c
+  X509_STORE_set_flags(store,
+      X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
+  ```
+
+### Added
+- **`cmq_config_t.tls_crl` config field** (and
+  `cmq_listener.tls_crl` for per-listener). Wires
+  `cmq_tls_set_crl` through `cmq_server_create` for both
+  slot 0 and per-listener slots. Without this field the
+  CRL API was unreachable from the public config since
+  v0.5.2.
+- **`tests/test_tls_e2e_handshake.c::mtls_revoked_client_rejected`**
+  — first end-to-end CRL test. Generates a CA + server +
+  client cert (with CDP extension pointing at the CRL
+  path), runs the three-step OpenSSL CRL sequence
+  (empty CRL → revoke → re-emit CRL), configures
+  `cmq_server` with `tls_crl`, and asserts the server
+  rejects the revoked client during the mTLS handshake.
+- **`docs/features/tls-crl-revocation.md`** — feature doc
+  including the CDP requirement that took substantial
+  debugging to discover (a cert without CDP is silently
+  accepted even with `X509_V_FLAG_CRL_CHECK` set).
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` +
+  `test_bench_regression`): 89/89 pass.
+- Bench: ~32K msg/s end-to-end, p99 inter-arrival 99.0 µs.
+
+### Caveats
+- TLS 1.3 mTLS still requires the v0.5.46 TLS 1.2 cap (TLS 1.3
+  moves cert verification to post-handshake; without the
+  cap, an unauthenticated TLS 1.3 client may be admitted
+  before verification fires). CRL rejection works on
+  TLS 1.2 mTLS only.
+- Production deployments must issue client certs with a
+  `crlDistributionPoints` extension pointing at the CRL URI.
+  Certs without CDP bypass CRL check silently.
+
+### Deferred to v0.5.48+
+- TLS 1.3 mTLS via client-cert-engine API (lift v0.5.46 cap).
+- OCSP stapling as an alternative to CRL.
+
 ## 0.5.46 - 2026-09-05
 
 ### Fixed

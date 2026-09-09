@@ -95,6 +95,7 @@ typedef struct cmq_config {
     const char *tls_key;
     const char *tls_ca;       /* P1: CA bundle for client cert verification. */
     int tls_verify_peer;     /* P1: 1 = require + verify client certs. */
+    const char *tls_crl;      /* v0.5.47: CRL file for client cert revocation check. NULL disables. */
     /* P2 (v0.5.2): per-listener config slots. Slot 0 mirrors the
      * legacy tls_cert/tls_key/tls_ca fields above for back-compat.
      * Slots 1..3 are reserved for future multi-listener support. */
@@ -103,6 +104,7 @@ typedef struct cmq_config {
         const char *tls_key;
         const char *tls_ca;
         int tls_verify_peer;
+        const char *tls_crl; /* v0.5.47: per-listener CRL. */
     } listeners[4];
     int listener_count;
     int max_connects_per_sec;  /* F10: per-IP connect rate cap; 0=disabled */
