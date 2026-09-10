@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.52 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::concurrent_handshakes`** —
+  defensive test for the v0.5.45 handshake-resume fix under
+  concurrency. Runs `cmq_server` with `num_threads=4` and
+  spawns 8 simultaneous client threads, each driving a full
+  TLS handshake against the server. Asserts all 8 handshakes
+  succeed. Guards against future regressions that could mix
+  up SSL state across concurrent handshakes.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  91/91 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.53+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.51 - 2026-09-05
 
 ### Added

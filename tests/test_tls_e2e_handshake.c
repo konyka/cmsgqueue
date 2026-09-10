@@ -668,4 +668,77 @@ TEST(tls_e2e_handshake, garbage_tls_record) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 7 (v0.5.52): concurrent TLS handshakes ----------
+ *
+ * Defensive test for the v0.5.45 handshake-resume fix under
+ * concurrency. Runs cmq_server with num_threads=4 and drives
+ * 8 simultaneous TLS handshakes. The v0.5.45 read-path resume
+ * is per-client (each client has its own cmq_tls_session_t),
+ * so the worker thread driving one client's handshake must
+ * not interfere with another client's handshake state.
+ *
+ * Without proper per-session isolation, a race between the
+ * resume path and concurrent threads could mix up SSL state,
+ * corrupt the handshake, or cause one client's handshake to
+ * stall another.
+ *
+ * The test asserts: all 8 handshakes complete with rc=1.
+ */
+typedef struct {
+    int port;
+    int idx;
+    int rc;
+} v0552_arg_t;
+
+static void *v0552_client_thread(void *arg) {
+    v0552_arg_t *a = arg;
+    int fd = open_tcp(a->port);
+    if (fd < 0) { a->rc = -1; return NULL; }
+    a->rc = drive_handshake(fd, TLS_DIR "/cert.pem");
+    close(fd);
+    return NULL;
+}
+
+TEST(tls_e2e_handshake, concurrent_handshakes) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0552server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 4;  /* multi-thread mode */
+    cfg.host = "127.0.0.1";
+    cfg.port = 25524;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Spawn 8 concurrent client threads, each does a full TLS
+     * handshake against the server. */
+    enum { N_CLIENTS = 8 };
+    pthread_t c_tids[N_CLIENTS];
+    v0552_arg_t args[N_CLIENTS];
+    for (int i = 0; i < N_CLIENTS; i++) {
+        args[i].port = 25524;
+        args[i].idx = i;
+        args[i].rc = 0;
+        ASSERT_EQ(pthread_create(&c_tids[i], NULL,
+                                   v0552_client_thread, &args[i]), 0);
+    }
+    for (int i = 0; i < N_CLIENTS; i++) {
+        pthread_join(c_tids[i], NULL);
+        ASSERT_EQ(args[i].rc, 1);  /* each handshake must succeed */
+    }
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
