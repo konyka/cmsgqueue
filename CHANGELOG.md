@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.53 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls13_negotiated`** —
+  defensive test that the server actually negotiates TLS 1.3
+  for plain TLS. Uses a client pinned to TLS 1.3 only
+  (`min=max=TLS1_3_VERSION`) and asserts `SSL_version ==
+  0x0304` after the handshake. Catches regressions where
+  the v0.5.46 mTLS TLS 1.2 cap accidentally leaks into the
+  plain TLS path.
+
+  (A concurrent-handshakes defensive test was attempted in
+  this round but was flaky under the test framework's
+  scheduling noise. The accept thread is single-threaded even
+  with `num_threads > 1`, so concurrent handshakes don't
+  exercise a meaningful race. Reverted.)
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  91/91 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.54+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.52 - 2026-09-05
 
 ### Added

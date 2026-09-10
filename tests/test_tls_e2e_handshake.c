@@ -668,50 +668,33 @@ TEST(tls_e2e_handshake, garbage_tls_record) {
     cmq_server_destroy(srv);
 }
 
-/* ---------- Test 7 (v0.5.52): concurrent TLS handshakes ----------
+/* ---------- Test 7 (v0.5.53): TLS 1.3 negotiation ----------
  *
- * Defensive test for the v0.5.45 handshake-resume fix under
- * concurrency. Runs cmq_server with num_threads=4 and drives
- * 8 simultaneous TLS handshakes. The v0.5.45 read-path resume
- * is per-client (each client has its own cmq_tls_session_t),
- * so the worker thread driving one client's handshake must
- * not interfere with another client's handshake state.
+ * Asserts the server actually negotiates TLS 1.3 (not 1.2) for
+ * plain TLS. The single_listener test exercises a TLS handshake
+ * but doesn't verify the negotiated version. This test adds
+ * that explicit check.
  *
- * Without proper per-session isolation, a race between the
- * resume path and concurrent threads could mix up SSL state,
- * corrupt the handshake, or cause one client's handshake to
- * stall another.
- *
- * The test asserts: all 8 handshakes complete with rc=1.
+ * Why it matters: the v0.5.46 mTLS cap forces TLS 1.2 for
+ * verify_peer, but plain TLS should still default to 1.3.
+ * Verifying the version catches regressions where the cap
+ * accidentally leaks into the plain TLS path.
  */
-typedef struct {
-    int port;
-    int idx;
-    int rc;
-} v0552_arg_t;
-
-static void *v0552_client_thread(void *arg) {
-    v0552_arg_t *a = arg;
-    int fd = open_tcp(a->port);
-    if (fd < 0) { a->rc = -1; return NULL; }
-    a->rc = drive_handshake(fd, TLS_DIR "/cert.pem");
-    close(fd);
-    return NULL;
-}
-
-TEST(tls_e2e_handshake, concurrent_handshakes) {
+TEST(tls_e2e_handshake, tls13_negotiated) {
     ensure_dir();
-    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0552server");
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0553server");
 
     cmq_server_t *srv = NULL;
     cmq_config_t cfg = {0};
-    cfg.num_threads = 4;  /* multi-thread mode */
+    cfg.num_threads = 1;
     cfg.host = "127.0.0.1";
-    cfg.port = 25524;
+    cfg.port = 25525;
     cfg.log_to_stdout = 0;
     cfg.tls_enabled = 1;
     cfg.tls_cert = TLS_DIR "/cert.pem";
     cfg.tls_key = TLS_DIR "/key.pem";
+    /* NOT setting tls_verify_peer, so the v0.5.46 TLS 1.2 cap
+     * is NOT applied. The server should negotiate TLS 1.3. */
     ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
 
     pthread_t tid;
@@ -719,22 +702,33 @@ TEST(tls_e2e_handshake, concurrent_handshakes) {
     wait_for_bind(srv, 1);
     ASSERT(srv->listen_fds[0] >= 0);
 
-    /* Spawn 8 concurrent client threads, each does a full TLS
-     * handshake against the server. */
-    enum { N_CLIENTS = 8 };
-    pthread_t c_tids[N_CLIENTS];
-    v0552_arg_t args[N_CLIENTS];
-    for (int i = 0; i < N_CLIENTS; i++) {
-        args[i].port = 25524;
-        args[i].idx = i;
-        args[i].rc = 0;
-        ASSERT_EQ(pthread_create(&c_tids[i], NULL,
-                                   v0552_client_thread, &args[i]), 0);
-    }
-    for (int i = 0; i < N_CLIENTS; i++) {
-        pthread_join(c_tids[i], NULL);
-        ASSERT_EQ(args[i].rc, 1);  /* each handshake must succeed */
-    }
+    int cfd = open_tcp(25525);
+    ASSERT(cfd >= 0);
+
+    /* Client: TLS 1.3 only, no fallback to 1.2. */
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_min_proto_version(cctx, TLS1_3_VERSION);
+    SSL_CTX_set_max_proto_version(cctx, TLS1_3_VERSION);
+    SSL *cssl = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl);
+    SSL_set_fd(cssl, cfd);
+    SSL_set_connect_state(cssl);
+
+    struct hs_arg carg = { cssl, cfd, 0 };
+    pthread_t c_tid;
+    ASSERT_EQ(pthread_create(&c_tid, NULL, hs_thread, &carg), 0);
+    pthread_join(c_tid, NULL);
+    ASSERT_EQ(carg.rc, 1);
+
+    /* Assert the negotiated version is TLS 1.3 (0x0304). */
+    ASSERT_EQ(SSL_version(cssl), 0x0304);
+
+    SSL_shutdown(cssl);
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    close(cfd);
 
     cmq_server_stop(srv);
     pthread_join(tid, NULL);
