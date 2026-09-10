@@ -1,4 +1,5 @@
 #include "cmq_info.h"
+#include <arpa/inet.h>
 #include <string.h>
 
 int cmq_info_json_str(const char *s, char *out, size_t cap) {
@@ -23,4 +24,12 @@ int cmq_info_json_str(const char *s, char *out, size_t cap) {
     out[1 + n] = '"';
     out[2 + n] = '\0';
     return 0;
+}
+
+int cmq_info_host_json(const char *host, char *out, size_t cap) {
+    const char *h = (host && host[0]) ? host : "0.0.0.0";
+    struct in_addr a;
+    if (inet_pton(AF_INET, h, &a) != 1)
+        return -1;
+    return cmq_info_json_str(h, out, cap);
 }

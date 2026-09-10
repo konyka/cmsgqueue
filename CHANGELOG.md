@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.175 - 2026-09-10
+
+### Added
+- **Wire INFO host from live config** — the live INFO
+  frame advertises the bind host. Omitted / empty is
+  `0.0.0.0`. Non-IPv4 skips INFO rather than lie.
+
+### Tests
+- `tests/test_inh.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.175.enumeration.md`, `v0.5.175.plan.md`.
+- `docs/features/info-frame.md`.
+- `docs/benchmarks/v05175_{1,2}.txt`.
+
+### Test count
+- 691 tests (was 687 in v0.5.174; +4).
+
 ## 0.5.174 - 2026-09-10
 
 ### Added

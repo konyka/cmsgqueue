@@ -1,0 +1,3 @@
+v0.5.175 bench 1:
+- INFO: one inet_pton + quote per CONNECT.
+- No per-message path.

@@ -5999,12 +5999,17 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
     char ck[16];
     if (cmq_info_json_str("crc32c", ck, sizeof(ck)) != 0)
         return;
+    /* v0.5.175: advertise the live bind host (create default 0.0.0.0). */
+    char hostj[32];
+    if (cmq_info_host_json(srv->config.host, hostj, sizeof(hostj)) != 0)
+        return;
     int info_len = snprintf(info_json, sizeof(info_json),
         "{\"server_id\":\"cmsgsrv\",\"version\":\"0.2.0\",\"proto\":1,"
-        "\"go\":\"20m\",\"host\":\"0.0.0.0\",\"port\":%d,"
+        "\"go\":\"20m\",\"host\":%s,\"port\":%d,"
         "\"max_payload\":%d,\"connections\":%llu,\"subscriptions\":%llu,"
         "\"auth\":%s,\"tls\":%s,\"compression\":\"%s\","
         "\"checksum\":%s,\"headers\":true,\"batch\":true}",
+        hostj,
         (int)srv->config.port,
         (int)srv->config.max_payload_size,
         (unsigned long long)conns,

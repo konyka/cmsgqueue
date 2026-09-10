@@ -12,6 +12,10 @@ extern "C" {
  * NULL out, or overflow fail closed. */
 int cmq_info_json_str(const char *s, char *out, size_t cap);
 
+/* v0.5.175: quote the INFO host. 0 / omitted / empty is
+ * "0.0.0.0". Non-IPv4 fail closed. */
+int cmq_info_host_json(const char *host, char *out, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif
