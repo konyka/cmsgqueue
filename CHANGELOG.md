@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.5.48 - 2026-09-05
+
+### Investigated
+- **TLS 1.3 mTLS post-handshake race condition.** Attempted to
+  lift the v0.5.46 TLS 1.2 cap by wiring the proper TLS 1.3
+  client-cert path:
+  - `cmq_tls_client_hello_cb` — per-SSL `SSL_set_verify` +
+    `SSL_verify_client_post_handshake` to trigger the
+    post-handshake CertificateRequest.
+  - `cmq_tls_info_cb` — watches for `SSL3_AD_HANDSHAKE_FAILURE`
+    / `BAD_CERTIFICATE` / `CERTIFICATE_REVOKED` alerts and marks
+    the session for teardown.
+  - `cmq_tls_flush` — wraps `SSL_write(NULL, 0)` to force
+    OpenSSL to emit pending records (required for the
+    post-handshake CertificateRequest to actually go out).
+  - `cmq_tls_handshake_failed` — accessor for the event loop.
+
+  The full pipeline worked for the rejection cases (unauthenticated
+  client, revoked client cert), but **caused authenticated mTLS
+  clients to be torn down prematurely** after the post-handshake
+  CertificateRequest. Root cause: a race between the v0.5.45
+  read-path resume (drives `SSL_do_handshake` on every EV_READ)
+  and the v0.5.48 `cmq_tls_flush` (drives a write op on every
+  wakeup) interacting with the post-handshake state machine in
+  a way that puts an authenticated connection into an error
+  state.
+
+### Reverted
+- Production code is unchanged from v0.5.47. The v0.5.46 TLS 1.2
+  cap for `verify_peer=1` stays.
+- **No tag push for v0.5.48.** The release is documentation-only
+  and the tag is held locally until the TLS 1.3 mTLS race is
+  resolved in v0.5.49+.
+
+### Deferred to v0.5.49+
+- Resolve the post-handshake race (likely fix: gate the
+  v0.5.45 read-path resume on `!handshake_failed`, OR defer
+  the post-handshake flush until first application write).
+- Consider switching to TLS 1.3-only design with
+  `SSL_CTX_set_client_cert_engine` for explicit cert request.
+
+### Verified
+- `ctest -j1`: 88/88 pass (no production change, all existing
+  tests still green).
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.47 - 2026-09-05
 
 ### Fixed
