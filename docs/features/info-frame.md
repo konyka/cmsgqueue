@@ -57,7 +57,11 @@ PUBLISHes.
 ## Files touched
 
 - `src/server/cmq_server.c` — `send_info_frame` updated.
+- `src/server/cmq_info.c` — `cmq_info_json_str` quotes the
+  checksum token (v0.5.174; the live format had been
+  `"checksum":crc32c` without quotes).
 - `tests/test_info.c` — 3 new tests verifying the JSON shape.
+- `tests/test_inf.c` — quote apply / omitted / empty / reject.
 
 ## Tests
 

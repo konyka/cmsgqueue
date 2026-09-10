@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.174 - 2026-09-10
+
+### Added
+- **Quote INFO checksum JSON** — the live INFO frame
+  emits `"checksum":"crc32c"` so clients can parse the
+  F3 advertisement. The previous format omitted quotes.
+
+### Tests
+- `tests/test_inf.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.174.enumeration.md`, `v0.5.174.plan.md`.
+- `docs/features/info-frame.md`.
+- `docs/benchmarks/v05174_{1,2}.txt`.
+
+### Test count
+- 687 tests (was 683 in v0.5.173; +4).
+
 ## 0.5.173 - 2026-09-09
 
 ### Added

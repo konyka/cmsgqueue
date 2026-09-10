@@ -1,0 +1,2 @@
+v0.5.174 bench 2:
+- test_inf: 4/4 pass (apply, omitted, empty, reject)

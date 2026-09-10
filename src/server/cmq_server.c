@@ -30,6 +30,7 @@
 #include "cmq_js.h"
 #include "cmq_h2.h"
 #include "cmq_tls_session_cache.h"
+#include "cmq_info.h"
 #include <sys/stat.h>
 #include <unistd.h>
 #include <signal.h>
@@ -5994,6 +5995,10 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
      * comma-separated list of strings, matching NATS Server's INFO
      * format. Clients negotiate compression / checksum / TLS by
      * sending a CONNECT with the corresponding flags set. */
+    /* v0.5.174: quote checksum (was unquoted crc32c — invalid JSON). */
+    char ck[16];
+    if (cmq_info_json_str("crc32c", ck, sizeof(ck)) != 0)
+        return;
     int info_len = snprintf(info_json, sizeof(info_json),
         "{\"server_id\":\"cmsgsrv\",\"version\":\"0.2.0\",\"proto\":1,"
         "\"go\":\"20m\",\"host\":\"0.0.0.0\",\"port\":%d,"
@@ -6009,8 +6014,7 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
         (srv->config.tls_enabled && cmq_tls_backend_secure()) ? "true" : "false",
         /* F2 compression: now implemented (BATCH-level zstd). */
         "zstd",
-        /* F3 checksum: now implemented. */
-        "crc32c");
+        ck);
     if (info_len > 0 && (size_t)info_len < sizeof(info_json)) {
         size_t len = cmq_frame_encode(info_buf, sizeof(info_buf), CMQ_OP_INFO, 0,
                                        (const uint8_t *)info_json, (size_t)info_len);
