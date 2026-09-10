@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.51 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::garbage_tls_record`** —
+  defensive test for the v0.5.45 handshake-resume fix. Sends
+  a valid-looking TLS record header with an invalid record
+  type (0xff) to a TLS-enabled server. OpenSSL rejects the
+  record with `SSL_ERROR_SSL`, the server's `cmq_tls_handshake`
+  returns -1, and `client_tls_handshake` destroys the session
+  cleanly. Test asserts the server doesn't hang on the bad fd
+  (same regression-guard pattern as v0.5.50's
+  `mid_handshake_disconnect` but for a different error path).
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  90/90 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.52+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.50 - 2026-09-05
 
 ### Added

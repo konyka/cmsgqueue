@@ -618,4 +618,54 @@ TEST(tls_e2e_handshake, mid_handshake_disconnect) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 6 (v0.5.51): garbage TLS record ----------
+ *
+ * Defensive test for the v0.5.45 handshake-resume fix. A TLS
+ * client sends bytes that look like a valid TLS record header but
+ * contain a bogus record type. OpenSSL's state machine should
+ * reject the record with SSL_ERROR_SSL, the server's
+ * cmq_tls_handshake should return -1, and the server should
+ * tear down the client. Without the v0.5.45 fix, the server
+ * might enter an inconsistent state and spin.
+ */
+TEST(tls_e2e_handshake, garbage_tls_record) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0551server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25523;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Send a valid-looking TLS record header but with an invalid
+     * record type (0xff). OpenSSL rejects unknown record types. */
+    int cfd = open_tcp(25523);
+    ASSERT(cfd >= 0);
+    uint8_t bad[5] = {0xff, 0x03, 0x03, 0x00, 0x01};
+    ssize_t w = write(cfd, bad, sizeof(bad));
+    ASSERT(w == (ssize_t)sizeof(bad));
+    /* Give the server a moment to read and reject. */
+    struct timespec ts = {0, 500000000}; nanosleep(&ts, NULL);
+    close(cfd);
+
+    /* Wait for server to clean up. Same rationale as
+     * mid_handshake_disconnect: without v0.5.45 the server
+     * could hang on the bad fd. */
+    ts.tv_sec = 1; ts.tv_nsec = 0; nanosleep(&ts, NULL);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
