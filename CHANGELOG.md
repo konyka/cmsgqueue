@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.55 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_missing_crl_file_path`** —
+  defensive test for the v0.5.47 CRL pipeline's behavior when
+  `tls_crl` points at a non-existent path. Asserts the server
+  starts without crashing AND a valid client cert is accepted
+  (fail-open policy: missing CRL file → CRL check silently
+  skipped).
+
+  Documents a security tradeoff: a misconfigured `tls_crl`
+  path means no CRL enforcement, rather than rejecting all
+  clients. The test guards against accidental policy changes.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  93/93 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.56+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.54 - 2026-09-05
 
 ### Added

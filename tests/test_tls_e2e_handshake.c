@@ -857,4 +857,72 @@ TEST(tls_e2e_handshake, mtls_crl_not_revoked_accepted) {
     (void)rc2;
 }
 
+/* ---------- Test 9 (v0.5.55): missing CRL file path ----------
+ *
+ * Defensive test: setting `tls_crl` to a non-existent path must
+ * not crash the server. The v0.5.47 code path uses BIO_new_file
+ * which returns NULL on missing file, and the existing code
+ * silently skips CRL loading on NULL. This test asserts:
+ *   1. Server starts without crashing.
+ *   2. mTLS handshake with a valid client cert succeeds (CRL
+ *      check is effectively disabled).
+ *
+ * Why it matters: a misconfigured `tls_crl` path is a security
+ * concern (operators expect CRL enforcement). The production
+ * code currently prefers fail-open (don't reject valid
+ * clients) over fail-closed (reject everything). Documenting
+ * this behavior in a test prevents future "helpful" changes
+ * that might silently flip the policy.
+ */
+TEST(tls_e2e_handshake, mtls_missing_crl_file_path) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    (void)rc;
+    ASSERT_EQ(mtls_gen_ca(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server.pem", MTLS_DIR "/server.key",
+                                "v0555server"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/client.pem", MTLS_DIR "/client.key",
+                                "v0555client"), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25531;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/server.pem";
+    cfg.tls_key = MTLS_DIR "/server.key";
+    cfg.tls_ca = MTLS_DIR "/ca.pem";
+    /* Point at a path that doesn't exist. */
+    cfg.tls_crl = "/tmp/cmq-test-no-such-crl.pem";
+    cfg.tls_verify_peer = 1;
+    /* Server creation must succeed (no crash). */
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Connect with a valid client cert. Should succeed because
+     * the CRL is silently ignored (BIO_new_file returned NULL). */
+    int cfd = open_tcp(25531);
+    ASSERT(cfd >= 0);
+    int rc_hs = drive_handshake_with_client_cert(cfd,
+        MTLS_DIR "/ca.pem",
+        MTLS_DIR "/client.pem",
+        MTLS_DIR "/client.key");
+    ASSERT_EQ(rc_hs, 1);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    int rc2 __attribute__((unused)) = system("rm -rf " MTLS_DIR);
+    (void)rc2;
+}
+
 TEST_MAIN()
