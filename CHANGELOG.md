@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.50 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mid_handshake_disconnect`** —
+  defensive test for the v0.5.45 TLS handshake resume fix.
+  Connects to the server, sends a partial ClientHello, closes
+  the socket abruptly. Asserts the server's event loop detects
+  the closed fd (via `cmq_tls_handshake → SSL_do_handshake →
+  SSL_ERROR_SYSCALL → -1`) and tears down the client cleanly
+  without blocking `cmq_server_stop` / `pthread_join`.
+
+  Regression guard against future changes that could re-introduce
+  the v0.5.45 bug (or a variant where the server spins on a
+  dead fd instead of detecting the closed state).
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  89/89 pass.
+- Bench: ~32K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.51+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests around concurrent TLS handshakes.
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.49 - 2026-09-05
 
 ### Investigated

@@ -554,4 +554,68 @@ TEST(tls_e2e_handshake, mtls_revoked_client_rejected) {
     rc = system("rm -rf " CRL_DIR); (void)rc;
 }
 
+/* ---------- Test 5 (v0.5.50): mid-handshake disconnect ----------
+ *
+ * Defensive test for the v0.5.45 handshake-resume fix. The server
+ * accepts a TCP connection, the TLS handshake begins, and the
+ * client disconnects before completing. The server must not spin
+ * in cmq_tls_handshake; it must detect the closed fd and tear
+ * down the client cleanly. Before v0.5.45, the bug would have
+ * been that the handshake never returned an error (the v0.5.45
+ * fix made SSL_do_handshake return -1 on a closed fd via the
+ * path that calls SSL_read → returns SSL_ERROR_SYSCALL → -1).
+ */
+TEST(tls_e2e_handshake, mid_handshake_disconnect) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0550server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25522;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Connect to the server, send a few bytes of ClientHello, then
+     * close the socket mid-handshake. The server should detect the
+     * EOF and tear down the client. We use a plain (non-TLS) write
+     * — enough bytes to start the handshake on the server side
+     * but invalid enough that the server keeps trying to read more. */
+    int cfd = open_tcp(25522);
+    ASSERT(cfd >= 0);
+    /* Send a partial ClientHello: TLS record header (0x16 = handshake,
+     * version 0x0303 = TLS 1.2, length 0x0004) + 4 bytes of garbage.
+     * This is enough to start the handshake but won't complete. */
+    uint8_t partial[9] = {0x16, 0x03, 0x03, 0x00, 0x04, 0xaa, 0xbb, 0xcc, 0xdd};
+    ssize_t w = write(cfd, partial, sizeof(partial));
+    ASSERT(w == (ssize_t)sizeof(partial));
+    /* Give the server a moment to read the partial. */
+    struct timespec ts = {0, 200000000}; nanosleep(&ts, NULL);
+    /* Close the socket abruptly. The server should detect EOF on
+     * its next EV_READ and call cmq_tls_handshake → SSL_do_handshake
+     * → returns -1 (SSL_ERROR_SYSCALL) → client_teardown. */
+    close(cfd);
+
+    /* Wait for the server to detect and clean up. Without this
+     * defensive test, a server that spun in cmq_tls_handshake
+     * would never exit cmq_server_run. */
+    ts.tv_sec = 1; ts.tv_nsec = 0; nanosleep(&ts, NULL);
+
+    /* Stop the server. If the server is stuck on a dead client
+     * fd, cmq_server_stop would hang on pthread_join. The 1-second
+     * wait above should have given it enough time to clean up. */
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
