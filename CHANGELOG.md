@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.49 - 2026-09-05
+
+### Investigated
+- **TLS 1.3 mTLS second attempt.** v0.5.48 left a race condition
+  where authenticated mTLS clients were torn down prematurely.
+  v0.5.49 tried a tighter design:
+  - `handshake_flushed` guard on `cmq_tls_session_t` ensures
+    `SSL_write(NULL, 0)` fires at most once per session.
+  - Changed `X509_V_FLAG_CRL_CHECK_ALL` to `CRL_CHECK` to
+    avoid rejecting valid certs without CDP (the v0.5.48
+    cert was rejected with `X509_V_ERR_DIFFERENT_CRL_SCOPE`,
+    OpenSSL issue #23325).
+
+  Result: same race. Authenticated mTLS clients still see
+  unexpected EOF; no clear alert. Root cause not pinpointed
+  (likely OpenSSL 3.5 internal state issue with post-handshake
+  + the v0.5.45 read-path resume interaction).
+
+### Reverted
+- Production code is unchanged from v0.5.47. The v0.5.46 TLS 1.2
+  cap for `verify_peer=1` stays.
+
+### Deferred to v0.5.50+
+- Investigate OpenSSL 3.5 source for the post-handshake state
+  machine.
+- Consider application-layer mTLS verification (read client
+  cert off the wire separately, not via OpenSSL).
+- Or accept TLS 1.2 as the only mTLS path.
+
+### Verified
+- `ctest -j1`: 88/88 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.48 - 2026-09-05
 
 ### Investigated
