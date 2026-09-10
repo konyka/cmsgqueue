@@ -996,4 +996,76 @@ TEST(tls_e2e_handshake, mtls_cross_ca_rejected) {
     rc = system("rm -rf " MTLS_DIR); (void)rc;
 }
 
+/* ---------- Test 11 (v0.5.57): missing CA bundle path ----------
+ *
+ * Defensive test: setting `tls_ca` to a non-existent path while
+ * `tls_verify_peer=1` must not silently accept unauthenticated
+ * clients. The v0.5.46 code calls SSL_CTX_load_verify_locations
+ * with the configured CA path; if the file is missing, OpenSSL
+ * has no trust anchors. With SSL_VERIFY_PEER, every client cert
+ * must fail verification (no valid chain).
+ *
+ * Why it matters: if the CA bundle were silently treated as
+ * "trust any cert" when the path is invalid, the security
+ * boundary collapses. This test verifies the failure mode is
+ * fail-closed (reject all clients) not fail-open (accept all).
+ */
+TEST(tls_e2e_handshake, mtls_missing_ca_bundle) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    (void)rc;
+    ASSERT_EQ(mtls_gen_ca(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server.pem", MTLS_DIR "/server.key",
+                                "v0557server"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/client.pem", MTLS_DIR "/client.key",
+                                "v0557client"), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25533;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/server.pem";
+    cfg.tls_key = MTLS_DIR "/server.key";
+    /* Point at a non-existent CA bundle. */
+    cfg.tls_ca = "/tmp/cmq-test-no-such-ca.pem";
+    cfg.tls_verify_peer = 1;
+    /* Server creation may or may not succeed depending on whether
+     * SSL_CTX_load_verify_locations returns an error. Either way
+     * the mTLS handshake must reject the client cert. */
+    int srv_rc = cmq_server_create(&srv, &cfg);
+    (void)srv_rc;  /* Either success or failure is acceptable */
+
+    if (srv) {
+        pthread_t tid;
+        ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+        wait_for_bind(srv, 1);
+        ASSERT(srv->listen_fds[0] >= 0);
+
+        int cfd = open_tcp(25533);
+        ASSERT(cfd >= 0);
+        int rc_hs = drive_handshake_with_client_cert(cfd,
+            MTLS_DIR "/ca.pem",
+            MTLS_DIR "/client.pem",
+            MTLS_DIR "/client.key");
+        /* With no CA bundle and verify_peer=1, the chain
+         * verification fails → handshake must fail. */
+        if (rc_hs == 1) {
+            fprintf(stderr, "v0.5.57: missing CA bundle accepted client (BUG)\n");
+        }
+        ASSERT(rc_hs != 1);
+        close(cfd);
+
+        cmq_server_stop(srv);
+        pthread_join(tid, NULL);
+        cmq_server_destroy(srv);
+    }
+
+    rc = system("rm -rf " MTLS_DIR); (void)rc;
+}
+
 TEST_MAIN()

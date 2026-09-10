@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.57 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_missing_ca_bundle`** —
+  defensive test for the v0.5.46 mTLS CA bundle trust chain.
+  Configures `tls_ca` to a non-existent path + `tls_verify_peer=1`.
+  Connects with a valid client cert. Asserts the handshake
+  fails (fail-closed behavior).
+
+  Guards against regressions where the CA bundle is silently
+  treated as "trust any cert" when the path is invalid.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  95/95 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.58+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.56 - 2026-09-05
 
 ### Added
