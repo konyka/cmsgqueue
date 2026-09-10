@@ -925,4 +925,75 @@ TEST(tls_e2e_handshake, mtls_missing_crl_file_path) {
     (void)rc2;
 }
 
+/* ---------- Test 10 (v0.5.56): cross-CA rejection ----------
+ *
+ * Defensive test for the v0.5.46 mTLS CA bundle trust chain. The
+ * server is configured with `tls_ca=ServerCA`. A client whose
+ * cert is signed by a DIFFERENT CA (ClientCA) must be rejected
+ * by the server.
+ *
+ * Why it matters: if the CA bundle were silently widened to
+ * "trust any cert" (e.g., by setting tls_ca=NULL), the security
+ * boundary collapses. The v0.5.46 wiring calls
+ * SSL_CTX_load_verify_locations with the configured CA path —
+ * if that path is wrong or the CA bundle is too permissive,
+ * the chain verification might accept a cert that shouldn't
+ * be trusted. This test verifies the chain check actually
+ * consults the CA bundle.
+ */
+TEST(tls_e2e_handshake, mtls_cross_ca_rejected) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    (void)rc;
+    /* Two independent CAs. The server trusts ServerCA. The
+     * client presents a cert signed by ClientCA. */
+    ASSERT_EQ(mtls_gen_ca(MTLS_DIR "/server_ca.pem", MTLS_DIR "/server_ca.key"), 0);
+    ASSERT_EQ(mtls_gen_ca(MTLS_DIR "/client_ca.pem", MTLS_DIR "/client_ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/server_ca.pem", MTLS_DIR "/server_ca.key",
+                                MTLS_DIR "/server.pem", MTLS_DIR "/server.key",
+                                "v0556server"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/client_ca.pem", MTLS_DIR "/client_ca.key",
+                                MTLS_DIR "/client.pem", MTLS_DIR "/client.key",
+                                "v0556client"), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25532;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/server.pem";
+    cfg.tls_key = MTLS_DIR "/server.key";
+    /* Trust the SERVER's CA only — the client's CA is untrusted. */
+    cfg.tls_ca = MTLS_DIR "/server_ca.pem";
+    cfg.tls_verify_peer = 1;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Connect with a client cert signed by ClientCA. The client's
+     * own CA bundle trusts ClientCA, but the server's CA bundle
+     * does NOT trust it. The handshake must fail. */
+    int cfd = open_tcp(25532);
+    ASSERT(cfd >= 0);
+    int rc_hs = drive_handshake_with_client_cert(cfd,
+        MTLS_DIR "/client_ca.pem",
+        MTLS_DIR "/client.pem",
+        MTLS_DIR "/client.key");
+    if (rc_hs == 1) {
+        fprintf(stderr, "v0.5.56: cross-CA client ACCEPTED (BUG)\n");
+    }
+    ASSERT(rc_hs != 1);  /* untrusted CA → must fail */
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    rc = system("rm -rf " MTLS_DIR); (void)rc;
+}
+
 TEST_MAIN()

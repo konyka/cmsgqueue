@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.56 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_cross_ca_rejected`** —
+  defensive test for the v0.5.46 mTLS CA bundle trust chain.
+  Generates two independent CAs (ServerCA, ClientCA). Configures
+  `cmq_server` to trust ServerCA only. Connects with a client
+  cert signed by ClientCA. Asserts the handshake fails.
+
+  Guards against regressions where the CA bundle is silently
+  widened (e.g., `tls_ca=NULL` or wrong file) and the chain
+  check stops actually filtering untrusted certs.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  94/94 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.57+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.55 - 2026-09-05
 
 ### Added
