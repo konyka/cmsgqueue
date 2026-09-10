@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.54 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_crl_not_revoked_accepted`** —
+  defensive test for the common case of CRL verification: a
+  client whose cert is NOT in the CRL must still be accepted.
+  Guards against the OpenSSL #23325 scope-matching bug class
+  where valid clients are falsely rejected.
+
+  The test generates two client certs (one revoked, one not,
+  both with CDP extensions), runs the standard 3-step CRL
+  generation, configures `cmq_server` with `tls_crl`, and
+  verifies the non-revoked client connects successfully.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  92/92 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.55+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.53 - 2026-09-05
 
 ### Added

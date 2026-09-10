@@ -735,4 +735,126 @@ TEST(tls_e2e_handshake, tls13_negotiated) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 8 (v0.5.54): CRL with non-revoked client ----------
+ *
+ * The v0.5.47 test covers "CRL configured, client IS revoked →
+ * rejected". This test covers the COMMON case: "CRL configured,
+ * client NOT revoked → accepted". The CRL has someone else's
+ * cert revoked, but the connecting client is in the clear.
+ *
+ * Why it matters: a regression in the CRL scope-matching code
+ * could falsely reject valid clients when a CRL is loaded.
+ * The OpenSSL issue #23325 documented a scope-matching bug
+ * where certs without CDP were falsely rejected with
+ * X509_V_ERR_DIFFERENT_CRL_SCOPE (44). The v0.5.49 fix
+ * reverted to CRL_CHECK (leaf-only) to mitigate this. This
+ * test ensures the common-case path keeps working: a client
+ * with CDP, no serial match in the CRL, handshake succeeds.
+ */
+TEST(tls_e2e_handshake, mtls_crl_not_revoked_accepted) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " CRL_DIR " && mkdir -p " CRL_DIR
+        " && mkdir -p " CRL_DIR "/ca_db"
+        " && touch " CRL_DIR "/ca_db/index.txt"
+        " && echo '01' > " CRL_DIR "/ca_db/serial");
+    (void)rc;
+    ASSERT_EQ(mtls_gen_ca(CRL_DIR "/ca.pem", CRL_DIR "/ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(CRL_DIR "/ca.pem", CRL_DIR "/ca.key",
+                                CRL_DIR "/server.pem", CRL_DIR "/server.key",
+                                "v0554server"), 0);
+
+    /* Two client certs: one WILL be revoked (other_client),
+     * one WILL stay valid (our_client). Both with CDP. */
+    FILE *cnf = fopen(CRL_DIR "/openssl.cnf", "w");
+    ASSERT_NOT_NULL(cnf);
+    fprintf(cnf,
+        "[ ca ]\n"
+        "default_ca = CMQ_CA\n"
+        "[ CMQ_CA ]\n"
+        "dir = %s/ca_db\n"
+        "database = %s/ca_db/index.txt\n"
+        "serial = %s/ca_db/serial\n"
+        "default_md = sha256\n"
+        "policy = CMQ_CA_POLICY\n"
+        "crl = %s/ca_db/crl.pem\n"
+        "crlnumber = %s/ca_db/crlnumber\n"
+        "private_key = %s/ca.key\n"
+        "certificate = %s/ca.pem\n"
+        "[ CMQ_CA_POLICY ]\n"
+        "commonName = supplied\n",
+        CRL_DIR, CRL_DIR, CRL_DIR, CRL_DIR, CRL_DIR,
+        CRL_DIR, CRL_DIR);
+    fclose(cnf);
+    FILE *fn = fopen(CRL_DIR "/ca_db/crlnumber", "w");
+    ASSERT_NOT_NULL(fn);
+    fprintf(fn, "01\n");
+    fclose(fn);
+
+    char crl_path[1024];
+    snprintf(crl_path, sizeof(crl_path), "%s/crl.pem", CRL_DIR);
+    ASSERT_EQ(mtls_gen_signed_with_cdp(CRL_DIR "/ca.pem", CRL_DIR "/ca.key",
+                                         CRL_DIR "/our_client.pem",
+                                         CRL_DIR "/our_client.key",
+                                         "v0554our", crl_path), 0);
+    ASSERT_EQ(mtls_gen_signed_with_cdp(CRL_DIR "/ca.pem", CRL_DIR "/ca.key",
+                                         CRL_DIR "/other_client.pem",
+                                         CRL_DIR "/other_client.key",
+                                         "v0554other", crl_path), 0);
+
+    /* Three-step CRL generation: empty → revoke other_client →
+     * re-emit. our_client is NOT revoked. */
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "openssl ca -config %s/openssl.cnf -gencrl -crldays 1 -out %s/crl.pem.tmp 2>/dev/null",
+        CRL_DIR, CRL_DIR);
+    ASSERT_EQ(crl_run(cmd), 0);
+    system("rm -f " CRL_DIR "/crl.pem.tmp");
+    snprintf(cmd, sizeof(cmd),
+        "openssl ca -config %s/openssl.cnf -revoke %s/other_client.pem 2>/dev/null",
+        CRL_DIR, CRL_DIR);
+    ASSERT_EQ(crl_run(cmd), 0);
+    snprintf(cmd, sizeof(cmd),
+        "openssl ca -config %s/openssl.cnf -gencrl -crldays 1 -out %s/crl.pem 2>/dev/null",
+        CRL_DIR, CRL_DIR);
+    ASSERT_EQ(crl_run(cmd), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25530;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = CRL_DIR "/server.pem";
+    cfg.tls_key = CRL_DIR "/server.key";
+    cfg.tls_ca = CRL_DIR "/ca.pem";
+    cfg.tls_crl = CRL_DIR "/crl.pem";
+    cfg.tls_verify_peer = 1;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Connect with the NON-revoked client. Handshake must succeed. */
+    int cfd = open_tcp(25530);
+    ASSERT(cfd >= 0);
+    int rc_hs = drive_handshake_with_client_cert(cfd,
+        CRL_DIR "/ca.pem",
+        CRL_DIR "/our_client.pem",
+        CRL_DIR "/our_client.key");
+    if (rc_hs != 1) {
+        fprintf(stderr, "v0.5.54: non-revoked client rejected (BUG)\n");
+    }
+    ASSERT_EQ(rc_hs, 1);  /* NOT in CRL → must succeed */
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    int rc2 __attribute__((unused)) = system("rm -rf " CRL_DIR);
+    (void)rc2;
+}
+
 TEST_MAIN()
