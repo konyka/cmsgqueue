@@ -6003,12 +6003,18 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
     char hostj[32];
     if (cmq_info_host_json(srv->config.host, hostj, sizeof(hostj)) != 0)
         return;
+    /* v0.5.176: advertise cluster_node_id (omitted keeps cmsgsrv). */
+    char sid[32];
+    if (cmq_info_server_id_json(srv->config.cluster_node_id, sid,
+                               sizeof(sid)) != 0)
+        return;
     int info_len = snprintf(info_json, sizeof(info_json),
-        "{\"server_id\":\"cmsgsrv\",\"version\":\"0.2.0\",\"proto\":1,"
+        "{\"server_id\":%s,\"version\":\"0.2.0\",\"proto\":1,"
         "\"go\":\"20m\",\"host\":%s,\"port\":%d,"
         "\"max_payload\":%d,\"connections\":%llu,\"subscriptions\":%llu,"
         "\"auth\":%s,\"tls\":%s,\"compression\":\"%s\","
         "\"checksum\":%s,\"headers\":true,\"batch\":true}",
+        sid,
         hostj,
         (int)srv->config.port,
         (int)srv->config.max_payload_size,

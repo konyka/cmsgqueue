@@ -16,6 +16,10 @@ int cmq_info_json_str(const char *s, char *out, size_t cap);
  * "0.0.0.0". Non-IPv4 fail closed. */
 int cmq_info_host_json(const char *host, char *out, size_t cap);
 
+/* v0.5.176: quote the INFO server_id. 0 / omitted / empty is
+ * "cmsgsrv". Longer than CMQ_NODE_ID_SIZE-1 fail closed. */
+int cmq_info_server_id_json(const char *id, char *out, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif

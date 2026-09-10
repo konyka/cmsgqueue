@@ -58,7 +58,8 @@ PUBLISHes.
 
 - `src/server/cmq_server.c` — `send_info_frame` updated.
   `host` is the live bind address (v0.5.175); omitted /
-  empty is `0.0.0.0`.
+  empty is `0.0.0.0`. `server_id` is `cluster_node_id`
+  when set (v0.5.176); omitted / empty is `cmsgsrv`.
 - `src/server/cmq_info.c` — `cmq_info_json_str` quotes the
   checksum token (v0.5.174; the live format had been
   `"checksum":crc32c` without quotes).

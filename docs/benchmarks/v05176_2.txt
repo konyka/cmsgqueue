@@ -1,0 +1,2 @@
+v0.5.176 bench 2:
+- test_isd: 4/4 pass (apply, omitted, empty, reject)

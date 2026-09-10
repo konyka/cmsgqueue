@@ -1,4 +1,4 @@
-# Remaining unimplemented work (HEAD after v0.5.175)
+# Remaining unimplemented work (HEAD after v0.5.176)
 
 Evidence-checked against `src/include/cmq.h`,
 `src/server/cmq_config.c`, `cmq_server.c` create/reload,
@@ -188,6 +188,7 @@ Intentional / out of scope (not unused create/conf paths):
 | v0.5.173 | verify CHECKSUM on BATCH |
 | v0.5.174 | quote INFO checksum JSON |
 | v0.5.175 | wire INFO host from live config |
+| v0.5.176 | wire INFO server_id from cluster_node_id |
 
 ## Deferred — detailed designs
 
@@ -345,6 +346,7 @@ are live (v0.5.88).
 | verify CHECKSUM on BATCH | shipped v0.5.173 | — |
 | quote INFO checksum JSON | shipped v0.5.174 | — |
 | wire INFO host from live config | shipped v0.5.175 | — |
+| wire INFO server_id from cluster_node_id | shipped v0.5.176 | — |
 | COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
 
 ## Optional follow-ups (not required next cuts)
@@ -415,6 +417,7 @@ are live (v0.5.88).
   CHECKSUM on BATCH shipped v0.5.173.
   INFO checksum JSON quotes shipped v0.5.174.
   INFO host from live config shipped v0.5.175.
+  INFO server_id from cluster_node_id shipped v0.5.176.
   Create-time only: `persist_dir` remount,
   WAL replay, `h2_port` / slot-0 rebind, route redial,
   extra-listener rebind.

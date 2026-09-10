@@ -1,0 +1,3 @@
+v0.5.176 bench 1:
+- INFO: one strnlen + quote per CONNECT.
+- No per-message path.

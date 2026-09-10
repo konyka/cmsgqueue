@@ -1,4 +1,5 @@
 #include "cmq_info.h"
+#include "cmq_cluster.h"
 #include <arpa/inet.h>
 #include <string.h>
 
@@ -32,4 +33,11 @@ int cmq_info_host_json(const char *host, char *out, size_t cap) {
     if (inet_pton(AF_INET, h, &a) != 1)
         return -1;
     return cmq_info_json_str(h, out, cap);
+}
+
+int cmq_info_server_id_json(const char *id, char *out, size_t cap) {
+    const char *s = (id && id[0]) ? id : "cmsgsrv";
+    if (strnlen(s, CMQ_NODE_ID_SIZE) >= CMQ_NODE_ID_SIZE)
+        return -1;
+    return cmq_info_json_str(s, out, cap);
 }

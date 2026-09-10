@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.176 - 2026-09-10
+
+### Added
+- **Wire INFO server_id from cluster_node_id** — the
+  live INFO frame advertises the node id. Omitted /
+  empty stays `cmsgsrv`. Oversize or unsafe tokens
+  skip INFO.
+
+### Tests
+- `tests/test_isd.c` — apply, omitted, empty, reject (+4).
+
+### Documentation
+- `docs/reviews/v0.5.176.enumeration.md`, `v0.5.176.plan.md`.
+- `docs/features/info-frame.md`.
+- `docs/benchmarks/v05176_{1,2}.txt`.
+
+### Test count
+- 695 tests (was 691 in v0.5.175; +4).
+
 ## 0.5.175 - 2026-09-10
 
 ### Added
