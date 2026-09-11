@@ -1246,4 +1246,33 @@ TEST(tls_e2e_handshake, cert_key_mismatch_rejected) {
     ASSERT_NULL(srv);
 }
 
+/* ---------- Test 15 (v0.5.61): tls_enabled without cert ----------
+ *
+ * Defensive test: setting `tls_enabled=1` without `tls_cert` or
+ * `tls_key` must fail at server startup. The
+ * `cmq_server_create` code checks for missing cert/key and
+ * returns `CMQ_ERR_INVALID_ARG`.
+ *
+ * Why it matters: a misconfigured `tls_enabled` (forgotten
+ * cert path) is a common production mistake. The pipeline should
+ * refuse to start in plaintext-with-TLS-claimed mode.
+ */
+TEST(tls_e2e_handshake, tls_enabled_without_cert_rejected) {
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25537;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    /* No tls_cert, no tls_key. */
+    int rc = cmq_server_create(&srv, &cfg);
+    if (rc == CMQ_OK) {
+        cmq_server_destroy(srv);
+        fprintf(stderr, "v0.5.61: TLS without cert accepted (BUG)\n");
+    }
+    ASSERT(rc != CMQ_OK);
+    ASSERT_NULL(srv);
+}
+
 TEST_MAIN()
