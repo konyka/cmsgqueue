@@ -1330,4 +1330,52 @@ TEST(tls_e2e_handshake, tls_enabled_without_cert_rejected) {
     ASSERT_NULL(srv);
 }
 
+/* ---------- Test 17 (v0.5.63): client trusts server cert, not CA ----------
+ *
+ * Defensive test: a client that trusts the server's CERT
+ * directly (not the issuer CA) must successfully handshake.
+ * This is the common operational case where operators
+ * self-sign the server cert and put it directly in the
+ * client's trust store without extracting the CA. The
+ * certificate chain is just the leaf.
+ *
+ * Why it matters: this is a real-world deployment pattern
+ * (especially for self-signed certs). The chain validation
+ * should accept a single-cert "chain" if the cert is in
+ * the trust store directly.
+ */
+TEST(tls_e2e_handshake, client_trusts_server_cert_directly) {
+    ensure_dir();
+    /* Self-signed server cert (no separate CA). */
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0563server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25539;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Connect. Client trusts the server cert directly (not
+     * a separate CA bundle). */
+    int cfd = open_tcp(25539);
+    ASSERT(cfd >= 0);
+    int rc = drive_handshake(cfd, TLS_DIR "/cert.pem");
+    ASSERT_EQ(rc, 1);  /* handshake must succeed */
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
