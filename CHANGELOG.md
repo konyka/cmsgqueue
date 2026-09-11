@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.62 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mid_handshake_tcp_rst`** —
+  defensive test for the RST (vs FIN) close path during TLS
+  handshake. Sets `SO_LINGER={1, 0}` to force TCP RST instead of
+  FIN. Verifies the server cleans up cleanly without hanging
+  on the dead fd.
+
+  Complements the v0.5.50 `mid_handshake_disconnect` (FIN path)
+  by exercising the harder RST path.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  100/100 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.63+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.61 - 2026-09-05
 
 ### Added

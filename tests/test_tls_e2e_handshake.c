@@ -1246,6 +1246,61 @@ TEST(tls_e2e_handshake, cert_key_mismatch_rejected) {
     ASSERT_NULL(srv);
 }
 
+/* ---------- Test 16 (v0.5.62): TCP RST during handshake ----------
+ *
+ * Defensive test: a TLS client connects, sends a partial
+ * ClientHello, then closes the socket via SO_LINGER=0 (which
+ * forces a TCP RST instead of FIN). The server must handle this
+ * without hanging. The v0.5.50 mid_handshake_disconnect test
+ * uses close() which sends FIN; this test exercises the more
+ * aggressive RST path.
+ */
+#ifdef TCP_LINGER_RST
+#include <sys/socket.h>
+#endif
+TEST(tls_e2e_handshake, mid_handshake_tcp_rst) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0562server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25538;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Connect + send partial ClientHello + force RST via
+     * SO_LINGER {l_onoff=1, l_linger=0}. */
+    int cfd = open_tcp(25538);
+    ASSERT(cfd >= 0);
+    int yes = 1;
+    struct linger lin = {1, 0};
+    ASSERT_EQ(setsockopt(cfd, SOL_SOCKET, SO_LINGER, &lin,
+                          sizeof(lin)), 0);
+    (void)yes;
+    uint8_t partial[9] = {0x16, 0x03, 0x03, 0x00, 0x04,
+                           0xaa, 0xbb, 0xcc, 0xdd};
+    ssize_t w = write(cfd, partial, sizeof(partial));
+    ASSERT(w == (ssize_t)sizeof(partial));
+    struct timespec ts = {0, 200000000}; nanosleep(&ts, NULL);
+    /* close() with SO_LINGER=0 sends RST. */
+    close(cfd);
+    ts.tv_sec = 1; ts.tv_nsec = 0; nanosleep(&ts, NULL);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 /* ---------- Test 15 (v0.5.61): tls_enabled without cert ----------
  *
  * Defensive test: setting `tls_enabled=1` without `tls_cert` or
