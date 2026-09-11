@@ -1068,4 +1068,86 @@ TEST(tls_e2e_handshake, mtls_missing_ca_bundle) {
     rc = system("rm -rf " MTLS_DIR); (void)rc;
 }
 
+/* ---------- Test 12 (v0.5.58): mTLS forces TLS 1.2 ----------
+ *
+ * Asserts the v0.5.46 cap behavior: when `tls_verify_peer=1`
+ * is set, the server's SSL_CTX is capped at TLS 1.2 (because
+ * OpenSSL 3.5 + TLS 1.3 silently bypasses
+ * SSL_VERIFY_FAIL_IF_NO_PEER_CERT). A client pinned to TLS 1.3
+ * ONLY must fail to handshake with such a server.
+ *
+ * Why it matters: this locks in the v0.5.46 design decision.
+ * If a future refactor "fixes" TLS 1.3 mTLS (v0.5.48/v0.5.49
+ * race) and removes the cap, this test fails — forcing the
+ * author to update the test along with the fix.
+ */
+TEST(tls_e2e_handshake, mtls_forces_tls12) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    (void)rc;
+    ASSERT_EQ(mtls_gen_ca(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server.pem", MTLS_DIR "/server.key",
+                                "v0558server"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/client.pem", MTLS_DIR "/client.key",
+                                "v0558client"), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25534;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/server.pem";
+    cfg.tls_key = MTLS_DIR "/server.key";
+    cfg.tls_ca = MTLS_DIR "/ca.pem";
+    cfg.tls_verify_peer = 1;  /* triggers v0.5.46 TLS 1.2 cap */
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Connect with a TLS 1.3-only client. The handshake must fail
+     * because the server (with verify_peer=1) caps at TLS 1.2. */
+    int cfd = open_tcp(25534);
+    ASSERT(cfd >= 0);
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, MTLS_DIR "/ca.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+    SSL_CTX_set_min_proto_version(cctx, TLS1_3_VERSION);
+    SSL_CTX_set_max_proto_version(cctx, TLS1_3_VERSION);
+    if (SSL_CTX_use_certificate_file(cctx, MTLS_DIR "/client.pem",
+                                      SSL_FILETYPE_PEM) == 1 &&
+        SSL_CTX_use_PrivateKey_file(cctx, MTLS_DIR "/client.key",
+                                     SSL_FILETYPE_PEM) == 1) {
+        SSL *cssl = SSL_new(cctx);
+        ASSERT_NOT_NULL(cssl);
+        SSL_set_fd(cssl, cfd);
+        SSL_set_connect_state(cssl);
+        struct hs_arg carg = { cssl, cfd, 0 };
+        pthread_t c_tid;
+        ASSERT_EQ(pthread_create(&c_tid, NULL, hs_thread, &carg), 0);
+        pthread_join(c_tid, NULL);
+        /* Handshake must fail (server caps at TLS 1.2). */
+        if (carg.rc == 1) {
+            fprintf(stderr, "v0.5.58: TLS 1.3 mTLS succeeded (CAP LIFTED?)\n");
+        }
+        ASSERT(carg.rc != 1);
+        SSL_shutdown(cssl);
+        SSL_free(cssl);
+    }
+    SSL_CTX_free(cctx);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    rc = system("rm -rf " MTLS_DIR); (void)rc;
+}
+
 TEST_MAIN()

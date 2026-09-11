@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.58 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_forces_tls12`** —
+  tripwire test for the v0.5.46 TLS 1.2 cap. Configures
+  `tls_verify_peer=1` (triggers the cap). Connects with a
+  TLS 1.3-only client. Asserts the handshake fails because
+  the server caps at TLS 1.2.
+
+  If a future refactor "fixes" TLS 1.3 mTLS and removes the
+  cap, this test fails — forcing the author to update the
+  test along with the fix. Locks in the v0.5.46 design
+  boundary until the v0.5.48/v0.5.49 race is resolved.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  96/96 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.59+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.57 - 2026-09-05
 
 ### Added
