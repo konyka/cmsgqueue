@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.60 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::cert_key_mismatch_rejected`** —
+  defensive test for the cert/key pair validation at server
+  startup. Generates two unrelated cert/key pairs. Configures
+  server with mismatched `tls_cert` + `tls_key`. Asserts
+  `cmq_server_create` returns non-OK and the server pointer
+  is NULL.
+
+  Guards against regressions where a cert/key mismatch slips
+  through to first-handshake-time (harder to diagnose).
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  98/98 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.61+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.59 - 2026-09-05
 
 ### Added

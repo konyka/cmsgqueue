@@ -1206,4 +1206,44 @@ TEST(tls_e2e_handshake, idle_tls_client) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 14 (v0.5.60): cert/key mismatch ----------
+ *
+ * Defensive test: passing `tls_cert=A.pem` with `tls_key=B.key`
+ * (different cert) must fail at server startup. The
+ * `cmq_tls_load` function calls `SSL_CTX_check_private_key`
+ * which returns 0 if cert and key don't match. `cmq_server_create`
+ * propagates the error.
+ *
+ * Why it matters: a misconfigured cert/key pair is a common
+ * production mistake. The pipeline should reject this at
+ * startup, not at the first TLS handshake (where the error
+ * is harder to diagnose).
+ */
+TEST(tls_e2e_handshake, cert_key_mismatch_rejected) {
+    ensure_dir();
+    /* Two unrelated cert/key pairs. */
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0560server");
+    gen_cert(TLS_DIR "/other.pem", TLS_DIR "/other.key", "v0560other");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25536;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    /* Mismatch: cert.pem paired with other.key. */
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/other.key";
+    /* cmq_server_create must return non-OK. */
+    int rc = cmq_server_create(&srv, &cfg);
+    if (rc == CMQ_OK) {
+        cmq_server_destroy(srv);
+        fprintf(stderr, "v0.5.60: cert/key mismatch accepted (BUG)\n");
+    }
+    ASSERT(rc != CMQ_OK);
+    /* Server must not be allocated. */
+    ASSERT_NULL(srv);
+}
+
 TEST_MAIN()
