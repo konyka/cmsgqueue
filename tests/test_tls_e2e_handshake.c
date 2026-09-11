@@ -1150,4 +1150,60 @@ TEST(tls_e2e_handshake, mtls_forces_tls12) {
     rc = system("rm -rf " MTLS_DIR); (void)rc;
 }
 
+/* ---------- Test 13 (v0.5.59): idle TLS client (no ClientHello) ----------
+ *
+ * Defensive test: a TCP client connects to a TLS-enabled server
+ * but never sends any data. The server must not spin in
+ * cmq_tls_handshake waiting for a ClientHello that will never
+ * arrive. The cmq_tls_handshake() function returns 0 (WANT_READ)
+ * when waiting, so the server must either timeout or stay
+ * blocked on a poll until the client closes.
+ *
+ * Before v0.5.45, the cmq_tls_handshake call would have failed
+ * (rc == 1 from SSL_do_handshake would have been treated as
+ * failure, returning -1, but SSL_do_handshake with no data
+ * returns WANT_READ = 0, not 1, so the v0.5.45 fix doesn't
+ * affect this path). The risk is that the server leaks the
+ * half-open client fd.
+ *
+ * This test connects, waits a beat, closes. The server should
+ * detect the close cleanly (cmq_tls_handshake returns -1 on EOF).
+ */
+TEST(tls_e2e_handshake, idle_tls_client) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0559server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25535;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Connect but don't send anything. */
+    int cfd = open_tcp(25535);
+    ASSERT(cfd >= 0);
+    /* Wait a beat — server should be waiting for ClientHello. */
+    struct timespec ts = {0, 500000000}; nanosleep(&ts, NULL);
+    /* Close without sending anything. Server must detect and
+     * clean up without hanging. */
+    close(cfd);
+    /* Give server time to detect EOF. */
+    ts.tv_sec = 1; ts.tv_nsec = 0; nanosleep(&ts, NULL);
+
+    /* Server should be clean: stop + join without hanging. */
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

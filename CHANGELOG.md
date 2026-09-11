@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.59 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::idle_tls_client`** —
+  defensive test for half-open TLS connections. A TCP client
+  connects but never sends data (no ClientHello). The server
+  sits in WANT_READ. After the client closes, the server
+  must clean up cleanly. Verifies `cmq_server_stop` +
+  `pthread_join` complete in bounded time (server isn't
+  stuck on a dead fd).
+
+  Guards against regressions in the half-open connection
+  cleanup logic.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  97/97 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.60+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.58 - 2026-09-05
 
 ### Added
