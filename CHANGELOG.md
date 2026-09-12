@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.64 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_self_signed_ca`** —
+  defensive test for the self-signed-CA mTLS deployment pattern
+  where the same file is used for `tls_cert` and `tls_ca`.
+  Verifies the trust chain doesn't accidentally widen when the
+  same self-signed cert is the only trust anchor.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  102/102 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.65+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.63 - 2026-09-05
 
 ### Added

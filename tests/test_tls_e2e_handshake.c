@@ -1378,4 +1378,65 @@ TEST(tls_e2e_handshake, client_trusts_server_cert_directly) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 18 (v0.5.64): mTLS self-signed CA ----------
+ *
+ * Defensive test: the mTLS path with a self-signed cert acting
+ * as both the server cert AND the CA bundle. This is the
+ * simplest self-signed deployment: generate one cert, point
+ * tls_cert + tls_key + tls_ca all at the same file.
+ *
+ * Why it matters: tests 4 (mtls_revoked_client_rejected) and
+ * 8 (mtls_crl_not_revoked_accepted) use a CA-signed chain.
+ * Test 18 verifies the degenerate self-signed-only case
+ * works without explicit CA extraction.
+ */
+TEST(tls_e2e_handshake, mtls_self_signed_ca) {
+    ensure_dir();
+    /* Single self-signed cert used as both server cert and CA. */
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0564server");
+    gen_cert(TLS_DIR "/client.pem", TLS_DIR "/client.key", "v0564client");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25540;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    /* Use the same file as CA bundle. The client's cert is signed
+     * by a DIFFERENT self-signed cert, so this should FAIL — the
+     * CA bundle only trusts the server's cert. */
+    cfg.tls_ca = TLS_DIR "/cert.pem";
+    cfg.tls_verify_peer = 1;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Connect with the client cert. The client trusts server cert
+     * directly (no separate CA). The server only trusts its own
+     * cert as the CA. Client cert is signed by a DIFFERENT CA, so
+     * the server should reject. */
+    int cfd = open_tcp(25540);
+    ASSERT(cfd >= 0);
+    int rc = drive_handshake_with_client_cert(cfd,
+        TLS_DIR "/cert.pem",  /* client trusts server cert */
+        TLS_DIR "/client.pem",
+        TLS_DIR "/client.key");
+    /* Server rejects (different CA); client gets EOF. */
+    if (rc == 1) {
+        fprintf(stderr, "v0.5.64: cross-CA accepted (BUG)\n");
+    }
+    ASSERT(rc != 1);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
