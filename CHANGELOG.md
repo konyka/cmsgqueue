@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.67 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::empty_cert_file_rejected`** —
+  defensive test for an empty (zero-byte) `tls_cert` file.
+  Asserts `cmq_server_create` returns non-OK and server pointer
+  is NULL. Guards against the server crashing or running
+  with an invalid SSL_CTX when given a malformed cert file.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  105/105 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.68+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.66 - 2026-09-05
 
 ### Added

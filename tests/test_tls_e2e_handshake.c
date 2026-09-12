@@ -1563,4 +1563,39 @@ TEST(tls_e2e_handshake, plain_tls_no_client_cert) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 21 (v0.5.67): empty tls_cert file ----------
+ *
+ * Defensive test: `tls_cert` pointing at an empty (zero-byte)
+ * file must fail at server startup, not crash. The
+ * `SSL_CTX_use_certificate_chain_file` call returns 0 on empty
+ * or malformed files; `cmq_server_create` propagates the
+ * failure.
+ */
+TEST(tls_e2e_handshake, empty_cert_file_rejected) {
+    ensure_dir();
+    system("rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    /* Create a zero-byte cert file. */
+    FILE *f = fopen(MTLS_DIR "/empty.pem", "w");
+    ASSERT_NOT_NULL(f);
+    fclose(f);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25543;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/empty.pem";
+    cfg.tls_key = MTLS_DIR "/empty.pem";
+    int rc = cmq_server_create(&srv, &cfg);
+    if (rc == CMQ_OK) {
+        cmq_server_destroy(srv);
+        fprintf(stderr, "v0.5.67: empty cert accepted (BUG)\n");
+    }
+    ASSERT(rc != CMQ_OK);
+    ASSERT_NULL(srv);
+    system("rm -rf " MTLS_DIR);
+}
+
 TEST_MAIN()
