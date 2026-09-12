@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.66 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::plain_tls_no_client_cert`** —
+  sanity test that a plain TLS server accepts a TLS client
+  without a cert. Regression guard against future changes that
+  accidentally enable mTLS by default.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  104/104 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.67+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.65 - 2026-09-05
 
 ### Added

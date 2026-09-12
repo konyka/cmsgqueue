@@ -1523,4 +1523,44 @@ TEST(tls_e2e_handshake, mtls_multi_ca_bundle) {
     rc = system("rm -rf " CRL_DIR); (void)rc;
 }
 
+/* ---------- Test 20 (v0.5.66): plain TLS, no client cert ----------
+ *
+ * Sanity test: a plain TLS server (no tls_verify_peer) accepts
+ * a TLS client that presents no cert. This is the default
+ * OpenSSL behavior but worth testing as a regression guard:
+ * if a future change accidentally enables mTLS by default,
+ * unconfigured clients would be rejected.
+ */
+TEST(tls_e2e_handshake, plain_tls_no_client_cert) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0566server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25542;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Plain TLS client with NO client cert. Handshake must succeed. */
+    int cfd = open_tcp(25542);
+    ASSERT(cfd >= 0);
+    int rc = drive_handshake(cfd, TLS_DIR "/cert.pem");
+    ASSERT_EQ(rc, 1);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
