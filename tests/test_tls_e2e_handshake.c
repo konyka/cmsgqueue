@@ -1439,4 +1439,88 @@ TEST(tls_e2e_handshake, mtls_self_signed_ca) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 19 (v0.5.65): mTLS multi-CA bundle ----------
+ *
+ * Defensive test: the mTLS CA bundle has multiple CAs concatenated
+ * into a single PEM file. OpenSSL's SSL_CTX_load_verify_locations
+ * only loads the FIRST cert in a concatenated PEM (a known
+ * limitation — must use X509_LOOKUP_add_dir or call the
+ * function multiple times for true multi-CA bundles).
+ *
+ * This test verifies the documented behavior: with a
+ * concatenated bundle, only the FIRST CA's clients are
+ * accepted. Good client (signed by ca1, the first CA) succeeds;
+ * bad client (signed by ca2, the second CA) is rejected.
+ */
+TEST(tls_e2e_handshake, mtls_multi_ca_bundle) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " CRL_DIR " && mkdir -p " CRL_DIR);
+    (void)rc;
+    /* Two CAs. */
+    ASSERT_EQ(mtls_gen_ca(CRL_DIR "/ca1.pem", CRL_DIR "/ca1.key"), 0);
+    ASSERT_EQ(mtls_gen_ca(CRL_DIR "/ca2.pem", CRL_DIR "/ca2.key"), 0);
+    /* Server cert signed by ca1. */
+    ASSERT_EQ(mtls_gen_signed(CRL_DIR "/ca1.pem", CRL_DIR "/ca1.key",
+                                CRL_DIR "/server.pem", CRL_DIR "/server.key",
+                                "v0565server"), 0);
+    /* Two clients: one signed by ca1 (trusted via concatenation), one
+     * by ca2 (NOT trusted — only first cert in concatenated PEM is loaded). */
+    ASSERT_EQ(mtls_gen_signed(CRL_DIR "/ca1.pem", CRL_DIR "/ca1.key",
+                                CRL_DIR "/good_client.pem",
+                                CRL_DIR "/good_client.key",
+                                "v0565good"), 0);
+    ASSERT_EQ(mtls_gen_signed(CRL_DIR "/ca2.pem", CRL_DIR "/ca2.key",
+                                CRL_DIR "/bad_client.pem",
+                                CRL_DIR "/bad_client.key",
+                                "v0565bad"), 0);
+    /* Concatenate ca1 + ca2 into a single bundle file. */
+    ASSERT_EQ(system("cat " CRL_DIR "/ca1.pem " CRL_DIR "/ca2.pem " \
+                       "> " CRL_DIR "/bundle.pem"), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25541;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = CRL_DIR "/server.pem";
+    cfg.tls_key = CRL_DIR "/server.key";
+    cfg.tls_ca = CRL_DIR "/bundle.pem";
+    cfg.tls_verify_peer = 1;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Good client (signed by ca1, the FIRST cert in the
+     * concatenated bundle) must succeed. */
+    int cfd_g = open_tcp(25541);
+    ASSERT(cfd_g >= 0);
+    int rc_g = drive_handshake_with_client_cert(cfd_g,
+        CRL_DIR "/ca1.pem",
+        CRL_DIR "/good_client.pem",
+        CRL_DIR "/good_client.key");
+    ASSERT_EQ(rc_g, 1);
+    close(cfd_g);
+
+    /* Bad client (signed by ca2, NOT in the loaded subset of
+     * the concatenated bundle) must fail. */
+    int cfd_b = open_tcp(25541);
+    ASSERT(cfd_b >= 0);
+    int rc_b = drive_handshake_with_client_cert(cfd_b,
+        CRL_DIR "/ca2.pem",
+        CRL_DIR "/bad_client.pem",
+        CRL_DIR "/bad_client.key");
+    ASSERT(rc_b != 1);
+    close(cfd_b);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    rc = system("rm -rf " CRL_DIR); (void)rc;
+}
+
 TEST_MAIN()

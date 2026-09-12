@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.65 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_multi_ca_bundle`** —
+  defensive test for the mTLS CA bundle with multiple CAs
+  concatenated into a single PEM file. Documents the OpenSSL
+  limitation that `SSL_CTX_load_verify_locations` only loads
+  the FIRST cert in a concatenated PEM (production workaround:
+  use `X509_LOOKUP_add_dir` or call the function multiple times).
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  103/103 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.66+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.64 - 2026-09-05
 
 ### Added
