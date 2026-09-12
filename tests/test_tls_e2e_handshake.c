@@ -1598,4 +1598,48 @@ TEST(tls_e2e_handshake, empty_cert_file_rejected) {
     system("rm -rf " MTLS_DIR);
 }
 
+/* ---------- Test 22 (v0.5.68): TLS version 0xFFFF rejected ----------
+ *
+ * Defensive test: a ClientHello with version 0x03 0xFF (an
+ * impossible future TLS version) must be rejected. OpenSSL
+ * returns SSL_ERROR_PROTOCOL_VERSION from SSL_do_handshake,
+ * which cmq_tls_handshake surfaces as -1, triggering
+ * client_teardown.
+ */
+TEST(tls_e2e_handshake, malformed_protocol_version) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0568server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25544;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Send a ClientHello with version 0x03 0xFF. */
+    int cfd = open_tcp(25544);
+    ASSERT(cfd >= 0);
+    uint8_t bad[5] = {0x16, 0x03, 0xFF, 0x00, 0x01};
+    ssize_t w = write(cfd, bad, sizeof(bad));
+    ASSERT(w == (ssize_t)sizeof(bad));
+    struct timespec ts = {0, 500000000}; nanosleep(&ts, NULL);
+    close(cfd);
+
+    /* Server must clean up without hanging. */
+    ts.tv_sec = 1; ts.tv_nsec = 0; nanosleep(&ts, NULL);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

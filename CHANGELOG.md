@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.68 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::malformed_protocol_version`** —
+  defensive test for an impossible TLS protocol version (0x03
+  0xFF). Verifies the server cleans up cleanly when the
+  client sends a malformed ClientHello.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  106/106 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.69+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.67 - 2026-09-05
 
 ### Added
