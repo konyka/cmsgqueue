@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.69 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::client_role_confusion`** —
+  defensive test for the TLS role-confusion attack pattern.
+  Sends a ServerHello (message type 0x02) to a server expecting
+  a ClientHello (message type 0x00). Verifies the server's
+  state machine detects the role mismatch and rejects cleanly.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  107/107 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.70+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.68 - 2026-09-05
 
 ### Added
