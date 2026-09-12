@@ -1755,4 +1755,60 @@ TEST(tls_e2e_handshake, tls12_client_negotiates_down) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 25 (v0.5.71): three listeners ----------
+ *
+ * Sanity test: a TLS server with three listeners (slot 0, 1, 2)
+ * each with its own cert/key. Verifies all three listeners
+ * accept handshakes independently.
+ */
+TEST(tls_e2e_handshake, three_listeners) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    (void)rc;
+    gen_cert(MTLS_DIR "/cert0.pem", MTLS_DIR "/key0.pem", "v0571srv0");
+    gen_cert(MTLS_DIR "/cert1.pem", MTLS_DIR "/key1.pem", "v0571srv1");
+    gen_cert(MTLS_DIR "/cert2.pem", MTLS_DIR "/key2.pem", "v0571srv2");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25547;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/cert0.pem";
+    cfg.tls_key = MTLS_DIR "/key0.pem";
+    cfg.listeners[1].tls_cert = MTLS_DIR "/cert1.pem";
+    cfg.listeners[1].tls_key = MTLS_DIR "/key1.pem";
+    cfg.listeners[2].tls_cert = MTLS_DIR "/cert2.pem";
+    cfg.listeners[2].tls_key = MTLS_DIR "/key2.pem";
+    cfg.listener_count = 3;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 3);
+    ASSERT(srv->listen_fds[0] >= 0);
+    ASSERT(srv->listen_fds[1] >= 0);
+    ASSERT(srv->listen_fds[2] >= 0);
+
+    const char *cert_files[3] = {
+        MTLS_DIR "/cert0.pem",
+        MTLS_DIR "/cert1.pem",
+        MTLS_DIR "/cert2.pem",
+    };
+    for (int port_off = 0; port_off < 3; port_off++) {
+        int cfd = open_tcp(25547 + port_off);
+        ASSERT(cfd >= 0);
+        int rc_hs = drive_handshake(cfd, cert_files[port_off]);
+        ASSERT_EQ(rc_hs, 1);
+        close(cfd);
+    }
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    rc = system("rm -rf " MTLS_DIR); (void)rc;
+}
+
 TEST_MAIN()

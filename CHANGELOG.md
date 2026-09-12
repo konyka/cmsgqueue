@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.71 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::three_listeners`** —
+  sanity test that a TLS server with three listeners
+  (`listener_count=3`) accepts handshakes independently on
+  each. Extends the v0.5.52 multi-listener coverage to three.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  109/109 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.72+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.70 - 2026-09-05
 
 ### Added
