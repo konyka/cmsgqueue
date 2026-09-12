@@ -1811,4 +1811,89 @@ TEST(tls_e2e_handshake, three_listeners) {
     rc = system("rm -rf " MTLS_DIR); (void)rc;
 }
 
+/* ---------- Test 26 (v0.5.72): graceful TLS shutdown ----------
+ *
+ * Regression test: after a complete TLS handshake, the server
+ * must send a TLS close_notify alert before closing the socket.
+ * The client should observe SSL_ERROR_ZERO_RETURN on its next
+ * SSL_read (graceful shutdown). Without close_notify the client
+ * sees an abrupt EOF (read returns 0 without the close_notify
+ * indicator).
+ *
+ * Existing tests cover: handshake, mid-handshake disconnect,
+ * idle TLS client, TCP RST. None exercise the production
+ * graceful-shutdown path where cmq_server_stop is called on
+ * a server with active TLS connections.
+ */
+TEST(tls_e2e_handshake, graceful_shutdown_close_notify) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0572server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25548;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Complete a TLS handshake as the client. */
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+    int cfd = open_tcp(25548);
+    ASSERT(cfd >= 0);
+    SSL *cssl = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl);
+    SSL_set_fd(cssl, cfd);
+    SSL_set_connect_state(cssl);
+    struct hs_arg carg = { cssl, cfd, 0 };
+    pthread_t c_tid;
+    ASSERT_EQ(pthread_create(&c_tid, NULL, hs_thread, &carg), 0);
+    pthread_join(c_tid, NULL);
+    ASSERT_EQ(carg.rc, 1);
+    ASSERT_EQ(SSL_version(cssl), 0x0304);  /* TLS 1.3 negotiated */
+
+    /* Stop the server. The server should send TLS close_notify
+     * to active clients before closing the socket. */
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+
+    /* Drain the client's TLS read. The server should have sent
+     * a close_notify, so we expect either r==0 (clean EOF with
+     * close_notify consumed) OR SSL_ERROR_ZERO_RETURN. Both
+     * indicate the close_notify was sent. A SSL_ERROR_SYSCALL
+     * or unexpected negative would mean abrupt close — the fix
+     * isn't working. */
+    char drain[1];
+    int r = SSL_read(cssl, drain, sizeof(drain));
+    int e = SSL_get_error(cssl, r);
+    int sd = SSL_get_shutdown(cssl);
+    int recv_close_notify = (sd & SSL_RECEIVED_SHUTDOWN) ? 1 : 0;
+    fprintf(stderr, "v0.5.72: SSL_read r=%d e=%d RECV_SHUTDOWN=%d\n",
+            r, e, recv_close_notify);
+    /* Assert the server sent a close_notify (RECV_SHUTDOWN set)
+     * and the client observed a clean close (r==0 OR ZERO_RETURN). */
+    ASSERT(recv_close_notify);
+    ASSERT(r <= 0);
+    ASSERT(e == SSL_ERROR_ZERO_RETURN || e == 0);
+    /* Suppress unused warnings */
+    (void)r; (void)e;
+
+    SSL_shutdown(cssl);
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    close(cfd);
+}
+
 TEST_MAIN()

@@ -584,6 +584,42 @@ void cmq_tls_session_destroy(cmq_tls_session_t *session) {
     free(session);
 }
 
+/* v0.5.72: graceful shutdown — send close_notify and drain the BIO.
+ * Must be called BEFORE the underlying fd is closed, while the
+ * client can still read. Returns 1 on full bidirectional close_notify,
+ * 0 on partial (close_notify sent but peer response missing),
+ * -1 on error. */
+int cmq_tls_session_graceful_shutdown(cmq_tls_session_t *session) {
+    if (!session) return -1;
+#ifdef CMQ_TLS_OPENSSL
+    if (!session->ssl) return -1;
+    if (!session->handshake_done) {
+        /* Handshake never completed — can't exchange close_notify. */
+        return -1;
+    }
+    /* SSL_shutdown sends our close_notify and tries to read peer's.
+     * Loop until both sides have sent close_notify (rc=1) or we
+     * run out of WANT cycles. */
+    int loops = 0;
+    int rc;
+    while (loops < 4) {
+        rc = SSL_shutdown(session->ssl);
+        if (rc == 1) return 1;       /* full bidirectional done */
+        if (rc < 0) return -1;       /* fatal error */
+        /* rc == 0 → WANT_READ or WANT_WRITE; retry once after a poll.
+         * The session's BIO is blocking on the underlying fd, so
+         * SSL_shutdown typically completes both sides in 1-2 calls. */
+        struct timeval tv = {0, 1000}; /* 1ms */
+        select(0, NULL, NULL, NULL, &tv);
+        loops++;
+    }
+    return 0;  /* partial — close_notify sent, peer didn't ack */
+#else
+    (void)session;
+    return -1;
+#endif
+}
+
 int cmq_tls_handshake(cmq_tls_session_t *session) {
     if (!session) return -1;
 #ifndef CMQ_TLS_OPENSSL

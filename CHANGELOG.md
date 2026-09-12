@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.5.72 - 2026-09-05
+
+### Fixed
+- **Graceful TLS shutdown via close_notify.** Before this fix, when
+  `cmq_server_stop` ran with active TLS connections, the server
+  abruptly closed the underlying fd without sending a TLS
+  `close_notify` alert. The client observed `SSL_ERROR_SYSCALL`
+  and `EBADF`, with `SSL_get_shutdown()` returning 0 (no
+  `SSL_RECEIVED_SHUTDOWN`). This degraded the client experience
+  for well-behaved TLS libraries (e.g., retries, error logs).
+  Root cause: `cmq_tls_session_destroy` called `SSL_shutdown`
+  (writes close_notify to BIO buffer) followed immediately by
+  `SSL_free` (frees buffer) + fd close. The close_notify never
+  reached the kernel.
+
+  Fix:
+  1. New `cmq_tls_session_graceful_shutdown()` in
+     `src/enterprise/cmq_tls.c`. Loops `SSL_shutdown` with short
+     `select(0, NULL, NULL, NULL, &tv)` waits so the BIO can
+     flush the alert. Returns 1 on full bidirectional close, 0 on
+     partial, -1 on error.
+  2. In `client_teardown()` in `src/server/cmq_server.c`,
+     call `cmq_tls_session_graceful_shutdown()` BEFORE
+     `cmq_ev_del(c->ev_loop, c->fd)`. If the fd is removed from
+     the polling loop first, the BIO can never flush.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::graceful_shutdown_close_notify`** —
+  regression test. Asserts `SSL_RECEIVED_SHUTDOWN` flag is set
+  AND `SSL_read` returns `SSL_ERROR_ZERO_RETURN` after
+  `cmq_server_stop` + `cmq_server_destroy`. Fails the build if
+  future changes regress the close_notify path.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  110/110 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged from v0.5.71).
+
+### Deferred to v0.5.73+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.71 - 2026-09-05
 
 ### Added

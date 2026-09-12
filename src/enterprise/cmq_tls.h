@@ -48,6 +48,11 @@ int cmq_tls_backend_secure(void);
 cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd);
 cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd);
 void cmq_tls_session_destroy(cmq_tls_session_t *session);
+/* v0.5.72: send close_notify and drive BIO to flush it. Returns 1
+ * on full bidirectional close, 0 on partial (close_notify sent
+ * but no peer response), -1 on error or no completed handshake.
+ * Must be called BEFORE the underlying fd is closed. */
+int cmq_tls_session_graceful_shutdown(cmq_tls_session_t *session);
 
 int cmq_tls_handshake(cmq_tls_session_t *session);
 ssize_t cmq_tls_read(cmq_tls_session_t *session, uint8_t *buf, size_t len);

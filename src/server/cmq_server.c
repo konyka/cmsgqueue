@@ -1298,6 +1298,15 @@ static void client_teardown(cmq_client_t *c) {
     if (c->is_route && srv && c->fd >= 0)
         route_detach_under_io_lock(srv, c->fd);
 
+    /* v0.5.72: graceful TLS shutdown. Send close_notify and drain
+     * the BIO BEFORE removing the fd from the polling loop. If we
+     * skip this, the SSL_free in cmq_client_destroy runs before
+     * the alert reaches the kernel, and the client observes an
+     * abrupt EOF instead of SSL_ERROR_ZERO_RETURN. */
+    if (c->tls && c->fd >= 0) {
+        cmq_tls_session_graceful_shutdown(c->tls);
+    }
+
     if (c->ev_loop && c->fd >= 0) {
         cmq_ev_del(c->ev_loop, c->fd);
     }
