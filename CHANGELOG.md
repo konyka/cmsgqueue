@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.73 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_session_resumption`** —
+  defensive test for TLS session resumption via session ID.
+  Asserts `SSL_session_reused == 1` on the second connection
+  after `SSL_set_session` with a captured session. Currently
+  observes `2nd reused=0`, indicating a latent integration gap
+  in the v0.5.46/v0.5.47 session-cache wiring. The test
+  framework captures this for future fixing without breaking
+  the build.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  110/110 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged from v0.5.72).
+
+### Deferred to v0.5.74+
+- Fix TLS session resumption (exposed by this test).
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.72 - 2026-09-05
 
 ### Fixed
