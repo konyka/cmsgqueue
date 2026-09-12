@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.74 - 2026-09-05
+
+### Status
+- **Docs-only release.** Attempted to add a concurrent graceful-TLS-shutdown
+  test validating the v0.5.72 fix under concurrent load; test
+  attempt hung due to SSL_read blocking on a worker thread
+  that hadn't received close_notify yet. Reverted and shipped
+  docs-only to preserve the v0.5.x small-defensive-test
+  pattern. The single-client graceful-shutdown test (v0.5.72)
+  covers the core path.
+
+### Deferred to v0.5.75+
+- Concurrent graceful-shutdown test (separate-thread + poll()
+  bounded SSL_read, > 50 lines).
+- TLS 1.3 session ticket resumption test (server doesn't issue
+  tickets — `has_ticket==0`).
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- Per-listener `accept_thread_func` refactor (already on
+  remote workstream as v0.5.42).
+
 ## 0.5.73 - 2026-09-05
 
 ### Added
