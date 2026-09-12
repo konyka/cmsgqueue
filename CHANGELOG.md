@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.70 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls12_client_negotiates_down`** —
+  defensive test that a TLS 1.2-only client connects successfully
+  (downgrade negotiation) against a default `cmq_server` and
+  the negotiated version is 0x0303 (TLS 1.2), not 0x0304
+  (TLS 1.3). Guards against a future "TLS 1.3 only" change that
+  would silently break compatibility with TLS 1.2 clients.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  108/108 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.71+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.69 - 2026-09-05
 
 ### Added

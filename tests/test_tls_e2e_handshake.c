@@ -1690,4 +1690,69 @@ TEST(tls_e2e_handshake, client_role_confusion) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 24 (v0.5.70): TLS 1.2 client negotiates down ----------
+ *
+ * Reverse of v0.5.53: a TLS 1.2-only client connects to a
+ * default `cmq_server` (no max-version cap → would prefer
+ * TLS 1.3). OpenSSL's protocol negotiation finds the highest
+ * common version (TLS 1.2). The handshake succeeds at TLS 1.2;
+ * the test asserts the NEGOTIATED version is 0x0303 (TLS 1.2),
+ * not 0x0304 (TLS 1.3).
+ *
+ * This guards against a future "default to TLS 1.3 only" change
+ * that would silently break compatibility with TLS 1.2 clients.
+ */
+TEST(tls_e2e_handshake, tls12_client_negotiates_down) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0570server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25546;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Connect with a TLS 1.2-only client. */
+    int cfd = open_tcp(25546);
+    ASSERT(cfd >= 0);
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+    SSL_CTX_set_min_proto_version(cctx, TLS1_2_VERSION);
+    SSL_CTX_set_max_proto_version(cctx, TLS1_2_VERSION);
+    SSL *cssl = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl);
+    SSL_set_fd(cssl, cfd);
+    SSL_set_connect_state(cssl);
+
+    struct hs_arg carg = { cssl, cfd, 0 };
+    pthread_t c_tid;
+    ASSERT_EQ(pthread_create(&c_tid, NULL, hs_thread, &carg), 0);
+    pthread_join(c_tid, NULL);
+    /* Handshake succeeds (downgrade negotiation). */
+    ASSERT_EQ(carg.rc, 1);
+    /* Negotiation must have settled on TLS 1.2, not 1.3. */
+    ASSERT_EQ(SSL_version(cssl), 0x0303);
+
+    SSL_shutdown(cssl);
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
