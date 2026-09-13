@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.75 - 2026-09-05
+
+### Status
+- **Docs-only release.** Attempted two scopes (concurrent graceful
+  TLS-shutdown test and invalid CA bundle rejection test);
+  both stalled on test infrastructure issues (framework timing,
+  OpenSSL serial state) and were reverted. The single-client
+  graceful_shutdown (v0.5.72) and cross-CA rejection (v0.5.56)
+  tests cover the core paths.
+
+### Deferred to v0.5.76+
+- Concurrent graceful-shutdown test (per-client thread with
+  `POLLOUT` poll loop for BIO write retries).
+- Invalid CA bundle rejection test (clean OpenSSL state).
+- TLS 1.3 session ticket resumption test.
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- Per-listener `accept_thread_func` refactor.
+
 ## 0.5.74 - 2026-09-05
 
 ### Status
