@@ -1330,6 +1330,35 @@ TEST(tls_e2e_handshake, tls_enabled_without_cert_rejected) {
     ASSERT_NULL(srv);
 }
 
+/* ---------- Test 16b (v0.5.80): tls_key empty with tls_cert set ----------
+ *
+ * Asymmetric validation test: when tls_enabled=1 and tls_cert is set
+ * but tls_key is empty/NULL, the server must reject startup
+ * (v0.5.61 tested the both-NULL case; this covers the
+ * cert-without-key case).
+ */
+TEST(tls_e2e_handshake, tls_cert_without_key_rejected) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0580server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25580;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    /* tls_key intentionally not set (NULL). */
+    int rc = cmq_server_create(&srv, &cfg);
+    if (rc == CMQ_OK) {
+        cmq_server_destroy(srv);
+        fprintf(stderr, "v0.5.80: cert without key accepted (BUG)\n");
+    }
+    ASSERT(rc != CMQ_OK);
+    ASSERT_NULL(srv);
+}
+
 /* ---------- Test 17 (v0.5.63): client trusts server cert, not CA ----------
  *
  * Defensive test: a client that trusts the server's CERT

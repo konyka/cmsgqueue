@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.80 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_cert_without_key_rejected`** —
+  asymmetric validation test: when `tls_enabled=1` and `tls_cert`
+  is set but `tls_key` is NULL, the server must reject startup.
+  Complements v0.5.61 (both-NULL case) and v0.5.76 (valid-cert +
+  garbage-key case). Together they cover all three asymmetric
+  combinations.
+
+### Verified
+- 29/29 PASS in `tests/test_tls_e2e_handshake.c` (3/3 runs).
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.79 - 2026-09-05
 
 ### Status
