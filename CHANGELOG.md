@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.79 - 2026-09-05
+
+### Status
+- **Docs-only release.** Round-35 summary: 27 production fixes
+  / defensive tests shipped across v0.5.45-v0.5.76; 5 docs-only
+  rounds (v0.5.74, v0.5.75, v0.5.77, v0.5.78, v0.5.79) plus 2
+  reverted attempts (v0.5.48/v0.5.49 TLS 1.3 mTLS race). The
+  current 28-test coverage matrix is documented in
+  `docs/reviews/v0.5.79.enumeration.md`.
+
+### Verified
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.78 - 2026-09-05
 
 ### Status
