@@ -2007,4 +2007,39 @@ TEST(tls_e2e_handshake, tls_session_resumption) {
     SSL_CTX_free(cctx);
 }
 
+/* ---------- Test 28 (v0.5.76): garbage tls_key rejected ----------
+ *
+ * Sanity test: passing `tls_key=<path>` where the file contains
+ * non-PEM data must fail at server startup. The v0.5.60 covers
+ * the case where `tls_cert` is corrupt (different file from
+ * `tls_key`); this test covers the case where `tls_key` itself
+ * is corrupt.
+ */
+TEST(tls_e2e_handshake, garbage_tls_key_rejected) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0576server");
+    FILE *f = fopen(TLS_DIR "/garbage.key", "w");
+    ASSERT_NOT_NULL(f);
+    fputs("this is not a valid private key\n", f);
+    fclose(f);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25555;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/garbage.key";
+    cfg.port = 25577;  /* unique port to avoid conflict with other tests */
+    int rc = cmq_server_create(&srv, &cfg);
+    if (rc == CMQ_OK) {
+        cmq_server_destroy(srv);
+        fprintf(stderr, "v0.5.76: garbage key accepted (BUG)\n");
+    }
+    ASSERT(rc != CMQ_OK);
+    ASSERT_NULL(srv);
+}
+
 TEST_MAIN()

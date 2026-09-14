@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.76 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::garbage_tls_key_rejected`** —
+  defensive test that `tls_key=<path>` containing non-PEM data
+  fails at server startup. Catches regressions where OpenSSL's
+  `SSL_CTX_use_PrivateKey_file` silently accepts garbage.
+
+### Verified
+- `ctest -j1 -E test_stress|test_bench_regression`: 28/28 PASS
+  in test_tls_e2e_handshake.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.77+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
 ## 0.5.75 - 2026-09-05
 
 ### Status
