@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.5.83 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the failure path of the
+  v0.5.82 ALPN select callback. No production change. The
+  v0.5.46 TLS 1.2 mTLS cap remains in place; lifting it
+  (the originally-planned v0.5.83 work) was deferred after
+  investigation revealed the test framework would need
+  non-trivial changes to handle TLS 1.3 mTLS rejection
+  timing (the client sees the handshake complete BEFORE
+  the server's rejection propagates).
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::alpn_no_overlap_rejected`**
+  — defensive test for the v0.5.82 ALPN select callback's
+  no-overlap path. Spins up `cmq_server` on port 25580 with
+  ALPN "h2,nats", connects a client with ALPN "spdy/3,http"
+  (no overlap), and asserts the handshake fails. The
+  callback returns `SSL_TLSEXT_ERR_ALERT_FATAL` on no
+  overlap, which translates to a fatal
+  `no_application_protocol` alert (TLS 1.2) or
+  `SSL_AD_UNRECOGNIZED_NAME` (TLS 1.3). Catches regressions
+  where a future change softens the callback (e.g. returns
+  `SSL_TLSEXT_ERR_NOACK` to allow the handshake to proceed
+  without ALPN) and silently changes the user-facing
+  contract.
+
+### Deferred (unchanged)
+- TLS 1.3 mTLS via post-handshake auth. Tracked for a
+  future round that budgets for a test framework overhaul
+  (the post-handshake cert rejection timing is the
+  blocker).
+- Per-listener `accept_thread_func` refactor (already on
+  remote workstream as v0.5.42).
+- Concurrent graceful-shutdown test (framework timing
+  issue).
+- TLS 1.3 session ticket resumption test (server doesn't
+  issue tickets).
+
+### Verified
+- 31/31 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 5/5 PASS in `tests/test_tls_per_listener.c` (covers
+  `alpn_protocols_set`, the legacy smoke test).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  87/87 PASS in 121.8 s.
+- `test_enterprise.tls.session_lifecycle` remains failing
+  in the v0.5.81+ baseline (missing test certs
+  `/tmp/cmq_test_{cert,key}.pem`); unrelated to this
+  change.
+- Bench: ~30K-35K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.82 - 2026-09-15
 
 ### Status

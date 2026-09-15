@@ -2171,4 +2171,89 @@ TEST(tls_e2e_handshake, alpn_negotiated_on_real_listener) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 31 (v0.5.83): ALPN no-overlap rejected ----------
+ *
+ * Defensive test for the v0.5.82 ALPN select callback's failure
+ * path. When the client's ALPN list shares NO protocol with the
+ * server's, the callback must return SSL_TLSEXT_ERR_ALERT_FATAL
+ * and the server must send a fatal alert (no_application_protocol
+ * in TLS 1.2, SSL_AD_UNRECOGNIZED_NAME in TLS 1.3). The handshake
+ * must fail.
+ *
+ * Test design:
+ *   1. Server: ALPN "h2,nats" on port 25580.
+ *   2. Client: ALPN "spdy/3,http" (no overlap with server's list).
+ *   3. Assert carg.rc != 1.
+ *
+ * Catches regressions: a future change that returns
+ * SSL_TLSEXT_ERR_NOACK (defer to no protocol) would let the
+ * handshake succeed without ALPN, silently changing the
+ * user-facing contract.
+ */
+TEST(tls_e2e_handshake, alpn_no_overlap_rejected) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0583server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25580;  /* unique port, no other test claims 25580 */
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Set server ALPN to "h2,nats" and reload so the SSL_CTX
+     * carries both the protos list and the select callback. */
+    ASSERT_EQ(cmq_tls_set_alpn(srv->tls_config_slots[0], "h2,nats"), 0);
+    ASSERT_EQ(cmq_tls_reload(srv->tls_config_slots[0]), 0);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    int cfd = open_tcp(25580);
+    ASSERT(cfd >= 0);
+
+    /* Client ALPN list: "spdy/3,http" — no overlap with server's
+     * "h2,nats". Wire-format: 6 spdy/3 4 http. */
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+    const unsigned char client_alpn[] = {
+        6, 's','p','d','y','/','3', 4, 'h','t','t','p'
+    };
+    ASSERT_EQ(SSL_CTX_set_alpn_protos(cctx, client_alpn,
+                                       sizeof(client_alpn)), 0);
+
+    SSL *cssl = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl);
+    SSL_set_fd(cssl, cfd);
+    SSL_set_connect_state(cssl);
+
+    struct hs_arg carg = { cssl, cfd, 0 };
+    pthread_t hs_tid;
+    ASSERT_EQ(pthread_create(&hs_tid, NULL, hs_thread, &carg), 0);
+    pthread_join(hs_tid, NULL);
+    int rc_hs = carg.rc;
+    if (rc_hs == 1) {
+        fprintf(stderr, "v0.5.83: ALPN no-overlap accepted (BUG)\n");
+    }
+    /* The select callback returns SSL_TLSEXT_ERR_ALERT_FATAL on
+     * no overlap. The handshake must fail. */
+    ASSERT(rc_hs != 1);
+
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
