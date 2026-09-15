@@ -2256,4 +2256,110 @@ TEST(tls_e2e_handshake, alpn_no_overlap_rejected) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 32 (v0.5.85): ALPN server preference order ----------
+ *
+ * Locks in the RFC 7301 server-preference contract of the
+ * v0.5.82 ALPN select callback. The callback walks the
+ * server's wire-format list and returns the first server-
+ * listed protocol that the client also offers. The
+ * client's preference order is overridden when the server
+ * has its own ordered list.
+ *
+ * Test design:
+ *   1. Server: ALPN "h2,nats" (server prefers h2 first).
+ *   2. Client: ALPN "nats,h2" (client prefers nats first).
+ *   3. After the handshake, assert SSL_get0_alpn_selected
+ *      returns "h2" (the server's preference), NOT "nats"
+ *      (the client's preference).
+ *
+ * Why it matters: HTTP/2 negotiation on top of ALPN
+ * assumes server-preference. Browsers and HTTP clients
+ * today assume that if a server lists "h2" before
+ * "http/1.1", that's what they get — not the reverse,
+ * even if the client prefers "http/1.1" for
+ * compatibility. A regression here would silently
+ * downgrade connections to HTTP/1.1 even when both sides
+ * support HTTP/2.
+ *
+ * Catches regressions: a future change to
+ * cmq_tls_alpn_select_cb that walks the client's list
+ * first (instead of the server's) would silently break
+ * the contract.
+ */
+TEST(tls_e2e_handshake, alpn_server_preference_order) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0585server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25582;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Server: "h2,nats" — server prefers h2 first. */
+    ASSERT_EQ(cmq_tls_set_alpn(srv->tls_config_slots[0], "h2,nats"), 0);
+    ASSERT_EQ(cmq_tls_reload(srv->tls_config_slots[0]), 0);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    int cfd = open_tcp(25582);
+    ASSERT(cfd >= 0);
+
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+
+    /* Client: "nats,h2" — client prefers nats first. The two
+     * lists overlap on {h2, nats}, so the server's order
+     * determines the winner. Wire-format: 4 nats 2 h2. */
+    const unsigned char client_alpn[] = {
+        4, 'n','a','t','s', 2, 'h','2'
+    };
+    ASSERT_EQ(SSL_CTX_set_alpn_protos(cctx, client_alpn,
+                                       sizeof(client_alpn)), 0);
+
+    SSL *cssl = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl);
+    SSL_set_fd(cssl, cfd);
+    SSL_set_connect_state(cssl);
+
+    struct hs_arg carg = { cssl, cfd, 0 };
+    pthread_t hs_tid;
+    ASSERT_EQ(pthread_create(&hs_tid, NULL, hs_thread, &carg), 0);
+    pthread_join(hs_tid, NULL);
+    ASSERT_EQ(carg.rc, 1);
+
+    const unsigned char *sel = NULL;
+    unsigned int sel_len = 0;
+    SSL_get0_alpn_selected(cssl, &sel, &sel_len);
+    ASSERT_NOT_NULL(sel);
+    ASSERT_EQ(sel_len, 2u);
+    /* Server's first preference ("h2") must win, not the
+     * client's first preference ("nats"). */
+    if (sel_len == 2 && memcmp(sel, "h2", 2) == 0) {
+        /* expected */
+    } else {
+        fprintf(stderr, "v0.5.85: ALPN selected='%.*s' (expected h2)\n",
+                (int)sel_len, sel ? (const char *)sel : "");
+    }
+    ASSERT(memcmp(sel, "h2", 2) == 0);
+
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

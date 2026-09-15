@@ -126,5 +126,35 @@ TEST(mqtt_retained_file, roundtrip_via_set_path) {
     unlink(path);
 }
 
-/* TEST_MAIN is the standard test runner macro from cmq_test.h. */
+TEST(mqtt_retained_file, truncated_record_does_not_poison_following) {
+    char path[256];
+    v0584_unique_path(path, sizeof(path));
+    unlink(path);
+
+    FILE *f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    /* The first record declares a payload larger than the bounded
+     * retained-record limit and has no payload bytes. */
+    fputs("v0585/truncated/test 1000000 \n", f);
+    const uint8_t payload[] = "survives-truncation";
+    fprintf(f, "v0585/valid/test %zu ", sizeof(payload) - 1);
+    fwrite(payload, 1, sizeof(payload) - 1, f);
+    fputc('\n', f);
+    fclose(f);
+
+    cmq_mqtt_set_retain_path(path);
+
+    const uint8_t *out = NULL;
+    size_t out_len = 0;
+    ASSERT_EQ(cmq_mqtt_fetch_retained("v0585/truncated/test",
+                                      &out, &out_len), -1);
+    ASSERT_EQ(cmq_mqtt_fetch_retained("v0585/valid/test",
+                                      &out, &out_len), 0);
+    ASSERT_EQ(out_len, sizeof(payload) - 1);
+    ASSERT_EQ(memcmp(out, payload, out_len), 0);
+
+    unlink(path);
+}
+
+/* The test runner is supplied by cmq_test.h. */
 TEST_MAIN()

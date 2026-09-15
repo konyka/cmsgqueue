@@ -20,6 +20,7 @@
 
 #define MQTT_LISTEN_PORT 1883
 #define MQTT_MAX_PACKET  65536
+#define MQTT_MAX_RETAINED_PAYLOAD MQTT_MAX_PACKET
 #define MQTT_TYPE_CONNECT     0x10
 #define MQTT_TYPE_CONNACK     0x20
 #define MQTT_TYPE_PUBLISH     0x30
@@ -669,10 +670,21 @@ void cmq_mqtt_set_retain_path(const char *path) {
              * field. */
             while (fscanf(f, "%127s %zu ", topic, &plen) == 2) {
                 if (plen == 0) continue;
+                if (plen > MQTT_MAX_RETAINED_PAYLOAD) {
+                    /* A retained record is bounded by the MQTT packet
+                     * limit. The format scanner has already consumed
+                     * the record header's separator, so continue at the
+                     * next record without allocating the payload. */
+                    continue;
+                }
                 uint8_t *buf = malloc(plen);
                 if (buf) {
                     if (fread(buf, 1, plen, f) == plen) {
                         cmq_mqtt_store_retained(topic, buf, plen);
+                    } else {
+                        /* A short payload is truncated; do not publish
+                         * partial data or attempt to parse past EOF. */
+                        clearerr(f);
                     }
                     free(buf);
                 }

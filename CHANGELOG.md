@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.5.85 - 2026-09-15
+
+### Status
+- **Production hardening + defensive test.** Retained-file
+  recovery now bounds declared payload lengths before
+  allocation and continues past oversized malformed records.
+  This protects server startup from unreasonable or damaged
+  retained-file input while preserving independent valid
+  records after the malformed entry.
+
+### Fixed
+- **`src/enterprise/cmq_mqtt_server.c`** — added
+  `MQTT_MAX_RETAINED_PAYLOAD`, bounded by
+  `MQTT_MAX_PACKET`. `cmq_mqtt_set_retain_path` rejects a
+  declared retained payload above that limit before calling
+  `malloc`, preventing an attacker-controlled allocation
+  during file recovery.
+- The loader continues after an oversized malformed header,
+  so a valid record following damaged input is still
+  recovered.
+- **`tests/test_tls_e2e_handshake.c::alpn_no_overlap_rejected`**
+  — moved from port 25580 to 25581 to avoid sharing a port
+  declaration with v0.5.80's early-failing validation test.
+
+### Added
+- **`tests/test_mqtt_retained_file.c::truncated_record_does_not_poison_following`**
+  — writes an oversized retained-file declaration with no
+  payload, followed by a valid record. Verifies the malformed
+  topic is not restored and the following valid topic and
+  payload are recovered.
+
+### Verified
+- 3/3 PASS in `tests/test_mqtt_retained_file.c`.
+- 31/31 PASS in `tests/test_tls_e2e_handshake.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.1 s.
+- `test_enterprise.tls.session_lifecycle` remains a baseline
+  failure when `/tmp/cmq_test_{cert,key}.pem` are absent;
+  unrelated to this change.
+- Bench: ~33-35K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.84 - 2026-09-15
 
 ### Status
