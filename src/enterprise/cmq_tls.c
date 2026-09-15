@@ -106,6 +106,16 @@ static SSL_SESSION *cmq_tls_sess_get_cb(SSL *ssl, const unsigned char *id,
                                           int id_len, int *copy);
 static int cmq_tls_gen_session_id(SSL *ssl, unsigned char *id,
                                     unsigned int *id_len);
+/* v0.5.82: default ALPN select callback. Picks the first server
+ * protocol that's also present in the client's list. Without a
+ * select callback installed, the server's SSL_CTX_set_alpn_protos
+ * is a no-op on the wire — the ServerHello omits the ALPN
+ * extension. The server's alpn_data is read from the cmq_tls_config
+ * stored on the SSL_CTX via SSL_CTX_set_app_data. */
+static int cmq_tls_alpn_select_cb(SSL *ssl, const unsigned char **out,
+                                    unsigned char *outlen,
+                                    const unsigned char *in, unsigned int inlen,
+                                    void *arg);
 #endif
 
 static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
@@ -141,6 +151,20 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     /* Best-effort defaults. */
     SSL_CTX_set_mode(cfg->ssl_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER |
                                     SSL_MODE_ENABLE_PARTIAL_WRITE);
+    /* v0.5.82: ALPN. SSL_CTX_set_alpn_protos alone is a no-op on
+     * the wire (the ServerHello omits the ALPN extension); we
+     * must also install a select callback that picks a protocol
+     * from the intersection of the server's and client's lists. */
+    if (cfg->alpn_len > 0) {
+        if (SSL_CTX_set_alpn_protos(cfg->ssl_ctx, cfg->alpn_data,
+                                     cfg->alpn_len) != 0) {
+            SSL_CTX_free(cfg->ssl_ctx);
+            cfg->ssl_ctx = NULL;
+            return -1;
+        }
+        SSL_CTX_set_alpn_select_cb(cfg->ssl_ctx, cmq_tls_alpn_select_cb,
+                                    cfg->ssl_ctx);
+    }
     /* Load cert chain. */
     if (SSL_CTX_use_certificate_chain_file(cfg->ssl_ctx, cfg->cert) != 1) {
         SSL_CTX_free(cfg->ssl_ctx);
@@ -409,6 +433,10 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
             tls_end_op(cfg);
             return -1;
         }
+        /* v0.5.82: also install the ALPN select callback. Without
+         * this, the ServerHello omits the ALPN extension. */
+        SSL_CTX_set_alpn_select_cb(new_ctx, cmq_tls_alpn_select_cb,
+                                    new_ctx);
     }
     if (SSL_CTX_use_certificate_chain_file(new_ctx, cfg->cert) != 1) {
         SSL_CTX_free(new_ctx);
@@ -436,6 +464,11 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
         SSL_CTX_set_verify(new_ctx, SSL_VERIFY_PEER |
                                  SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
     }
+    /* v0.5.82: the ALPN select callback reads cmq_tls_config from
+     * the SSL_CTX's app_data. tls_build_ssl_ctx sets this on the
+     * initial CTX; we must do the same on the new CTX built here
+     * so the callback can find the ALPN list. */
+    SSL_CTX_set_app_data(new_ctx, cfg);
     /* P1 v0.5.4 UAF fix: bump the new CTX's built-in OpenSSL
      * refcount so it isn't freed when the next reload decrements
      * to zero. Existing in-flight SSL* each hold a borrowed
@@ -771,6 +804,49 @@ static int cmq_tls_gen_session_id(SSL *ssl, unsigned char *id,
     if (RAND_bytes(id, 32) != 1) return 0;
     *id_len = 32;
     return 1;
+}
+
+/* v0.5.82: default ALPN select callback. The arg is the SSL_CTX
+ * (passed via SSL_CTX_set_alpn_select_cb). The server's protocol
+ * list is read from the cmq_tls_config stored on the SSL_CTX via
+ * SSL_CTX_set_app_data. We pick the first server protocol that's
+ * also in the client's list, following RFC 7301 server-side
+ * selection rules. If the two lists don't overlap, we return
+ * NOACK so the handshake fails with a fatal alert — same as
+ * OpenSSL's built-in default behavior. */
+static int cmq_tls_alpn_select_cb(SSL *ssl, const unsigned char **out,
+                                    unsigned char *outlen,
+                                    const unsigned char *in, unsigned int inlen,
+                                    void *arg) {
+    (void)ssl;
+    SSL_CTX *ctx = (SSL_CTX *)arg;
+    if (!ctx || !out || !outlen || !in || inlen == 0) {
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+    cmq_tls_config_t *cfg = (cmq_tls_config_t *)SSL_CTX_get_app_data(ctx);
+    if (!cfg || cfg->alpn_len == 0) {
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+    /* Walk the server's wire-format list and look for a match in
+     * the client's wire-format list. */
+    unsigned int i = 0;
+    while (i < cfg->alpn_len) {
+        unsigned char plen = cfg->alpn_data[i];
+        if (plen == 0 || i + 1 + plen > cfg->alpn_len) break;
+        unsigned int j = 0;
+        while (j < inlen) {
+            unsigned char clen = in[j];
+            if (clen == plen &&
+                memcmp(cfg->alpn_data + i + 1, in + j + 1, plen) == 0) {
+                *out = cfg->alpn_data + i + 1;
+                *outlen = plen;
+                return SSL_TLSEXT_ERR_OK;
+            }
+            j += 1 + clen;
+        }
+        i += 1 + plen;
+    }
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 #endif
 

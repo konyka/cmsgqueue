@@ -2071,4 +2071,104 @@ TEST(tls_e2e_handshake, garbage_tls_key_rejected) {
     ASSERT_NULL(srv);
 }
 
+/* ---------- Test 30 (v0.5.82): ALPN negotiated on real listener ----------
+ *
+ * Regression test: cmq_tls_set_alpn() must take effect on the
+ * initial server startup, not just on subsequent reloads. v0.5.82
+ * discovered that tls_build_ssl_ctx (the path cmq_tls_load takes
+ * on first call) did NOT call SSL_CTX_set_alpn_protos — only
+ * cmq_tls_reload did. The user-facing API implied ALPN was
+ * configured; the wire showed the server had no ALPN extension.
+ *
+ * Test design:
+ *   1. Create a cmq_server with TLS enabled on port 25579.
+ *   2. After cmq_server_create but before cmq_server_run, set
+ *      ALPN "h2,nats" on the server's tls_config_slots[0] via
+ *      cmq_tls_set_alpn, then re-load the SSL_CTX so the new
+ *      ALPN takes effect.
+ *   3. Connect a TLS client with SSL_CTX_set_alpn_protos of
+ *      "nats,spdy/3.1" (the client does NOT prefer "h2" so the
+ *      server's "nats" should be selected).
+ *   4. After the handshake, SSL_get0_alpn_selected must return
+ *      a 4-byte "nats" string.
+ */
+TEST(tls_e2e_handshake, alpn_negotiated_on_real_listener) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0582server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25579;  /* unique port, no other test claims 25579 */
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Set ALPN on the server's TLS slot 0 and re-load so the
+     * new SSL_CTX carries the ALPN extension. */
+    ASSERT_EQ(cmq_tls_set_alpn(srv->tls_config_slots[0], "h2,nats"), 0);
+    ASSERT_EQ(cmq_tls_reload(srv->tls_config_slots[0]), 0);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    int cfd = open_tcp(25579);
+    ASSERT(cfd >= 0);
+
+    /* Drive a TLS handshake with ALPN client preference. */
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+
+    /* Client ALPN list: "nats,http" (no "h2", so the server's
+     * "nats" wins). Wire-format: 4 nats 4 http. */
+    const unsigned char client_alpn[] = {
+        4, 'n','a','t','s', 4, 'h','t','t','p'
+    };
+    ASSERT_EQ(SSL_CTX_set_alpn_protos(cctx, client_alpn,
+                                       sizeof(client_alpn)), 0);
+
+    SSL *cssl = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl);
+    SSL_set_fd(cssl, cfd);
+    SSL_set_connect_state(cssl);
+
+    struct hs_arg carg = { cssl, cfd, 0 };
+    pthread_t hs_tid;
+    ASSERT_EQ(pthread_create(&hs_tid, NULL, hs_thread, &carg), 0);
+    pthread_join(hs_tid, NULL);
+    int rc_hs = carg.rc;
+    if (rc_hs != 1) {
+        int e = SSL_get_error(cssl, rc_hs);
+        fprintf(stderr, "v0.5.82: SSL_get_error=%d\n", e);
+        unsigned long err;
+        while ((err = ERR_get_error()))
+            fprintf(stderr, "v0.5.82 err: %s\n",
+                    ERR_reason_error_string(err));
+    }
+    ASSERT_EQ(rc_hs, 1);
+
+    /* Read the negotiated ALPN protocol. */
+    const unsigned char *sel = NULL;
+    unsigned int sel_len = 0;
+    SSL_get0_alpn_selected(cssl, &sel, &sel_len);
+    ASSERT_NOT_NULL(sel);
+    ASSERT_EQ(sel_len, 4u);
+    ASSERT(memcmp(sel, "nats", 4) == 0);
+
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

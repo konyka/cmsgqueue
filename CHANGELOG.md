@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.5.82 - 2026-09-15
+
+### Status
+- **Production fix + defensive test.** Closes a real production
+  gap: `cmq_tls_set_alpn` previously stored the ALPN protocol
+  list on the `cmq_tls_config_t` but the wire never carried the
+  extension. OpenSSL's server-side ALPN requires both
+  `SSL_CTX_set_alpn_protos` AND a select callback — without the
+  callback, the ServerHello omits the ALPN extension entirely.
+  This meant HTTP/2 / NATS-WebSocket handoff over TLS that
+  depends on ALPN was silently broken on the very first
+  handshake; only `cmq_tls_reload` had the bug because the
+  initial load path (`tls_build_ssl_ctx`) never installed the
+  callback.
+
+### Fixed
+- **`src/enterprise/cmq_tls.c::tls_build_ssl_ctx`** — when
+  `cfg->alpn_len > 0`, install both `SSL_CTX_set_alpn_protos`
+  AND `SSL_CTX_set_alpn_select_cb` with a default
+  `cmq_tls_alpn_select_cb` that picks the first server protocol
+  also present in the client's list. Mirrors the existing
+  reload-path fix.
+- **`src/enterprise/cmq_tls.c::cmq_tls_reload`** — also install
+  the ALPN select callback on the new CTX. Previously the new
+  CTX had ALPN protos but no select callback, so a fresh
+  handshake on the reloaded SSL_CTX was equally broken.
+- **`src/enterprise/cmq_tls.c::cmq_tls_reload`** — set
+  `SSL_CTX_set_app_data(new_ctx, cfg)` on the new CTX so the
+  select callback can find the per-config ALPN list. (The
+  initial-load path already did this in `tls_build_ssl_ctx`.)
+- **`src/enterprise/cmq_tls.c::cmq_tls_alpn_select_cb`** (new)
+  — default RFC 7301 server-side selection: walk the server's
+  wire-format list, return the first protocol that also appears
+  in the client's list. Returns `SSL_TLSEXT_ERR_ALERT_FATAL` on
+  no overlap (matches OpenSSL's built-in default behavior).
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::alpn_negotiated_on_real_listener`**
+  — end-to-end test on a real `cmq_server` listener (port
+  25579). Sets ALPN "h2,nats" on `tls_config_slots[0]`, opens a
+  client with ALPN "nats,http", verifies the handshake
+  completes and `SSL_get0_alpn_selected` returns "nats".
+  Catches regressions of all three fixes above.
+
+### Verified
+- 30/30 PASS in `tests/test_tls_e2e_handshake.c` (3/3 stable).
+- 5/5 PASS in `tests/test_tls_per_listener.c` (covers
+  `alpn_protocols_set`, the legacy smoke test).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  87/87 PASS in 121.6 s.
+- `test_enterprise.tls.session_lifecycle` was already failing
+  in the v0.5.81 baseline (missing test certs
+  `/tmp/cmq_test_{cert,key}.pem`); unrelated to this change.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.81 - 2026-09-05
 
 ### Status
