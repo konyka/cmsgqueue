@@ -411,8 +411,12 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
     if (!m) { tls_end_op(cfg); return -1; }
     SSL_CTX *new_ctx = SSL_CTX_new(m);
     if (!new_ctx) { tls_end_op(cfg); return -1; }
+    /* v0.5.87: TLS 1.2 floor, no upper cap. Mirrors the
+     * tls_build_ssl_ctx behavior introduced in v0.5.83 —
+     * capping at TLS 1.2 here would prevent a TLS 1.3
+     * client from resuming a TLS 1.3 session after the
+     * reload. */
     SSL_CTX_set_min_proto_version(new_ctx, TLS1_2_VERSION);
-    SSL_CTX_set_max_proto_version(new_ctx, TLS1_2_VERSION);
     const char *ciphers =
         "ECDHE-ECDSA-AES256-GCM-SHA384:"
         "ECDHE-RSA-AES256-GCM-SHA384:"
@@ -469,6 +473,27 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
      * initial CTX; we must do the same on the new CTX built here
      * so the callback can find the ALPN list. */
     SSL_CTX_set_app_data(new_ctx, cfg);
+    /* v0.5.87: wire the session resumption callbacks on the
+     * new CTX. Without this, an incoming connection that
+     * presents a session ID captured before the reload will
+     * see no get_cb installed and fall back to a full
+     * handshake. The cache itself (cmq_tls_session_cache_t
+     * in cfg) is unaffected — only the new CTX needed
+     * the callbacks. Mirrors the wiring in tls_build_ssl_ctx. */
+    SSL_CTX_sess_set_new_cb(new_ctx, cmq_tls_sess_new_cb);
+    SSL_CTX_sess_set_get_cb(new_ctx, cmq_tls_sess_get_cb);
+    /* v0.5.87: the session ID context and the cache mode
+     * must be set on the new CTX for OpenSSL to honor
+     * resumption across the reload boundary. The session
+     * ID context must match between the CTX that issued
+     * the session and the CTX that consumes it; the cache
+     * mode ensures OpenSSL's internal cache is disabled
+     * (we own the cache via cmq_tls_session_cache). */
+    SSL_CTX_set_session_id_context(new_ctx,
+        (const unsigned char *)"cmq-tls-v0.5.29", 16);
+    SSL_CTX_set_generate_session_id(new_ctx, cmq_tls_gen_session_id);
+    SSL_CTX_set_session_cache_mode(new_ctx,
+        SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_INTERNAL);
     /* P1 v0.5.4 UAF fix: bump the new CTX's built-in OpenSSL
      * refcount so it isn't freed when the next reload decrements
      * to zero. Existing in-flight SSL* each hold a borrowed

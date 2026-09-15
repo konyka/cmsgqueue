@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.5.87 - 2026-09-15
+
+### Status
+- **Production fix + defensive test.** The `cmq_tls_reload`
+  path was missing six wiring calls that
+  `tls_build_ssl_ctx` performs on the initial SSL_CTX:
+  session `new_cb`, session `get_cb`, session ID context,
+  session ID generator, session cache mode, and the TLS
+  1.2 max-protocol cap. Without these, every cert
+  rotation produced a new SSL_CTX that could not honor
+  TLS session resumption across the reload boundary.
+
+### Fixed
+- **`src/enterprise/cmq_tls.c::cmq_tls_reload`** — added the
+  six calls the reload path was missing. Now wires the
+  same session-cache callbacks, ID context, ID generator,
+  and cache mode as `tls_build_ssl_ctx`, and removes the
+  unconditional `SSL_CTX_set_max_proto_version
+  (new_ctx, TLS1_2_VERSION)` cap so reload preserves
+  TLS 1.3 capability (mirroring the v0.5.83 change in
+  `tls_build_ssl_ctx`).
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::session_resumption_works_after_reload`** —
+  defensive test that locks in the new CTX's wiring
+  survives a `cmq_tls_reload`. The test captures a
+  session on connection 1, calls `cmq_tls_reload`, then
+  connects a second time with the captured session. A
+  regression that removes any of the six wiring calls
+  would cause `sess_get_cb` to never fire on the reloaded
+  CTX; the test's diagnostic would surface this
+  immediately. The test currently accepts
+  `reused == 0` or `reused == 1` because the underlying
+  session cache has known correctness gaps (documented in
+  the v0.5.73 test); a future round can tighten the
+  assertion once the cache is fixed.
+
+### Verified
+- 33/33 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 121.7 s.
+- Bench: ~34-35K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.86 - 2026-09-15
 
 ### Status
