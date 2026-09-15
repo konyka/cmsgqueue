@@ -2198,7 +2198,7 @@ TEST(tls_e2e_handshake, alpn_no_overlap_rejected) {
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
     cfg.host = "127.0.0.1";
-    cfg.port = 25580;  /* unique port, no other test claims 25580 */
+    cfg.port = 25581;  /* v0.5.80 uses 25580 (fails early, no bind) */
     cfg.log_to_stdout = 0;
     cfg.tls_enabled = 1;
     cfg.tls_cert = TLS_DIR "/cert.pem";
@@ -2215,7 +2215,7 @@ TEST(tls_e2e_handshake, alpn_no_overlap_rejected) {
     wait_for_bind(srv, 1);
     ASSERT(srv->listen_fds[0] >= 0);
 
-    int cfd = open_tcp(25580);
+    int cfd = open_tcp(25581);
     ASSERT(cfd >= 0);
 
     /* Client ALPN list: "spdy/3,http" — no overlap with server's

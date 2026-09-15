@@ -610,12 +610,12 @@ void cmq_mqtt_store_retained(const char *topic, const uint8_t *payload,
     }
     g_mqtt_retained[idx].payload_len = len;
     pthread_mutex_unlock(&g_mqtt_retained_lock);
-    /* P3: append to the persistent retain file (best-effort). */
+    /* v0.5.84: append to the persistent retain file (best-effort).
+     * Format: "<topic> <len> <payload>\n" — single length field. */
     if (g_mqtt_retain_path[0]) {
         FILE *f = fopen(g_mqtt_retain_path, "a");
         if (f) {
-            fprintf(f, "%s %d %zu ", g_mqtt_retained[idx].topic,
-                    (int)g_mqtt_retained[idx].payload_len, len);
+            fprintf(f, "%s %zu ", g_mqtt_retained[idx].topic, len);
             if (len > 0) fwrite(payload, 1, len, f);
             fputc('\n', f);
             fclose(f);
@@ -654,15 +654,21 @@ void cmq_mqtt_set_credentials(const char *user, const char *pass) {
 
 void cmq_mqtt_set_retain_path(const char *path) {
     if (path) {
-        snprintf(g_mqtt_retain_path, sizeof(g_mqtt_retain_path),
-                  "%s", path);
-        FILE *f = fopen(g_mqtt_retain_path, "r");
+        /* v0.5.84: read the file BEFORE enabling the write path.
+         * cmq_mqtt_store_retained (called for each entry) would
+         * re-append the entry to the same file, causing the fscanf
+         * loop to read the new entries and loop forever. We
+         * therefore clear g_mqtt_retain_path for the duration of
+         * the read, then restore it on the way out. */
+        g_mqtt_retain_path[0] = '\0';
+        FILE *f = fopen(path, "r");
         if (f) {
             char topic[128];
-            int tlen;
             size_t plen;
-            while (fscanf(f, "%127s %d %zu ", topic, &tlen, &plen) == 3) {
-                if (tlen <= 0 || tlen >= 128 || plen == 0) continue;
+            /* Format: "<topic> <len> <payload>\n" — single length
+             * field. */
+            while (fscanf(f, "%127s %zu ", topic, &plen) == 2) {
+                if (plen == 0) continue;
                 uint8_t *buf = malloc(plen);
                 if (buf) {
                     if (fread(buf, 1, plen, f) == plen) {
@@ -673,6 +679,9 @@ void cmq_mqtt_set_retain_path(const char *path) {
             }
             fclose(f);
         }
+        /* Restore the path so subsequent stores append to it. */
+        snprintf(g_mqtt_retain_path, sizeof(g_mqtt_retain_path),
+                  "%s", path);
     } else {
         g_mqtt_retain_path[0] = '\0';
     }

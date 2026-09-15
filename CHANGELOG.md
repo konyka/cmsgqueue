@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.5.84 - 2026-09-15
+
+### Status
+- **Critical production fix + defensive test.** Closes a
+  silent infinite-loop bug in the MQTT retain file
+  persistence path. Servers booting with an existing
+  retain file would hang at startup. The bug was latent
+  because the v0.5.43 retained test did not exercise
+  the file-load path.
+
+### Fixed
+- **`src/enterprise/cmq_mqtt_server.c::cmq_mqtt_set_retain_path`** —
+  the read loop called `cmq_mqtt_store_retained` for each
+  entry, which appends to the file (since the path was
+  already set). Each store created a new line that the
+  fscanf loop then re-read, looping forever. Fix: clear
+  `g_mqtt_retain_path` before the read loop, restore on
+  the way out. While empty, `cmq_mqtt_store_retained`
+  skips the file write.
+- **`src/enterprise/cmq_mqtt_server.c::cmq_mqtt_store_retained`** —
+  on-disk format cleanup. Old format wrote two length
+  fields (always equal); new format writes one. Reader
+  updated to match.
+- **`tests/test_tls_e2e_handshake.c::alpn_no_overlap_rejected`** —
+  port 25580 → 25581. v0.5.80 also uses 25580 (but
+  doesn't bind, so no runtime conflict); the move makes
+  per-test port usage unambiguous in the source.
+
+### Added
+- **`tests/test_mqtt_retained_file.c`** (new file, 2 tests):
+  - `mqtt_retained_file.file_format_text` — directly
+    inspects the on-disk file after a store. Verifies the
+    line is `<topic> <len> <payload>\n` with a single
+    length field.
+  - `mqtt_retained_file.roundtrip_via_set_path` — stores
+    a message, re-reads the file via
+    `cmq_mqtt_set_retain_path`, verifies the message is
+    restored via `cmq_mqtt_fetch_retained`. Without the
+    production fix, this test hangs forever.
+
+### Migration
+- v0.5.84 changes the on-disk retain file format (one
+  length instead of two). Deployments with existing
+  retain files must clear the file before upgrading —
+  the new reader cannot parse the old format. New
+  deployments start with the clean format. No migration
+  logic is shipped.
+
+### Verified
+- 2/2 PASS in `tests/test_mqtt_retained_file.c` (3/3
+  stable runs).
+- 31/31 PASS in `tests/test_tls_e2e_handshake.c`
+  (3/3 stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_wildcard.c`
+  (no regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 121.8 s (was 87; +1 for new test_mqtt_retained_file).
+- `test_enterprise.tls.session_lifecycle` remains failing
+  in the v0.5.81+ baseline (missing test certs); unrelated.
+- Bench: ~33-34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.83 - 2026-09-15
 
 ### Status
