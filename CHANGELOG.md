@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.81 - 2026-09-05
+
+### Status
+- **Docs-only release.** Captures a bench snapshot and CHANGELOG
+  entry for the post-v0.5.80 state. The TLS defensive test
+  suite (`tests/test_tls_e2e_handshake.c`) reached 29 tests
+  covering v0.5.45 through v0.5.80. v0.5.81 commits the
+  documentation snapshot.
+
+### Verified
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.80 - 2026-09-05
 
 ### Added
