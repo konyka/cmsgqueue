@@ -156,5 +156,60 @@ TEST(mqtt_retained_file, truncated_record_does_not_poison_following) {
     unlink(path);
 }
 
+/* v0.5.86: same-topic replace contract.
+ *
+ * Lock in the last-write-wins replacement contract for
+ * retained-file recovery. cmq_mqtt_store_retained searches
+ * the in-memory array for an existing entry with the same
+ * topic and replaces it. When the file is read in order,
+ * the LAST entry in the file must win. A future regression
+ * that appends without checking for an existing match would
+ * let the first entry leak into the retained list and
+ * silently consume the MQTT_MAX_RETAINED cap.
+ */
+TEST(mqtt_retained_file, same_topic_second_entry_wins) {
+    char path[256];
+    v0584_unique_path(path, sizeof(path));
+    unlink(path);
+
+    FILE *f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    /* Two records for the same topic, in order. The second
+     * payload must win on recovery. */
+    const char *shared_topic = "v0586/dup/test";
+    const uint8_t first_payload[] = "first-payload";
+    const uint8_t second_payload[] = "second-payload-later-wins";
+    fprintf(f, "%s %zu ", shared_topic, sizeof(first_payload) - 1);
+    fwrite(first_payload, 1, sizeof(first_payload) - 1, f);
+    fputc('\n', f);
+    fprintf(f, "%s %zu ", shared_topic, sizeof(second_payload) - 1);
+    fwrite(second_payload, 1, sizeof(second_payload) - 1, f);
+    fputc('\n', f);
+    fclose(f);
+
+    cmq_mqtt_set_retain_path(path);
+
+    const uint8_t *out = NULL;
+    size_t out_len = 0;
+    int fetch_rc = cmq_mqtt_fetch_retained(shared_topic, &out, &out_len);
+    ASSERT_EQ(fetch_rc, 0);
+    ASSERT_EQ(out_len, sizeof(second_payload) - 1);
+    /* The recovered payload must be the SECOND entry, not
+     * the first. A regression that returned "first-payload"
+     * here would let stale retained messages survive a
+     * reload. */
+    if (out_len == sizeof(second_payload) - 1 &&
+        memcmp(out, second_payload, out_len) == 0) {
+        /* expected */
+    } else {
+        fprintf(stderr, "v0.5.86: same-topic retained was '%.*s' "
+                "(expected '%s')\n", (int)out_len,
+                out ? (const char *)out : "", second_payload);
+    }
+    ASSERT_EQ(memcmp(out, second_payload, out_len), 0);
+
+    unlink(path);
+}
+
 /* The test runner is supplied by cmq_test.h. */
 TEST_MAIN()

@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.86 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the last-write-wins
+  replacement contract for retained-file recovery. No
+  production change.
+
+### Added
+- **`tests/test_mqtt_retained_file.c::same_topic_second_entry_wins`**
+  — writes two records for the same topic into the retain
+  file, calls `cmq_mqtt_set_retain_path` to load them, and
+  asserts that `cmq_mqtt_fetch_retained` returns the
+  SECOND payload. A regression that appended without
+  checking for an existing match would let the first
+  entry leak into the in-memory retained list and
+  silently consume the MQTT_MAX_RETAINED cap.
+
+### Verified
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (3/3
+  stable runs).
+- 31/31 PASS in `tests/test_tls_e2e_handshake.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.1 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure (missing test certs); unrelated.
+- `test_rl_concurrent` was intermittently failing under
+  the full-suite run but passed in isolation; documented
+  as environmental.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.85 - 2026-09-15
 
 ### Status
