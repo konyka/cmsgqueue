@@ -2674,4 +2674,120 @@ TEST(tls_e2e_handshake, alpn_three_protocols_server_preference) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 36 (v0.5.90): mTLS + ALPN combined ----------
+ *
+ * Locks in the combination of mTLS client-cert
+ * authentication and ALPN protocol negotiation on a
+ * single listener. The existing 5 mTLS tests and 4 ALPN
+ * tests cover each subsystem in isolation; a regression
+ * in their interaction would slip through those tests
+ * uncovered.
+ *
+ * Test design:
+ *   1. Generate CA + server cert + client cert.
+ *   2. Spin up server with both mTLS (verify_peer=1,
+ *      tls_ca set) and ALPN "h2,nats" on port 25586.
+ *   3. Connect a client with both a valid client
+ *      certificate AND ALPN "nats,h2".
+ *   4. Assert the handshake completes.
+ *   5. Assert SSL_get0_alpn_selected returns "h2"
+ *      (server's first preference), proving both
+ *      subsystems worked in combination.
+ *
+ * Why it matters: many production endpoints use both
+ * mTLS and ALPN simultaneously. A regression in either
+ * subsystem, or in their interaction, would silently
+ * break those deployments.
+ */
+TEST(tls_e2e_handshake, mtls_alpn_combined) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    (void)rc;
+    ASSERT_EQ(mtls_gen_ca(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server.pem",
+                                MTLS_DIR "/server.key",
+                                "v0590server"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/client.pem",
+                                MTLS_DIR "/client.key",
+                                "v0590client"), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25586;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/server.pem";
+    cfg.tls_key = MTLS_DIR "/server.key";
+    cfg.tls_ca = MTLS_DIR "/ca.pem";
+    cfg.tls_verify_peer = 1;  /* mTLS: require + verify client certs */
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Set server ALPN to "h2,nats" and reload so the SSL_CTX
+     * carries both the protos list and the select callback. */
+    ASSERT_EQ(cmq_tls_set_alpn(srv->tls_config_slots[0],
+                              "h2,nats"), 0);
+    ASSERT_EQ(cmq_tls_reload(srv->tls_config_slots[0]), 0);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    int cfd = open_tcp(25586);
+    ASSERT(cfd >= 0);
+
+    /* Drive a TLS handshake with both a client certificate
+     * (mTLS) and ALPN "nats,h2". The shared client CTX in
+     * drive_handshake_with_client_cert does not set ALPN, so
+     * we build an inline equivalent that does both. */
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, MTLS_DIR "/ca.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+    ASSERT_EQ(SSL_CTX_use_certificate_file(cctx, MTLS_DIR "/client.pem",
+                                           SSL_FILETYPE_PEM), 1);
+    ASSERT_EQ(SSL_CTX_use_PrivateKey_file(cctx, MTLS_DIR "/client.key",
+                                          SSL_FILETYPE_PEM), 1);
+    /* Client ALPN "nats,h2" — wire-format: 4 nats 2 h2.
+     * Server picks "h2" (its first preference). */
+    const unsigned char client_alpn[] = {
+        4, 'n','a','t','s', 2, 'h','2'
+    };
+    ASSERT_EQ(SSL_CTX_set_alpn_protos(cctx, client_alpn,
+                                       sizeof(client_alpn)), 0);
+
+    SSL *cssl = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl);
+    SSL_set_fd(cssl, cfd);
+    SSL_set_connect_state(cssl);
+
+    struct hs_arg carg = { cssl, cfd, 0 };
+    pthread_t hs_tid;
+    ASSERT_EQ(pthread_create(&hs_tid, NULL, hs_thread, &carg), 0);
+    pthread_join(hs_tid, NULL);
+    /* Handshake must succeed: mTLS accepted client cert,
+     * AND ALPN negotiated. */
+    ASSERT_EQ(carg.rc, 1);
+
+    const unsigned char *sel = NULL;
+    unsigned int sel_len = 0;
+    SSL_get0_alpn_selected(cssl, &sel, &sel_len);
+    ASSERT_NOT_NULL(sel);
+    /* Server's first preference "h2" must win. */
+    ASSERT(memcmp(sel, "h2", 2) == 0);
+
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    rc = system("rm -rf " MTLS_DIR); (void)rc;
+}
+
 TEST_MAIN()

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.90 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the combination of
+  mTLS client-cert authentication and ALPN protocol
+  negotiation on a single listener. No production
+  change.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_alpn_combined`** —
+  server with `verify_peer=1` and ALPN "h2,nats" on
+  port 25586; client presents a valid certificate AND
+  ALPN "nats,h2"; asserts the negotiated protocol is "h2"
+  (server's first preference). The existing 5 mTLS
+  tests and 4 ALPN tests cover each subsystem in
+  isolation; this exercises their interaction on the
+  same listener.
+
+### Verified
+- 36/36 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.5 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~29-34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.89 - 2026-09-15
 
 ### Status
