@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.89 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the RFC 7301
+  server-preference contract for ALPN protocol lists with
+  more than two entries. No production change.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::alpn_three_protocols_server_preference`** —
+  server offers "h2,http/1.1,nats"; client offers
+  "nats,h2,http/1.1"; assert the negotiated protocol is
+  "h2" (server's first preference), NOT "nats" (the
+  client's first preference) and NOT "http/1.1" (the
+  server's second preference). The existing 2-element
+  ALPN tests would not catch a regression at length 3.
+
+### Verified
+- 35/35 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.0 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.88 - 2026-09-15
 
 ### Status

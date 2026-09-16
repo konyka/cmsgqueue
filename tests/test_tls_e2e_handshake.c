@@ -2575,4 +2575,103 @@ TEST(tls_e2e_handshake, tls_reload_invalid_cert_preserves_context) {
     unlink(TLS_DIR "/cert.original.pem");
 }
 
+/* ---------- Test 35 (v0.5.89): ALPN 3+ protocol list server preference ----------
+ *
+ * Locks in the RFC 7301 server-preference contract for
+ * protocol lists with more than two entries. The existing
+ * ALPN tests cover the 2-element case; a regression in
+ * cmq_tls_alpn_select_cb's iteration logic that broke at
+ * length 3 would slip through those tests uncovered.
+ *
+ * Test design:
+ *   1. Server: ALPN "h2,http/1.1,nats" (server prefers
+ *      h2 first, http/1.1 second, nats third).
+ *   2. Client: ALPN "nats,h2,http/1.1" (client prefers
+ *      nats first; server's first preference is the
+ *      client's second choice).
+ *   3. After the handshake, assert SSL_get0_alpn_selected
+ *      returns "h2" (server's first preference), NOT
+ *      "nats" (client's first preference) and NOT
+ *      "http/1.1" (server's second preference).
+ *
+ * Catches regressions: a future change to
+ * cmq_tls_alpn_select_cb that walks the client's list
+ * first (instead of the server's), or that miscounts
+ * length fields, would break the contract on 3+ element
+ * lists.
+ */
+TEST(tls_e2e_handshake, alpn_three_protocols_server_preference) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0589server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25585;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Server: "h2,http/1.1,nats" — server prefers h2 first. */
+    ASSERT_EQ(cmq_tls_set_alpn(srv->tls_config_slots[0],
+                              "h2,http/1.1,nats"), 0);
+    ASSERT_EQ(cmq_tls_reload(srv->tls_config_slots[0]), 0);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    int cfd = open_tcp(25585);
+    ASSERT(cfd >= 0);
+
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+
+    /* Client: "nats,h2,http/1.1" — client prefers nats first.
+     * Both lists contain {h2, http/1.1, nats}; server's
+     * order determines the winner. Wire-format:
+     * 4 nats 2 h2 8 http/1.1. */
+    const unsigned char client_alpn[] = {
+        4, 'n','a','t','s',
+        2, 'h','2',
+        8, 'h','t','t','p','/','1','.','1'
+    };
+    ASSERT_EQ(SSL_CTX_set_alpn_protos(cctx, client_alpn,
+                                       sizeof(client_alpn)), 0);
+
+    SSL *cssl = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl);
+    SSL_set_fd(cssl, cfd);
+    SSL_set_connect_state(cssl);
+
+    struct hs_arg carg = { cssl, cfd, 0 };
+    pthread_t hs_tid;
+    ASSERT_EQ(pthread_create(&hs_tid, NULL, hs_thread, &carg), 0);
+    pthread_join(hs_tid, NULL);
+    ASSERT_EQ(carg.rc, 1);
+
+    const unsigned char *sel = NULL;
+    unsigned int sel_len = 0;
+    SSL_get0_alpn_selected(cssl, &sel, &sel_len);
+    ASSERT_NOT_NULL(sel);
+    /* Server's first preference "h2" must win, NOT the
+     * client's first preference "nats" and NOT the
+     * server's second preference "http/1.1". */
+    ASSERT(memcmp(sel, "h2", 2) == 0);
+
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
