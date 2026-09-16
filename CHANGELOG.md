@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.88 - 2026-09-15
+
+### Status
+- **Defensive test only.** Adds coverage for the failed
+  certificate-reload rollback path. No production code
+  change was required: `cmq_tls_reload` already validates
+  the new SSL_CTX before swapping it into the live config.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_reload_invalid_cert_preserves_context`**
+  — starts a TLS server on port 25584, replaces the
+  configured certificate file with malformed PEM, asserts
+  `cmq_tls_reload` returns `-1`, restores the exact
+  original certificate bytes, and completes a real TLS
+  handshake. This verifies that a failed reload leaves the
+  old known-good SSL_CTX serving traffic.
+- Added a bounded streaming `copy_file` helper in the TLS
+  test to restore the exact certificate rather than
+  generating a different certificate, preserving the
+  rollback test's trust relationship.
+
+### Verified
+- 34/34 PASS in `tests/test_tls_e2e_handshake.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.1 s.
+- Bench: ~34.8K msg/s, p99 99.1 µs (unchanged).
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem` are
+  absent; unrelated to this change.
+
 ## 0.5.87 - 2026-09-15
 
 ### Status

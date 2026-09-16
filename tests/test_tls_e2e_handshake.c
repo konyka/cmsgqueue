@@ -63,6 +63,29 @@ static void gen_cert(const char *cert, const char *key, const char *cn) {
     (void)rc;
 }
 
+static int copy_file(const char *src, const char *dst) {
+    FILE *in = fopen(src, "rb");
+    if (!in) return -1;
+    FILE *out = fopen(dst, "wb");
+    if (!out) {
+        fclose(in);
+        return -1;
+    }
+    char buf[4096];
+    size_t n;
+    int rc = 0;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            rc = -1;
+            break;
+        }
+    }
+    if (ferror(in)) rc = -1;
+    if (fclose(out) != 0) rc = -1;
+    fclose(in);
+    return rc;
+}
+
 static void *server_thread(void *arg) {
     cmq_server_run((cmq_server_t *)arg);
     return NULL;
@@ -2482,6 +2505,74 @@ TEST(tls_e2e_handshake, session_resumption_works_after_reload) {
     cmq_server_stop(srv);
     pthread_join(tid, NULL);
     cmq_server_destroy(srv);
+}
+
+/* ---------- Test 34 (v0.5.88): invalid reload preserves context ----------
+ *
+ * Regression test for the atomic rollback contract of
+ * cmq_tls_reload. The reload path must build and validate a
+ * new SSL_CTX before swapping it into the live config. If
+ * the certificate is malformed, reload must return -1 and
+ * leave the old, known-good context serving traffic.
+ *
+ * Test design:
+ *   1. Create a server with a valid certificate on port 25584.
+ *   2. Replace the configured certificate file with malformed
+ *      PEM and assert cmq_tls_reload returns -1.
+ *   3. Restore the valid certificate file.
+ *   4. Start the listener and complete a real TLS handshake.
+ *
+ * If reload freed or replaced the old context before
+ * validation completed, the final handshake would fail.
+ */
+TEST(tls_e2e_handshake, tls_reload_invalid_cert_preserves_context) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0588server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25584;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Snapshot the valid certificate so we can restore it after
+     * corrupting it for the failed-reload case. */
+    ASSERT_EQ(copy_file(TLS_DIR "/cert.pem", TLS_DIR "/cert.original.pem"), 0);
+
+    /* Corrupt the on-disk certificate. */
+    FILE *bad = fopen(TLS_DIR "/cert.pem", "w");
+    ASSERT_NOT_NULL(bad);
+    fputs("not a certificate\n", bad);
+    fclose(bad);
+
+    /* reload must reject the corrupted material. The old SSL_CTX
+     * must remain installed. */
+    ASSERT_EQ(cmq_tls_reload(srv->tls_config_slots[0]), -1);
+
+    /* Restore the exact original certificate. The handshake in
+     * the next step proves the old SSL_CTX still trusts it. */
+    ASSERT_EQ(copy_file(TLS_DIR "/cert.original.pem",
+                        TLS_DIR "/cert.pem"), 0);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    int cfd = open_tcp(25584);
+    ASSERT(cfd >= 0);
+    ASSERT_EQ(drive_handshake(cfd, TLS_DIR "/cert.pem"), 1);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    unlink(TLS_DIR "/cert.original.pem");
 }
 
 TEST_MAIN()
