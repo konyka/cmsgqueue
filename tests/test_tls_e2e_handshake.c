@@ -2903,4 +2903,97 @@ TEST(tls_e2e_handshake, tls12_session_resumption) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 38 (v0.5.92): ALPN client list with duplicates ----------
+ *
+ * Defensive test for ALPN server-preference when the
+ * client list contains duplicate protocol entries.
+ * The server-side callback iterates the SERVER's wire-
+ * format list and returns the first server-listed protocol
+ * that matches any client entry. Duplicates in the
+ * client list are silently ignored. This test locks in
+ * the contract: server's first preference wins regardless
+ * of duplicates on the client side.
+ *
+ * Test design:
+ *   1. Server: ALPN "h2,nats" on port 25588.
+ *   2. Client: ALPN "h2,h2,nats" — the client's first
+ *      protocol appears twice, then the client's second.
+ *   3. After the handshake, assert SSL_get0_alpn_selected
+ *      returns "h2" (server's first preference), NOT "nats".
+ *
+ * Why it matters: production HTTP/2 deployments have
+ * observed buggy clients sending duplicate ALPN entries.
+ * A regression that walks the client list with a
+ * "already-returned" tracker would surface here as a
+ * failure (e.g., returning "nats" because the second
+ * "h2" was "already used").
+ */
+TEST(tls_e2e_handshake, alpn_client_list_with_duplicates) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0592server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25588;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Server: "h2,nats" — server prefers h2 first. */
+    ASSERT_EQ(cmq_tls_set_alpn(srv->tls_config_slots[0], "h2,nats"), 0);
+    ASSERT_EQ(cmq_tls_reload(srv->tls_config_slots[0]), 0);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    int cfd = open_tcp(25588);
+    ASSERT(cfd >= 0);
+
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+
+    /* Client: "h2,h2,nats" — duplicate h2, then nats.
+     * Wire-format: 2 h2 2 h2 4 nats. */
+    const unsigned char client_alpn[] = {
+        2, 'h','2', 2, 'h','2', 4, 'n','a','t','s'
+    };
+    ASSERT_EQ(SSL_CTX_set_alpn_protos(cctx, client_alpn,
+                                       sizeof(client_alpn)), 0);
+
+    SSL *cssl = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl);
+    SSL_set_fd(cssl, cfd);
+    SSL_set_connect_state(cssl);
+
+    struct hs_arg carg = { cssl, cfd, 0 };
+    pthread_t hs_tid;
+    ASSERT_EQ(pthread_create(&hs_tid, NULL, hs_thread, &carg), 0);
+    pthread_join(hs_tid, NULL);
+    ASSERT_EQ(carg.rc, 1);
+
+    const unsigned char *sel = NULL;
+    unsigned int sel_len = 0;
+    SSL_get0_alpn_selected(cssl, &sel, &sel_len);
+    ASSERT_NOT_NULL(sel);
+    /* Server's first preference "h2" must win despite the
+     * duplicate "h2" entry in the client list. */
+    ASSERT(memcmp(sel, "h2", 2) == 0);
+
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

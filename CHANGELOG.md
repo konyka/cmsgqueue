@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.92 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the ALPN
+  server-preference callback's behavior when the client
+  list contains duplicate protocol entries. No
+  production change.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::alpn_client_list_with_duplicates`** —
+  server offers "h2,nats"; client offers "h2,h2,nats"
+  (with the first protocol duplicated); asserts the
+  negotiated protocol is "h2" (server's first preference).
+  Catches regressions where the callback tracks
+  "already-matched" entries on the client side.
+
+### Verified
+- 38/38 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.2 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~29-34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.91 - 2026-09-15
 
 ### Status
