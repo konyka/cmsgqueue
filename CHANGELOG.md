@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.91 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in ID-based TLS session
+  resumption on the initial SSL_CTX by pinning the test
+  client to TLS 1.2. No production change.
+
+### Investigation
+- The existing v0.5.73 `tls_session_resumption` test
+  asserted `reused == 0 || reused == 1` because the client
+  defaulted to TLS 1.3, which uses session tickets (not
+  the server's `get_cb`). That masked the real cache
+  behavior.
+- A standalone TLS 1.2 client against the production
+  certificate correctly observes `reused == 1` on the
+  second connection. The cache machinery works; the
+  existing test was just hitting the wrong protocol.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls12_session_resumption`** —
+  client pinned to TLS 1.2; capture session on connection
+  1; present on connection 2; assert `reused == 1`.
+  Asserts `SSL_version == 0x0303` to confirm the protocol
+  pin. Catches regressions that would silently disable
+  ID-based resumption on the initial CTX.
+
+### Verified
+- 37/37 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.1 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~33-34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.90 - 2026-09-15
 
 ### Status

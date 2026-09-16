@@ -2790,4 +2790,117 @@ TEST(tls_e2e_handshake, mtls_alpn_combined) {
     rc = system("rm -rf " MTLS_DIR); (void)rc;
 }
 
+/* ---------- Test 37 (v0.5.91): TLS 1.2 session resumption ----------
+ *
+ * Defensive test for ID-based TLS session resumption on the
+ * initial SSL_CTX. The existing v0.5.73
+ * `tls_session_resumption` test and the v0.5.87 reload-
+ * survives test both use a client without a TLS version
+ * pin, which lets OpenSSL default to TLS 1.3. TLS 1.3
+ * uses session tickets by default, so the server's
+ * `get_cb` is never consulted and `SSL_session_reused`
+ * returns 0 regardless of whether the cache lookup works.
+ * That masked the real cache-hit behavior behind an
+ * "accept either 0 or 1" assertion.
+ *
+ * Test design:
+ *   1. Server with TLS on port 25587.
+ *   2. Client pinned to TLS 1.2 only (min/max).
+ *   3. Connection 1: full handshake. Capture the session.
+ *      Assert SSL_version == 0x0303 and reused == 0.
+ *   4. Connection 2: present the captured session.
+ *   5. Assert reused == 1. The server's get_cb MUST hit
+ *      the cache, the session_id_context MUST match, and
+ *      the gen_session_id MUST produce an ID the client
+ *      accepts.
+ *
+ * Why TLS 1.2 specifically: TLS 1.3 resumption uses
+ * tickets (independent of get_cb); TLS 1.2 with the
+ * production code's session cache wiring uses
+ * session IDs and goes through get_cb. This test
+ * isolates that path.
+ */
+TEST(tls_e2e_handshake, tls12_session_resumption) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0591server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25587;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Shared client context pinned to TLS 1.2. */
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+    SSL_CTX_set_min_proto_version(cctx, TLS1_2_VERSION);
+    SSL_CTX_set_max_proto_version(cctx, TLS1_2_VERSION);
+
+    /* Connection 1: full handshake. Capture the session. */
+    int cfd1 = open_tcp(25587);
+    ASSERT(cfd1 >= 0);
+    SSL *cssl1 = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl1);
+    SSL_set_fd(cssl1, cfd1);
+    SSL_set_connect_state(cssl1);
+    struct hs_arg carg1 = { cssl1, cfd1, 0 };
+    pthread_t ct1;
+    ASSERT_EQ(pthread_create(&ct1, NULL, hs_thread, &carg1), 0);
+    pthread_join(ct1, NULL);
+    ASSERT_EQ(carg1.rc, 1);
+    /* Negotiated version must be TLS 1.2 (0x0303). */
+    ASSERT_EQ(SSL_version(cssl1), 0x0303);
+    /* First connection is a full handshake, not a resumption. */
+    ASSERT_EQ(SSL_session_reused(cssl1), 0);
+
+    SSL_SESSION *sess = SSL_get1_session(cssl1);
+    ASSERT_NOT_NULL(sess);
+    SSL_shutdown(cssl1);
+    SSL_free(cssl1);
+    close(cfd1);
+
+    /* Connection 2: present the captured session. Expect
+     * ID-based resumption. */
+    int cfd2 = open_tcp(25587);
+    ASSERT(cfd2 >= 0);
+    SSL *cssl2 = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl2);
+    SSL_set_fd(cssl2, cfd2);
+    SSL_set_connect_state(cssl2);
+    ASSERT_EQ(SSL_set_session(cssl2, sess), 1);
+    SSL_SESSION_free(sess);
+
+    struct hs_arg carg2 = { cssl2, cfd2, 0 };
+    pthread_t ct2;
+    ASSERT_EQ(pthread_create(&ct2, NULL, hs_thread, &carg2), 0);
+    pthread_join(ct2, NULL);
+    ASSERT_EQ(carg2.rc, 1);
+
+    /* Server must have served the cached session. */
+    int second_resumed = SSL_session_reused(cssl2);
+    fprintf(stderr, "v0.5.91: 2nd (TLS 1.2) reused=%d\n", second_resumed);
+    ASSERT_EQ(second_resumed, 1);
+
+    SSL_shutdown(cssl2);
+    SSL_free(cssl2);
+    close(cfd2);
+    SSL_CTX_free(cctx);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
