@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.5.94 - 2026-09-15
+
+### Status
+- **Production change + defensive test.** Adds a new
+  `tls_no_tickets` configuration option that disables TLS
+  session tickets (NewSessionTicket) on the server. ID-
+  based session resumption still works. Operators can now
+  turn off session tickets for compliance or session-
+  binding reasons.
+
+### Added
+- **`cmq_config_t.tls_no_tickets`** — new `int` field.
+  When non-zero, the server's SSL_CTX is configured with
+  `SSL_OP_NO_TICKET` in both `tls_build_ssl_ctx` and
+  `cmq_tls_reload`.
+- **`cmq_tls_set_no_tickets(cfg, val)`** — public setter.
+- **`cmq_listener.tls_no_tickets`** — per-listener field
+  (added for forward compatibility; slot 0 wiring only in
+  v0.5.94; per-listener wiring deferred).
+- **`tests/test_tls_e2e_handshake.c::tls_no_tickets_disables_ticket_issuance`** —
+  defensive test: starts a server with `tls_no_tickets=1`,
+  reaches into the slot 0 SSL_CTX via the test-only
+  accessor, and asserts `SSL_CTX_get_options(ctx) &
+  SSL_OP_NO_TICKET` is non-zero. The test also completes a
+  real handshake to verify the listener still works with
+  tickets disabled.
+
+### Investigation note
+- The investigation behind v0.5.94 discovered that
+  `cmq_tls_session_cache_init` (defined in
+  `cmq_tls_session_cache.c:66`) is never called anywhere in
+  the codebase. As a result, `cfg->session_cache_state`
+  stays NULL, and `cmq_tls_session_cache_insert` always
+  returns -1. The session resumption observed in the v0.5.91
+  test (reused=1) was actually OpenSSL's INTERNAL fallback
+  cache despite `SSL_SESS_CACHE_NO_INTERNAL`. This is a
+  pre-existing bug tracked separately; v0.5.94 does NOT
+  fix it. The v0.5.94 test does not assert reused==1
+  precisely because the cache init bug makes that assertion
+  unreliable on this codebase.
+
+### Verified
+- 40/40 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.7 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.93 - 2026-09-15
 
 ### Status

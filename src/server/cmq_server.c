@@ -7076,6 +7076,10 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         if (srv->config.tls_verify_peer) {
             cmq_tls_set_verify(srv->tls_config_slots[0], 1);
         }
+        /* v0.5.94: optionally disable session tickets. */
+        if (srv->config.tls_no_tickets) {
+            cmq_tls_set_no_tickets(srv->tls_config_slots[0], 1);
+        }
         if (cmq_tls_load(srv->tls_config_slots[0]) != 0) {
             cmq_log_error(srv->log,
                 "TLS cert/key load failed — refusing plaintext");

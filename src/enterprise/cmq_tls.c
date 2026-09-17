@@ -38,6 +38,10 @@ struct cmq_tls_config {
     char crl[CMQ_TLS_PATH_MAX];
     char server_name[CMQ_TLS_NAME_MAX];
     int verify_peer;
+    /* v0.5.94: 1 = disable TLS session tickets. The server's
+     * SSL_CTX is configured with SSL_OP_NO_TICKET when this is
+     * set. ID-based session resumption (get_cb) still works. */
+    int no_tickets;
     uint64_t last_crl_log_ms;  /* P3 v0.5.6: log throttle */
     int has_cert;
     int has_key;
@@ -135,6 +139,10 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
      * TLS 1.3 client-cert path (v0.5.47+), this cap can lift. */
     if (cfg->verify_peer) {
         SSL_CTX_set_max_proto_version(cfg->ssl_ctx, TLS1_2_VERSION);
+    }
+    /* v0.5.94: optionally disable TLS session tickets. */
+    if (cfg->no_tickets) {
+        SSL_CTX_set_options(cfg->ssl_ctx, SSL_OP_NO_TICKET);
     }
     /* AEAD-only cipher list: TLS 1.3 ciphers are fixed by the protocol
      * (AEAD-only). For TLS 1.2, restrict to AEAD suites. */
@@ -338,6 +346,15 @@ int cmq_tls_set_verify(cmq_tls_config_t *cfg, int verify_peer) {
     return 0;
 }
 
+/* v0.5.94: 1 = disable TLS session tickets on this config. */
+int cmq_tls_set_no_tickets(cmq_tls_config_t *cfg, int no_tickets) {
+    if (!cfg) return -1;
+    if (tls_begin_op(cfg) != 0) return -1;
+    cfg->no_tickets = no_tickets ? 1 : 0;
+    tls_end_op(cfg);
+    return 0;
+}
+
 /* P2 (v0.5.2): CRL path. Loaded into the SSL_CTX's X509_STORE
  * at cmq_tls_load time. Peer certs whose serial matches a CRL
  * entry fail verification. NULL disables. */
@@ -430,6 +447,10 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
         return -1;
     }
     SSL_CTX_set_options(new_ctx, SSL_OP_NO_COMPRESSION);
+    /* v0.5.94: optionally disable TLS session tickets. */
+    if (cfg->no_tickets) {
+        SSL_CTX_set_options(new_ctx, SSL_OP_NO_TICKET);
+    }
     if (cfg->alpn_len > 0) {
         if (SSL_CTX_set_alpn_protos(new_ctx, cfg->alpn_data,
                                      cfg->alpn_len) != 0) {

@@ -3092,4 +3092,80 @@ TEST(tls_e2e_handshake, alpn_overlong_and_empty_filtering) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 40 (v0.5.94): tls_no_tickets disables ticket issuance ----------
+ *
+ * Defensive test for the new tls_no_tickets config option.
+ * When tls_no_tickets=1, the server's SSL_CTX is configured
+ * with SSL_OP_NO_TICKET, which disables NewSessionTicket
+ * emission.
+ *
+ * Test design:
+ *   1. Server on port 25590 with tls_no_tickets=1.
+ *   2. Spin up the listener.
+ *   3. Reach into the server's slot 0 SSL_CTX via the
+ *      test-only accessor cmq_tls_get_ssl_ctx_for_test.
+ *   4. Assert SSL_CTX_get_options(ctx) & SSL_OP_NO_TICKET is
+ *      non-zero. This proves the production code wired the
+ *      option.
+ *   5. Complete a real TLS handshake against the listener
+ *      to verify the server still accepts clients.
+ *
+ * Note: the v0.5.91 tls12_session_resumption test already
+ * exercises ID-based resumption against this server. v0.5.94
+ * only adds the OPTION presence check; it does not assert
+ * resumption here because (a) the per-config cache is not
+ * yet initialized at startup (cmq_tls_session_cache_init
+ * is never called — pre-existing bug tracked separately)
+ * and (b) the no-tickets + ID-based interaction is documented
+ * to differ across OpenSSL versions.
+ *
+ * Why it matters: some operators need to disable tickets
+ * for compliance or session-binding reasons. v0.5.94 gives
+ * them that option. The test locks in: tls_no_tickets=1
+ * produces an SSL_CTX with SSL_OP_NO_TICKET set.
+ */
+TEST(tls_e2e_handshake, tls_no_tickets_disables_ticket_issuance) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0594server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25590;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    /* v0.5.94: disable session tickets on the server. */
+    cfg.tls_no_tickets = 1;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Reach into slot 0 and verify SSL_OP_NO_TICKET is set.
+     * The accessor is test-only — production code never
+     * inspects the CTX directly. */
+    SSL_CTX *sctx = cmq_tls_get_ssl_ctx_for_test(srv->tls_config_slots[0]);
+    ASSERT_NOT_NULL(sctx);
+    long opts = SSL_CTX_get_options(sctx);
+    fprintf(stderr, "v0.5.94: server CTX options=0x%lx, "
+            "SSL_OP_NO_TICKET bit=%d\n", opts,
+            (int)((opts & SSL_OP_NO_TICKET) != 0));
+    ASSERT_EQ((opts & SSL_OP_NO_TICKET) != 0, 1);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    /* Sanity: the listener still accepts a real handshake. */
+    int cfd = open_tcp(25590);
+    ASSERT(cfd >= 0);
+    ASSERT_EQ(drive_handshake(cfd, TLS_DIR "/cert.pem"), 1);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
