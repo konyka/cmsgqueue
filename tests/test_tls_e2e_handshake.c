@@ -3168,4 +3168,112 @@ TEST(tls_e2e_handshake, tls_no_tickets_disables_ticket_issuance) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 41 (v0.5.95): session resumption via the per-config cache ----------
+ *
+ * Defensive test for the v0.5.95 production fix that initializes
+ * the per-config session cache in cmq_tls_load. Before the fix,
+ * the cache never worked: cmq_tls_session_cache_insert always
+ * returned -1 because cfg->session_cache_state stayed NULL.
+ * The v0.5.91 tls12_session_resumption test passed only because
+ * OpenSSL's INTERNAL fallback cache was serving resumption,
+ * despite SSL_SESS_CACHE_NO_INTERNAL being set.
+ *
+ * Test design:
+ *   1. Server on port 25591.
+ *   2. Client pinned to TLS 1.2 so ID-based resumption
+ *      applies (TLS 1.3 default uses tickets).
+ *   3. Connection 1: full handshake, capture session.
+ *      Assert reused == 0 (it's a fresh handshake).
+ *   4. Connection 2: present captured session.
+ *   5. Assert reused == 1 — the per-config cache lookup
+ *      found the session and OpenSSL resumed the
+ *      connection.
+ *
+ * Why it matters: the v0.5.91 test asserted
+ * `reused == 0 || reused == 1`, accepting both outcomes.
+ * This test asserts the strict contract `reused == 1`,
+ * proving the production fix wires the cache through to a
+ * real resumption.
+ */
+TEST(tls_e2e_handshake, tls12_session_resumption_via_cache) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0595server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25591;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+    SSL_CTX_set_min_proto_version(cctx, TLS1_2_VERSION);
+    SSL_CTX_set_max_proto_version(cctx, TLS1_2_VERSION);
+
+    /* Connection 1: full handshake, capture session. */
+    int cfd1 = open_tcp(25591);
+    ASSERT(cfd1 >= 0);
+    SSL *cssl1 = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl1);
+    SSL_set_fd(cssl1, cfd1);
+    SSL_set_connect_state(cssl1);
+    struct hs_arg carg1 = { cssl1, cfd1, 0 };
+    pthread_t ct1;
+    ASSERT_EQ(pthread_create(&ct1, NULL, hs_thread, &carg1), 0);
+    pthread_join(ct1, NULL);
+    ASSERT_EQ(carg1.rc, 1);
+    ASSERT_EQ(SSL_version(cssl1), 0x0303);
+    ASSERT_EQ(SSL_session_reused(cssl1), 0);
+
+    SSL_SESSION *sess = SSL_get1_session(cssl1);
+    ASSERT_NOT_NULL(sess);
+    SSL_shutdown(cssl1);
+    SSL_free(cssl1);
+    close(cfd1);
+
+    /* Connection 2: present captured session, expect
+     * resumption via the per-config cache. */
+    int cfd2 = open_tcp(25591);
+    ASSERT(cfd2 >= 0);
+    SSL *cssl2 = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl2);
+    SSL_set_fd(cssl2, cfd2);
+    SSL_set_connect_state(cssl2);
+    ASSERT_EQ(SSL_set_session(cssl2, sess), 1);
+    SSL_SESSION_free(sess);
+
+    struct hs_arg carg2 = { cssl2, cfd2, 0 };
+    pthread_t ct2;
+    ASSERT_EQ(pthread_create(&ct2, NULL, hs_thread, &carg2), 0);
+    pthread_join(ct2, NULL);
+    ASSERT_EQ(carg2.rc, 1);
+
+    int second_resumed = SSL_session_reused(cssl2);
+    fprintf(stderr, "v0.5.95: 2nd (TLS 1.2, cache) reused=%d\n",
+            second_resumed);
+    /* The cache fix MUST enable strict resumption. */
+    ASSERT_EQ(second_resumed, 1);
+
+    SSL_shutdown(cssl2);
+    SSL_free(cssl2);
+    close(cfd2);
+    SSL_CTX_free(cctx);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

@@ -322,6 +322,15 @@ int cmq_tls_load(cmq_tls_config_t *cfg) {
 #ifdef CMQ_TLS_OPENSSL
     if (tls_begin_op(cfg) != 0) return -1;
     int rc = tls_build_ssl_ctx(cfg);
+    if (rc == 0) {
+        /* v0.5.95: initialize the per-config session cache so the
+         * new_cb / get_cb callbacks can store and look up sessions.
+         * Without this call the cache state stayed NULL and
+         * cmq_tls_session_cache_insert always returned -1; ID-based
+         * resumption silently fell back to OpenSSL's internal
+         * cache. */
+        cmq_tls_session_cache_init(cfg);
+    }
     tls_end_op(cfg);
     return rc;
 #else

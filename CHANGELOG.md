@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.5.95 - 2026-09-15
+
+### Status
+- **Production fix.** Closes the cache-init defect surfaced
+  by the v0.5.94 investigation. `cmq_tls_session_cache_init`
+  was never called by the production load path, so the
+  per-config session cache never worked. v0.5.95 calls
+  init from `cmq_tls_load`, and adds two defensive tests
+  that lock in the contract.
+
+### Fixed
+- **`src/enterprise/cmq_tls.c::cmq_tls_load`** — after
+  `tls_build_ssl_ctx` succeeds, call
+  `cmq_tls_session_cache_init(cfg)`. The init allocates the
+  bounded LRU hash table and a mutex; without it
+  `cmq_tls_session_cache_insert` always returned -1
+  because `cfg->session_cache_state` was NULL.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls12_session_resumption_via_cache`**
+  — defensive test using a real listener handshake that
+  pins the client to TLS 1.2 and asserts `reused == 1`
+  (strict). Replaces the v0.5.91 test's "accept either 0 or
+  1" pattern with a strict contract.
+- **`tests/test_tls_session_cache.c::initialized_on_load`**
+  — defensive unit test that creates a TLS config through
+  the production load path (no explicit
+  `cmq_tls_session_cache_init`) and asserts the cache is
+  initialized and accepts insert/lookup. The team proposed
+  this to lock the regression at the production-load
+  boundary, not just at the unit-cache boundary.
+
+### Verified
+- 41/41 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 11/11 PASS in `tests/test_tls_session_cache.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.2 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.94 - 2026-09-15
 
 ### Status
