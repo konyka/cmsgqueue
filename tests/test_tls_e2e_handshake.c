@@ -2996,4 +2996,100 @@ TEST(tls_e2e_handshake, alpn_client_list_with_duplicates) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 39 (v0.5.93): ALPN overlong + empty filtering ----------
+ *
+ * Defensive test for cmq_tls_set_alpn handling of malformed
+ * CSV input. The implementation silently skips protocol
+ * names longer than 127 bytes and empty protocol names.
+ * This test exercises that boundary via a real listener
+ * handshake.
+ *
+ * Test design:
+ *   1. Build a CSV with:
+ *      - "h2,<empty>,<200-byte name>,http/1.1,nats"
+ *   2. The overlong and empty entries must be filtered.
+ *   3. Only "h2", "http/1.1", "nats" reach the wire.
+ *   4. A real client connecting with ALPN "h2" succeeds.
+ *
+ * Why it matters: real-world ALPN lists come from operator
+ * configuration files. A misconfigured entry could be a
+ * 200-byte blob. The current behavior — silently skip —
+ * is the safe choice. This test locks in the contract.
+ */
+TEST(tls_e2e_handshake, alpn_overlong_and_empty_filtering) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0593server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25589;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Build the malformed CSV. The middle empty entry comes
+     * from a trailing comma; the overlong entry is 200 'a'
+     * bytes. The valid entries are at the start and end. */
+    char malformed_csv[512];
+    int p = 0;
+    p += snprintf(malformed_csv + p, sizeof(malformed_csv) - p, "h2,,");
+    /* 200 'a' bytes */
+    for (int i = 0; i < 200; i++) malformed_csv[p++] = 'a';
+    p += snprintf(malformed_csv + p, sizeof(malformed_csv) - p, ",http/1.1,nats");
+    malformed_csv[p] = '\0';
+
+    ASSERT_EQ(cmq_tls_set_alpn(srv->tls_config_slots[0], malformed_csv), 0);
+    ASSERT_EQ(cmq_tls_reload(srv->tls_config_slots[0]), 0);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    int cfd = open_tcp(25589);
+    ASSERT(cfd >= 0);
+
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+
+    /* Client offers "h2" — must match the server's filtered
+     * list (which excludes the empty and 200-byte entries). */
+    const unsigned char client_alpn[] = {2, 'h','2'};
+    ASSERT_EQ(SSL_CTX_set_alpn_protos(cctx, client_alpn,
+                                       sizeof(client_alpn)), 0);
+
+    SSL *cssl = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl);
+    SSL_set_fd(cssl, cfd);
+    SSL_set_connect_state(cssl);
+
+    struct hs_arg carg = { cssl, cfd, 0 };
+    pthread_t hs_tid;
+    ASSERT_EQ(pthread_create(&hs_tid, NULL, hs_thread, &carg), 0);
+    pthread_join(hs_tid, NULL);
+    /* Handshake must succeed: server's filtered list contains
+     * "h2" (the 200-byte and empty entries were dropped). */
+    ASSERT_EQ(carg.rc, 1);
+
+    const unsigned char *sel = NULL;
+    unsigned int sel_len = 0;
+    SSL_get0_alpn_selected(cssl, &sel, &sel_len);
+    ASSERT_NOT_NULL(sel);
+    ASSERT(memcmp(sel, "h2", 2) == 0);
+
+    SSL_free(cssl);
+    SSL_CTX_free(cctx);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()

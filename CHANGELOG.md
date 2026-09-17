@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.93 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the
+  `cmq_tls_set_alpn` boundary behavior for malformed CSV
+  input (overlong and empty protocol names). No
+  production change.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::alpn_overlong_and_empty_filtering`** —
+  calls `cmq_tls_set_alpn` with a CSV containing a valid
+  protocol "h2", an empty entry (",,"), a 200-byte
+  overlong entry, then "http/1.1,nats". The overlong and
+  empty entries must be silently filtered; the remaining
+  three reach the wire. A real client with ALPN "h2"
+  completes a handshake, proving the filter contract.
+
+### Verified
+- 39/39 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.4 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~34-35K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.92 - 2026-09-15
 
 ### Status
