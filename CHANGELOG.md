@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.98 - 2026-09-17
+
+### Status
+- **Defensive test only.** Covers per-listener TLS startup
+  fallback when slot 3 has invalid certificate/key
+  credentials. No production code change was required.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_slot3_invalid_credentials_fallback`**
+  — configures valid global slot 0 credentials plus a
+  mismatched certificate/key pair on listener slot 3,
+  asserts server creation succeeds and slot 3 is discarded,
+  then completes a real handshake through slot 0. This
+  directly covers the documented fallback branch in
+  `cmq_server_create` (load failure destroys only the
+  invalid listener slot and continues with slot 0).
+
+### Verified
+- 44/44 PASS in `tests/test_tls_e2e_handshake.c`.
+- 11/11 PASS in `tests/test_tls_session_cache.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 123.4 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem` are
+  absent; unrelated to this change.
+- Bench: ~29-35K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.97 - 2026-09-17
 
 ### Status
