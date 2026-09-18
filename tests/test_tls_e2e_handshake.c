@@ -3380,4 +3380,87 @@ TEST(tls_e2e_handshake, tls12_session_resumption_via_cache) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 43 (v0.5.97): listener slot 3 tls_no_tickets ----------
+ *
+ * Defensive boundary test for the final supported listener
+ * slot. v0.5.96 verified slot 1 enabled and slots 0/2 stayed
+ * at the default. This test configures slot 3 and verifies
+ * the per-listener option is not lost at the upper array
+ * boundary.
+ *
+ * Four listeners use distinct certificates on ports 25595-25598.
+ * Only listeners[3].tls_no_tickets is set. Slot 3 must have
+ * SSL_OP_NO_TICKET; slot 0 remains ticket-enabled. All four
+ * listeners also complete a real handshake through the shared
+ * CA bundle.
+ */
+TEST(tls_e2e_handshake, listener_slot_3_no_tickets) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    (void)rc;
+    ASSERT_EQ(mtls_gen_ca(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server0.pem",
+                                MTLS_DIR "/server0.key",
+                                "v0597server0"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server1.pem",
+                                MTLS_DIR "/server1.key",
+                                "v0597server1"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server2.pem",
+                                MTLS_DIR "/server2.key",
+                                "v0597server2"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server3.pem",
+                                MTLS_DIR "/server3.key",
+                                "v0597server3"), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25595;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/server0.pem";
+    cfg.tls_key = MTLS_DIR "/server0.key";
+    cfg.listeners[1].tls_cert = MTLS_DIR "/server1.pem";
+    cfg.listeners[1].tls_key = MTLS_DIR "/server1.key";
+    cfg.listeners[2].tls_cert = MTLS_DIR "/server2.pem";
+    cfg.listeners[2].tls_key = MTLS_DIR "/server2.key";
+    cfg.listeners[3].tls_cert = MTLS_DIR "/server3.pem";
+    cfg.listeners[3].tls_key = MTLS_DIR "/server3.key";
+    /* Only the final supported slot disables tickets. */
+    cfg.listeners[3].tls_no_tickets = 1;
+    cfg.listener_count = 4;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    SSL_CTX *ctx0 = cmq_tls_get_ssl_ctx_for_test(srv->tls_config_slots[0]);
+    SSL_CTX *ctx3 = cmq_tls_get_ssl_ctx_for_test(srv->tls_config_slots[3]);
+    ASSERT_NOT_NULL(ctx0);
+    ASSERT_NOT_NULL(ctx3);
+    long opts0 = SSL_CTX_get_options(ctx0);
+    long opts3 = SSL_CTX_get_options(ctx3);
+    ASSERT_EQ((opts0 & SSL_OP_NO_TICKET) != 0, 0);
+    ASSERT_EQ((opts3 & SSL_OP_NO_TICKET) != 0, 1);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 4);
+    for (int i = 0; i < 4; i++) ASSERT(srv->listen_fds[i] >= 0);
+
+    for (int i = 0; i < 4; i++) {
+        int cfd = open_tcp(25595 + i);
+        ASSERT(cfd >= 0);
+        ASSERT_EQ(drive_handshake(cfd, MTLS_DIR "/ca.pem"), 1);
+        close(cfd);
+    }
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    rc = system("rm -rf " MTLS_DIR); (void)rc;
+}
+
 TEST_MAIN()

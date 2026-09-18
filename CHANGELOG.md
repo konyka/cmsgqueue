@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.97 - 2026-09-17
+
+### Status
+- **Defensive test only.** Covers the final supported
+  per-listener TLS slot (slot 3) for `tls_no_tickets`.
+  No production code change was required; v0.5.96's
+  per-listener wiring already covered slots 1-3.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::listener_slot_3_no_tickets`**
+  — configures four TLS listeners with distinct
+  CA-signed certificates, sets `listeners[3].tls_no_tickets
+  = 1`, verifies slot 3's SSL_CTX has `SSL_OP_NO_TICKET`
+  while slot 0 remains ticket-enabled, and completes real
+  handshakes on all four listeners via the shared CA bundle.
+  This closes the upper-boundary gap left by v0.5.96's
+  slot-1-enabled / slot-0-and-2-untouched test.
+
+### Verified
+- 43/43 PASS in `tests/test_tls_e2e_handshake.c`.
+- 11/11 PASS in `tests/test_tls_session_cache.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.9 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem` are
+  absent; unrelated to this change.
+- Bench: ~33-35K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.96 - 2026-09-17
 
 ### Status
