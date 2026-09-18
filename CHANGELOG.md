@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.0 - 2026-09-17
+
+### Status
+- **v0.6.0 milestone: TLS reload lifetime safety.** The
+  existing v0.5.4 `SSL_CTX_up_ref` design was audited and
+  exercised through a real active TLS session. No production
+  code change was required: the existing reference-counted
+  context ownership remains valid.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::reload_with_active_tls_session`**
+  — completes a TLS handshake, keeps the original client
+  SSL* active, calls `cmq_tls_reload`, completes a new
+  handshake through the replacement context, then closes
+  the original session. This is a real-listener regression
+  test for UAF/lifetime safety, not a synthetic refcount
+  smoke test.
+- `docs/reviews/v0.6.0.enumeration.md` documenting the
+  lifetime-safety contract and deferred concurrent stress
+  coverage.
+
+### Verified
+- 43/43 PASS in `tests/test_tls_e2e_handshake.c`.
+- 11/11 PASS in `tests/test_tls_session_cache.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 123.4 s.
+- Bench: ~34-35K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.99 - 2026-09-17
 
 ### Status

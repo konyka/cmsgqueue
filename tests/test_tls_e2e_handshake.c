@@ -3580,4 +3580,70 @@ TEST(tls_e2e_handshake, tls_invalid_middle_slot_preserves_later_listener) {
     rc = system("rm -rf " MTLS_DIR); (void)rc;
 }
 
+/* ---------- Test 43 (v0.6.0): reload with active TLS session ----------
+ *
+ * Exercises the existing SSL_CTX_up_ref lifetime contract through
+ * a real active TLS connection. The original SSL* must remain
+ * valid after cmq_tls_reload swaps in a replacement context,
+ * while a new connection must use the replacement context.
+ */
+TEST(tls_e2e_handshake, reload_with_active_tls_session) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0600server");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25603;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+    ASSERT(srv->listen_fds[0] >= 0);
+
+    SSL_CTX *cctx = SSL_CTX_new(TLS_client_method());
+    ASSERT_NOT_NULL(cctx);
+    ASSERT_EQ(SSL_CTX_load_verify_file(cctx, TLS_DIR "/cert.pem"), 1);
+    SSL_CTX_set_verify(cctx, SSL_VERIFY_PEER, NULL);
+
+    /* Connection 1 remains active across the reload. */
+    int cfd1 = open_tcp(25603);
+    ASSERT(cfd1 >= 0);
+    SSL *cssl1 = SSL_new(cctx);
+    ASSERT_NOT_NULL(cssl1);
+    SSL_set_fd(cssl1, cfd1);
+    SSL_set_connect_state(cssl1);
+    struct hs_arg carg1 = { cssl1, cfd1, 0 };
+    pthread_t ct1;
+    ASSERT_EQ(pthread_create(&ct1, NULL, hs_thread, &carg1), 0);
+    pthread_join(ct1, NULL);
+    ASSERT_EQ(carg1.rc, 1);
+
+    /* Swap the server context while cssl1 remains established. */
+    ASSERT_EQ(cmq_tls_reload(srv->tls_config_slots[0]), 0);
+
+    /* A new connection must still work with the replacement CTX. */
+    int cfd2 = open_tcp(25603);
+    ASSERT(cfd2 >= 0);
+    ASSERT_EQ(drive_handshake(cfd2, TLS_DIR "/cert.pem"), 1);
+    close(cfd2);
+
+    /* The original SSL* still owns a reference to the old CTX.
+     * Closing it after reload must not trigger a UAF. */
+    SSL_shutdown(cssl1);
+    SSL_free(cssl1);
+    close(cfd1);
+    SSL_CTX_free(cctx);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 TEST_MAIN()
