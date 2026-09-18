@@ -3516,4 +3516,68 @@ TEST(tls_e2e_handshake, tls_slot3_invalid_credentials_fallback) {
     cmq_server_destroy(srv);
 }
 
+/* ---------- Test 45 (v0.5.99): invalid middle slot preserves later listener ----------
+ *
+ * A failed listener TLS load must be isolated to that slot.
+ * This is the middle-slot complement to v0.5.98's slot-3
+ * fallback test: slot 1 has a mismatched certificate/key,
+ * while slot 2 has valid distinct credentials. The setup
+ * loop must discard slot 1 and continue initializing slot 2.
+ */
+TEST(tls_e2e_handshake, tls_invalid_middle_slot_preserves_later_listener) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    (void)rc;
+    ASSERT_EQ(mtls_gen_ca(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server0.pem",
+                                MTLS_DIR "/server0.key",
+                                "v0599server0"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server2.pem",
+                                MTLS_DIR "/server2.key",
+                                "v0599server2"), 0);
+    gen_cert(TLS_DIR "/other-cert.pem", TLS_DIR "/other-key.pem",
+             "v0599wrongkey");
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25600;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/server0.pem";
+    cfg.tls_key = MTLS_DIR "/server0.key";
+    /* Slot 1: valid certificate with the WRONG private key. */
+    cfg.listeners[1].tls_cert = MTLS_DIR "/server0.pem";
+    cfg.listeners[1].tls_key = TLS_DIR "/other-key.pem";
+    /* Slot 2: valid distinct credentials that must survive. */
+    cfg.listeners[2].tls_cert = MTLS_DIR "/server2.pem";
+    cfg.listeners[2].tls_key = MTLS_DIR "/server2.key";
+    cfg.listener_count = 3;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    ASSERT_NOT_NULL(srv->tls_config_slots[0]);
+    ASSERT_NULL(srv->tls_config_slots[1]);
+    ASSERT_NOT_NULL(srv->tls_config_slots[2]);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 3);
+    ASSERT(srv->listen_fds[0] >= 0);
+    ASSERT(srv->listen_fds[1] >= 0);
+    ASSERT(srv->listen_fds[2] >= 0);
+
+    /* Slot 2 must still serve its own valid certificate. */
+    int cfd = open_tcp(25602);
+    ASSERT(cfd >= 0);
+    ASSERT_EQ(drive_handshake(cfd, MTLS_DIR "/ca.pem"), 1);
+    close(cfd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    rc = system("rm -rf " MTLS_DIR); (void)rc;
+}
+
 TEST_MAIN()

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.99 - 2026-09-17
+
+### Status
+- **Defensive test only.** Adds coverage for an invalid
+  middle per-listener TLS slot preserving a later valid
+  listener. No production code change was required.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_invalid_middle_slot_preserves_later_listener`**
+  — configures valid global slot 0 credentials, a
+  mismatched certificate/key pair on slot 1, and valid
+  distinct credentials on slot 2. Asserts server creation
+  succeeds, slot 1 is discarded, slot 2 remains active,
+  and a real handshake on port 25602 succeeds through the
+  later valid listener.
+
+This complements v0.5.98's invalid slot 3 fallback test:
+the per-listener load-failure branch is now covered for
+both the final slot and a middle slot, proving an invalid
+slot does not poison later valid slots.
+
+### Verified
+- 45/45 PASS in `tests/test_tls_e2e_handshake.c`.
+- 11/11 PASS in `tests/test_tls_session_cache.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 123.4 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem` are
+  absent; unrelated to this change.
+- Bench: ~33-35K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.98 - 2026-09-17
 
 ### Status
