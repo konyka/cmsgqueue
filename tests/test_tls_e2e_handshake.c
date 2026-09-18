@@ -1863,6 +1863,110 @@ TEST(tls_e2e_handshake, three_listeners) {
     rc = system("rm -rf " MTLS_DIR); (void)rc;
 }
 
+/* ---------- Test 42 (v0.5.96): per-listener tls_no_tickets wiring ----------
+ *
+ * Defensive test for v0.5.96 production fix. v0.5.94 wired
+ * tls_no_tickets on slot 0 only; v0.5.96 wires the same option
+ * on per-listener slots (1..3). Without the fix, a multi-
+ * listener deployment could not disable tickets on listeners
+ * other than the legacy slot 0.
+ *
+ * Test design:
+ *   1. Server on ports 25592 (slot 0), 25593 (slot 1),
+ *      25594 (slot 2). All three listeners have distinct
+ *      self-signed certs.
+ *   2. Configure listeners[1].tls_no_tickets = 1; leave
+ *      listeners 0 and 2 at the default (tickets on).
+ *   3. Reach into each slot via the test-only accessor and
+ *      assert SSL_CTX_get_options(slot) & SSL_OP_NO_TICKET
+ *      is set ONLY for slot 1.
+ *
+ * Why it matters: the per-listener TLS path is the production
+ * configuration for any multi-listener deployment. Leaving
+ * the field unwired means the documented option silently
+ * no-ops on slots 1-3.
+ */
+TEST(tls_e2e_handshake, three_listeners_per_listener_no_tickets) {
+    int rc __attribute__((unused)) = system(
+        "rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    (void)rc;
+    ASSERT_EQ(mtls_gen_ca(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server.pem",
+                                MTLS_DIR "/server.key",
+                                "v0596server"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server1.pem",
+                                MTLS_DIR "/server1.key",
+                                "v0596server1"), 0);
+    ASSERT_EQ(mtls_gen_signed(MTLS_DIR "/ca.pem", MTLS_DIR "/ca.key",
+                                MTLS_DIR "/server2.pem",
+                                MTLS_DIR "/server2.key",
+                                "v0596server2"), 0);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25592;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = MTLS_DIR "/server.pem";
+    cfg.tls_key = MTLS_DIR "/server.key";
+    cfg.listeners[1].tls_cert = MTLS_DIR "/server1.pem";
+    cfg.listeners[1].tls_key = MTLS_DIR "/server1.key";
+    cfg.listeners[2].tls_cert = MTLS_DIR "/server2.pem";
+    cfg.listeners[2].tls_key = MTLS_DIR "/server2.key";
+    /* v0.5.96: only listener 1 disables tickets. */
+    cfg.listeners[1].tls_no_tickets = 1;
+    cfg.listener_count = 3;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* Reach into each slot and verify SSL_OP_NO_TICKET only on
+     * slot 1. The accessor is test-only — production code
+     * never inspects the CTX directly. */
+    SSL_CTX *ctx0 = cmq_tls_get_ssl_ctx_for_test(srv->tls_config_slots[0]);
+    SSL_CTX *ctx1 = cmq_tls_get_ssl_ctx_for_test(srv->tls_config_slots[1]);
+    SSL_CTX *ctx2 = cmq_tls_get_ssl_ctx_for_test(srv->tls_config_slots[2]);
+    ASSERT_NOT_NULL(ctx0);
+    ASSERT_NOT_NULL(ctx1);
+    ASSERT_NOT_NULL(ctx2);
+    long opts0 = SSL_CTX_get_options(ctx0);
+    long opts1 = SSL_CTX_get_options(ctx1);
+    long opts2 = SSL_CTX_get_options(ctx2);
+    fprintf(stderr, "v0.5.96: slot 0 SSL_OP_NO_TICKET bit=%d, "
+            "slot 1 bit=%d, slot 2 bit=%d\n",
+            (int)((opts0 & SSL_OP_NO_TICKET) != 0),
+            (int)((opts1 & SSL_OP_NO_TICKET) != 0),
+            (int)((opts2 & SSL_OP_NO_TICKET) != 0));
+    ASSERT_EQ((opts0 & SSL_OP_NO_TICKET) != 0, 0);  /* slot 0: tickets ON */
+    ASSERT_EQ((opts1 & SSL_OP_NO_TICKET) != 0, 1);  /* slot 1: tickets OFF */
+    ASSERT_EQ((opts2 & SSL_OP_NO_TICKET) != 0, 0);  /* slot 2: tickets ON */
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 3);
+    ASSERT(srv->listen_fds[0] >= 0);
+    ASSERT(srv->listen_fds[1] >= 0);
+    ASSERT(srv->listen_fds[2] >= 0);
+
+    /* Sanity: the listeners still accept real handshakes. */
+    for (int port_off = 0; port_off < 3; port_off++) {
+        int cfd = open_tcp(25592 + port_off);
+        ASSERT(cfd >= 0);
+        /* All three server certificates are signed by the shared
+         * CA, so the client must trust the CA bundle rather than
+         * treating each leaf as a trust anchor. */
+        ASSERT_EQ(drive_handshake(cfd, MTLS_DIR "/ca.pem"), 1);
+        close(cfd);
+    }
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    rc = system("rm -rf " MTLS_DIR); (void)rc;
+}
+
 /* ---------- Test 26 (v0.5.72): graceful TLS shutdown ----------
  *
  * Regression test: after a complete TLS handshake, the server

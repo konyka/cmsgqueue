@@ -7127,6 +7127,12 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         if (srv->config.listeners[li].tls_verify_peer) {
             cmq_tls_set_verify(srv->tls_config_slots[li], 1);
         }
+        /* v0.5.96: per-listener tls_no_tickets wiring. Mirrors the
+         * slot 0 wiring added in v0.5.94. Without this the field
+         * would silently no-op on slots 1-3. */
+        if (srv->config.listeners[li].tls_no_tickets) {
+            cmq_tls_set_no_tickets(srv->tls_config_slots[li], 1);
+        }
         if (cmq_tls_load(srv->tls_config_slots[li]) != 0) {
             cmq_log_warn(srv->log,
                 "v0.5.31: tls slot %d load failed; listener falls back to slot 0",

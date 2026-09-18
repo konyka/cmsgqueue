@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.5.96 - 2026-09-17
+
+### Status
+- **Production fix + defensive test.** Completes the
+  per-listener `tls_no_tickets` wiring introduced in
+  v0.5.94. Slots 1-3 now honor the option just like slot 0.
+
+### Fixed
+- **`src/server/cmq_server.c`** — the per-listener TLS
+  setup loop now calls `cmq_tls_set_no_tickets` when
+  `listeners[li].tls_no_tickets` is non-zero. Before
+  v0.5.96, the field existed in the public struct but was
+  silently ignored for listeners 1-3.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::three_listeners_per_listener_no_tickets`**
+  — builds three listeners with distinct CA-signed
+  certificates, configures only listener 1 with
+  `tls_no_tickets=1`, verifies the three SSL_CTX option
+  bits (slot 1 set; slots 0 and 2 clear), and completes a
+  real handshake on every listener using the shared CA
+  bundle.
+
+### Verified
+- 42/42 PASS in `tests/test_tls_e2e_handshake.c`.
+- 11/11 PASS in `tests/test_tls_session_cache.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 123.3 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem` are
+  absent; unrelated to this change.
+- Bench: ~30-34K msg/s, p99 99 µs (unchanged).
+
 ## 0.5.95 - 2026-09-15
 
 ### Status
