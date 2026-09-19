@@ -595,14 +595,21 @@ int cmq_tls_backend_secure(void) {
 
 cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
     if (!cfg || fd < 0 || !cmq_tls_configured(cfg)) return NULL;
+    if (tls_begin_op(cfg) != 0) return NULL;
 #ifdef CMQ_TLS_OPENSSL
     /* Build the SSL_CTX lazily on first session. */
     if (!cfg->ssl_ctx_init_done) {
-        if (tls_build_ssl_ctx(cfg) != 0) return NULL;
+        if (tls_build_ssl_ctx(cfg) != 0) {
+            tls_end_op(cfg);
+            return NULL;
+        }
     }
 #endif
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));
-    if (!s) return NULL;
+    if (!s) {
+        tls_end_op(cfg);
+        return NULL;
+    }
     s->cfg = cfg;
     s->fd = fd;
     s->is_server = 1;
@@ -611,6 +618,7 @@ cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
     s->ssl = SSL_new(cfg->ssl_ctx);
     if (!s->ssl) {
         free(s);
+        tls_end_op(cfg);
         return NULL;
     }
     SSL_set_fd(s->ssl, fd);
@@ -622,18 +630,26 @@ cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
     }
     SSL_set_accept_state(s->ssl);
 #endif
+    tls_end_op(cfg);
     return s;
 }
 
 cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
     if (!cfg || fd < 0 || !cmq_tls_configured(cfg)) return NULL;
+    if (tls_begin_op(cfg) != 0) return NULL;
 #ifdef CMQ_TLS_OPENSSL
     if (!cfg->ssl_ctx_init_done) {
-        if (tls_build_ssl_ctx(cfg) != 0) return NULL;
+        if (tls_build_ssl_ctx(cfg) != 0) {
+            tls_end_op(cfg);
+            return NULL;
+        }
     }
 #endif
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));
-    if (!s) return NULL;
+    if (!s) {
+        tls_end_op(cfg);
+        return NULL;
+    }
     s->cfg = cfg;
     s->fd = fd;
     s->is_server = 0;
@@ -642,6 +658,7 @@ cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
     s->ssl = SSL_new(cfg->ssl_ctx);
     if (!s->ssl) {
         free(s);
+        tls_end_op(cfg);
         return NULL;
     }
     SSL_set_fd(s->ssl, fd);
@@ -653,6 +670,7 @@ cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
     }
     SSL_set_connect_state(s->ssl);
 #endif
+    tls_end_op(cfg);
     return s;
 }
 
