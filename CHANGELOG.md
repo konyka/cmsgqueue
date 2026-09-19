@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.2 - 2026-09-19
+
+### Status
+- **F17 ships: inter-node TLS BIO-wrap wire-up.** The route pool
+  now attaches a cmq_route_tls_sess_t to every fd and
+  cmq_route_broadcast encrypts the bytes via SSL_write when the
+  peer has TLS configured. Plain write(2) remains the default
+  when pool->tls_cfg is NULL.
+
+### Added
+- **`tests/test_route_tls_wire.c::attach_inbound_populates_sess_when_tls_configured`**
+  — drives the full path over a Unix socketpair: configure
+  TLS on the pool, attach_inbound, drive SSL handshake, mark
+  connected, broadcast, peer observes plaintext on SSL_read.
+- `cmq_route_pool_set_tls_cfg` / `cmq_route_pool_get_tls_cfg` —
+  install / read the SSL_CTX source on the pool.
+- `cmq_route_tls_get_ssl_ctx` — builds (and caches) the
+  SSL_CTX from cert/key paths on the route TLS config.
+
+### Fixed
+- **`cmq_route.c::write_one`** — was returning the `ssize_t`
+  from `cmq_route_tls_sess_write`, which the broadcast path
+  misread as a hard error (every SSL_write that returned the
+  byte count looked like a successful plain write, but the
+  convention `0 = full, 1 = EAGAIN, -1 = hard` required a
+  remap). Re-aligned to that convention.
+- **`cmq_route_conn_t.sess` lifetime** — `conn_drop_fd` calls
+  `cmq_route_tls_sess_destroy` before close/shutdown.
+
+### Verified
+- 1/1 PASS in `tests/test_route_tls_wire.c`.
+- 3/3 PASS in `tests/test_route_tls*.c` (no regression in the
+  pre-existing handshake / sess unit tests).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  90/90 PASS in 122.1 s.
+
+### See also
+- `docs/reviews/hyperplan-v050-bundle.md` §3.3 — F17 BIO-wrap
+  design rationale.
+
 ## 0.6.1 - 2026-09-19
 
 ### Status
