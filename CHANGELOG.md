@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.6.1 - 2026-09-19
+
+### Status
+- **F2 ships: BATCH-level zstd wire compression.** The
+  reserved CMQ_FLAG_COMPRESSED bit (0x01) is now accepted
+  on BATCH frames and round-trips through the server's
+  handle_batch. Per-message compression remains rejected
+  (F11 interop safety). Implementation in v0.4.x shipped
+  the `cmq_compress` module and handle_batch integration,
+  but the parser still fail-closed on the flag and a
+  recursive handle_batch re-triggered the decompression
+  branch. Both gaps are closed here.
+
+### Added
+- **`tests/test_compressed_batch_wire.c`** — end-to-end
+  coverage for compressed BATCH:
+  - `wire_round_trip` — client zstd-compresses a 78-byte
+    two-message batch (53 bytes on the wire), server
+    decompresses, subscriber receives both messages
+    byte-exact.
+  - `corrupt_zstd_payload` — garbage payload surfaces as
+    a server-side ERROR frame; connection survives.
+- **`tests/test_parser.c`** — three new tests and three
+  updated tests pinning the F11 + F2 contract:
+  - `reject_flag_compressed_on_subscribe` (new) —
+    non-BATCH ops still reject 0x01.
+  - `accept_flag_compressed_on_batch` (new) — BATCH
+    with CMQ_FLAG_COMPRESSED parses without error and
+    preserves the flag through to the server.
+  - `accept_flag_compressed_only_on_batch` (new) —
+    spot-check with BATCH payload to guard against
+    future regressions.
+  - `reject_flag_compressed` (updated) — reasserts
+    PUBLISH-with-CMQ_FLAG_COMPRESSED rejection.
+  - `reject_flag_combined_reserved` (updated) —
+    reasserts PUBLISH-with-0x03 rejection; CHECKSUM
+    on BATCH remains rejected because the trailing
+    4-byte CRC32C only applies to PUBLISH payloads.
+
+### Fixed
+- **`src/proto/cmq_parser.c`** — parser now accepts
+  CMQ_FLAG_COMPRESSED only on CMQ_OP_BATCH. Previously
+  the flag was rejected pre-CONNACK on every op, so
+  compressed BATCH frames dropped the connection.
+- **`src/server/cmq_server.c::handle_batch`** — the
+  recursive call into handle_batch for the decompressed
+  payload now strips CMQ_FLAG_COMPRESSED on the local
+  dec_frame. Without this fix the second pass through
+  handle_batch re-entered the decompression branch with
+  the now-uncompressed payload as input and failed
+  with `decompress failed`. The fix is one `&=` on
+  dec_frame.hdr.flags.
+
+### Verified
+- 5/5 PASS in `tests/test_compress.c`.
+- 3/3 PASS in `tests/test_compressed_batch_wire.c`.
+- 29/29 PASS in `tests/test_parser.c` (26 → 29 with
+  F11+F2 contract coverage).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  89/89 PASS in 124.8 s.
+- Bench: unchanged (compression is a client opt-in;
+  the small-frame hot path is unaffected).
+
+### See also
+- `docs/features/wire-compression.md` — F2 design.
+- `docs/features/flag-rejection.md` — F11 fail-closed
+  baseline (still in force for non-BATCH ops).
+
 ## 0.6.0 - 2026-09-17
 
 ### Status

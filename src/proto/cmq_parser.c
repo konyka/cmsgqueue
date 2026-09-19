@@ -254,12 +254,14 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
             return parser_have_frames(p, produced);
         }
 
-        /* F11: Reject unknown flag bits pre-CONNACK. CMQ_FLAG_COMPRESSED (0x01)
-         * is reserved but not yet implemented on the wire. Accepting it
-         * silently round-trips garbage to subscribers. CMQ_FLAG_CHECKSUM
-         * (0x02) is now implemented (F3) — see handle_publish() for the
-         * trailing-4-byte verification. */
-        if (hb[3] & (uint8_t)CMQ_FLAG_COMPRESSED) {
+        /* F11 + F2: CMQ_FLAG_COMPRESSED (0x01) is rejected pre-CONNACK
+         * EXCEPT on CMQ_OP_BATCH. F2 ships BATCH-level zstd compression;
+         * per-message compression remains rejected to avoid silently
+         * round-tripping opaque payload bytes to subscribers.
+         * CMQ_FLAG_CHECKSUM (0x02) is accepted unconditionally — the
+         * trailing-4-byte CRC32C verification lives in handle_publish()
+         * (F3). */
+        if ((hb[3] & (uint8_t)CMQ_FLAG_COMPRESSED) && hb[4] != (uint8_t)CMQ_OP_BATCH) {
             p->pending_error = 1;
             return parser_have_frames(p, produced);
         }

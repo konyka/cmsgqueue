@@ -4235,11 +4235,14 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             return;
         }
         /* Recurse with a local frame whose payload is the decoded buffer.
-         * frame->payload remains owned by the parser; decoded is freed
-         * on this return path. */
+         * Strip CMQ_FLAG_COMPRESSED on the recursive frame — the
+         * payload has already been decompressed, so the compression
+         * branch must not run again. frame->payload remains owned by
+         * the parser; decoded is freed on this return path. */
         cmq_frame_t dec_frame = *frame;
         dec_frame.payload = decoded;
         dec_frame.payload_len = (size_t)dlen;
+        dec_frame.hdr.flags &= (uint8_t)~CMQ_FLAG_COMPRESSED;
         handle_batch(srv, c, &dec_frame);
         free(decoded);
         return;
