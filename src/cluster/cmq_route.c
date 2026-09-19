@@ -2,13 +2,15 @@
 #include "cmq_route.h"
 #include "cmq_parser.h"
 #include "cmq_proto.h"
+#include "cmq_route_tls.h"
+#include "cmq_route_tls_sess.h"
 #include "cmq_thread.h"
 #include "cmq_types.h"
 #include "cmq_route_tls_sess.h"
 
 /* F17: TLS-aware read/write forward declarations. */
-static ssize_t write_one(int fd, const uint8_t *data, size_t len,
-                          cmq_route_tls_sess_t *sess);
+static int write_one(int fd, const uint8_t *data, size_t len,
+                      cmq_route_tls_sess_t *sess);
 static ssize_t read_one(int fd, void *buf, size_t len,
                          cmq_route_tls_sess_t *sess);
 
@@ -171,14 +173,31 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
 /* F17: TLS-aware read/write. When sess is NULL, fall back to plain
  * read/write. When sess is non-NULL, the bytes flow through
  * SSL_read/SSL_write with EAGAIN mapping for WANT_READ/WANT_WRITE. */
-static ssize_t write_one(int fd, const uint8_t *data, size_t len,
-                          cmq_route_tls_sess_t *sess) {
-    if (sess) return cmq_route_tls_sess_write(sess, fd, data, len);
+/* F17: TLS-aware write. Returns the cmq_route_broadcast convention
+ * (0 = full, 1 = EAGAIN, -1 = hard error) so callers can swap this in
+ * for write_full without changing their decode. cmq_route_tls_sess_write
+ * returns the byte count on success or -1 on WANT_* / error — we map
+ * positive to 0 and -1 (with errno=EAGAIN) to 1. */
+static int write_one(int fd, const uint8_t *data, size_t len,
+                      cmq_route_tls_sess_t *sess) {
+    if (sess) {
+        ssize_t n = cmq_route_tls_sess_write(sess, fd, data, len);
+        if (n == (ssize_t)len) return 0;
+        if (n > 0) {
+            /* TLS framing partial — rare. Treat as transient. */
+            errno = EAGAIN;
+            return 1;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;
+        return -1;
+    }
     ssize_t n;
     do {
         n = write(fd, data, len);
     } while (n < 0 && errno == EINTR);
-    return n;
+    if (n == (ssize_t)len) return 0;
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 1;
+    return -1;
 }
 
 static ssize_t read_one(int fd, void *buf, size_t len,
@@ -259,6 +278,10 @@ struct cmq_route_pool {
     atomic_int in_flight; /* connect/add_conn unlocked dial/handshake */
     atomic_int dying;
     cmq_atomic_int *dial_gate; /* optional; non-zero aborts post-dial install */
+    /* F17: TLS config used to build cmq_route_tls_sess_t for each new
+       fd. NULL disables TLS for this pool. Read under pool->lock in
+       the install helpers; written under pool->lock by set_tls_cfg. */
+    cmq_route_tls_config_t *tls_cfg;
 };
 
 
@@ -282,6 +305,13 @@ static void route_end_op(cmq_route_pool_t *pool) {
    must not leave zombie is_route clients. */
 static void conn_drop_fd(cmq_route_conn_t *c) {
     if (!c) return;
+    /* F17: tear down any TLS session before the fd leaves us. The
+     * sess lives on the cmq_route_conn_t so freeing here keeps the
+     * lifetime tied to the slot. */
+    if (c->sess) {
+        cmq_route_tls_sess_destroy(c->sess);
+        c->sess = NULL;
+    }
     if (c->fd >= 0) {
         if (c->fd_owned)
             close(c->fd);
@@ -314,6 +344,14 @@ static void route_slot_snap(cmq_route_pool_t *pool, size_t idx,
     }
     cmq_mutex_unlock(&pool->io_locks[idx]);
 }
+
+/* Forward declaration for route_slot_attach_sess so route_slot_install
+ * (defined further down) can call it. The full definition sits just
+ * above route_slot_install to keep the file readable. */
+static cmq_route_tls_sess_t *route_slot_attach_sess(cmq_route_pool_t *pool,
+                                                      size_t idx);
+static cmq_route_tls_sess_t *route_slot_attach_sess_locked(
+        cmq_route_pool_t *pool, size_t idx);
 
 /* Caller must hold pool->lock. Order: pool->lock → io_lock. */
 static void route_slot_close(cmq_route_pool_t *pool, size_t idx) {
@@ -505,6 +543,83 @@ static void route_target_dial_end(cmq_route_pool_t *pool, const char *node_id) {
 /* Publish a peer into a slot. Caller holds pool->lock.
    connected=0 stages inbound until handshake is drained.
    addr may be NULL for inbound/placeholder (no endpoint sticky). */
+/* Build a cmq_route_tls_sess_t for the slot if pool->tls_cfg is set
+ * and the slot has a live fd. Returns the new sess (also stored on
+ * conn->sess) or NULL. Caller must NOT hold pool->lock — this reads
+ * tls_cfg under pool->lock itself; nested lock would self-deadlock.
+ * If the caller has pool->lock already, use
+ * route_slot_attach_sess_locked. */
+static cmq_route_tls_sess_t *route_slot_attach_sess(cmq_route_pool_t *pool,
+                                                       size_t idx) {
+#ifdef CMQ_TLS_OPENSSL
+    if (!pool || idx >= CMQ_ROUTE_MAX_CONNS) return NULL;
+    cmq_mutex_lock(&pool->lock);
+    cmq_route_tls_config_t *cfg = pool->tls_cfg;
+    cmq_mutex_unlock(&pool->lock);
+    if (!cfg) return NULL;
+    cmq_mutex_lock(&pool->io_locks[idx]);
+    int fd = pool->conns[idx].fd;
+    cmq_route_tls_sess_t *existing = pool->conns[idx].sess;
+    cmq_mutex_unlock(&pool->io_locks[idx]);
+    if (fd < 0) return NULL;
+    if (existing) return existing;
+    SSL_CTX *ssl_ctx = cmq_route_tls_get_ssl_ctx(cfg);
+    if (!ssl_ctx) return NULL;
+    cmq_route_tls_sess_t *sess = cmq_route_tls_sess_create(fd, ssl_ctx);
+    if (!sess) return NULL;
+    cmq_mutex_lock(&pool->io_locks[idx]);
+    /* Re-check under io_lock: a concurrent set_tls_cfg / drop could
+     * have changed fd or installed another sess. */
+    if (pool->conns[idx].fd == fd && !pool->conns[idx].sess) {
+        pool->conns[idx].sess = sess;
+    } else {
+        cmq_mutex_unlock(&pool->io_locks[idx]);
+        cmq_route_tls_sess_destroy(sess);
+        return pool->conns[idx].sess;
+    }
+    cmq_mutex_unlock(&pool->io_locks[idx]);
+    return sess;
+#else
+    (void)pool; (void)idx;
+    return NULL;
+#endif
+}
+
+/* Same as route_slot_attach_sess but assumes the caller already holds
+ * pool->lock. Avoids re-locking pool->lock and sidesteps the self-
+ * deadlock that bit route_slot_install when it tried to do both. */
+static cmq_route_tls_sess_t *route_slot_attach_sess_locked(
+        cmq_route_pool_t *pool, size_t idx) {
+#ifdef CMQ_TLS_OPENSSL
+    if (!pool || idx >= CMQ_ROUTE_MAX_CONNS) return NULL;
+    cmq_route_tls_config_t *cfg = pool->tls_cfg;
+    if (!cfg) return NULL;
+    cmq_mutex_lock(&pool->io_locks[idx]);
+    int fd = pool->conns[idx].fd;
+    cmq_route_tls_sess_t *existing = pool->conns[idx].sess;
+    cmq_mutex_unlock(&pool->io_locks[idx]);
+    if (fd < 0) return NULL;
+    if (existing) return existing;
+    SSL_CTX *ssl_ctx = cmq_route_tls_get_ssl_ctx(cfg);
+    if (!ssl_ctx) return NULL;
+    cmq_route_tls_sess_t *sess = cmq_route_tls_sess_create(fd, ssl_ctx);
+    if (!sess) return NULL;
+    cmq_mutex_lock(&pool->io_locks[idx]);
+    if (pool->conns[idx].fd == fd && !pool->conns[idx].sess) {
+        pool->conns[idx].sess = sess;
+    } else {
+        cmq_mutex_unlock(&pool->io_locks[idx]);
+        cmq_route_tls_sess_destroy(sess);
+        return pool->conns[idx].sess;
+    }
+    cmq_mutex_unlock(&pool->io_locks[idx]);
+    return sess;
+#else
+    (void)pool; (void)idx;
+    return NULL;
+#endif
+}
+
 static void route_slot_install(cmq_route_pool_t *pool, size_t idx,
                                 const char *node_id, int fd, int fd_owned,
                                 int connected, const char *addr, int port) {
@@ -521,6 +636,12 @@ static void route_slot_install(cmq_route_pool_t *pool, size_t idx,
     pool->conns[idx].connected = connected ? 1 : 0;
     pool->conns[idx].fd_owned = fd_owned ? 1 : 0;
     cmq_mutex_unlock(&pool->io_locks[idx]);
+    /* F17: every route_slot_install caller holds pool->lock when this
+     * fires (verified by inspection: 22+ call sites all bracket
+     * install with pool->lock acquire/release). Use the _locked
+     * variant to avoid the self-deadlock that the unlocked variant
+     * would hit. */
+    if (fd >= 0) (void)route_slot_attach_sess_locked(pool, idx);
 }
 
 cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
@@ -543,6 +664,28 @@ void cmq_route_pool_set_dial_gate(cmq_route_pool_t *pool, cmq_atomic_int *gate) 
     if (route_begin_op(pool) != 0) return;
     pool->dial_gate = gate;
     route_end_op(pool);
+}
+
+/* F17: set the TLS config used to build sessions for new routes.
+   NULL disables TLS. Existing slots keep their current sess — the
+   change applies only to attach_inbound / add_conn calls that follow.
+   The pool does not take ownership of cfg; the caller manages its
+   lifetime and must destroy it after cmq_route_pool_destroy. */
+void cmq_route_pool_set_tls_cfg(cmq_route_pool_t *pool,
+                                  cmq_route_tls_config_t *cfg) {
+    if (!pool) return;
+    cmq_mutex_lock(&pool->lock);
+    pool->tls_cfg = cfg;
+    cmq_mutex_unlock(&pool->lock);
+}
+
+cmq_route_tls_config_t *cmq_route_pool_get_tls_cfg(cmq_route_pool_t *pool) {
+    if (!pool) return NULL;
+    cmq_route_tls_config_t *cfg;
+    cmq_mutex_lock(&pool->lock);
+    cfg = pool->tls_cfg;
+    cmq_mutex_unlock(&pool->lock);
+    return cfg;
 }
 
 /* 1 if server drain (or similar) forbids installing a freshly dialed peer. */
@@ -1339,6 +1482,9 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
     int fds[CMQ_ROUTE_MAX_CONNS];
     size_t idxs[CMQ_ROUTE_MAX_CONNS];
     char ids[CMQ_ROUTE_MAX_CONNS][CMQ_NODE_ID_SIZE];
+    /* F17: parallel sess snapshot so the per-iteration write path can
+       pick SSL_write vs plain write(2) without re-locking. */
+    cmq_route_tls_sess_t *sess_snap[CMQ_ROUTE_MAX_CONNS];
     size_t n = 0;
     /* Snapshot under pool→io so conn_count cannot grow mid-scan (missed peers). */
     cmq_mutex_lock(&pool->lock);
@@ -1351,6 +1497,7 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
             fds[n] = c->fd;
             idxs[n] = i;
             memcpy(ids[n], c->remote_id, CMQ_NODE_ID_SIZE);
+            sess_snap[n] = c->sess;
             n++;
         }
         cmq_mutex_unlock(&pool->io_locks[i]);
@@ -1362,15 +1509,18 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
     for (size_t j = 0; j < n; j++) {
         size_t idx = idxs[j];
         int expect_fd = fds[j];
+        cmq_route_tls_sess_t *expect_sess = sess_snap[j];
         cmq_mutex_lock(&pool->io_locks[idx]);
         /* Validate under io_lock only — never nest pool->lock here (AB-BA with
            connect/disconnect holding pool->lock then taking io_lock). */
         int fd = -1;
+        cmq_route_tls_sess_t *sess = NULL;
         if (idx < CMQ_ROUTE_MAX_CONNS &&
             pool->conns[idx].connected &&
             pool->conns[idx].fd == expect_fd &&
             memcmp(pool->conns[idx].remote_id, ids[j], CMQ_NODE_ID_SIZE) == 0) {
             fd = expect_fd;
+            sess = pool->conns[idx].sess;
         }
         if (fd < 0) {
             /* Snapshotted peer vanished — count undelivered so forward_op
@@ -1379,7 +1529,17 @@ size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
             deferred++;
             continue;
         }
-        int wr = write_full(fd, data, len);
+        /* Reject sess mismatch so a slot that lost its sess (or gained one)
+           between snapshot and lock is treated as not-yet-writable. */
+        if ((sess == NULL) != (expect_sess == NULL)) {
+            cmq_mutex_unlock(&pool->io_locks[idx]);
+            deferred++;
+            continue;
+        }
+        /* F17: write_full does plain write(2); write_one dispatches via
+           cmq_route_tls_sess_write when sess is non-NULL. */
+        int wr = sess ? write_one(fd, data, len, sess)
+                       : write_full(fd, data, len);
         if (wr == 0) {
             if (pool->conns[idx].fd == fd) {
                 pool->conns[idx].bytes_sent += (uint64_t)len;

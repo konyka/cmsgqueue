@@ -8,6 +8,10 @@
 #include <sys/socket.h>
 
 typedef struct cmq_route_pool cmq_route_pool_t;
+/* Opaque cmq_route_tls_sess_t — full definition in cmq_route_tls_sess.h.
+   Forward-declared here so cmq_route_conn_t can carry the sess pointer. */
+typedef struct cmq_route_tls_sess cmq_route_tls_sess_t;
+typedef struct cmq_route_tls_config cmq_route_tls_config_t;
 
 typedef struct {
     char remote_id[CMQ_NODE_ID_SIZE];
@@ -16,6 +20,11 @@ typedef struct {
     int fd;
     int connected;
     int fd_owned;                   /* 1 = pool closes fd; 0 = inbound borrow */
+    /* F17: TLS session. NULL when the pool has no TLS configured or
+       the route was registered without one. Owned by the pool — freed
+       in conn_drop_fd. Reads/writes on this slot use SSL_read/SSL_write
+       when sess is non-NULL. */
+    cmq_route_tls_sess_t *sess;
     uint64_t msgs_sent;
     uint64_t msgs_recv;
     uint64_t bytes_sent;
@@ -38,6 +47,14 @@ cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster);
 void cmq_route_pool_destroy(cmq_route_pool_t *pool);
 /* Optional: when *gate != 0, post-dial install is aborted (server drain). */
 void cmq_route_pool_set_dial_gate(cmq_route_pool_t *pool, cmq_atomic_int *gate);
+
+/* F17: install the TLS config used to build cmq_route_tls_sess_t for
+   every fd added to the pool. Pass NULL to disable. Existing routes
+   keep their current sess — the change applies to subsequent
+   attach_inbound / add_conn calls. */
+void cmq_route_pool_set_tls_cfg(cmq_route_pool_t *pool,
+                                  cmq_route_tls_config_t *cfg);
+cmq_route_tls_config_t *cmq_route_pool_get_tls_cfg(cmq_route_pool_t *pool);
 
 /* auth_user/auth_pass may be NULL when the peer has no auth configured.
    Sends CONNECT and waits for CONNACK before returning (blocking handshake). */
