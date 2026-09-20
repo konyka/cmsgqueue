@@ -4727,9 +4727,11 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             if (srv->config.auth_username && srv->config.auth_username[0])
                 strncpy(expect_u, srv->config.auth_username, sizeof(expect_u) - 1);
             int f8_hashed_fail = 0;
+            int password_is_hashed = 0;
             if (srv->config.auth_password && srv->config.auth_password[0]) {
                 if (srv->config.auth_password[0] == '$') {
                     /* F8: hashed password. Verify with cmq_password_verify. */
+                    password_is_hashed = 1;
                     int v = cmq_password_verify(srv->config.auth_password, passwd);
                     if (v < 0) {
                         cmq_send_connack(c, 1);
@@ -4752,7 +4754,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 bad |= !ct_memeq(uname, expect_u, sizeof(uname));
             else
                 bad |= !ct_memeq(uname, uname, sizeof(uname)); /* timing pad */
-            if (need_pass)
+            if (need_pass && !password_is_hashed)
                 bad |= !ct_memeq(passwd, expect_p, sizeof(passwd));
             else
                 bad |= !ct_memeq(passwd, passwd, sizeof(passwd));

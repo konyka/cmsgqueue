@@ -2,6 +2,7 @@
 #include "cmq_server.h"
 #include "cmq_parser.h"
 #include "cmq_proto.h"
+#include "cmq_password.h"
 #include "cmq_test.h"
 
 #include <sys/socket.h>
@@ -202,6 +203,60 @@ TEST(phase2, auth_failure) {
     }
     ASSERT_EQ(frame.hdr.op, CMQ_OP_CONNACK);
     ASSERT_EQ(frame.payload[0], 2);
+    free_frame_payload(&frame);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+TEST(phase2, hashed_auth_success) {
+    char stored[256];
+    ASSERT_EQ(cmq_password_hash("secret", stored, sizeof(stored)), 0);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18904;
+    config.log_to_stdout = 0;
+    config.auth_username = "admin";
+    config.auth_password = stored;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18904);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    const char *user = "admin";
+    const char *pass = "secret";
+    uint8_t connect_pl[256];
+    uint16_t ulen = (uint16_t)strlen(user);
+    uint16_t plen = (uint16_t)strlen(pass);
+    connect_pl[0] = (ulen >> 8) & 0xFF;
+    connect_pl[1] = ulen & 0xFF;
+    connect_pl[2] = (plen >> 8) & 0xFF;
+    connect_pl[3] = plen & 0xFF;
+    memcpy(connect_pl + 4, user, ulen);
+    memcpy(connect_pl + 4 + ulen, pass, plen);
+    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    wait_ms(50);
+
+    cmq_frame_t frame;
+    ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
+    }
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_CONNACK);
+    ASSERT_EQ(frame.payload[0], 0);
     free_frame_payload(&frame);
 
     cmq_parser_destroy(parser);
