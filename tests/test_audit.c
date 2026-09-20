@@ -103,4 +103,49 @@ TEST(audit, trace_id_is_json_safe) {
     unlink(AUDIT_TEST_FILE);
 }
 
+/* RED: json_escape currently drops characters silently when the
+ * buffer is too small to hold the encoded output. For a trace_id
+ * filled with control bytes (\\uXXXX = 6 bytes per source byte
+ * plus null), the 64-byte trace_esc buffer overruns and the rest
+ * of the trace is silently lost, producing a truncated JSON line.
+ * After the fix, the API must drop the whole event when the trace
+ * cannot safely fit, never producing truncated or malformed JSON. */
+TEST(audit, trace_id_overflow_drops_event_safely) {
+    cmq_audit_set_path(AUDIT_TEST_FILE);
+    unlink(AUDIT_TEST_FILE);
+    /* 16 control bytes expand to 96 bytes of \\uXXXX output,
+     * exceeding the 64-byte trace_esc buffer in cmq_audit.c. */
+    char long_trace[64];
+    memset(long_trace, 0x01, 16);
+    long_trace[16] = '\0';
+    cmq_audit_log(CMQ_AUDIT_AUTH_FAIL, long_trace, "u", "d");
+    /* Either the file must not contain the truncated line, or it
+     * must be a fully-formed JSON object. Empty file is the
+     * post-fix acceptable behavior. */
+    FILE *f = fopen(AUDIT_TEST_FILE, "r");
+    if (!f) { unlink(AUDIT_TEST_FILE); return; }
+    char buf[4096];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+    if (n == 0) {
+        /* dropped entirely */
+    } else {
+        ASSERT(file_lines_are_valid_json(AUDIT_TEST_FILE));
+        /* If kept, the trace must contain exactly 16 \u00XX escapes,
+         * one per source byte, proving no truncation. */
+        int total = 0;
+        for (int i = 0; i < 16; i++) {
+            char needle[8];
+            snprintf(needle, sizeof(needle), "\\u00%02x",
+                     (unsigned char)long_trace[i]);
+            const char *p = buf;
+            size_t nlen = strlen(needle);
+            while ((p = strstr(p, needle))) { total++; p += nlen; }
+        }
+        ASSERT_EQ(total, 16);
+    }
+    unlink(AUDIT_TEST_FILE);
+}
+
 TEST_MAIN()
