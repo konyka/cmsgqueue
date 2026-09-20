@@ -4759,10 +4759,12 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             else
                 bad |= !ct_memeq(passwd, passwd, sizeof(passwd));
             if (bad) {
+                cmq_audit_log(CMQ_AUDIT_AUTH_FAIL, NULL, "connect", "auth_fail");
                 cmq_send_connack(c, malformed ? 1 : 2);
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
+            cmq_audit_log(CMQ_AUDIT_AUTH_OK, NULL, "connect", "auth_ok");
             free(c->username);
             /* Password-only auth: ignore client username so a shared secret
                cannot pick/create arbitrary tenant accounts. */

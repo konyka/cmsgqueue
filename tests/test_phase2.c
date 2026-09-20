@@ -3,6 +3,7 @@
 #include "cmq_parser.h"
 #include "cmq_proto.h"
 #include "cmq_password.h"
+#include "cmq_audit.h"
 #include "cmq_test.h"
 
 #include <sys/socket.h>
@@ -264,6 +265,130 @@ TEST(phase2, hashed_auth_success) {
     cmq_server_stop(srv);
     pthread_join(tid, NULL);
     cmq_server_destroy(srv);
+}
+
+/* RED: a successful CONNECT must emit CMQ_AUDIT_AUTH_OK and a failed
+ * CONNECT must emit CMQ_AUDIT_AUTH_FAIL into the configured audit
+ * file. Currently neither event is logged because the server never
+ * calls cmq_audit_log for these enum values. */
+static int audit_file_contains(const char *path, const char *needle) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+    return strstr(buf, needle) != NULL;
+}
+
+TEST(phase2, audit_emits_auth_ok_on_success) {
+    const char *audit_path = "/tmp/cmq-test-phase2-audit-ok.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18906;
+    config.log_to_stdout = 0;
+    config.auth_username = "admin";
+    config.auth_password = "secret";
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18906);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    const char *user = "admin";
+    const char *pass = "secret";
+    uint8_t connect_pl[256];
+    uint16_t ulen = (uint16_t)strlen(user);
+    uint16_t plen = (uint16_t)strlen(pass);
+    connect_pl[0] = (ulen >> 8) & 0xFF;
+    connect_pl[1] = ulen & 0xFF;
+    connect_pl[2] = (plen >> 8) & 0xFF;
+    connect_pl[3] = plen & 0xFF;
+    memcpy(connect_pl + 4, user, ulen);
+    memcpy(connect_pl + 4 + ulen, pass, plen);
+    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    wait_ms(100);
+
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    ASSERT(audit_file_contains(audit_path, "\"event\":\"auth_ok\""));
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+TEST(phase2, audit_emits_auth_fail_on_bad_password) {
+    const char *audit_path = "/tmp/cmq-test-phase2-audit-fail.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18907;
+    config.log_to_stdout = 0;
+    config.auth_username = "admin";
+    config.auth_password = "secret";
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18907);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    const char *user = "admin";
+    const char *pass = "wrong";
+    uint8_t connect_pl[256];
+    uint16_t ulen = (uint16_t)strlen(user);
+    uint16_t plen = (uint16_t)strlen(pass);
+    connect_pl[0] = (ulen >> 8) & 0xFF;
+    connect_pl[1] = ulen & 0xFF;
+    connect_pl[2] = (plen >> 8) & 0xFF;
+    connect_pl[3] = plen & 0xFF;
+    memcpy(connect_pl + 4, user, ulen);
+    memcpy(connect_pl + 4 + ulen, pass, plen);
+    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    wait_ms(100);
+
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    free_frame_payload(&frame);
+
+    ASSERT(audit_file_contains(audit_path, "\"event\":\"auth_fail\""));
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
 }
 
 TEST(phase2, queue_group_delivery) {
