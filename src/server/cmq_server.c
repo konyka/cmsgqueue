@@ -7266,6 +7266,11 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             }
             cmq_log_info(srv->log, "WAL replay complete: %llu records",
                          (unsigned long long)last);
+            /* F13 audit: signal durable-storage recovery so operators
+             * can correlate a duplicate-delivery burst with a known
+             * recovery event rather than chasing a phantom bug. */
+            cmq_audit_log(CMQ_AUDIT_PERSIST_RECOVER, NULL,
+                          "wal_replay", "wal replay complete");
         }
         /* F18 P3: restore persisted subscriptions before accepting clients.
          * Each record becomes a subject pattern in the sublist — no live
