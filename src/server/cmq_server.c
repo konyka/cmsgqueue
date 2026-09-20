@@ -3048,6 +3048,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   frame->payload_len, &seq) != 0) {
             cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
                                       CMQ_ATOMIC_RELAXED);
+            /* F13 audit: surface durable-write failures so operators
+             * notice when the WAL falls behind. Best-effort append
+             * continues, so the audit event is a signal, not a gate. */
+            cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, NULL, "publish", "filestore_append failed");
         }
     }
 
