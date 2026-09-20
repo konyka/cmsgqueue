@@ -69,8 +69,10 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
 
     char subj_esc[256];
     char det_esc[512];
+    char trace_esc[64];
     json_escape(subject ? subject : "", subj_esc, sizeof(subj_esc));
     json_escape(details ? details : "", det_esc, sizeof(det_esc));
+    json_escape(trace_id ? trace_id : "", trace_esc, sizeof(trace_esc));
 
     char line[1024];
     int n = snprintf(line, sizeof(line),
@@ -78,8 +80,7 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
                      "\"subject\":\"%s\",\"details\":\"%s\"}\n",
                      ts_buf, (long)(ts.tv_nsec / 1000000),
                      event_name(event),
-                     trace_id ? trace_id : "",
-                     subj_esc, det_esc);
+                     trace_esc, subj_esc, det_esc);
     if (n <= 0 || (size_t)n >= sizeof(line)) return;
 
     pthread_mutex_lock(&g_audit_lock);
