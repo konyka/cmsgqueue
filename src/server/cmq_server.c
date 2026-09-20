@@ -6486,6 +6486,25 @@ static void accept_cb(int fd, int events, void *data) {
             continue;
         }
 
+        /* F15: connection blocklist at accept_cb. Pre-handshake, so
+         * denied IPs never receive INFO/CONNACK and never burn a
+         * rate-limit slot. The CONNECT-time check stays as belt-and-
+         * suspenders for racy reloads. */
+        if (addr.sin_family == AF_INET) {
+            cmq_blocklist_t *bl = (cmq_blocklist_t *)cmq_rch_acquire(srv->blocklist_h);
+            if (bl) {
+                int denied = cmq_blocklist_check(bl, (uint32_t)addr.sin_addr.s_addr);
+                cmq_rch_release(srv->blocklist_h, bl);
+                if (denied) {
+                    cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, NULL,
+                                  "blocklist reject at accept",
+                                  "");
+                    close(client_fd);
+                    continue;
+                }
+            }
+        }
+
         if (srv->config.max_clients > 0) {
             /* CAS so concurrent accepts cannot overshoot max_clients. */
             uint32_t max = (uint32_t)srv->config.max_clients;
