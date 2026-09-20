@@ -267,6 +267,67 @@ TEST(phase2, hashed_auth_success) {
     cmq_server_destroy(srv);
 }
 
+/* RED v0.6.10: cmq_quota_check_connect must reject CONNECTs once
+ * max_connections_per_account is exceeded. The quota object is built
+ * by cmq_server_create and the check function exists in cmq_quota.h,
+ * but cmq_server.c never calls it on the CONNECT path. The second
+ * CONNECT in the same account must receive a non-zero CONNACK. */
+TEST(phase2, quota_rejects_connect_above_per_account_cap) {
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18908;
+    config.log_to_stdout = 0;
+    config.max_connections_per_account = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    /* First CONNECT should succeed; second should be rejected. */
+    int fd1 = connect_to(18908);
+    ASSERT(fd1 >= 0);
+    wait_server();
+    cmq_parser_t *p1 = cmq_parser_create();
+    send_frame(fd1, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t f1;
+    ASSERT_EQ(recv_frame(fd1, &f1, p1), 0);
+    if (f1.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&f1);
+        ASSERT_EQ(recv_frame(fd1, &f1, p1), 0);
+    }
+    ASSERT_EQ(f1.hdr.op, CMQ_OP_CONNACK);
+    ASSERT_EQ(f1.payload[0], 0);
+    free_frame_payload(&f1);
+    cmq_parser_destroy(p1);
+
+    int fd2 = connect_to(18908);
+    ASSERT(fd2 >= 0);
+    wait_server();
+    cmq_parser_t *p2 = cmq_parser_create();
+    send_frame(fd2, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t f2;
+    ASSERT_EQ(recv_frame(fd2, &f2, p2), 0);
+    if (f2.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&f2);
+        ASSERT_EQ(recv_frame(fd2, &f2, p2), 0);
+    }
+    ASSERT_EQ(f2.hdr.op, CMQ_OP_CONNACK);
+    ASSERT(f2.payload[0] != 0);
+    free_frame_payload(&f2);
+    cmq_parser_destroy(p2);
+
+    close(fd1);
+    close(fd2);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
 /* RED: a successful CONNECT must emit CMQ_AUDIT_AUTH_OK and a failed
  * CONNECT must emit CMQ_AUDIT_AUTH_FAIL into the configured audit
  * file. Currently neither event is logged because the server never

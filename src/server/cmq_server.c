@@ -4831,6 +4831,19 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             break;
         }
         c->account_epoch = aep;
+        /* F14: per-account connect quota (rate-limit per docs/features
+         * /quota.md). Check before inc_connections so a rejected
+         * CONNECT does not inflate the account counter. */
+        if (srv->quota &&
+            !cmq_quota_check_connect(srv->quota, c->account_name)) {
+            cmq_account_release(srv->accounts, acc);
+            c->account_epoch = 0;
+            cmq_send_connack(c, 3);
+            cmq_log_info(srv->log, "Quota reject CONNECT account=%s",
+                         c->account_name);
+            client_set_state(c, CMQ_CLIENT_CLOSING);
+            break;
+        }
         /* get→inc→CONNECTED TOCTOU: refuse if credit cannot stick or epoch died. */
         if (cmq_account_inc_connections(acc, aep) != 0) {
             cmq_account_release(srv->accounts, acc);
