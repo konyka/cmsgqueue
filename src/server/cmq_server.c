@@ -7795,6 +7795,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
             cmq_acl_free(new_acl);
         }
     }
+    /* F4: apply the parsed logger threshold to the live logger. Keep
+     * server->config.log_level as the startup snapshot; cmq_log_set_level
+     * is the synchronized runtime state used by log writers. */
+    cmq_log_set_level(server->log, (cmq_log_level_t)fresh.log_level);
     cmq_log_info(server->log, "Config reloaded: %s", config_path);
     cmq_config_free(&fresh);
     return 0;
