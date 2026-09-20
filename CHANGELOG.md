@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.6.11 - 2026-09-19
+
+### Status
+- **P1 back-log v0.6.0 → v0.6.11 cleared.** Eight earlier v0.6.x
+  commits had no CHANGELOG entry. This entry groups them in
+  chronological order so the security and enforcement work is
+  traceable end-to-end.
+
+### Added
+- v0.6.5 `tests/test_audit_rotate.c::rotation_after_cap` — fills
+  the file past 100 MiB and verifies rename to .1 plus a fresh
+  active file. Implemented a test-only
+  `cmq_audit_set_max_bytes` to bound the loop.
+- v0.6.6 `cmq_audit_log` now JSON-escapes `trace_id`. Closes a JSON
+  injection / contract-break that wrote raw user input into the
+  audit JSON object.
+- v0.6.7 `cmq_server.c::accept_cb` reads the blocklist at TCP accept
+  time and closes denied fds before INFO/CONNACK. The CONNECT-time
+  check stays as defense-in-depth.
+- v0.6.8 `cmq_audit_log(CMQ_AUDIT_AUTH_OK / AUTH_FAIL, ...)` now
+  fires on the CONNECT path so operators can see auth lifecycle.
+- v0.6.10 `cmq_quota_check_connect` is wired into the CONNECT path
+  before `cmq_account_inc_connections`, enforcing per-account
+  connect rate (docs/features/quota.md semantics).
+- v0.6.11 `cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, ...)` now fires
+  when `cmq_filestore_append` fails inside `handle_publish`. Two
+  tests pin the contract: a grep for the call inside
+  handle_publish, and an audit-API smoke test.
+
+### Fixed
+- v0.6.3 `cmq_server_reload` now applies the parsed `log_level` to
+  the live `cmq_log_t` via `cmq_log_set_level`. Start-up snapshot
+  `server->config.log_level` is intentionally unchanged.
+- v0.6.4 `handle_frame` CONNECT auth: a `$scrypt$` configured
+  password now relies on `cmq_password_verify` alone, skipping the
+  legacy plaintext compare. `cmq_password_verify` rejects records
+  with `salt_len == 0` or `hash_len == 0` before `EVP_PBE_scrypt`,
+  preventing empty derived hashes from passing.
+- v0.6.9 `json_escape` returns 0 on buffer truncation. `cmq_audit_log`
+  drops the event when any of `trace_id` / `subject` / `details`
+  truncated, so the JSON-lines contract holds even under hostile
+  input.
+
+### Verified
+- v0.6.6 through v0.6.11 each ship with focused and full non-stress
+  ctest at 90/90 PASS (123 s).
+
+### See also
+- `docs/features/audit.md` — F13 audit events now exercised end-to-end.
+- `docs/features/quota.md` — F14 per-account connect quota semantics.
+
 ## 0.6.2 - 2026-09-19
 
 ### Status
