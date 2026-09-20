@@ -22,13 +22,18 @@ static const char *event_name(cmq_audit_event_t e) {
     }
 }
 
-#define AUDIT_MAX_BYTES (100u * 1024u * 1024u)
+#define AUDIT_DEFAULT_MAX_BYTES (100u * 1024u * 1024u)
+static uint64_t g_audit_max_bytes = AUDIT_DEFAULT_MAX_BYTES;
 
 void cmq_audit_set_path(const char *path) {
     pthread_mutex_lock(&g_audit_lock);
     free(g_audit_path);
     g_audit_path = path ? strdup(path) : NULL;
     pthread_mutex_unlock(&g_audit_lock);
+}
+
+void cmq_audit_set_max_bytes(uint64_t bytes) {
+    g_audit_max_bytes = bytes ? bytes : AUDIT_DEFAULT_MAX_BYTES;
 }
 
 static void json_escape(const char *in, char *out, size_t out_cap) {
@@ -90,7 +95,7 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
              * silent-non-rotation bug, see v0.5.1.bundle.md B7). */
             struct stat st;
             int needs_rotate = (fstat(fileno(f), &st) == 0 &&
-                                 (uint64_t)st.st_size >= AUDIT_MAX_BYTES);
+                                 (uint64_t)st.st_size >= g_audit_max_bytes);
             fclose(f);
             if (needs_rotate) {
                 char rotated[1024];
