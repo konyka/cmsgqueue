@@ -10,18 +10,23 @@ extern "C" {
 
 /* F19: Server-side MQTT 5.0 listener.
  *
- * STUB. The full server-side MQTT listener (CONNECT/CONNACK/
- * SUBSCRIBE/SUBACK/PUBLISH/PUBACK/PINGREQ/PINGRESP/DISCONNECT
- * state machine) is deferred to v0.4.0. The MQTT bridge (F6)
- * ships a client-side library only; this server-side listener
- * would re-implement mosquitto/NanoMQ at the protocol level.
+ * Implemented. The listener accepts CONNECT/CONNACK, SUBSCRIBE/
+ * SUBACK, PUBLISH/PUBACK, PINGREQ/PINGRESP, and DISCONNECT for
+ * MQTT 3.1.1 / 5.0. Topic wildcards (+, #) reuse cmq_sublist.
+ * Optional static credentials (cmq_mqtt_set_credentials) and a
+ * per-IP PUBLISH rate limit (cmq_mqtt_set_rate_limit) are available.
+ * A persistent retain file (cmq_mqtt_set_retain_path) survives
+ * restart.
  *
- * Estimate: XL (2-4 weeks for one engineer to land a protocol-
- * compliant broker, including auth, topic wildcards, retain,
- * QoS 1/2, session state, will-message).
+ * Off by default: cmq_mqtt_set_listener_enabled(1) turns the
+ * listener on; cmq_mqtt_set_bridge_server(srv) wires PUBLISH into
+ * the cmq_sublist of an existing cmq_server_t.
  *
- * The stub returns ENOSYS so callers can detect and document
- * the gap.
+ * Tests: tests/test_mqtt_5_wildcard.c,
+ *        tests/test_mqtt_listen.c,
+ *        tests/test_mqtt_qos2.c,
+ *        tests/test_mqtt_retained_file.c,
+ *        tests/test_mqtt_retained_wildcard.c.
  */
 
 int cmq_mqtt_server_listen(const char *bind_addr, int port);
