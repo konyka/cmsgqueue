@@ -3077,6 +3077,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_quota, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface per-account quota pressure so operators
+         * can spot noisy accounts in the audit pipeline. */
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, NULL, "publish",
+                      "quota exceeded");
         cmq_send_error(c, "quota exceeded");
         return;
     }
