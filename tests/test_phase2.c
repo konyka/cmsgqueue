@@ -771,6 +771,92 @@ TEST(phase2, audit_emits_rate_limit_on_publish_quota) {
     ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
     ASSERT(strstr(buf, "\"subject\":\"publish\"") != NULL);
     ASSERT(strstr(buf, "quota exceeded") != NULL);
+}
+
+/* RED v0.6.17: handle_frame's CONNECT branch assigns a 16-byte trace
+ * id at cmq_server.c:4626-4630, but the loop logic is inverted:
+ * "assigned = 1" runs when ANY byte is zero, which is true for
+ * zero-initialized new clients. cmq_trace_id is therefore never
+ * called and every audit event for a new client passes a NULL
+ * trace_id. After the fix, the audit_ok event for a successful
+ * CONNECT must carry a 32-char lowercase-hex trace string. */
+TEST(phase2, connect_assigns_trace_id_in_audit) {
+    const char *audit_path = "/tmp/cmq-test-v0617-trace-audit.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18911;
+    config.log_to_stdout = 0;
+    config.auth_username = "admin";
+    config.auth_password = "secret";
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18911);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    const char *user = "admin";
+    const char *pass = "secret";
+    uint8_t connect_pl[256];
+    uint16_t ulen = (uint16_t)strlen(user);
+    uint16_t plen = (uint16_t)strlen(pass);
+    connect_pl[0] = (ulen >> 8) & 0xFF;
+    connect_pl[1] = ulen & 0xFF;
+    connect_pl[2] = (plen >> 8) & 0xFF;
+    connect_pl[3] = plen & 0xFF;
+    memcpy(connect_pl + 4, user, ulen);
+    memcpy(connect_pl + 4 + ulen, pass, plen);
+    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    wait_ms(50);
+
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Poll the audit file for the auth_ok event and assert that the
+     * "trace" field is a non-empty 32-char lowercase-hex string. */
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    const char *event = strstr(buf, "\"event\":\"auth_ok\"");
+    ASSERT_NOT_NULL(event);
+    const char *trace_field = strstr(event, "\"trace\":\"");
+    ASSERT_NOT_NULL(trace_field);
+    trace_field += strlen("\"trace\":\"");
+    /* Trace id hex should be 32 lowercase hex chars followed by '"'. */
+    int hex_len = 0;
+    while (hex_len < 33 &&
+           ((trace_field[hex_len] >= '0' && trace_field[hex_len] <= '9') ||
+            (trace_field[hex_len] >= 'a' && trace_field[hex_len] <= 'f'))) {
+        hex_len++;
+    }
+    ASSERT_EQ(hex_len, 32);
+    ASSERT_EQ(trace_field[hex_len], '"');
 
     cmq_parser_destroy(parser);
     close(fd);

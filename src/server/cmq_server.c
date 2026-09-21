@@ -4621,13 +4621,14 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
     case CMQ_OP_CONNECT:
         /* F11: assign a trace ID at the earliest point in the
          * connection's lifecycle so log entries from this point
-         * forward can be correlated. */
+         * forward can be correlated. A fresh cmq_client_t is
+         * zero-initialized, so any all-zero byte means unassigned. */
         {
-            int assigned = 0;
+            int unassigned = 1;
             for (int i = 0; i < 16; i++) {
-                if (c->trace_id[i] == 0) { assigned = 1; break; }
+                if (c->trace_id[i] != 0) { unassigned = 0; break; }
             }
-            if (!assigned) cmq_trace_id(c->trace_id);
+            if (unassigned) cmq_trace_id(c->trace_id);
         }
         /* Only virgin INIT sockets may CONNECT — CLOSING must not resurrect. */
         if (client_state(c) == CMQ_CLIENT_CLOSING || client_state(c) == CMQ_CLIENT_CLOSED) {
@@ -4772,7 +4773,9 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
-            cmq_audit_log(CMQ_AUDIT_AUTH_OK, NULL, "connect", "auth_ok");
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_AUTH_OK, trace_hex, "connect", "auth_ok");
             free(c->username);
             /* Password-only auth: ignore client username so a shared secret
                cannot pick/create arbitrary tenant accounts. */
