@@ -3096,6 +3096,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_ratelimit, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface per-subject rate-limit pressure so
+         * operators can spot noisy subjects in the audit pipeline. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "subject rate limit");
         cmq_send_error(c, "subject rate limit");
         return;
     }

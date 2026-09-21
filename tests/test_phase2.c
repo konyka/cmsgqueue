@@ -896,4 +896,106 @@ TEST(phase2, connect_assigns_trace_id_in_audit) {
     unlink(audit_path);
 }
 
+/* RED v0.6.19: when a PUBLISH is rejected by the per-subject
+ * rate limit (N1), the server must emit CMQ_AUDIT_RATE_LIMIT_REJECT
+ * with the offending subject so operators can spot noisy subjects
+ * in the audit log. Today handle_publish only updates the
+ * stat_publishes_rejected[_ratelimit] counters and emits no audit
+ * event. */
+TEST(phase2, audit_emits_rate_limit_on_subject_ratelimit) {
+    const char *audit_path = "/tmp/cmq-test-v0619-audit-rl.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18912;
+    config.log_to_stdout = 0;
+    /* Cap at 1 message/sec per subject so the second publish is
+     * rejected. Per-subject rate limit is independent of the global
+     * per-account quota (v0.6.16), so we set the latter to 0 to
+     * isolate this test. */
+    config.max_msgs_per_sec_per_subject = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18912);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    /* CONNECT + first publish accepted (within the per-subject cap). */
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    free_frame_payload(&frame);
+
+    const char *subject = "noisy.subject";
+    uint16_t slen = (uint16_t)strlen(subject);
+    uint8_t pub_pl[128];
+    pub_pl[0] = (slen >> 8) & 0xFF;
+    pub_pl[1] = slen & 0xFF;
+    memcpy(pub_pl + 2, subject, slen);
+    pub_pl[2 + slen] = 0; pub_pl[3 + slen] = 0;
+    const char *body1 = "first";
+    uint16_t blen1 = (uint16_t)strlen(body1);
+    pub_pl[4 + slen] = (blen1 >> 24) & 0xFF;
+    pub_pl[5 + slen] = (blen1 >> 16) & 0xFF;
+    pub_pl[6 + slen] = (blen1 >> 8) & 0xFF;
+    pub_pl[7 + slen] = blen1 & 0xFF;
+    memcpy(pub_pl + 8 + slen, body1, blen1);
+    send_frame(fd, CMQ_OP_PUBLISH, pub_pl, 8 + slen + blen1);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    free_frame_payload(&frame);
+
+    /* Second publish to the same subject exceeds the cap → ERROR +
+     * rate_limit_reject audit. */
+    const char *body2 = "second";
+    uint16_t blen2 = (uint16_t)strlen(body2);
+    pub_pl[4 + slen] = (blen2 >> 24) & 0xFF;
+    pub_pl[5 + slen] = (blen2 >> 16) & 0xFF;
+    pub_pl[6 + slen] = (blen2 >> 8) & 0xFF;
+    pub_pl[7 + slen] = blen2 & 0xFF;
+    memcpy(pub_pl + 8 + slen, body2, blen2);
+    send_frame(fd, CMQ_OP_PUBLISH, pub_pl, 8 + slen + blen2);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "subject rate limit") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
 TEST_MAIN()
