@@ -998,4 +998,115 @@ TEST(phase2, audit_emits_rate_limit_on_subject_ratelimit) {
     unlink(audit_path);
 }
 
+/* RED v0.6.20: when the F15 per-conn inbox budget rejects a REQUEST
+ * (pending >= inbox_max_pending), the server must emit a
+ * rate_limit_reject audit so operators can spot slow responders
+ * holding the head-of-line lock. Today handle_request only updates
+ * stat_publishes_rejected and emits no audit event. */
+TEST(phase2, audit_emits_rate_limit_on_inbox_full) {
+    const char *audit_path = "/tmp/cmq-test-v0620-audit-inbox.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18913;
+    config.log_to_stdout = 0;
+    /* Cap pending REQUESTs at 1. A subscriber (second connection)
+     * holds the inbox slot open until RESPONSE arrives, so two
+     * back-to-back REQUESTs from the first connection trip the cap. */
+    config.inbox_max_pending = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    /* Subscriber connection. */
+    int sub_fd = connect_to(18913);
+    ASSERT(sub_fd >= 0);
+    wait_server();
+    cmq_parser_t *sub_parser = cmq_parser_create();
+    send_frame(sub_fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(sub_fd, &frame, sub_parser);
+    free_frame_payload(&frame);
+    /* Subscribe to the request subject so it consumes the inbox. */
+    uint16_t sslen = 9; /* "slow.rsdr" */
+    uint8_t sub_pl[64];
+    sub_pl[0] = 0; sub_pl[1] = 0; sub_pl[2] = 0; sub_pl[3] = 1;
+    sub_pl[4] = (sslen >> 8) & 0xFF; sub_pl[5] = sslen & 0xFF;
+    memcpy(sub_pl + 6, "slow.rsdr", sslen);
+    send_frame(sub_fd, CMQ_OP_SUBSCRIBE, sub_pl, 6 + sslen);
+    wait_ms(50);
+    recv_frame(sub_fd, &frame, sub_parser);
+    free_frame_payload(&frame);
+
+    /* Publisher connection. */
+    int pub_fd = connect_to(18913);
+    ASSERT(pub_fd >= 0);
+    wait_server();
+    cmq_parser_t *pub_parser = cmq_parser_create();
+    send_frame(pub_fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    recv_frame(pub_fd, &frame, pub_parser);
+    free_frame_payload(&frame);
+
+    /* Two REQUESTs — second should be rejected as inbox full. */
+    uint16_t slen = 9; /* "slow.rsdr" */
+    uint16_t rlen = 5; /* empty reply "_INBOX" */
+    uint8_t req_pl[64];
+    size_t off = 0;
+    req_pl[off++] = (slen >> 8) & 0xFF;
+    req_pl[off++] = slen & 0xFF;
+    memcpy(req_pl + off, "slow.rsdr", slen);
+    off += slen;
+    req_pl[off++] = (rlen >> 8) & 0xFF;
+    req_pl[off++] = rlen & 0xFF;
+    memcpy(req_pl + off, "reply", rlen);
+    off += rlen;
+    send_frame(pub_fd, CMQ_OP_REQUEST, req_pl, off);
+    wait_ms(50);
+    recv_frame(pub_fd, &frame, pub_parser);
+    free_frame_payload(&frame);
+
+    send_frame(pub_fd, CMQ_OP_REQUEST, req_pl, off);
+    wait_ms(50);
+    recv_frame(pub_fd, &frame, pub_parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "inbox full") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(pub_parser);
+    cmq_parser_destroy(sub_parser);
+    close(pub_fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    close(sub_fd);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
 TEST_MAIN()

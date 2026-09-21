@@ -3822,6 +3822,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     int pending = cmq_atomic_load_int(&c->inbox_pending, CMQ_ATOMIC_RELAXED);
     if (srv->config.inbox_max_pending > 0 &&
         pending >= srv->config.inbox_max_pending) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        /* F13 audit: surface F15 inbox pressure so operators can
+         * spot slow responders holding the head-of-line lock. */
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      "request", "inbox full");
         cmq_send_error(c, "inbox full");
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
