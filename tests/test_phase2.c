@@ -343,6 +343,33 @@ static int audit_file_contains(const char *path, const char *needle) {
     return strstr(buf, needle) != NULL;
 }
 
+/* Locate "trace":"<hex>" inside an event line. Returns the hex length
+ * (32 when propagation is correct) or -1 when the field is missing
+ * / not a 32-char lowercase-hex string. */
+static int audit_event_trace_hex_len(const char *path, const char *event_name) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"event\":\"%s\"", event_name);
+    const char *p = strstr(buf, needle);
+    if (!p) return -1;
+    const char *trace = strstr(p, "\"trace\":\"");
+    if (!trace) return -1;
+    trace += strlen("\"trace\":\"");
+    int len = 0;
+    while (len < 33 &&
+           ((trace[len] >= '0' && trace[len] <= '9') ||
+            (trace[len] >= 'a' && trace[len] <= 'f'))) {
+        len++;
+    }
+    if (len == 32 && trace[len] == '"') return 32;
+    return len > 0 ? -len : -1;
+}
+
 TEST(phase2, audit_emits_auth_ok_on_success) {
     const char *audit_path = "/tmp/cmq-test-phase2-audit-ok.log";
     unlink(audit_path);
@@ -443,6 +470,8 @@ TEST(phase2, audit_emits_auth_fail_on_bad_password) {
     free_frame_payload(&frame);
 
     ASSERT(audit_file_contains(audit_path, "\"event\":\"auth_fail\""));
+    /* The audit line must also carry the F11 connection trace id. */
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "auth_fail"), 32);
 
     cmq_parser_destroy(parser);
     close(fd);

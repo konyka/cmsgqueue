@@ -3051,7 +3051,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
             /* F13 audit: surface durable-write failures so operators
              * notice when the WAL falls behind. Best-effort append
              * continues, so the audit event is a signal, not a gate. */
-            cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, NULL, "publish", "filestore_append failed");
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, trace_hex, "publish",
+                          "filestore_append failed");
         }
     }
 
@@ -3079,8 +3082,10 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         /* F13 audit: surface per-account quota pressure so operators
          * can spot noisy accounts in the audit pipeline. */
-        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, NULL, "publish",
-                      "quota exceeded");
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      "publish", "quota exceeded");
         cmq_send_error(c, "quota exceeded");
         return;
     }
@@ -4646,8 +4651,10 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 uint32_t ip = (uint32_t)peer.sin_addr.s_addr;
                 if (cmq_blocklist_check(bl, ip)) {
                     cmq_rch_release(srv->blocklist_h, bl);
-                    cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, NULL, "",
-                                  "blocklist reject");
+                    char trace_hex[33];
+                    cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+                    cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                                  "", "blocklist reject");
                     client_finish_closing(c);
                     break;
                 }
@@ -4768,7 +4775,10 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             else
                 bad |= !ct_memeq(passwd, passwd, sizeof(passwd));
             if (bad) {
-                cmq_audit_log(CMQ_AUDIT_AUTH_FAIL, NULL, "connect", "auth_fail");
+                char trace_hex[33];
+                cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+                cmq_audit_log(CMQ_AUDIT_AUTH_FAIL, trace_hex,
+                              "connect", "auth_fail");
                 cmq_send_connack(c, malformed ? 1 : 2);
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
@@ -5655,7 +5665,9 @@ static void client_read_cb(int fd, int events, void *data) {
         if (hrc < 0) {
             /* F13 audit: surface TLS handshake failures so operators
              * can detect brute-force or cert rotation failures. */
-            cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, NULL,
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, trace_hex,
                           "tls_handshake", "handshake failed");
             client_teardown(c);
             return;
@@ -6641,7 +6653,10 @@ static void accept_cb(int fd, int events, void *data) {
                  * failures. The same path is also wired into
                  * client_read_cb for failures that surface after
                  * more bytes arrive. */
-                cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, NULL,
+                char trace_hex[33];
+                cmq_trace_id_hex(client->trace_id, trace_hex,
+                                  sizeof(trace_hex));
+                cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, trace_hex,
                               "tls_handshake", "handshake failed");
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
