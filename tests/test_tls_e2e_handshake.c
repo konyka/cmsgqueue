@@ -23,6 +23,7 @@
 #include "cmq_test.h"
 #include "cmq_server.h"
 #include "cmq_tls.h"
+#include "cmq_audit.h"
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -1089,6 +1090,79 @@ TEST(tls_e2e_handshake, mtls_missing_ca_bundle) {
     }
 
     rc = system("rm -rf " MTLS_DIR); (void)rc;
+}
+
+/* ---------- Test 12 (v0.5.58): mTLS forces TLS 1.2 ----------
+ *
+ * Asserts the v0.5.46 cap behavior: when `tls_verify_peer=1`
+ * is set, the server's SSL_CTX is capped at TLS 1.2 (because
+/* RED v0.6.13: TLS handshake failures must surface as
+ * CMQ_AUDIT_TLS_HANDSHAKE_FAIL. client_read_cb teardown at the
+ * handshake failure branch only logs to stderr and never emits an
+ * audit event, so operators have no F13 trace of brute-force or
+ * cert rotation failures.
+ *
+ * Drive the proven mid_handshake_disconnect failure path with a
+ * private audit file so the tls_handshake_fail event lands in our
+ * file. */
+TEST(tls_e2e_handshake, audit_hs_fail) {
+    ensure_dir();
+    gen_cert(TLS_DIR "/cert.pem", TLS_DIR "/key.pem", "v0613server");
+
+    const char *audit_path = "/tmp/cmq-test-v0613-audit.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_server_t *srv = NULL;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25529;
+    cfg.log_to_stdout = 0;
+    cfg.tls_enabled = 1;
+    cfg.tls_cert = TLS_DIR "/cert.pem";
+    cfg.tls_key = TLS_DIR "/key.pem";
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+    wait_for_bind(srv, 1);
+
+    /* Same partial ClientHello trick as mid_handshake_disconnect.
+     * We send NO bytes — the server's first handshake attempt returns
+     * WANT_READ (no data), the next EV_READ detects EOF, and SSL_do_handshake
+     * fails with SSL_ERROR_SYSCALL. */
+    int cfd = open_tcp(25529);
+    ASSERT(cfd >= 0);
+    struct timespec ts = {0, 200000000}; nanosleep(&ts, NULL);
+    close(cfd);
+
+    /* Poll until the audit file appears (server-driven handshake
+     * failure may take a moment to drive SSL_do_handshake → -1 →
+     * client_teardown → cmq_audit_log). Cap the wait so a regression
+     * that never emits the event fails cleanly. */
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        ts.tv_sec = 0; ts.tv_nsec = 100000000; nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char audit_buf[8192];
+    size_t alen = fread(audit_buf, 1, sizeof(audit_buf) - 1, audit);
+    audit_buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(audit_buf, "\"event\":\"tls_handshake_fail\"") != NULL);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
 }
 
 /* ---------- Test 12 (v0.5.58): mTLS forces TLS 1.2 ----------

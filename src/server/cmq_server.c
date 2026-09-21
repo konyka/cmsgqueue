@@ -5645,7 +5645,14 @@ static void client_read_cb(int fd, int events, void *data) {
      * round-trips needed"; bail out and wait for the next wakeup. */
     if (c->tls && !cmq_tls_handshake_done(c->tls)) {
         int hrc = cmq_tls_handshake(c->tls);
-        if (hrc < 0) { client_teardown(c); return; }
+        if (hrc < 0) {
+            /* F13 audit: surface TLS handshake failures so operators
+             * can detect brute-force or cert rotation failures. */
+            cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, NULL,
+                          "tls_handshake", "handshake failed");
+            client_teardown(c);
+            return;
+        }
         if (hrc == 0) return;
         /* rc == 1 → handshake complete; fall through to read app data. */
     }
@@ -6622,6 +6629,13 @@ static void accept_cb(int fd, int events, void *data) {
             client->worker_id = idx;
             client->tls_slot = srv_find_tls_slot(srv, fd);
             if (client_tls_handshake(srv, client) != 0) {
+                /* F13 audit: surface TLS handshake failures at accept
+                 * so operators can detect brute-force or cert rotation
+                 * failures. The same path is also wired into
+                 * client_read_cb for failures that surface after
+                 * more bytes arrive. */
+                cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, NULL,
+                              "tls_handshake", "handshake failed");
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
                 continue;
