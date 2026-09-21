@@ -84,6 +84,11 @@ typedef struct cmq_config {
     int max_msgs_per_sec_per_account;
     int max_msgs_per_sec_per_subject;
     int max_bytes_per_sec_per_account;
+    /* Misleading legacy name. Despite "connections", the quota is a
+     * fixed-window per-account rate limit on CONNECTs/sec (reset every
+     * 1 s), not a simultaneous-connection cap. See docs/features/quota.md
+     * and cmq_quota_check_connect. Kept under the old name to avoid
+     * breaking existing cmq.conf files. */
     int max_connections_per_account;
     /* F16 ACL: CSV patterns. NULL disables. */
     const char *acl_allow;

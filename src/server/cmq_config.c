@@ -117,6 +117,9 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return parse_int_range(value, 0, 1073741824,
                               &config->max_bytes_per_sec_per_account);
     } else if (strcmp(key, "max_connections_per_account") == 0) {
+        /* Despite the legacy name, this is a per-account CONNECT
+         * rate limit (CONNECTs/sec), not a simultaneous-connection
+         * cap. See docs/features/quota.md. */
         return parse_int_range(value, 0, 1000000,
                               &config->max_connections_per_account);
     } else if (strcmp(key, "max_msgs_per_sec_per_subject") == 0) {
