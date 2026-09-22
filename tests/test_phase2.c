@@ -94,6 +94,22 @@ static void wait_ms(int ms) {
     nanosleep(&ts, NULL);
 }
 
+/* Encode a SUBSCRIBE frame into `out`. Returns the total length. */
+static size_t build_sub_frame(uint32_t sub_id, const char *subj,
+                                uint8_t *out) {
+    size_t off = 0;
+    out[off++] = (sub_id >> 24) & 0xFF;
+    out[off++] = (sub_id >> 16) & 0xFF;
+    out[off++] = (sub_id >> 8) & 0xFF;
+    out[off++] = sub_id & 0xFF;
+    uint16_t slen = (uint16_t)strlen(subj);
+    out[off++] = (slen >> 8) & 0xFF;
+    out[off++] = slen & 0xFF;
+    memcpy(out + off, subj, slen);
+    off += slen;
+    return off;
+}
+
 static void do_connect(int fd, cmq_parser_t *parser) {
     send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
     wait_ms(50);
@@ -1287,6 +1303,92 @@ TEST(phase2, audit_emits_rate_limit_on_account_export_acl) {
     fclose(audit);
     ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
     ASSERT(strstr(buf, "denied.subject") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.23: when handle_subscribe rejects a connection that has
+ * already hit max_subs_per_client, the server must emit an audit
+ * event so operators can spot clients exhausting their subscription
+ * budget. Today only stat_subscribes_rejected is updated. */
+TEST(phase2, audit_emits_rate_limit_on_subscribe_cap) {
+    const char *audit_path = "/tmp/cmq-test-v0623-audit-subcap.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18916;
+    config.log_to_stdout = 0;
+    config.max_subs_per_client = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18916);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Build SUBSCRIBE frame: 4-byte sub_id, 2-byte subject len,
+     * subject, no reply_to (0). */
+    uint8_t sub_pl1[128];
+    size_t sub_off1 = build_sub_frame(1, "alpha", sub_pl1);
+    send_frame(fd, CMQ_OP_SUBSCRIBE, sub_pl1, sub_off1);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    free_frame_payload(&frame);
+
+    /* Second distinct SUBSCRIBE exceeds the cap. */
+    uint8_t sub_pl2[128];
+    size_t sub_off2 = build_sub_frame(2, "beta", sub_pl2);
+    send_frame(fd, CMQ_OP_SUBSCRIBE, sub_pl2, sub_off2);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_SUBACK);
+    /* SUBACK code 1 = rejected. Payload[0] is the response code. */
+    ASSERT(frame.payload_len >= 5);
+    ASSERT_EQ(frame.payload[0], 1);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "beta") != NULL);
     ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
 
     cmq_parser_destroy(parser);

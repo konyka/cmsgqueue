@@ -3422,6 +3422,12 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     if (!replacing && c->sub_count >= sub_cap) {
         cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface subscribe-cap rejections so operators
+         * can spot clients exceeding their subscription budget. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "subscribe cap reached");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
