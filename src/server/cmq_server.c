@@ -3337,6 +3337,9 @@ int cmq_server_persist_bridge(cmq_server_t *srv, const char *topic,
 static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                               const cmq_frame_t *frame) {
     if (!frame->payload || frame->payload_len < 6) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "malformed subscribe");
         cmq_send_suback(c, 0, 1);
         return;
     }
@@ -3346,6 +3349,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                       ((uint32_t)frame->payload[2] << 8) |
                       (uint32_t)frame->payload[3];
     if (sub_id == 0) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, 0, 1);
         return;
     }
@@ -3353,6 +3359,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                             frame->payload[5];
     if ((size_t)(6 + subject_len) > frame->payload_len ||
         subject_len == 0 || subject_len >= CMQ_MAX_SUBJECT) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -3361,6 +3370,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     subject[subject_len] = '\0';
     if (!wire_cstr_exact(subject, subject_len) ||
         cmq_sublist_subject_valid(subject) != 0) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -3378,6 +3390,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     if (!cmq_account_can_import(srv->accounts, c->account_name, subject)) {
         cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -3434,6 +3449,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
 
     cmq_sub_entry_t *entry = malloc(sizeof(cmq_sub_entry_t));
     if (!entry) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -3448,6 +3466,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     cmq_sub_ref_t *ref = malloc(sizeof(cmq_sub_ref_t));
     if (!ref) {
         free(entry);
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -3703,6 +3724,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                 (void)shutdown(c->fd, SHUT_RDWR);
             return;
         }
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }

@@ -1002,8 +1002,9 @@ TEST(phase2, audit_emits_rate_limit_on_subject_ratelimit) {
     buf[alen] = '\0';
     fclose(audit);
     ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
-    ASSERT(strstr(buf, "subject rate limit") != NULL);
+    ASSERT(strstr(buf, "noisy.subject") != NULL);
     ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
 
     cmq_parser_destroy(parser);
     close(fd);
@@ -1389,6 +1390,83 @@ TEST(phase2, audit_emits_rate_limit_on_subscribe_cap) {
     fclose(audit);
     ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
     ASSERT(strstr(buf, "beta") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.24: when handle_subscribe rejects (malformed frame,
+ * empty subject, or any other validation branch) the server must
+ * emit an audit event so operators can spot clients sending bad
+ * SUBSCRIBE frames. Today the rejection branches only update
+ * stat_subscribes_rejected and emit no audit event. */
+TEST(phase2, audit_emits_rate_limit_on_malformed_subscribe) {
+    const char *audit_path = "/tmp/cmq-test-v0624-audit-subacl.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18917;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18917);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Malformed SUBSCRIBE: payload length < 6 bytes triggers the
+     * early reject at handle_subscribe's "frame->payload_len < 6"
+     * guard. */
+    uint8_t bad_sub[3] = {0, 0, 0};
+    send_frame(fd, CMQ_OP_SUBSCRIBE, bad_sub, sizeof(bad_sub));
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_SUBACK);
+    ASSERT(frame.payload_len >= 5);
+    ASSERT_EQ(frame.payload[0], 1);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "malformed subscribe") != NULL);
     ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
 
     cmq_parser_destroy(parser);
