@@ -3025,6 +3025,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface payload-size rejections so operators
+         * can spot publishers exceeding the configured cap. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "payload too large");
         cmq_send_error(c, "payload too large");
         return;
     }
@@ -3892,6 +3898,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface payload-size rejections so operators
+         * can spot publishers exceeding the configured cap. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "payload too large");
         cmq_send_error(c, "payload too large");
         return;
     }
@@ -4054,6 +4066,12 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface payload-size rejections so operators
+         * can spot publishers exceeding the configured cap. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "payload too large");
         cmq_send_error(c, "payload too large");
         return;
     }
