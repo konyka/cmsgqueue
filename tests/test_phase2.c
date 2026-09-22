@@ -1201,4 +1201,101 @@ TEST(phase2, audit_emits_rate_limit_on_publish_too_large) {
     unlink(audit_path);
 }
 
+/* RED v0.6.22: when handle_publish rejects with
+ * cmq_account_can_export, the server must emit an audit event so
+ * operators can spot accounts blocked by the export allow-list.
+ * Today only stat_publishes_rejected / stat_publishes_rejected_acl
+ * are updated. */
+TEST(phase2, audit_emits_rate_limit_on_account_export_acl) {
+    const char *audit_path = "/tmp/cmq-test-v0622-audit-acl.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18915;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    /* Restrict the default account ("$default") to a subject that the
+     * test publish will not match, triggering can_export denial. The
+     * destination must be a non-empty peer ("*" is the catch-all). */
+    ASSERT_EQ(cmq_account_add_export(srv->accounts, "$default",
+                                     "allowed.subject", "*"), 0);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18915);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Publish to "denied.subject" — the allow-list restricts to
+     * "allowed.subject", so can_export returns 0 and the server
+     * emits "permission denied". */
+    const char *subject = "denied.subject";
+    uint16_t slen = (uint16_t)strlen(subject);
+    const char *body = "x";
+    uint16_t blen = (uint16_t)strlen(body);
+    uint8_t pub_pl[128];
+    size_t off = 0;
+    pub_pl[off++] = (slen >> 8) & 0xFF;
+    pub_pl[off++] = slen & 0xFF;
+    memcpy(pub_pl + off, subject, slen);
+    off += slen;
+    pub_pl[off++] = 0; pub_pl[off++] = 0;
+    pub_pl[off++] = (blen >> 24) & 0xFF;
+    pub_pl[off++] = (blen >> 16) & 0xFF;
+    pub_pl[off++] = (blen >> 8) & 0xFF;
+    pub_pl[off++] = blen & 0xFF;
+    memcpy(pub_pl + off, body, blen);
+    off += blen;
+    send_frame(fd, CMQ_OP_PUBLISH, pub_pl, off);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "denied.subject") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
 TEST_MAIN()

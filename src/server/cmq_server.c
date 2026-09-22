@@ -3040,6 +3040,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_acl, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface F16 ACL export rejections so operators
+         * can spot accounts blocked by the export allow-list. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "permission denied");
         cmq_send_error(c, "permission denied");
         return;
     }
@@ -3913,6 +3919,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_acl, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface F16 ACL export rejections so operators
+         * can spot accounts blocked by the export allow-list. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "permission denied");
         cmq_send_error(c, "permission denied");
         return;
     }
