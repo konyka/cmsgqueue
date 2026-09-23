@@ -1478,4 +1478,136 @@ TEST(phase2, audit_emits_rate_limit_on_malformed_subscribe) {
     unlink(audit_path);
 }
 
+/* RED v0.6.25: handle_response increments stat_publishes_rejected
+ * when the response body exceeds max_payload_size, but emits no
+ * audit event. Today only stat counters are updated; operators have
+ * no F13 trace of misbehaving response senders. */
+TEST(phase2, audit_emits_rate_limit_on_response_acl) {
+    const char *audit_path = "/tmp/cmq-test-v0625-audit-resp.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18918;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    /* Restrict the default account's export allow-list so a
+     * response to a non-INBOX subject triggers the ACL rejection. The
+     * destination must be a non-empty peer ("*" is the catch-all). */
+    ASSERT_EQ(cmq_account_add_export(srv->accounts, "$default",
+                                     "allowed.subject", "*"), 0);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    /* Subscriber holds a subscription on a non-INBOX subject so
+     * the auto-generated RESPONSE does not bypass the ACL check via
+     * the _INBOX short-circuit. The RESPONSE's subject field will
+     * be set to this subscriber's subject, then handle_response will
+     * run cmq_account_can_export on it. */
+    int sub_fd = connect_to(18918);
+    ASSERT(sub_fd >= 0);
+    wait_server();
+    cmq_parser_t *sub_parser = cmq_parser_create();
+    send_frame(sub_fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(sub_fd, &frame, sub_parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(sub_fd, &frame, sub_parser);
+    }
+    free_frame_payload(&frame);
+    uint8_t sub_pl[128];
+    size_t sub_off = build_sub_frame(1, "worker.1", sub_pl);
+    send_frame(sub_fd, CMQ_OP_SUBSCRIBE, sub_pl, sub_off);
+    wait_ms(50);
+    recv_frame(sub_fd, &frame, sub_parser);
+    free_frame_payload(&frame);
+
+    /* Publisher connection that fires a REQUEST matching the
+     * subscriber's subscription, so a RESPONSE is generated. */
+    int pub_fd = connect_to(18918);
+    ASSERT(pub_fd >= 0);
+    wait_server();
+    cmq_parser_t *pub_parser = cmq_parser_create();
+    send_frame(pub_fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    recv_frame(pub_fd, &frame, pub_parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(pub_fd, &frame, pub_parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Build REQUEST frame: subject (worker.1) + reply-to
+     * (_INBOX.publisher) + small body. The subscriber's RESPONSE will
+     * have subject=worker.1 which is blocked by our export ACL. */
+    const char *req_subj = "worker.1";
+    const char *reply_to = "_INBOX.publisher";
+    uint16_t slen = (uint16_t)strlen(req_subj);
+    uint16_t rlen = (uint16_t)strlen(reply_to);
+    const char *body = "ping";
+    uint32_t blen = (uint32_t)strlen(body);
+    uint8_t req_pl[128];
+    size_t off = 0;
+    req_pl[off++] = (slen >> 8) & 0xFF;
+    req_pl[off++] = slen & 0xFF;
+    memcpy(req_pl + off, req_subj, slen);
+    off += slen;
+    req_pl[off++] = (rlen >> 8) & 0xFF;
+    req_pl[off++] = rlen & 0xFF;
+    memcpy(req_pl + off, reply_to, rlen);
+    off += rlen;
+    req_pl[off++] = (blen >> 24) & 0xFF;
+    req_pl[off++] = (blen >> 16) & 0xFF;
+    req_pl[off++] = (blen >> 8) & 0xFF;
+    req_pl[off++] = blen & 0xFF;
+    memcpy(req_pl + off, body, blen);
+    off += blen;
+    send_frame(pub_fd, CMQ_OP_REQUEST, req_pl, off);
+    wait_ms(100);
+    /* Drain the response (which never arrives because the ACL
+     * rejects the responder). */
+    recv_frame(pub_fd, &frame, pub_parser);
+    free_frame_payload(&frame);
+
+    /* The RESPONSE ACL rejection runs on the subscriber's worker
+     * thread inside handle_response; the audit event lands in the
+     * configured audit file. Poll for it. */
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "permission denied") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(pub_parser);
+    cmq_parser_destroy(sub_parser);
+    close(pub_fd);
+    close(sub_fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
 TEST_MAIN()
