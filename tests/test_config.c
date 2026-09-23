@@ -429,4 +429,19 @@ TEST(config, reject_overlong_line) {
     ASSERT_EQ(rc, CMQ_ERR_INVALID_ARG);
 }
 
+
+TEST(config, load_persistence_keys) {
+    const char *path = write_test_config(
+        "persist_dir = /tmp/cmq-persist\n"
+        "persist_sync_interval_ms = 250\n");
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    cmq_status_t rc = cmq_config_load(path, &config);
+    ASSERT_EQ(rc, CMQ_OK);
+    ASSERT_NOT_NULL(config.persist_dir);
+    ASSERT_STR_EQ(config.persist_dir, "/tmp/cmq-persist");
+    ASSERT_EQ(config.persist_sync_interval_ms, 250u);
+    cmq_config_free(&config);
+}
+
 TEST_MAIN()

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <limits.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
@@ -133,10 +134,17 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->blocklist_file, value);
     } else if (strcmp(key, "inbox_max_pending") == 0) {
         return parse_int_range(value, 0, 100000, &config->inbox_max_pending);
+    } else if (strcmp(key, "persist_sync_interval_ms") == 0) {
+        int interval = 0;
+        int rc = parse_int_range(value, 0, INT_MAX, &interval);
+        if (rc == 0) config->persist_sync_interval_ms = (unsigned)interval;
+        return rc;
     } else if (strcmp(key, "ping_interval") == 0 || strcmp(key, "ping_interval_ms") == 0) {
         return parse_int_range(value, 0, 86400000, &config->ping_interval_ms);
     } else if (strcmp(key, "write_timeout") == 0 || strcmp(key, "write_timeout_ms") == 0) {
         return parse_int_range(value, 0, 86400000, &config->write_timeout_ms);
+    } else if (strcmp(key, "persist_dir") == 0) {
+        return cfg_set_str(&config->persist_dir, value);
     } else if (strcmp(key, "log_file") == 0) {
         return cfg_set_str(&config->log_file, value);
     } else if (strcmp(key, "log_level") == 0) {
@@ -188,6 +196,7 @@ void cmq_config_free(cmq_config_t *config) {
     if (!config) return;
     cfg_free_owned(config->host);
     cfg_free_owned(config->log_file);
+    cfg_free_owned(config->persist_dir);
     cfg_free_owned(config->auth_username);
     cfg_free_owned(config->auth_password);
     cfg_free_owned(config->cluster_name);
@@ -198,6 +207,7 @@ void cmq_config_free(cmq_config_t *config) {
         cfg_free_owned(config->routes[i].addr);
     config->host = NULL;
     config->log_file = NULL;
+    config->persist_dir = NULL;
     config->auth_username = NULL;
     config->auth_password = NULL;
     config->cluster_name = NULL;
