@@ -1,10 +1,18 @@
-# F18: Persistent Subscription State (STUB)
+# F18: Persistent Subscription State
 
 ## Status
 
-**STUB.** The full persistent sublist requires refactoring the in-memory `cmq_sublist` to also write to a WAL stream. The current implementation has no WAL integration.
+**Shipped.** `SUBSCRIBE` and `UNSUBSCRIBE` record state in the
+subscription WAL; server startup loads the WAL before accepting new
+clients; server destruction closes it. Restored entries are server-side
+subject references only — TCP clients and their connection state cannot
+be replayed. Publish replay runs before subscription WAL load, so a
+persisted subscription does not receive historical publishes from the
+same restart; fresh clients can subscribe and receive new publishes.
 
-The library API (`cmq_sublist_persist.{h,c}`) is in place; the implementation is deferred. See `docs/reviews/hyperplan-v030-plan.md` for the full design.
+The library API (`cmq_sublist_persist.{h,c}`) is wired into the server
+when `persist_dir` is configured. The historical deferred design below
+is retained as context only.
 
 ## Design (deferred)
 

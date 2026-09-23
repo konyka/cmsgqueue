@@ -15,10 +15,9 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Backpressure** 4MB write buffer limit per client; validated by tests/test_parser_backpressure.c
 - **Connection Limit** atomic `active_clients` gate on accept (`max_clients`)
 - **Graceful Shutdown** cmq_server_drain() sends DISCONNECT to all clients before stopping; validated by tests/test_server_ops.c shutdown path
-- **Persistence** ring buffer memstore, durable streams with consumers, file-based with CRC32 (library APIs; optional server wiring)
-  Note: durable streams and file-based persistence are library APIs only — not wired into the server process.
+ - **Persistence** ring buffer memstore, durable streams with consumers, and server-integrated file WAL persistence with CRC32. Set `persist_dir` in `cmq.conf` to enable publish replay and persistent subscription state; durable stream APIs remain library-level.
 - **Clustering** node membership and outbound route broadcast (gateway/leaf APIs available as libraries)
-- **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired, F1 pending), MQTT bridge library, WebSocket transport with frame reassembly
+ - **Enterprise** account counters, OpenSSL TLS listeners and inter-node BIO-wrap, MQTT bridge plus server-side MQTT 3.1.1/5.0 listener, and WebSocket transport with frame reassembly
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
 - **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability
@@ -28,13 +27,13 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
   - **F1** test_stress flake fix: subscribe-publish barrier + deterministic drain.
   - **F2** audit log rotation at 100 MiB (`cmq-audit.log` → `cmq-audit.log.1`).
   - **F3** N1 per-subject rate limit enforced in `handle_publish`.
-  - **F4** N2 hot config reload (`cmq_server_reload` re-reads blocklist/audit/log levels).
+   - **F4** N2 hot config reload (`cmq_server_reload` applies blocklist, ACL, and logger threshold; SIGHUP/audit-path reload remain future work).
   - **F5** F14/F15/F16 wire-up: blocklist in `accept_cb`, ACL + quota in `handle_publish`.
   - **F6** N3 audit log file creation test.
   - **F7** mTLS API surface tests.
   - **F8** F17 BIO-wrap write_full/read wiring (`cmq_route_tls_sess_t` integration; full socket BIO-wrap in v0.5.1).
   - **F9** F18 wire-up: subscriptions persisted on sub/unsub.
-  - **F10** F19 server-side MQTT listener tests (full state machine deferred to v0.5.3).
+   - **F10** F19 server-side MQTT listener tests (full CONNECT/CONNACK, SUBSCRIBE/SUBACK, PUBLISH/PUBACK, QoS, retain, and wildcard state machine shipped).
 - **Performance**: 33,784 msg/s end-to-end, 30 µs avg latency (v0.5.0 baseline; preserved by v0.5.0).
 - **Assembly Coroutines** x86_64 + ARM64 context switching; high-fanout delivery uses value snapshots (no live ref UAF)
 - **Multi-Worker** N worker threads with eventfd cross-thread messaging keyed by stable client id

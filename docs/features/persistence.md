@@ -1,10 +1,18 @@
 # F5: Persistence WAL Wired into Server
 
+## Status
+
+**Shipped.** `persist_dir` and `persist_sync_interval_ms` are parsed
+from `cmq.conf`; `cmq_server_create` opens the publish WAL, replay runs
+before accepting clients, validated publishes append before fanout, and
+server destruction syncs and closes the store. F18 subscription WAL is
+opened/loaded/recorded/closed alongside the publish WAL.
+
 ## Motivation
 
-The `cmq_filestore` module existed as a library (719 LOC) but was
-never wired into `cmq_server_create`. Operators with a workload that
-needed durability had no way to enable it from the public config.
+The `cmq_filestore` module originally existed only as a library. The
+server integration now exposes the durable publish path through the
+public configuration keys above.
 
 ## Design
 
