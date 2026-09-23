@@ -1681,4 +1681,116 @@ TEST(phase2, audit_emits_rate_limit_on_unsubscribe_malformed) {
     unlink(audit_path);
 }
 
+/* RED v0.6.27: handle_batch's per-entry reject branches (ACL,
+ * payload-too-large, quota) increment stat_publishes_rejected
+ * without emitting an audit event. Operators have no F13 trace of
+ * batch-PUBLISH rejections. */
+TEST(phase2, audit_emits_rate_limit_on_batch_publish_acl) {
+    const char *audit_path = "/tmp/cmq-test-v0627-audit-batch.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18920;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    /* Restrict the default account's export allow-list so a
+     * batch-PUBLISH entry is rejected by the ACL. The dest must be a
+     * non-empty peer ("*" is the catch-all). */
+    ASSERT_EQ(cmq_account_add_export(srv->accounts, "$default",
+                                     "allowed.subject", "*"), 0);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18920);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Build a 2-entry BATCH with subject denied.subject; the second
+     * entry's subject is outside the export allow-list. */
+    const char *sub1 = "allowed.subject";
+    const char *sub2 = "denied.subject";
+    uint16_t slen1 = (uint16_t)strlen(sub1);
+    uint16_t slen2 = (uint16_t)strlen(sub2);
+    const char *body1 = "ok";
+    const char *body2 = "no";
+    uint32_t blen1 = (uint32_t)strlen(body1);
+    uint32_t blen2 = (uint32_t)strlen(body2);
+    uint8_t batch[256];
+    size_t off = 0;
+    batch[off++] = 0;
+    batch[off++] = 2;
+    batch[off++] = (slen1 >> 8) & 0xFF;
+    batch[off++] = slen1 & 0xFF;
+    memcpy(batch + off, sub1, slen1);
+    off += slen1;
+    batch[off++] = 0; batch[off++] = 0;
+    batch[off++] = (blen1 >> 24) & 0xFF;
+    batch[off++] = (blen1 >> 16) & 0xFF;
+    batch[off++] = (blen1 >> 8) & 0xFF;
+    batch[off++] = blen1 & 0xFF;
+    memcpy(batch + off, body1, blen1);
+    off += blen1;
+    batch[off++] = (slen2 >> 8) & 0xFF;
+    batch[off++] = slen2 & 0xFF;
+    memcpy(batch + off, sub2, slen2);
+    off += slen2;
+    batch[off++] = 0; batch[off++] = 0;
+    batch[off++] = (blen2 >> 24) & 0xFF;
+    batch[off++] = (blen2 >> 16) & 0xFF;
+    batch[off++] = (blen2 >> 8) & 0xFF;
+    batch[off++] = blen2 & 0xFF;
+    memcpy(batch + off, body2, blen2);
+    off += blen2;
+    send_frame(fd, CMQ_OP_BATCH, batch, off);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    /* Batch validation rejects with ERROR. */
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "denied.subject") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
 TEST_MAIN()

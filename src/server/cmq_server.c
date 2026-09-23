@@ -4378,6 +4378,13 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         if (!cmq_account_can_export(srv->accounts, c->account_name, subj)) {
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            /* F13 audit: surface batch-PUBLISH ACL rejections so
+             * operators can spot accounts whose batch publishers are
+             * blocked by the export allow-list. */
+            cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                          subj, "permission denied");
             cmq_send_error(c, "permission denied");
             return;
         }
@@ -4444,6 +4451,10 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             payload_len > (uint32_t)srv->config.max_payload_size) {
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                          subj, "payload too large");
             cmq_send_error(c, "payload too large");
             return;
         }
@@ -4452,6 +4463,10 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                                                    payload_len) == 0) {
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                          subj, "quota exceeded");
             cmq_send_error(c, "quota exceeded");
             return;
         }
