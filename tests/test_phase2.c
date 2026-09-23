@@ -1610,4 +1610,75 @@ TEST(phase2, audit_emits_rate_limit_on_response_acl) {
     unlink(audit_path);
 }
 
+/* RED v0.6.26: handle_unsubscribe rejects malformed payload
+ * (< 4 bytes) but emits no audit event. Operators have no F13
+ * trace of clients sending bad UNSUBSCRIBE frames. */
+TEST(phase2, audit_emits_rate_limit_on_unsubscribe_malformed) {
+    const char *audit_path = "/tmp/cmq-test-v0626-audit-unsub.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18919;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18919);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Malformed UNSUBSCRIBE: payload length < 4 bytes triggers the
+     * early reject at handle_unsubscribe's first guard. */
+    uint8_t bad_unsub[2] = {0, 0};
+    send_frame(fd, CMQ_OP_UNSUBSCRIBE, bad_unsub, sizeof(bad_unsub));
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "malformed unsubscribe") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
 TEST_MAIN()

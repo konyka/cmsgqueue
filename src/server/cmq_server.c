@@ -3797,6 +3797,12 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
 static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
                                 const cmq_frame_t *frame) {
     if (!frame->payload || frame->payload_len < 4) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        /* F13 audit: surface malformed UNSUBSCRIBE frames so operators
+         * can spot clients sending bad UNSUBSCRIBE frames. */
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      "", "malformed unsubscribe");
         cmq_send_error(c, "invalid unsubscribe");
         return;
     }
