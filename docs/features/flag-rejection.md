@@ -7,8 +7,8 @@ The CMSGQueue wire protocol reserves two flag bits:
 - `CMQ_FLAG_COMPRESSED = 0x01` (defined in `src/proto/cmq_proto.h:14`)
 - `CMQ_FLAG_CHECKSUM   = 0x02` (defined in `src/proto/cmq_proto.h:15`)
 
-Both are **reserved but not yet implemented on the wire**. Prior to this fix, a
-peer setting either bit on a `PUBLISH` frame was successfully parsed — the
+Both were initially **reserved and unimplemented on the wire**. Prior to this
+fix, a peer setting either bit on a `PUBLISH` frame was successfully parsed — the
 parser recorded the flag bits in `frame.hdr.flags`, then re-emitted them on
 outbound `MESSAGE` frames (`src/server/cmq_server.c:2915/2956/2983`). The
 result: a compressed PUBLISH **round-tripped as opaque plaintext bytes** to
@@ -35,13 +35,17 @@ how to handle the framing.
 - `CMQ_FLAG_HEADERS (0x04)` — already implemented, still passes.
 - `CMQ_FLAG_BATCH (0x08)` — already implemented, still passes.
 - `CMQ_FLAG_ROUTE (0x10)` — used on CONNECT, not in the parser path.
-- `CMQ_FLAG_COMPRESSED (0x01)` — now rejected.
-- `CMQ_FLAG_CHECKSUM (0x02)` — now rejected.
+- `CMQ_FLAG_COMPRESSED (0x01)` — accepted only on `CMQ_OP_BATCH` (F2),
+  where the payload is zstd-compressed and decompressed before batch
+  validation. It remains rejected on per-message `PUBLISH` frames.
+- `CMQ_FLAG_CHECKSUM (0x02)` — accepted and verified on publish paths
+  with CRC32C (F3); invalid checksums are rejected before delivery.
 - Any combination of reserved bits — now rejected.
 
-Forward path: when `CMQ_FLAG_COMPRESSED` is implemented (F2), the parser
-gains a branch that knows how to decompress the payload. Same for `F3`
-(checksum). Each promotion is a TightlyScoped PR.
+F2 and F3 are now shipped as separate, tightly scoped promotions. The
+fail-closed behavior remains for unsupported combinations: compression is
+not a per-message publish feature, and checksum verification still rejects
+bad or truncated checksum payloads.
 
 ## API
 
