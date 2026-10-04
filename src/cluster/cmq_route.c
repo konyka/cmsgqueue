@@ -108,7 +108,7 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
 
     size_t off = 0;
     while (off < len) {
-        ssize_t n = write_one(fd, buf + off, len - off, NULL);
+        ssize_t n = write(fd, buf + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -123,10 +123,12 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
     while (waited_ms < CMQ_ROUTE_HANDSHAKE_MS) {
         while (rlen >= sizeof(cmq_frame_hdr_t)) {
             const uint8_t *hb = rbuf;
-            if (hb[0] != CMQ_PROTO_MAGIC_0 || hb[1] != CMQ_PROTO_MAGIC_1)
+            if (hb[0] != CMQ_PROTO_MAGIC_0 || hb[1] != CMQ_PROTO_MAGIC_1) {
                 return -1;
-            if (hb[2] != CMQ_PROTO_VERSION)
+            }
+            if (hb[2] != CMQ_PROTO_VERSION) {
                 return -1;
+            }
             uint8_t op = hb[4];
             uint32_t plen_f = (uint32_t)hb[5] | ((uint32_t)hb[6] << 8) |
                                ((uint32_t)hb[7] << 16) | ((uint32_t)hb[8] << 24);
@@ -144,8 +146,9 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
                 if (rlen > need) return -1;
                 return 0;
             }
-            if (op != (uint8_t)CMQ_OP_INFO)
+            if (op != (uint8_t)CMQ_OP_INFO) {
                 return -1;
+            }
             /* Skip INFO frames before CONNACK. */
             memmove(rbuf, rbuf + need, rlen - need);
             rlen -= need;

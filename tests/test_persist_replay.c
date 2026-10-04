@@ -81,16 +81,14 @@ TEST(persist_replay, audit_emits_persist_recover_on_startup) {
     cmq_filestore_sync(srv_a->filestore);
     cmq_server_destroy(srv_a);
 
-    /* Server B: point cmq_audit at a private path before create, so the
-     * persist_recover event lands in our file. */
-    const char *audit_path = "/tmp/cmq-test-v0612-recover-audit.log";
+    /* Server B derives the audit path from persist_dir during startup. */
+    char audit_path[256];
+    snprintf(audit_path, sizeof(audit_path), "%s/cmq-audit.log", WAL_DIR);
     unlink(audit_path);
-    cmq_audit_set_path(audit_path);
 
     cmq_server_t *srv_b = NULL;
     ASSERT_EQ(cmq_server_create(&srv_b, &cfg), CMQ_OK);
     cmq_server_destroy(srv_b);
-    cmq_audit_set_path(NULL);
 
     FILE *f = fopen(audit_path, "r");
     ASSERT_NOT_NULL(f);
@@ -105,4 +103,3 @@ TEST(persist_replay, audit_emits_persist_recover_on_startup) {
 }
 
 TEST_MAIN()
-
