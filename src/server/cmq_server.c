@@ -5542,6 +5542,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             if (srv->config.auth_username && srv->config.auth_username[0])
                 strncpy(expect_u, srv->config.auth_username, sizeof(expect_u) - 1);
             int f8_hashed_fail = 0;
+            int jwt_fail = 0;
+            int nkey_fail = 0;
             int password_is_hashed = 0;
             if (srv->config.auth_password && srv->config.auth_password[0]) {
                 if (srv->config.auth_password[0] == '$') {
@@ -7502,7 +7504,7 @@ static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
 
 /* v0.5.42: shared admit path for accept_cb and accept_thread_func.
  * Takes ownership of client_fd. Returns 1 if the session is live. */
-static int admit_one_client(cmq_server_t *srv, int listen_fd,
+static int admit_one_client(cmq_server_t *srv, int listener_fd,
                              int client_fd, const struct sockaddr_in *addr) {
         if (set_nonblocking(client_fd) != 0) {
             close(client_fd);
@@ -7605,7 +7607,7 @@ static int admit_one_client(cmq_server_t *srv, int listen_fd,
                 return 0;
             }
             client->worker_id = idx;
-            client->tls_slot = srv_find_tls_slot(srv, listen_fd);
+            client->tls_slot = srv_find_tls_slot(srv, listener_fd);
             if (client_tls_handshake(srv, client) != 0) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
@@ -7658,7 +7660,7 @@ static int admit_one_client(cmq_server_t *srv, int listen_fd,
                 return 0;
             }
             client->worker_id = -1;
-            client->tls_slot = srv_find_tls_slot(srv, listen_fd);
+            client->tls_slot = srv_find_tls_slot(srv, listener_fd);
             if (client_tls_handshake(srv, client) != 0) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);

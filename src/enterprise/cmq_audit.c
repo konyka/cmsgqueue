@@ -32,6 +32,31 @@ void cmq_audit_set_path(const char *path) {
     pthread_mutex_unlock(&g_audit_lock);
 }
 
+int cmq_audit_from_persist(const char *dir) {
+    if (!dir || !dir[0]) {
+        cmq_audit_set_path(NULL);
+        return 0;
+    }
+    if (strstr(dir, "..") || strchr(dir, '\\'))
+        return -1;
+    for (const char *p = dir; *p; p++) {
+        if ((unsigned char)*p < 0x20)
+            return -1;
+    }
+    char path[600];
+    int n = snprintf(path, sizeof(path), "%s/cmq-audit.log", dir);
+    if (n <= 0 || (size_t)n >= sizeof(path))
+        return -1;
+    cmq_audit_set_path(path);
+    return 0;
+}
+
+int cmq_audit_reload_persist(const char *dir) {
+    if (!dir || !dir[0])
+        return 0;
+    return cmq_audit_from_persist(dir);
+}
+
 void cmq_audit_set_max_bytes(uint64_t bytes) {
     g_audit_max_bytes = bytes ? bytes : AUDIT_DEFAULT_MAX_BYTES;
 }
@@ -100,7 +125,7 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
                      "{\"ts\":\"%s.%03ldZ\",\"event\":\"%s\",\"trace\":\"%s\","
                      "\"subject\":\"%s\",\"details\":\"%s\"}\n",
                      ts_buf, (long)(ts.tv_nsec / 1000000),
-                     event_name(event),
+                     cmq_audit_event_name(event),
                      trace_esc, subj_esc, det_esc);
     if (n <= 0 || (size_t)n >= sizeof(line)) return;
 

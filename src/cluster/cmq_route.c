@@ -269,6 +269,13 @@ typedef struct {
     uint32_t gen;
 } cmq_route_cancel_t;
 
+typedef struct {
+    char node_id[CMQ_NODE_ID_SIZE];
+    uint8_t data[CMQ_ROUTE_RETRY_BYTES];
+    uint16_t len;
+    int used;
+} cmq_route_retry_t;
+
 struct cmq_route_pool {
     cmq_cluster_t *cluster;
     cmq_route_conn_t conns[CMQ_ROUTE_MAX_CONNS];
@@ -281,6 +288,10 @@ struct cmq_route_pool {
     cmq_route_interest_t interests[256];
     size_t interest_count;
     cmq_mutex_t lock;
+    cmq_mutex_t retry_lock;
+    cmq_route_retry_t retry[CMQ_ROUTE_RETRY_MAX];
+    uint64_t retry_dropped;
+    uint64_t retry_sent;
     cmq_mutex_t io_locks[CMQ_ROUTE_MAX_CONNS]; /* per-slot write serialization */
     atomic_int in_flight; /* connect/add_conn unlocked dial/handshake */
     atomic_int dying;

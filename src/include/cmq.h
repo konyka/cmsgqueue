@@ -139,6 +139,8 @@ typedef struct cmq_config {
         int tls_verify_peer;
         const char *tls_crl; /* v0.5.47: per-listener CRL. */
         int tls_no_tickets;   /* v0.5.94: per-listener no-tickets flag. */
+        const char *host;      /* v0.5.115: listener bind address. */
+        int port;              /* v0.5.115: listener port; 0 = ephemeral. */
     } listeners[4];
     int listener_count;
     int max_connects_per_sec;  /* F10: per-IP connect rate cap; 0=disabled */

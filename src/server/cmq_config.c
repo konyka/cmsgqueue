@@ -469,7 +469,6 @@ void cmq_config_free(cmq_config_t *config) {
     if (!config) return;
     cfg_free_owned(config->host);
     cfg_free_owned(config->log_file);
-    cfg_free_owned(config->persist_dir);
     cfg_free_owned(config->auth_username);
     cfg_free_owned(config->auth_password);
     cfg_free_owned(config->jwt_issuer);
