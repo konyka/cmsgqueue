@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <errno.h>
+#include <poll.h>
 
 static int connect_to(int port) {
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
@@ -25,6 +26,23 @@ static int connect_to(int port) {
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
     int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
     if (rc < 0 && errno != EINPROGRESS) { close(fd); return -1; }
+    if (rc < 0) {
+        struct pollfd pfd = {.fd = fd, .events = POLLOUT};
+        do {
+            rc = poll(&pfd, 1, 1000);
+        } while (rc < 0 && errno == EINTR);
+        if (rc <= 0 || (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            close(fd);
+            return -1;
+        }
+        int so_error = 0;
+        socklen_t so_len = sizeof(so_error);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) != 0 ||
+            so_error != 0) {
+            close(fd);
+            return -1;
+        }
+    }
     return fd;
 }
 
@@ -32,7 +50,18 @@ static ssize_t send_frame(int fd, cmq_op_t op, const uint8_t *payload, size_t pl
     uint8_t buf[4096];
     size_t len = cmq_frame_encode(buf, sizeof(buf), op, 0, payload, plen);
     if (len == 0) return -1;
-    return write(fd, buf, len);
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n > 0) { off += (size_t)n; continue; }
+        if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct timespec ts = {0, 1000000L};
+            nanosleep(&ts, NULL);
+            continue;
+        }
+        return -1;
+    }
+    return (ssize_t)off;
 }
 
 static ssize_t send_frame_flags(int fd, cmq_op_t op, uint8_t flags,
@@ -40,7 +69,18 @@ static ssize_t send_frame_flags(int fd, cmq_op_t op, uint8_t flags,
     uint8_t buf[8192];
     size_t len = cmq_frame_encode(buf, sizeof(buf), op, flags, payload, plen);
     if (len == 0) return -1;
-    return write(fd, buf, len);
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n > 0) { off += (size_t)n; continue; }
+        if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct timespec ts = {0, 1000000L};
+            nanosleep(&ts, NULL);
+            continue;
+        }
+        return -1;
+    }
+    return (ssize_t)off;
 }
 
 static int recv_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
@@ -157,7 +197,7 @@ TEST(phase2, auth_success) {
     memcpy(connect_pl + 4, user, ulen);
     memcpy(connect_pl + 4 + ulen, pass, plen);
 
-    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    ASSERT(send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen) > 0);
     wait_ms(50);
 
     cmq_frame_t frame;
@@ -210,7 +250,7 @@ TEST(phase2, auth_failure) {
     memcpy(connect_pl + 4, user, ulen);
     memcpy(connect_pl + 4 + ulen, pass, plen);
 
-    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    ASSERT(send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen) > 0);
     wait_ms(50);
 
     cmq_frame_t frame;
@@ -264,7 +304,7 @@ TEST(phase2, hashed_auth_success) {
     connect_pl[3] = plen & 0xFF;
     memcpy(connect_pl + 4, user, ulen);
     memcpy(connect_pl + 4 + ulen, pass, plen);
-    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    ASSERT(send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen) > 0);
     wait_ms(50);
 
     cmq_frame_t frame;

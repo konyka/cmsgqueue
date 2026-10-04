@@ -5507,7 +5507,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             char uname[256] = {0};
             char passwd[CMQ_JWT_TOKEN_MAX + 1] = {0};
             char expect_u[256] = {0};
-            char expect_p[256] = {0};
+            char expect_p[CMQ_JWT_TOKEN_MAX + 1] = {0};
             int jwt_mode = (srv->config.jwt_issuer &&
                             srv->config.jwt_issuer[0] &&
                             ((srv->config.jwt_hmac_secret &&
