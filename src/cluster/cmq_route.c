@@ -681,6 +681,18 @@ cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster) {
     return p;
 }
 
+int cmq_route_pool_reload_attach(cmq_route_pool_t **pool,
+                                 cmq_cluster_t *cluster,
+                                 cmq_atomic_int *gate) {
+    if (!pool) return -1;
+    if (!cluster || *pool) return 0;
+    cmq_route_pool_t *created = cmq_route_pool_create(cluster);
+    if (!created) return -1;
+    cmq_route_pool_set_dial_gate(created, gate);
+    *pool = created;
+    return 0;
+}
+
 void cmq_route_pool_set_dial_gate(cmq_route_pool_t *pool, cmq_atomic_int *gate) {
     if (!pool) return;
     if (route_begin_op(pool) != 0) return;
