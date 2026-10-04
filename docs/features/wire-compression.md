@@ -36,7 +36,10 @@ parser; the decoded buffer is freed on this return path.
 
 **Parser (v0.5.41 / v0.5.96–99):** `CMQ_FLAG_COMPRESSED` is accepted
 on the data path (BATCH, PUBLISH, MESSAGE, REQUEST, RESPONSE).
-Control opcodes with the bit set are still `pending_error` (F11).
+Per-message opcodes (`PUBLISH`, `MESSAGE`, `REQUEST`, and `RESPONSE`) with
+the bit set remain `pending_error` (F11). Only `BATCH` supports wire
+compression; this fail-closed rule prevents compressed payloads from being
+forwarded without an explicit decompression boundary.
 
 ### Threshold policy
 
