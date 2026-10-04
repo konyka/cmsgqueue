@@ -497,6 +497,7 @@ void cmq_config_free(cmq_config_t *config) {
         cfg_free_owned(config->listeners[i].tls_cert);
         cfg_free_owned(config->listeners[i].tls_key);
         cfg_free_owned(config->listeners[i].tls_ca);
+        cfg_free_owned(config->listeners[i].tls_crl);
         cfg_free_owned(config->listeners[i].host);
         config->listeners[i].tls_cert = NULL;
         config->listeners[i].tls_key = NULL;

@@ -8302,6 +8302,18 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.cluster_node_id = NULL;
     srv->config.tls_cert = NULL;
     srv->config.tls_key = NULL;
+    srv->config.tls_ca = NULL;
+    srv->config.acl_allow = NULL;
+    srv->config.acl_deny = NULL;
+    srv->config.blocklist_file = NULL;
+    srv->config.mqtt_bridge_addr = NULL;
+    for (int i = 0; i < 4; i++) {
+        srv->config.listeners[i].tls_cert = NULL;
+        srv->config.listeners[i].tls_key = NULL;
+        srv->config.listeners[i].tls_ca = NULL;
+        srv->config.listeners[i].tls_crl = NULL;
+        srv->config.listeners[i].host = NULL;
+    }
     srv->config.persist_dir = NULL;
     srv->config.route_count = 0;
     for (int i = 0; i < 8; i++) {
@@ -8340,6 +8352,18 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.cluster_node_id, src.cluster_node_id);
     OWN(srv->config.tls_cert, src.tls_cert);
     OWN(srv->config.tls_key, src.tls_key);
+    OWN(srv->config.tls_ca, src.tls_ca);
+    OWN(srv->config.acl_allow, src.acl_allow);
+    OWN(srv->config.acl_deny, src.acl_deny);
+    OWN(srv->config.blocklist_file, src.blocklist_file);
+    OWN(srv->config.mqtt_bridge_addr, src.mqtt_bridge_addr);
+    for (int i = 0; i < 4; i++) {
+        OWN(srv->config.listeners[i].tls_cert, src.listeners[i].tls_cert);
+        OWN(srv->config.listeners[i].tls_key, src.listeners[i].tls_key);
+        OWN(srv->config.listeners[i].tls_ca, src.listeners[i].tls_ca);
+        OWN(srv->config.listeners[i].tls_crl, src.listeners[i].tls_crl);
+        OWN(srv->config.listeners[i].host, src.listeners[i].host);
+    }
     OWN(srv->config.persist_dir, src.persist_dir);
 #undef OWN
     /* Fail closed before copy — truncating/skipping would hide invalid
