@@ -126,10 +126,15 @@ static void http_get_body(int port, const char *path, char *buf, size_t cap) {
     (void)send(fd, req, strlen(req), 0);
     struct timeval tv = { .tv_sec = 1, .tv_usec = 500000 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    ssize_t n = recv(fd, buf, cap - 1, 0);
+    size_t total = 0;
+    for (;;) {
+        ssize_t n = recv(fd, buf + total, cap - 1 - total, 0);
+        if (n <= 0) break;
+        total += (size_t)n;
+        if (total == cap - 1) break;
+    }
     close(fd);
-    if (n < 0) n = 0;
-    buf[n] = '\0';
+    buf[total] = '\0';
 }
 
 TEST(http, connz_json) {
