@@ -5544,6 +5544,108 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             int f8_hashed_fail = 0;
             int jwt_fail = 0;
             int nkey_fail = 0;
+            const cmq_jwks_t *jwks_live = srv_jwks_live(srv);
+            if (jwt_mode && !malformed) {
+                struct timespec tsj;
+                clock_gettime(CLOCK_REALTIME, &tsj);
+                char sub[128] = {0};
+                unsigned leeway = srv->config.jwt_leeway_sec > 0
+                    ? (unsigned)srv->config.jwt_leeway_sec
+                    : (unsigned)CMQ_JWT_LEEWAY_SEC;
+                const uint8_t *jsec = NULL;
+                size_t jslen = 0;
+                const uint8_t *ecx = NULL, *ecy = NULL;
+                uint8_t ecxy[64];
+                const uint8_t *rsan = NULL, *rsae = NULL;
+                size_t rsanl = 0, rsael = 0;
+                uint8_t rsabn[CMQ_JWT_RSA_N_MAX], rsabe[CMQ_JWT_RSA_E_MAX];
+                const char *sstr = srv->config.jwt_hmac_secret;
+                char alg[16] = {0};
+                int is_es = 0;
+                int is_rs = 0;
+                if (cmq_jwt_header_alg(passwd, alg, sizeof(alg)) != 0)
+                    jwt_fail = 1;
+                else if (strcmp(alg, "ES256") == 0)
+                    is_es = 1;
+                else if (strcmp(alg, "RS256") == 0)
+                    is_rs = 1;
+                else if (strcmp(alg, "HS256") != 0)
+                    jwt_fail = 1;
+                if (!jwt_fail && jwks_live) {
+                    char kid[64] = {0};
+                    if (cmq_jwt_header_kid(passwd, kid, sizeof(kid)) == 0) {
+                        if (is_es) {
+                            if (cmq_jwks_lookup_ec(jwks_live, kid, &ecx, &ecy) != 0)
+                                jwt_fail = 1;
+                        } else if (is_rs) {
+                            if (cmq_jwks_lookup_rsa(jwks_live, kid, &rsan, &rsanl,
+                                                    &rsae, &rsael) != 0)
+                                jwt_fail = 1;
+                        } else if (cmq_jwks_lookup(jwks_live, kid, &jsec, &jslen) != 0) {
+                            jwt_fail = 1;
+                        }
+                    } else if (is_es) {
+                        if (!srv->config.jwt_ec_pub || !srv->config.jwt_ec_pub[0])
+                            jwt_fail = 1;
+                    } else if (is_rs) {
+                        if (!srv->config.jwt_rsa_n || !srv->config.jwt_rsa_n[0] ||
+                            !srv->config.jwt_rsa_e || !srv->config.jwt_rsa_e[0])
+                            jwt_fail = 1;
+                    } else if (!sstr || !sstr[0]) {
+                        jwt_fail = 1;
+                    }
+                }
+                if (!jwt_fail && is_es && !ecx) {
+                    if (!srv->config.jwt_ec_pub ||
+                        cmq_nkey_hex_decode(srv->config.jwt_ec_pub, ecxy, 64) != 0)
+                        jwt_fail = 1;
+                    else {
+                        ecx = ecxy;
+                        ecy = ecxy + 32;
+                    }
+                }
+                if (!jwt_fail && is_rs && !rsan) {
+                    if (!srv->config.jwt_rsa_n || !srv->config.jwt_rsa_e ||
+                        cmq_jwt_rsa_decode(srv->config.jwt_rsa_n, srv->config.jwt_rsa_e,
+                                           rsabn, &rsanl, rsabe, &rsael) != 0)
+                        jwt_fail = 1;
+                    else {
+                        rsan = rsabn;
+                        rsae = rsabe;
+                    }
+                }
+                if (!jwt_fail) {
+                    int vr;
+                    if (is_es)
+                        vr = cmq_jwt_verify_es256(passwd, ecx, ecy,
+                            srv->config.jwt_issuer, (uint64_t)tsj.tv_sec,
+                            leeway, sub, sizeof(sub));
+                    else if (is_rs)
+                        vr = cmq_jwt_verify_rs256(passwd, rsan, rsanl, rsae, rsael,
+                            srv->config.jwt_issuer, (uint64_t)tsj.tv_sec,
+                            leeway, sub, sizeof(sub));
+                    else if (jsec)
+                        vr = cmq_jwt_verify_hs256_bin(passwd, jsec, jslen,
+                            srv->config.jwt_issuer, (uint64_t)tsj.tv_sec,
+                            leeway, sub, sizeof(sub));
+                    else
+                        vr = cmq_jwt_verify_hs256(passwd, sstr,
+                            srv->config.jwt_issuer, (uint64_t)tsj.tv_sec,
+                            leeway, sub, sizeof(sub));
+                    if (vr != 0)
+                        jwt_fail = 1;
+                    else if (sub[0]) {
+                        memset(uname, 0, sizeof(uname));
+                        snprintf(uname, sizeof(uname), "%s", sub);
+                    }
+                }
+            }
+            if (nkey_mode && !malformed) {
+                uint8_t npub[CMQ_NKEY_PUB_LEN];
+                if (cmq_nkey_pub_decode(srv->config.nkey_pub, npub) != 0 ||
+                    cmq_nkey_verify_user(npub, uname, passwd) != 0)
+                    nkey_fail = 1;
+            }
             int password_is_hashed = 0;
             if (srv->config.auth_password && srv->config.auth_password[0]) {
                 if (srv->config.auth_password[0] == '$') {
