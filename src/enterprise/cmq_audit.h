@@ -30,6 +30,14 @@ typedef enum {
 
 /* Set the audit file path. NULL disables file output. */
 void cmq_audit_set_path(const char *path);
+/* v0.5.129: `{dir}/cmq-audit.log`. NULL/empty disables. `..` / `\\`
+ * / controls fail closed and leave the current path. */
+int cmq_audit_from_persist(const char *dir);
+/* Reload: NULL/empty keeps the current file. Invalid dir fails
+ * closed. Create uses from_persist; destroy clears the path. */
+int cmq_audit_reload_persist(const char *dir);
+
+const char *cmq_audit_event_name(cmq_audit_event_t event);
 
 /* Override the rotation size cap (bytes). 0 restores the 100 MiB
  * default. Intended for tests; production code should not call this. */
@@ -39,6 +47,10 @@ void cmq_audit_set_max_bytes(uint64_t bytes);
  * ID (hex-encoded) or NULL for non-connection events. */
 void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
                     const char *subject, const char *details);
+
+/* CONNECT helper. `reason` must not contain a password. */
+void cmq_audit_auth(int ok, const char *trace_id, const char *user,
+                    const char *reason);
 
 #ifdef __cplusplus
 }

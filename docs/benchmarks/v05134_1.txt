@@ -1,0 +1,3 @@
+v0.5.134 bench 1:
+- Reload apply: mutex + memcpy of ca path (<=255).
+- Sidecar GET copies url under the same lock.

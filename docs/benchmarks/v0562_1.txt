@@ -1,0 +1,3 @@
+v0.5.62 bench 1:
+- jwt_hmac_secret unset: one pointer on CONNECT.
+- Existing password path unchanged.

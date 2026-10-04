@@ -49,6 +49,12 @@ struct cmq_filestore {
     uint64_t last_sync_ms;
     /* P1 v0.5.5: max payload size for async enqueue. */
     size_t max_payload_bytes;
+    /* v0.5.45: 0 = no automatic rotate. */
+    uint64_t rotate_bytes;
+    /* v0.5.88: 0 = drop tombstones immediately. */
+    uint64_t tombstone_ttl_ms;
+    unsigned compact_dirty_num;
+    unsigned compact_dirty_den;
     /* P1: async WAL ring (SPSC + worker thread). The producer enqueues
      * a copy of (data, len); the worker drains and writes. */
     pthread_t async_thread;
@@ -167,6 +173,11 @@ static void fs_unlock_pair(cmq_filestore_t *fs) {
     if (fs->idx_fp) fs_flock(fs->idx_fp, LOCK_UN);
     if (fs->data_fp) fs_flock(fs->data_fp, LOCK_UN);
 }
+
+static int filestore_rotate_archive_locked(cmq_filestore_t *fs);
+static int filestore_compact_impl(cmq_filestore_t *fs, uint64_t retain);
+static int filestore_compact_keys_impl(cmq_filestore_t *fs);
+static int filestore_compact_keys_maybe_impl(cmq_filestore_t *fs);
 
 /* Under flock: idx length is the cross-process authority for next_seq.
    may_truncate: only under LOCK_EX — drop a torn trailing partial entry. */
@@ -501,6 +512,585 @@ void cmq_filestore_destroy(cmq_filestore_t *fs) {
     free(fs);
 }
 
+/* Caller holds mutex. On success flock is released and files replaced. */
+static int filestore_rotate_archive_locked(cmq_filestore_t *fs) {
+    if (!fs || !fs->data_fp || !fs->idx_fp) return -1;
+    if (fflush(fs->data_fp) != 0 || fflush(fs->idx_fp) != 0)
+        return -1;
+    (void)fsync(fileno(fs->data_fp));
+    (void)fsync(fileno(fs->idx_fp));
+    fs_unlock_pair(fs);
+    fclose(fs->data_fp);
+    fs->data_fp = NULL;
+    fclose(fs->idx_fp);
+    fs->idx_fp = NULL;
+
+    char d1[616], i1[616];
+    if (snprintf(d1, sizeof(d1), "%s.1", fs->data_path) >= (int)sizeof(d1) ||
+        snprintf(i1, sizeof(i1), "%s.1", fs->idx_path) >= (int)sizeof(i1))
+        goto reopen;
+    unlink(d1);
+    unlink(i1);
+    if (rename(fs->data_path, d1) != 0)
+        goto reopen;
+    if (rename(fs->idx_path, i1) != 0)
+        goto reopen;
+    fs->data_fp = fopen(fs->data_path, "a+b");
+    fs->idx_fp = fopen(fs->idx_path, "a+b");
+    if (!fs->data_fp || !fs->idx_fp)
+        goto reopen;
+    fs->next_seq = 1;
+    fs->data_end_off = 0;
+    fs->idx_end_off = 0;
+    return 0;
+reopen:
+    if (!fs->data_fp)
+        fs->data_fp = fopen(fs->data_path, "a+b");
+    if (!fs->idx_fp)
+        fs->idx_fp = fopen(fs->idx_path, "a+b");
+    return -1;
+}
+
+static int compact_copy_one(cmq_filestore_t *fs, uint64_t old_seq,
+                             uint64_t new_seq, FILE *df, FILE *idf,
+                             uint64_t *off) {
+    if (fs_seek(fs->idx_fp, (old_seq - 1) * 8u) != 0)
+        return -1;
+    uint8_t idxb[8];
+    if (fread(idxb, sizeof(idxb), 1, fs->idx_fp) != 1)
+        return -1;
+    uint64_t data_offset = get_le64(idxb);
+    if (fs_seek(fs->data_fp, data_offset) != 0)
+        return -1;
+    uint8_t hdr[CMQ_FS_HDR_SIZE];
+    if (fread(hdr, sizeof(hdr), 1, fs->data_fp) != 1)
+        return -1;
+    if (get_le32(hdr + 0) != CMQ_FS_MAGIC ||
+        get_le16(hdr + 4) != (uint16_t)CMQ_FS_VERSION)
+        return -1;
+    uint32_t hlen = get_le32(hdr + 14);
+    uint32_t hcrc = get_le32(hdr + 18);
+    if (hlen == 0 || hlen > (16u * 1024 * 1024))
+        return -1;
+    uint8_t *buf = malloc(hlen);
+    if (!buf)
+        return -1;
+    if (fread(buf, 1, hlen, fs->data_fp) != hlen) {
+        free(buf);
+        return -1;
+    }
+    if (crc32_compute(buf, hlen) != hcrc) {
+        free(buf);
+        return -1;
+    }
+    put_le64(hdr + 6, new_seq);
+    if (fwrite(hdr, sizeof(hdr), 1, df) != 1 ||
+        fwrite(buf, 1, hlen, df) != hlen) {
+        free(buf);
+        return -1;
+    }
+    uint8_t nidx[8];
+    put_le64(nidx, *off);
+    if (fwrite(nidx, sizeof(nidx), 1, idf) != 1) {
+        free(buf);
+        return -1;
+    }
+    *off += (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)hlen;
+    free(buf);
+    return 0;
+}
+
+static int filestore_compact_impl(cmq_filestore_t *fs, uint64_t retain) {
+    if (!fs) return -1;
+    cmq_mutex_lock(&fs->lock);
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    if (fs_lock_pair(fs, LOCK_EX) != 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    if (fs_refresh_next_seq(fs, 1) != 0) {
+        clearerr(fs->idx_fp);
+        clearerr(fs->data_fp);
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    uint64_t last = fs->next_seq > 0 ? fs->next_seq - 1 : 0;
+    if (retain >= last) {
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return 0;
+    }
+    if (retain == 0) {
+        if (fflush(fs->data_fp) != 0 || fflush(fs->idx_fp) != 0) {
+            fs_unlock_pair(fs);
+            cmq_mutex_unlock(&fs->lock);
+            return -1;
+        }
+        if (ftruncate(fileno(fs->data_fp), 0) != 0 ||
+            ftruncate(fileno(fs->idx_fp), 0) != 0) {
+            fs_unlock_pair(fs);
+            cmq_mutex_unlock(&fs->lock);
+            return -1;
+        }
+        (void)fs_seek_end(fs->data_fp);
+        (void)fs_seek_end(fs->idx_fp);
+        fs->next_seq = 1;
+        fs->data_end_off = 0;
+        fs->idx_end_off = 0;
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return 0;
+    }
+
+    char dtmp[616], itmp[616];
+    if (snprintf(dtmp, sizeof(dtmp), "%s.tmp", fs->data_path) >= (int)sizeof(dtmp) ||
+        snprintf(itmp, sizeof(itmp), "%s.tmp", fs->idx_path) >= (int)sizeof(itmp)) {
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    FILE *df = fopen(dtmp, "wb");
+    FILE *idf = fopen(itmp, "wb");
+    if (!df || !idf) {
+        if (df) fclose(df);
+        if (idf) fclose(idf);
+        unlink(dtmp);
+        unlink(itmp);
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    uint64_t keep_from = last - retain + 1;
+    uint64_t off = 0;
+    int ok = 1;
+    for (uint64_t i = 0; i < retain; i++) {
+        if (compact_copy_one(fs, keep_from + i, i + 1, df, idf, &off) != 0) {
+            ok = 0;
+            break;
+        }
+    }
+    if (ok) {
+        ok = (fflush(df) == 0 && fflush(idf) == 0 &&
+              fsync(fileno(df)) == 0 && fsync(fileno(idf)) == 0);
+    }
+    fclose(df);
+    fclose(idf);
+    if (!ok) {
+        unlink(dtmp);
+        unlink(itmp);
+        if (fs->idx_fp) clearerr(fs->idx_fp);
+        if (fs->data_fp) clearerr(fs->data_fp);
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+
+    fs_unlock_pair(fs);
+    fclose(fs->data_fp);
+    fs->data_fp = NULL;
+    fclose(fs->idx_fp);
+    fs->idx_fp = NULL;
+    if (rename(dtmp, fs->data_path) != 0 ||
+        rename(itmp, fs->idx_path) != 0) {
+        unlink(dtmp);
+        unlink(itmp);
+        fs->data_fp = fopen(fs->data_path, "a+b");
+        fs->idx_fp = fopen(fs->idx_path, "a+b");
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    fs->data_fp = fopen(fs->data_path, "a+b");
+    fs->idx_fp = fopen(fs->idx_path, "a+b");
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    fs->next_seq = retain + 1;
+    fs->data_end_off = off;
+    fs->idx_end_off = retain * 8u;
+    cmq_mutex_unlock(&fs->lock);
+    return 0;
+}
+
+int cmq_filestore_compact(cmq_filestore_t *fs, uint64_t retain) {
+    if (!fs) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_compact_impl(fs, retain);
+    fs_end_op(fs);
+    return rc;
+}
+
+void cmq_filestore_set_rotate_bytes(cmq_filestore_t *fs, uint64_t cap) {
+    if (!fs) return;
+    fs->rotate_bytes = cap;
+}
+
+#define CMQ_FS_KEY_MAGIC "CMQK"
+#define CMQ_FS_KEYCOMPACT_MAX_RECS 262144u
+
+int cmq_filestore_key_encode(uint8_t *out, size_t out_sz,
+                             const char *key, size_t key_len,
+                             const uint8_t *val, size_t val_len,
+                             size_t *out_len) {
+    if (!out || !out_len || !key || key_len == 0 || key_len > CMQ_FS_KEY_MAX)
+        return -1;
+    if (val_len > 0 && !val) return -1;
+    if (out_sz < 6 || key_len > out_sz - 6) return -1;
+    if (val_len > out_sz - 6 - key_len) return -1;
+    memcpy(out, CMQ_FS_KEY_MAGIC, 4);
+    put_le16(out + 4, (uint16_t)key_len);
+    memcpy(out + 6, key, key_len);
+    if (val_len > 0)
+        memcpy(out + 6 + key_len, val, val_len);
+    *out_len = 6 + key_len + val_len;
+    return 0;
+}
+
+int cmq_filestore_key_decode(const uint8_t *p, size_t n,
+                             const uint8_t **key, size_t *key_len,
+                             const uint8_t **val, size_t *val_len) {
+    if (!p || n < 6) return -1;
+    if (memcmp(p, CMQ_FS_KEY_MAGIC, 4) != 0) return -1;
+    uint16_t klen = get_le16(p + 4);
+    if (klen == 0 || klen > CMQ_FS_KEY_MAX || (size_t)klen > n - 6)
+        return -1;
+    if (key) *key = p + 6;
+    if (key_len) *key_len = klen;
+    if (val) *val = p + 6 + klen;
+    if (val_len) *val_len = n - 6 - klen;
+    return 0;
+}
+
+typedef struct {
+    uint64_t off;
+    uint32_t len;
+    uint32_t crc;
+    uint16_t klen;
+    uint8_t keyed;
+    uint8_t tombstone;
+    uint8_t keep;
+    char key[CMQ_FS_KEY_MAX];
+} kc_rec_t;
+
+static int keycompact_load(FILE *df, FILE *idf, kc_rec_t **out, size_t *out_n) {
+    if (fs_seek_end(idf) != 0) return -1;
+    uint64_t idx_sz = 0;
+    if (fs_tell(idf, &idx_sz) != 0) return -1;
+    if ((idx_sz % 8u) != 0) return -1;
+    uint64_t n = idx_sz / 8u;
+    if (n > CMQ_FS_KEYCOMPACT_MAX_RECS) return -1;
+    kc_rec_t *recs = NULL;
+    if (n > 0) {
+        recs = calloc((size_t)n, sizeof(*recs));
+        if (!recs) return -1;
+    }
+    for (uint64_t i = 0; i < n; i++) {
+        if (fs_seek(idf, i * 8u) != 0) {
+            free(recs);
+            return -1;
+        }
+        uint8_t ib[8];
+        if (fread(ib, sizeof(ib), 1, idf) != 1) {
+            free(recs);
+            return -1;
+        }
+        uint64_t off = get_le64(ib);
+        if (fs_seek(df, off) != 0) {
+            free(recs);
+            return -1;
+        }
+        uint8_t hdr[CMQ_FS_HDR_SIZE];
+        if (fread(hdr, sizeof(hdr), 1, df) != 1) {
+            free(recs);
+            return -1;
+        }
+        if (get_le32(hdr + 0) != CMQ_FS_MAGIC ||
+            get_le16(hdr + 4) != (uint16_t)CMQ_FS_VERSION) {
+            free(recs);
+            return -1;
+        }
+        uint32_t hlen = get_le32(hdr + 14);
+        uint32_t hcrc = get_le32(hdr + 18);
+        if (hlen == 0 || hlen > (16u * 1024 * 1024)) {
+            free(recs);
+            return -1;
+        }
+        uint8_t *buf = malloc(hlen);
+        if (!buf) {
+            free(recs);
+            return -1;
+        }
+        if (fread(buf, 1, hlen, df) != hlen ||
+            crc32_compute(buf, hlen) != hcrc) {
+            free(buf);
+            free(recs);
+            return -1;
+        }
+        recs[i].off = off;
+        recs[i].len = hlen;
+        recs[i].crc = hcrc;
+        const uint8_t *k = NULL, *v = NULL;
+        size_t klen = 0, vlen = 0;
+        if (cmq_filestore_key_decode(buf, hlen, &k, &klen, &v, &vlen) == 0) {
+            recs[i].keyed = 1;
+            recs[i].tombstone = (vlen == 0) ? 1 : 0;
+            recs[i].klen = (uint16_t)klen;
+            memcpy(recs[i].key, k, klen);
+        }
+        free(buf);
+    }
+    *out = recs;
+    *out_n = (size_t)n;
+    return 0;
+}
+
+static uint64_t fs_wall_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
+}
+
+static uint64_t fs_mtime_ms(const char *path) {
+    struct stat st;
+    if (!path || stat(path, &st) != 0) return 0;
+    return (uint64_t)st.st_mtime * 1000ull;
+}
+
+static void keycompact_mark(kc_rec_t *recs, size_t n, uint64_t ttl_ms,
+                            uint64_t archive_mtime_ms) {
+    uint64_t now = fs_wall_ms();
+    int keep_young = (ttl_ms > 0 && archive_mtime_ms != 0 &&
+                      now >= archive_mtime_ms &&
+                      now - archive_mtime_ms < ttl_ms);
+    for (size_t i = 0; i < n; i++) {
+        if (!recs[i].keyed) {
+            recs[i].keep = 1;
+            continue;
+        }
+        size_t last = i;
+        for (size_t j = i + 1; j < n; j++) {
+            if (recs[j].keyed && recs[j].klen == recs[i].klen &&
+                memcmp(recs[j].key, recs[i].key, recs[i].klen) == 0)
+                last = j;
+        }
+        if (last == i && (!recs[i].tombstone || keep_young))
+            recs[i].keep = 1;
+    }
+}
+
+static int keycompact_write(FILE *src, const kc_rec_t *recs, size_t n,
+                            FILE *df, FILE *idf, uint64_t *out_off) {
+    uint64_t off = 0;
+    uint64_t seq = 1;
+    for (size_t i = 0; i < n; i++) {
+        if (!recs[i].keep) continue;
+        if (fs_seek(src, recs[i].off) != 0) return -1;
+        uint8_t hdr[CMQ_FS_HDR_SIZE];
+        if (fread(hdr, sizeof(hdr), 1, src) != 1) return -1;
+        uint8_t *buf = malloc(recs[i].len);
+        if (!buf) return -1;
+        if (fread(buf, 1, recs[i].len, src) != recs[i].len) {
+            free(buf);
+            return -1;
+        }
+        put_le64(hdr + 6, seq);
+        if (fwrite(hdr, sizeof(hdr), 1, df) != 1 ||
+            fwrite(buf, 1, recs[i].len, df) != recs[i].len) {
+            free(buf);
+            return -1;
+        }
+        uint8_t ib[8];
+        put_le64(ib, off);
+        if (fwrite(ib, sizeof(ib), 1, idf) != 1) {
+            free(buf);
+            return -1;
+        }
+        off += (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)recs[i].len;
+        seq++;
+        free(buf);
+    }
+    *out_off = off;
+    return 0;
+}
+
+static int filestore_compact_keys_impl(cmq_filestore_t *fs) {
+    if (!fs) return -1;
+    cmq_mutex_lock(&fs->lock);
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    if (fs_lock_pair(fs, LOCK_EX) != 0) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    char d1[616], i1[616], dtmp[624], itmp[624];
+    if (snprintf(d1, sizeof(d1), "%s.1", fs->data_path) >= (int)sizeof(d1) ||
+        snprintf(i1, sizeof(i1), "%s.1", fs->idx_path) >= (int)sizeof(i1) ||
+        snprintf(dtmp, sizeof(dtmp), "%s.tmp", d1) >= (int)sizeof(dtmp) ||
+        snprintf(itmp, sizeof(itmp), "%s.tmp", i1) >= (int)sizeof(itmp)) {
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    FILE *src = fopen(d1, "rb");
+    FILE *sidx = fopen(i1, "rb");
+    if (!src || !sidx) {
+        if (src) fclose(src);
+        if (sidx) fclose(sidx);
+        fs_unlock_pair(fs);
+        cmq_mutex_unlock(&fs->lock);
+        return 0;
+    }
+    kc_rec_t *recs = NULL;
+    size_t n = 0;
+    int rc = -1;
+    if (keycompact_load(src, sidx, &recs, &n) != 0)
+        goto out_src;
+    keycompact_mark(recs, n, fs->tombstone_ttl_ms, fs_mtime_ms(d1));
+    FILE *df = fopen(dtmp, "wb");
+    FILE *idf = fopen(itmp, "wb");
+    if (!df || !idf) {
+        if (df) fclose(df);
+        if (idf) fclose(idf);
+        unlink(dtmp);
+        unlink(itmp);
+        goto out_recs;
+    }
+    uint64_t off = 0;
+    int ok = (keycompact_write(src, recs, n, df, idf, &off) == 0);
+    if (ok)
+        ok = (fflush(df) == 0 && fflush(idf) == 0 &&
+              fsync(fileno(df)) == 0 && fsync(fileno(idf)) == 0);
+    fclose(df);
+    fclose(idf);
+    if (!ok) {
+        unlink(dtmp);
+        unlink(itmp);
+        goto out_recs;
+    }
+    if (rename(dtmp, d1) != 0 || rename(itmp, i1) != 0) {
+        unlink(dtmp);
+        unlink(itmp);
+        goto out_recs;
+    }
+    rc = 0;
+out_recs:
+    free(recs);
+out_src:
+    fclose(src);
+    fclose(sidx);
+    if (rc != 0) {
+        if (fs->idx_fp) clearerr(fs->idx_fp);
+        if (fs->data_fp) clearerr(fs->data_fp);
+    }
+    fs_unlock_pair(fs);
+    cmq_mutex_unlock(&fs->lock);
+    return rc;
+}
+
+int cmq_filestore_compact_keys(cmq_filestore_t *fs) {
+    if (!fs) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_compact_keys_impl(fs);
+    fs_end_op(fs);
+    return rc;
+}
+
+void cmq_filestore_set_tombstone_ttl_ms(cmq_filestore_t *fs, uint64_t ms) {
+    if (!fs) return;
+    fs->tombstone_ttl_ms = ms;
+}
+
+int cmq_filestore_set_compact_dirty(cmq_filestore_t *fs, unsigned num,
+                                    unsigned den) {
+    if (!fs) return -1;
+    fs->compact_dirty_num = num;
+    fs->compact_dirty_den = den;
+    return 0;
+}
+
+static int filestore_key_dirty_impl(cmq_filestore_t *fs, size_t *drop,
+                                    size_t *total) {
+    if (!fs || !drop || !total) return -1;
+    *drop = 0;
+    *total = 0;
+    cmq_mutex_lock(&fs->lock);
+    if (!fs->data_fp || !fs->idx_fp) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    char d1[616], i1[616];
+    if (snprintf(d1, sizeof(d1), "%s.1", fs->data_path) >= (int)sizeof(d1) ||
+        snprintf(i1, sizeof(i1), "%s.1", fs->idx_path) >= (int)sizeof(i1)) {
+        cmq_mutex_unlock(&fs->lock);
+        return -1;
+    }
+    FILE *src = fopen(d1, "rb");
+    FILE *sidx = fopen(i1, "rb");
+    if (!src || !sidx) {
+        if (src) fclose(src);
+        if (sidx) fclose(sidx);
+        cmq_mutex_unlock(&fs->lock);
+        return 0;
+    }
+    kc_rec_t *recs = NULL;
+    size_t n = 0;
+    int rc = -1;
+    if (keycompact_load(src, sidx, &recs, &n) == 0) {
+        keycompact_mark(recs, n, fs->tombstone_ttl_ms, fs_mtime_ms(d1));
+        size_t d = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (!recs[i].keep)
+                d++;
+        }
+        *drop = d;
+        *total = n;
+        rc = 0;
+    }
+    free(recs);
+    fclose(src);
+    fclose(sidx);
+    cmq_mutex_unlock(&fs->lock);
+    return rc;
+}
+
+static int filestore_compact_keys_maybe_impl(cmq_filestore_t *fs) {
+    if (!fs) return -1;
+    if (fs->compact_dirty_den == 0)
+        return 0;
+    size_t drop = 0, total = 0;
+    if (filestore_key_dirty_impl(fs, &drop, &total) != 0)
+        return -1;
+    if (total == 0)
+        return 0;
+    /* drop/total >= num/den  <=>  drop*den >= total*num (64-bit). */
+    if ((uint64_t)drop * (uint64_t)fs->compact_dirty_den <
+        (uint64_t)total * (uint64_t)fs->compact_dirty_num)
+        return 0;
+    return filestore_compact_keys_impl(fs);
+}
+
+int cmq_filestore_key_dirty(cmq_filestore_t *fs, size_t *drop, size_t *total) {
+    if (!fs || !drop || !total) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_key_dirty_impl(fs, drop, total);
+    fs_end_op(fs);
+    return rc;
+}
+
+int cmq_filestore_compact_keys_maybe(cmq_filestore_t *fs) {
+    if (!fs) return -1;
+    if (fs_begin_op(fs) != 0) return -1;
+    int rc = filestore_compact_keys_maybe_impl(fs);
+    fs_end_op(fs);
+    return rc;
+}
+
 static int filestore_append_impl(cmq_filestore_t *fs, const uint8_t *data, size_t len,
                           uint64_t *out_seq) {
     if (!fs || !data || len == 0 || len > (16u * 1024 * 1024)) return -1;
@@ -631,8 +1221,15 @@ static int filestore_append_impl(cmq_filestore_t *fs, const uint8_t *data, size_
     fs->data_end_off += (uint64_t)CMQ_FS_HDR_SIZE + (uint64_t)len;
     fs->idx_end_off += 8u;
 
-    fs_unlock_pair(fs);
+    int rotated = 0;
+    if (fs->rotate_bytes && fs->data_end_off >= fs->rotate_bytes)
+        rotated = (filestore_rotate_archive_locked(fs) == 0);
+    unsigned dirty_den = fs->compact_dirty_den;
+    if (!rotated)
+        fs_unlock_pair(fs);
     cmq_mutex_unlock(&fs->lock);
+    if (rotated && dirty_den)
+        (void)filestore_compact_keys_maybe_impl(fs);
     return 0;
 }
 
@@ -884,6 +1481,45 @@ void cmq_filestore_set_sync_interval(cmq_filestore_t *fs,
                                        unsigned interval_ms) {
     if (!fs) return;
     fs->fsync_interval_ms = interval_ms;
+}
+
+unsigned cmq_filestore_sync_interval(const cmq_filestore_t *fs) {
+    return fs ? fs->fsync_interval_ms : 0;
+}
+
+int cmq_filestore_reload_sync(cmq_filestore_t *fs, unsigned *live_ms,
+                              unsigned fresh_ms) {
+    if (!live_ms) return -1;
+    if (fresh_ms > 86400000u) return -1;
+    if (fresh_ms == 0) return 0;
+    *live_ms = fresh_ms;
+    if (fs)
+        cmq_filestore_set_sync_interval(fs, fresh_ms);
+    return 0;
+}
+
+int cmq_filestore_reload_attach(cmq_filestore_t **fs, const char **live_dir,
+                                const char *fresh_dir) {
+    if (!fs) return -1;
+    if (!fresh_dir || !fresh_dir[0])
+        return 0;
+    if (*fs)
+        return 0;
+    if (!dir_safe(fresh_dir))
+        return -1;
+    cmq_filestore_t *n = cmq_filestore_create(fresh_dir, "cmq");
+    if (!n) return -1;
+    if (live_dir) {
+        char *owned = strdup(fresh_dir);
+        if (!owned) {
+            cmq_filestore_destroy(n);
+            return -1;
+        }
+        free((void *)*live_dir);
+        *live_dir = owned;
+    }
+    *fs = n;
+    return 0;
 }
 
 void cmq_filestore_set_max_payload_size(cmq_filestore_t *fs, size_t bytes) {

@@ -1,0 +1,4 @@
+v0.5.46 bench 1:
+- CONNECT-only parse + optional will copy (rare).
+- cmq binary PUBLISH path unchanged.
+- Will/session tables are fixed arrays (no hash).

@@ -1,0 +1,3 @@
+v0.5.110 bench 2:
+- Cap matches ping_interval_ms (24 h). Reject is parse-time.
+- Filestore maybe_fsync path is unchanged.

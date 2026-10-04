@@ -1,0 +1,4 @@
+v0.5.108 bench 2:
+- Keep window is 1024 offsets (ring). No full-file index.
+- Failed compact does not retry-fail the publish (no duplicate).
+- Reopen replays only the tail; consume seqs restart at 1.

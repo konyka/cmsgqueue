@@ -6,7 +6,7 @@
  *   - connections, subscriptions (atomic stats)
  *   - auth_required flag
  *   - tls_required flag (false until F1 ships)
- *   - compression codec string ("none" until F2 ships)
+ *   - compression codec string ("zstd" since F2 / v0.5.41)
  *   - checksum algorithm ("crc32c" since F3)
  *   - headers/batch capability flags
  */

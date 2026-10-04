@@ -1,0 +1,3 @@
+v0.5.71 bench 2:
+- Decode is a 256-symbol scan per accumulated bits; no heap.
+- Output cap CMQ_HPACK_STR_MAX; leftover padding ≤7 ones.

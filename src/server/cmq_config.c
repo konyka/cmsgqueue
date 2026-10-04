@@ -2,6 +2,9 @@
 #include "cmq_config.h"
 #include "cmq_cluster.h"
 #include "cmq_account.h"
+#include "cmq_jwt.h"
+#include "cmq_jwksf.h"
+#include "cmq_otlp.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,6 +88,153 @@ static int parse_log_level(const char *value, int *out) {
     return 0;
 }
 
+/* Match filestore dir_safe: no '\', controls, or "."/".." components. */
+static int cfg_saw_config_file;
+
+static int persist_dir_ok(const char *dir) {
+    if (!dir || !dir[0]) return 0;
+    size_t n = strnlen(dir, 512);
+    if (n == 0 || n >= 512) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)dir[i];
+        if (c == '\\' || c < 0x20 || c == 0x7f)
+            return 0;
+    }
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && dir[i] == '/')
+            i++;
+        if (i >= n)
+            break;
+        size_t start = i;
+        while (i < n && dir[i] != '/')
+            i++;
+        size_t len = i - start;
+        if (len == 1 && dir[start] == '.')
+            return 0;
+        if (len == 2 && dir[start] == '.' && dir[start + 1] == '.')
+            return 0;
+    }
+    return 1;
+}
+
+static int mqtt_bridge_addr_ok(const char *addr) {
+    if (!addr || !addr[0]) return 0;
+    size_t n = strnlen(addr, 256);
+    if (n == 0 || n >= 256) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)addr[i];
+        if (c < 0x21 || c > 0x7e || c == '/' || c == '\\')
+            return 0;
+    }
+    return 1;
+}
+
+static int parse_int_range(const char *value, int min, int max, int *out);
+
+static int mqtt_map_subject_ok(const char *s, size_t n) {
+    if (!s || n == 0 || n >= 256) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x21 || c > 0x7e || c == '/' || c == '\\' || c == ',')
+            return 0;
+    }
+    return 1;
+}
+
+static int mqtt_map_topic_ok(const char *s, size_t n) {
+    if (!s || n == 0 || n >= 256) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x21 || c > 0x7e || c == '\\' || c == ',')
+            return 0;
+    }
+    return 1;
+}
+
+static int parse_mqtt_bridge_map(const char *value, cmq_config_t *config) {
+    if (!value || !config) return -1;
+    if (config->mqtt_bridge_map_count >= 8) return -1;
+    const char *c1 = strchr(value, ',');
+    if (!c1 || c1 == value || !c1[1]) return -1;
+    size_t slen = (size_t)(c1 - value);
+    const char *rest = c1 + 1;
+    const char *c2 = strchr(rest, ',');
+    int qos = 0;
+    size_t tlen;
+    if (c2) {
+        tlen = (size_t)(c2 - rest);
+        if (parse_int_range(c2 + 1, 0, 2, &qos) != 0) return -1;
+    } else {
+        tlen = strlen(rest);
+    }
+    if (!mqtt_map_subject_ok(value, slen) || !mqtt_map_topic_ok(rest, tlen))
+        return -1;
+    char *subj = malloc(slen + 1);
+    char *top = malloc(tlen + 1);
+    if (!subj || !top) {
+        free(subj);
+        free(top);
+        return -1;
+    }
+    memcpy(subj, value, slen);
+    subj[slen] = '\0';
+    memcpy(top, rest, tlen);
+    top[tlen] = '\0';
+    int i = config->mqtt_bridge_map_count;
+    config->mqtt_bridge_maps[i].cmq_subject = subj;
+    config->mqtt_bridge_maps[i].mqtt_topic = top;
+    config->mqtt_bridge_maps[i].qos = qos;
+    config->mqtt_bridge_map_count++;
+    return 0;
+}
+
+static int cfg_set_str_empty(const char **dst, const char *value) {
+    if (!value[0]) {
+        cfg_free_owned(*dst);
+        *dst = NULL;
+        return 0;
+    }
+    return cfg_set_str(dst, value);
+}
+
+static int parse_listener_key(const char *key, const char *value,
+                              cmq_config_t *config) {
+    if (strcmp(key, "listener_count") == 0)
+        return parse_int_range(value, 0, 4, &config->listener_count);
+    if (strncmp(key, "listener", 8) != 0 || key[8] < '1' || key[8] > '3' ||
+        key[9] != '_')
+        return 1;
+    int idx = key[8] - '0';
+    const char *rest = key + 9;
+    if (strcmp(rest, "_tls_cert") == 0)
+        return cfg_set_str_empty(&config->listeners[idx].tls_cert, value);
+    if (strcmp(rest, "_tls_key") == 0)
+        return cfg_set_str_empty(&config->listeners[idx].tls_key, value);
+    if (strcmp(rest, "_tls_ca") == 0)
+        return cfg_set_str_empty(&config->listeners[idx].tls_ca, value);
+    if (strcmp(rest, "_tls_verify_peer") == 0)
+        return parse_int_range(value, 0, 1,
+                               &config->listeners[idx].tls_verify_peer);
+    if (strcmp(rest, "_host") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->listeners[idx].host);
+            config->listeners[idx].host = NULL;
+            return 0;
+        }
+        {
+            struct in_addr ha;
+            if (inet_pton(AF_INET, value, &ha) != 1)
+                return -1;
+        }
+        return cfg_set_str(&config->listeners[idx].host, value);
+    }
+    if (strcmp(rest, "_port") == 0)
+        return parse_int_range(value, 0, 65535,
+                               &config->listeners[idx].port);
+    return -1;
+}
+
 static int parse_int_range(const char *value, int min, int max, int *out) {
     if (!value || !out || min > max) return -1;
     char *end = NULL;
@@ -97,9 +247,60 @@ static int parse_int_range(const char *value, int min, int max, int *out) {
 
 static int parse_key_value(const char *key, const char *value, cmq_config_t *config) {
     if (strcmp(key, "host") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->host);
+            config->host = NULL;
+            return 0;
+        }
+        {
+            struct in_addr ha;
+            if (inet_pton(AF_INET, value, &ha) != 1)
+                return -1;
+        }
         return cfg_set_str(&config->host, value);
     } else if (strcmp(key, "port") == 0) {
         return parse_int_range(value, 0, 65535, &config->port);
+    } else if (strcmp(key, "h2_port") == 0) {
+        return parse_int_range(value, 0, 65535, &config->h2_port);
+    } else if (strcmp(key, "js_partitions") == 0) {
+        return parse_int_range(value, 0, 16, &config->js_partitions);
+    } else if (strcmp(key, "js_msgs_rotate_bytes") == 0) {
+        return parse_int_range(value, 0, 1073741824,
+                               &config->js_msgs_rotate_bytes);
+    } else if (strcmp(key, "config_file") == 0) {
+        cfg_saw_config_file = 1;
+        if (!value[0]) {
+            cfg_free_owned(config->config_file);
+            config->config_file = NULL;
+            return 0;
+        }
+        if (!persist_dir_ok(value)) return -1;
+        return cfg_set_str(&config->config_file, value);
+    } else if (strcmp(key, "persist_dir") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->persist_dir);
+            config->persist_dir = NULL;
+            return 0;
+        }
+        if (!persist_dir_ok(value)) return -1;
+        return cfg_set_str(&config->persist_dir, value);
+    } else if (strcmp(key, "persist_sync_interval_ms") == 0) {
+        int v = 0;
+        if (parse_int_range(value, 0, 86400000, &v) != 0) return -1;
+        config->persist_sync_interval_ms = (unsigned)v;
+        return 0;
+    } else if (strcmp(key, "mqtt_bridge_addr") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->mqtt_bridge_addr);
+            config->mqtt_bridge_addr = NULL;
+            return 0;
+        }
+        if (!mqtt_bridge_addr_ok(value)) return -1;
+        return cfg_set_str(&config->mqtt_bridge_addr, value);
+    } else if (strcmp(key, "mqtt_bridge_port") == 0) {
+        return parse_int_range(value, 0, 65535, &config->mqtt_bridge_port);
+    } else if (strcmp(key, "mqtt_bridge_map") == 0) {
+        return parse_mqtt_bridge_map(value, config);
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
         return parse_int_range(value, 0, 64, &config->num_threads);
     } else if (strcmp(key, "max_clients") == 0) {
@@ -123,14 +324,41 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
          * cap. See docs/features/quota.md. */
         return parse_int_range(value, 0, 1000000,
                               &config->max_connections_per_account);
+    } else if (strcmp(key, "account_max_connections") == 0) {
+        return parse_int_range(value, 0, 1000000,
+                              &config->account_max_connections);
+    } else if (strcmp(key, "account_max_subscriptions") == 0) {
+        return parse_int_range(value, 0, 1000000,
+                              &config->account_max_subscriptions);
+    } else if (strcmp(key, "account_max_payload") == 0) {
+        return parse_int_range(value, 0, CMQ_MAX_PAYLOAD_LIMIT,
+                              &config->account_max_payload);
+    } else if (strcmp(key, "account_max_bytes_live") == 0) {
+        return parse_int_range(value, 0, 1073741824,
+                              &config->account_max_bytes_live);
     } else if (strcmp(key, "max_msgs_per_sec_per_subject") == 0) {
         return parse_int_range(value, 0, 1000000,
                               &config->max_msgs_per_sec_per_subject);
     } else if (strcmp(key, "acl_allow") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->acl_allow);
+            config->acl_allow = NULL;
+            return 0;
+        }
         return cfg_set_str(&config->acl_allow, value);
     } else if (strcmp(key, "acl_deny") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->acl_deny);
+            config->acl_deny = NULL;
+            return 0;
+        }
         return cfg_set_str(&config->acl_deny, value);
     } else if (strcmp(key, "blocklist_file") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->blocklist_file);
+            config->blocklist_file = NULL;
+            return 0;
+        }
         return cfg_set_str(&config->blocklist_file, value);
     } else if (strcmp(key, "inbox_max_pending") == 0) {
         return parse_int_range(value, 0, 100000, &config->inbox_max_pending);
@@ -146,10 +374,20 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
     } else if (strcmp(key, "persist_dir") == 0) {
         return cfg_set_str(&config->persist_dir, value);
     } else if (strcmp(key, "log_file") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->log_file);
+            config->log_file = NULL;
+            return 0;
+        }
+        if (!persist_dir_ok(value)) return -1;
         return cfg_set_str(&config->log_file, value);
     } else if (strcmp(key, "log_level") == 0) {
         return parse_log_level(value, &config->log_level);
     } else if (strcmp(key, "log_to_stdout") == 0) {
+        if (!value[0]) {
+            config->log_to_stdout = 0;
+            return 0;
+        }
         return parse_int_range(value, 0, 1, &config->log_to_stdout);
     } else if (strcmp(key, "log_to_file") == 0) {
         return parse_int_range(value, 0, 1, &config->log_to_file);
@@ -157,17 +395,49 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->auth_username, value);
     } else if (strcmp(key, "auth_password") == 0) {
         return cfg_set_str(&config->auth_password, value);
+    } else if (strcmp(key, "jwt_issuer") == 0) {
+        return cfg_set_str_empty(&config->jwt_issuer, value);
+    } else if (strcmp(key, "jwt_hmac_secret") == 0) {
+        return cfg_set_str_empty(&config->jwt_hmac_secret, value);
+    } else if (strcmp(key, "jwt_leeway_sec") == 0) {
+        return parse_int_range(value, 0, 3600, &config->jwt_leeway_sec);
+    } else if (strcmp(key, "nkey_pub") == 0) {
+        return cfg_set_str_empty(&config->nkey_pub, value);
+    } else if (strcmp(key, "jwks_json") == 0) {
+        return cfg_set_str_empty(&config->jwks_json, value);
+    } else if (strcmp(key, "jwks_url") == 0) {
+        return cfg_set_str_empty(&config->jwks_url, value);
+    } else if (strcmp(key, "jwks_ca") == 0) {
+        return cfg_set_str_empty(&config->jwks_ca, value);
+    } else if (strcmp(key, "jwks_refresh_sec") == 0) {
+        return parse_int_range(value, 0, CMQ_JWKS_REFRESH_MAX,
+                               &config->jwks_refresh_sec);
+    } else if (strcmp(key, "jwt_ec_pub") == 0) {
+        return cfg_set_str_empty(&config->jwt_ec_pub, value);
+    } else if (strcmp(key, "jwt_rsa_n") == 0) {
+        return cfg_set_str_empty(&config->jwt_rsa_n, value);
+    } else if (strcmp(key, "jwt_rsa_e") == 0) {
+        return cfg_set_str_empty(&config->jwt_rsa_e, value);
+    } else if (strcmp(key, "otlp_endpoint") == 0) {
+        return cfg_set_str_empty(&config->otlp_endpoint, value);
+    } else if (strcmp(key, "otlp_ca") == 0) {
+        return cfg_set_str_empty(&config->otlp_ca, value);
     } else if (strcmp(key, "cluster_name") == 0) {
-        return cfg_set_str(&config->cluster_name, value);
+        return cfg_set_str_empty(&config->cluster_name, value);
     } else if (strcmp(key, "cluster_node_id") == 0) {
-        return cfg_set_str(&config->cluster_node_id, value);
+        return cfg_set_str_empty(&config->cluster_node_id, value);
     } else if (strcmp(key, "tls_enabled") == 0) {
         return parse_int_range(value, 0, 1, &config->tls_enabled);
     } else if (strcmp(key, "tls_cert") == 0) {
-        return cfg_set_str(&config->tls_cert, value);
+        return cfg_set_str_empty(&config->tls_cert, value);
     } else if (strcmp(key, "tls_key") == 0) {
-        return cfg_set_str(&config->tls_key, value);
+        return cfg_set_str_empty(&config->tls_key, value);
     } else if (strcmp(key, "tls_ca") == 0) {
+        if (!value[0]) {
+            cfg_free_owned(config->tls_ca);
+            config->tls_ca = NULL;
+            return 0;
+        }
         return cfg_set_str(&config->tls_ca, value);
     } else if (strcmp(key, "tls_verify_peer") == 0) {
         return parse_int_range(value, 0, 1, &config->tls_verify_peer);
@@ -188,6 +458,9 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         config->routes[config->route_count].addr = addr;
         config->routes[config->route_count].port = port;
         config->route_count++;
+    } else {
+        int lr = parse_listener_key(key, value, config);
+        if (lr < 0) return -1;
     }
     return 0;
 }
@@ -199,10 +472,48 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->persist_dir);
     cfg_free_owned(config->auth_username);
     cfg_free_owned(config->auth_password);
+    cfg_free_owned(config->jwt_issuer);
+    cfg_free_owned(config->jwt_hmac_secret);
+    cfg_free_owned(config->nkey_pub);
+    cfg_free_owned(config->jwks_json);
+    cfg_free_owned(config->jwks_url);
+    cfg_free_owned(config->jwks_ca);
+    cfg_free_owned(config->jwt_ec_pub);
+    cfg_free_owned(config->jwt_rsa_n);
+    cfg_free_owned(config->jwt_rsa_e);
+    cfg_free_owned(config->otlp_endpoint);
+    cfg_free_owned(config->otlp_ca);
     cfg_free_owned(config->cluster_name);
     cfg_free_owned(config->cluster_node_id);
     cfg_free_owned(config->tls_cert);
     cfg_free_owned(config->tls_key);
+    cfg_free_owned(config->tls_ca);
+    cfg_free_owned(config->acl_allow);
+    cfg_free_owned(config->acl_deny);
+    cfg_free_owned(config->blocklist_file);
+    cfg_free_owned(config->config_file);
+    cfg_free_owned(config->persist_dir);
+    cfg_free_owned(config->mqtt_bridge_addr);
+    for (int i = 0; i < 4; i++) {
+        cfg_free_owned(config->listeners[i].tls_cert);
+        cfg_free_owned(config->listeners[i].tls_key);
+        cfg_free_owned(config->listeners[i].tls_ca);
+        cfg_free_owned(config->listeners[i].host);
+        config->listeners[i].tls_cert = NULL;
+        config->listeners[i].tls_key = NULL;
+        config->listeners[i].tls_ca = NULL;
+        config->listeners[i].host = NULL;
+        config->listeners[i].tls_verify_peer = 0;
+        config->listeners[i].port = 0;
+    }
+    for (int i = 0; i < config->mqtt_bridge_map_count && i < 8; i++) {
+        cfg_free_owned(config->mqtt_bridge_maps[i].cmq_subject);
+        cfg_free_owned(config->mqtt_bridge_maps[i].mqtt_topic);
+        config->mqtt_bridge_maps[i].cmq_subject = NULL;
+        config->mqtt_bridge_maps[i].mqtt_topic = NULL;
+        config->mqtt_bridge_maps[i].qos = 0;
+    }
+    config->mqtt_bridge_map_count = 0;
     for (int i = 0; i < config->route_count && i < 8; i++)
         cfg_free_owned(config->routes[i].addr);
     config->host = NULL;
@@ -210,10 +521,28 @@ void cmq_config_free(cmq_config_t *config) {
     config->persist_dir = NULL;
     config->auth_username = NULL;
     config->auth_password = NULL;
+    config->jwt_issuer = NULL;
+    config->jwt_hmac_secret = NULL;
+    config->nkey_pub = NULL;
+    config->jwks_json = NULL;
+    config->jwks_url = NULL;
+    config->jwks_ca = NULL;
+    config->jwt_ec_pub = NULL;
+    config->jwt_rsa_n = NULL;
+    config->jwt_rsa_e = NULL;
+    config->otlp_endpoint = NULL;
+    config->otlp_ca = NULL;
     config->cluster_name = NULL;
     config->cluster_node_id = NULL;
     config->tls_cert = NULL;
     config->tls_key = NULL;
+    config->tls_ca = NULL;
+    config->acl_allow = NULL;
+    config->acl_deny = NULL;
+    config->blocklist_file = NULL;
+    config->config_file = NULL;
+    config->persist_dir = NULL;
+    config->mqtt_bridge_addr = NULL;
     for (int i = 0; i < 8; i++) {
         config->routes[i].addr = NULL;
         config->routes[i].port = 0;
@@ -229,8 +558,11 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
        be zeroed or previously load/free'd — same contract as error paths). */
     cmq_config_free(config);
     memset(config, 0, sizeof(*config));
+    cfg_saw_config_file = 0;
     /* Omitted log_level key → INFO (0 is TRACE when explicitly set). */
     config->log_level = 2;
+    /* Omitted log_to_stdout → on (cmq.h default 1; 0 is explicit off). */
+    config->log_to_stdout = 1;
 
     FILE *fp = fopen(path, "r");
     if (!fp) return CMQ_ERR_IO;
@@ -279,12 +611,43 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
     }
 
     fclose(fp);
+    if (!cfg_saw_config_file && persist_dir_ok(path))
+        (void)cfg_set_str(&config->config_file, path);
     return CMQ_OK;
 }
 
 cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (!config) return CMQ_ERR_INVALID_ARG;
     if (config->port < 0 || config->port > 65535) return CMQ_ERR_INVALID_ARG;
+    if (config->h2_port < 0 || config->h2_port > 65535)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->js_partitions < 0 || config->js_partitions > 16)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->js_msgs_rotate_bytes < 0 ||
+        config->js_msgs_rotate_bytes > 1073741824)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->persist_sync_interval_ms > 86400000u)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->mqtt_bridge_port < 0 || config->mqtt_bridge_port > 65535)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->mqtt_bridge_map_count < 0 ||
+        config->mqtt_bridge_map_count > 8)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->listener_count < 0 || config->listener_count > 4)
+        return CMQ_ERR_INVALID_ARG;
+    for (int i = 0; i < 4; i++) {
+        if (config->listeners[i].tls_verify_peer < 0 ||
+            config->listeners[i].tls_verify_peer > 1)
+            return CMQ_ERR_INVALID_ARG;
+        if (config->listeners[i].port < 0 ||
+            config->listeners[i].port > 65535)
+            return CMQ_ERR_INVALID_ARG;
+        if (config->listeners[i].host) {
+            struct in_addr ha;
+            if (inet_pton(AF_INET, config->listeners[i].host, &ha) != 1)
+                return CMQ_ERR_INVALID_ARG;
+        }
+    }
     if (config->max_payload_size < 0) return CMQ_ERR_INVALID_ARG;
     /* Must fit CMQ_WRITE_BUF_LIMIT after framing — else deliver force-closes. */
     if (config->max_payload_size > CMQ_MAX_PAYLOAD_LIMIT)
@@ -299,6 +662,14 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (config->max_msgs_per_sec_per_account < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_bytes_per_sec_per_account < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_connections_per_account < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->account_max_connections < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->account_max_subscriptions < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->account_max_payload < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->account_max_payload > CMQ_MAX_PAYLOAD_LIMIT)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->account_max_bytes_live < 0) return CMQ_ERR_INVALID_ARG;
+    if (config->account_max_bytes_live > 1073741824)
+        return CMQ_ERR_INVALID_ARG;
     if (config->max_msgs_per_sec_per_subject < 0) return CMQ_ERR_INVALID_ARG;
     if (config->ping_interval_ms < 0) return CMQ_ERR_INVALID_ARG;
     /* Cap so keepalive timeout_ms = interval*2 cannot overflow int. */
@@ -319,8 +690,89 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         return CMQ_ERR_INVALID_ARG;
     /* Username without password accepts any password — fail closed.
        Password-only (no username) remains valid for shared-secret auth. */
+    {
+        int have_hmac = config->jwt_hmac_secret &&
+                        config->jwt_hmac_secret[0];
+        int have_jwks = config->jwks_json && config->jwks_json[0];
+        int have_jwks_url = config->jwks_url && config->jwks_url[0];
+        int have_ec = config->jwt_ec_pub && config->jwt_ec_pub[0];
+        int have_rsa_n = config->jwt_rsa_n && config->jwt_rsa_n[0];
+        int have_rsa_e = config->jwt_rsa_e && config->jwt_rsa_e[0];
+        int have_rsa = have_rsa_n && have_rsa_e;
+        int have_iss = config->jwt_issuer && config->jwt_issuer[0];
+        if (have_jwks && have_jwks_url)
+            return CMQ_ERR_INVALID_ARG;
+        if (have_rsa_n != have_rsa_e)
+            return CMQ_ERR_INVALID_ARG;
+        if ((have_hmac || have_jwks || have_jwks_url || have_ec || have_rsa) &&
+            !have_iss)
+            return CMQ_ERR_INVALID_ARG;
+        if (have_iss && !have_hmac && !have_jwks && !have_jwks_url &&
+            !have_ec && !have_rsa)
+            return CMQ_ERR_INVALID_ARG;
+        if (have_ec) {
+            uint8_t xy[64];
+            if (cmq_nkey_hex_decode(config->jwt_ec_pub, xy, 64) != 0)
+                return CMQ_ERR_INVALID_ARG;
+        }
+        if (have_rsa) {
+            uint8_t rn[CMQ_JWT_RSA_N_MAX], re[CMQ_JWT_RSA_E_MAX];
+            size_t rnl = 0, rel = 0;
+            if (cmq_jwt_rsa_decode(config->jwt_rsa_n, config->jwt_rsa_e,
+                                   rn, &rnl, re, &rel) != 0)
+                return CMQ_ERR_INVALID_ARG;
+        }
+        if (have_jwks) {
+            cmq_jwks_t j;
+            if (cmq_jwks_parse(config->jwks_json, &j) != 0)
+                return CMQ_ERR_INVALID_ARG;
+        }
+        if (have_jwks_url) {
+            cmq_jwks_url_t u;
+            if (cmq_jwks_parse_url(config->jwks_url, &u) != 0)
+                return CMQ_ERR_INVALID_ARG;
+        }
+        if (config->jwks_refresh_sec != 0) {
+            if (config->jwks_refresh_sec < CMQ_JWKS_REFRESH_MIN ||
+                config->jwks_refresh_sec > CMQ_JWKS_REFRESH_MAX)
+                return CMQ_ERR_INVALID_ARG;
+            if (!have_jwks_url)
+                return CMQ_ERR_INVALID_ARG;
+        }
+        if (config->jwks_ca && config->jwks_ca[0]) {
+            cmq_jwks_url_t tmp;
+            memset(&tmp, 0, sizeof(tmp));
+            if (cmq_jwks_set_ca(&tmp, config->jwks_ca) != 0)
+                return CMQ_ERR_INVALID_ARG;
+        }
+    }
+    if (config->jwt_hmac_secret &&
+        strnlen(config->jwt_hmac_secret, 129) >= 129)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->nkey_pub && config->nkey_pub[0]) {
+        uint8_t pub[32];
+        if (cmq_nkey_pub_decode(config->nkey_pub, pub) != 0)
+            return CMQ_ERR_INVALID_ARG;
+    }
+    if (config->otlp_endpoint && config->otlp_endpoint[0]) {
+        cmq_otlp_url_t u;
+        if (cmq_otlp_parse_url(config->otlp_endpoint, &u) != 0)
+            return CMQ_ERR_INVALID_ARG;
+    }
+    if (config->otlp_ca && config->otlp_ca[0]) {
+        cmq_otlp_url_t tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        if (cmq_otlp_set_ca(&tmp, config->otlp_ca) != 0)
+            return CMQ_ERR_INVALID_ARG;
+    }
     if (config->auth_username && config->auth_username[0] &&
-        (!config->auth_password || !config->auth_password[0]))
+        (!config->auth_password || !config->auth_password[0]) &&
+        !(config->jwt_hmac_secret && config->jwt_hmac_secret[0]) &&
+        !(config->jwks_json && config->jwks_json[0]) &&
+        !(config->jwks_url && config->jwks_url[0]) &&
+        !(config->jwt_ec_pub && config->jwt_ec_pub[0]) &&
+        !(config->jwt_rsa_n && config->jwt_rsa_n[0]) &&
+        !(config->nkey_pub && config->nkey_pub[0]))
         return CMQ_ERR_INVALID_ARG;
     /* Username becomes account name — must fit CMQ_ACCOUNT_NAME_SIZE.
        Password still compared in 256-byte CONNECT pads. */

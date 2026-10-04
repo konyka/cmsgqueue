@@ -1,0 +1,3 @@
+v0.5.152 bench 1:
+- config_file apply: one strcmp + strdup on change.
+- Same path: one strcmp, no heap.

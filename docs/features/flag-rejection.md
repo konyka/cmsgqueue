@@ -20,16 +20,14 @@ highest-priority weakness preceding any new feature work.
 
 ## Design
 
-**Reject unknown flag bits pre-CONNACK.** The parser inspects the flags byte
-in `parser_parse_inbuf` (`src/proto/cmq_parser.c:252`) and marks
-`pending_error = 1` when bits 0 or 1 are set. The server's accept loop
-already drains the queue and tears down the connection on `pending_error`,
-so the offending peer is disconnected cleanly.
+**Reject unimplemented flag+opcode combinations.** The parser inspects
+the flags byte and marks `pending_error = 1` when `CMQ_FLAG_COMPRESSED`
+is set on any opcode other than the data path (BATCH, PUBLISH,
+MESSAGE, REQUEST, RESPONSE). The server's accept loop drains
+the queue and tears down the connection on `pending_error`.
 
-The fix is **fail-closed**: a feature that hasn't been implemented on the
-wire must NOT silently round-trip garbage. The intent is for future
-promotion: each bit moves to a dedicated branch in the parser that knows
-how to handle the framing.
+The rule is **fail-closed**: a compressed SUBSCRIBE must not
+silently round-trip garbage. Data-path opcodes inflate before use.
 
 **Compatibility:**
 - `CMQ_FLAG_HEADERS (0x04)` — already implemented, still passes.

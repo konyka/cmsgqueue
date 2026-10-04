@@ -51,4 +51,24 @@ TEST(quota, connect_limit) {
     cmq_quota_free(q);
 }
 
+TEST(quota, connect_null_admits) {
+    ASSERT_EQ(cmq_quota_check_connect(NULL, "user1"), 1);
+    ASSERT_EQ(cmq_quota_check_connect(NULL, NULL), 1);
+}
+
+TEST(quota, connect_isolated) {
+    cmq_quota_t *q = cmq_quota_create(0, 0, 1);
+    ASSERT_EQ(cmq_quota_check_connect(q, "user1"), 1);
+    ASSERT_EQ(cmq_quota_check_connect(q, "user1"), 0);
+    ASSERT_EQ(cmq_quota_check_connect(q, "user2"), 1);
+    cmq_quota_free(q);
+}
+
+TEST(quota, connect_disabled_when_only_msgs) {
+    cmq_quota_t *q = cmq_quota_create(3, 0, 0);
+    for (int i = 0; i < 8; i++)
+        ASSERT_EQ(cmq_quota_check_connect(q, "user1"), 1);
+    cmq_quota_free(q);
+}
+
 TEST_MAIN()

@@ -1,0 +1,4 @@
+v0.5.103 bench 1:
+- $JS PUBLISH with persist_dir: one extra last-file write.
+- No persist_dir: no I/O (same as v0.5.93).
+- REQUEST-get after reopen: one file read on first miss.

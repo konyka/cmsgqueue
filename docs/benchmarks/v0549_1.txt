@@ -1,0 +1,3 @@
+v0.5.49 bench 1:
+- No maps: one atomic load of map_total on PUBLISH / REQUEST / BATCH.
+- WAL still stores the original frame; rewrite is live policy.

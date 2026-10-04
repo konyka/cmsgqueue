@@ -1,0 +1,3 @@
+v0.5.118 bench 2:
+- Empty config_file: take is ignored; no I/O.
+- Omitted key: one extra strdup of the load path.

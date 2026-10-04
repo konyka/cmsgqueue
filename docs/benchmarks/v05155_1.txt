@@ -1,0 +1,3 @@
+v0.5.155 bench 1:
+- ACL live apply: one strcmp + strdup per changed CSV.
+- Same string: one strcmp, no heap.

@@ -1,0 +1,3 @@
+v0.5.152 bench 2:
+- Empty / omitted: one length check, keep live path.
+- Reject: persist_dir_ok rules, live path unchanged.

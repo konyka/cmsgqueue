@@ -1,0 +1,3 @@
+v0.5.92 bench 2:
+- PUBLISH / CONSUME paths unchanged.
+- Offer stays non-blocking (drop newest).

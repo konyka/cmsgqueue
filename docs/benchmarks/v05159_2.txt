@@ -1,0 +1,3 @@
+v0.5.159 bench 2:
+- Empty / omitted: one length check, keep txn log off.
+- Reject: txn_dir_safe rules, log_path unchanged.

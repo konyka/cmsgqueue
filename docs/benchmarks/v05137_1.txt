@@ -1,0 +1,3 @@
+v0.5.137 bench 1:
+- Reload apply: mutex + copy of parsed url (host/path/port/tls).
+- CA bytes memcpy from live slot; no GET.

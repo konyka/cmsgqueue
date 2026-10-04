@@ -44,7 +44,7 @@ The forward-compatibility plan is:
 | Field | Value today | After F1 | After F2 |
 |---|---|---|---|
 | `tls` | `false` | `true` (when configured) | unchanged |
-| `compression` | `"none"` | `"none"` | `"zstd"` |
+| `compression` | `"zstd"` (BATCH, v0.5.41) | unchanged | `"zstd"` |
 | `checksum` | `"crc32c"` | unchanged | unchanged |
 | `headers` | `true` | unchanged | unchanged |
 | `batch` | `true` | unchanged | unchanged |
@@ -57,7 +57,14 @@ PUBLISHes.
 ## Files touched
 
 - `src/server/cmq_server.c` — `send_info_frame` updated.
+  `host` is the live bind address (v0.5.175); omitted /
+  empty is `0.0.0.0`. `server_id` is `cluster_node_id`
+  when set (v0.5.176); omitted / empty is `cmsgsrv`.
+- `src/server/cmq_info.c` — `cmq_info_json_str` quotes the
+  checksum token (v0.5.174; the live format had been
+  `"checksum":crc32c` without quotes).
 - `tests/test_info.c` — 3 new tests verifying the JSON shape.
+- `tests/test_inf.c` — quote apply / omitted / empty / reject.
 
 ## Tests
 

@@ -1,0 +1,4 @@
+v0.5.44 bench 1:
+- Accept: one RAND_bytes(16) + 32-nibble hex encode.
+- Per frame: two TLS pointer stores around handle_frame.
+- PUBLISH that does not log: no hex, no snprintf change.

@@ -1,0 +1,3 @@
+v0.5.93 bench 1:
+- Non-$ PUBLISH: one existing byte compare (unchanged).
+- $JS.<name> append: table lookup + ring copy.

@@ -20,6 +20,9 @@ HTTP request. Three paths are recognized:
 | `/healthz` | 200 OK | `{"status":"ok"}` |
 | `/readyz` | 200 OK / 503 | `{"status":"ready"\|"draining"}` |
 | `/metrics` | 200 OK | Prometheus exposition |
+| `/connz` | 200 OK | connections snapshot (v0.5.47) |
+| `/subz` | 200 OK | subscriptions snapshot (v0.5.47) |
+| `/routez` | 200 OK | route pool snapshot (v0.5.47) |
 
 The dispatcher uses `client_sock_write` (synchronous write) so the
 response is in the kernel TCP buffer before the connection transitions
@@ -58,6 +61,12 @@ within the 4 KiB print buffer.
 - The `/healthz` response is constant: no fingerprinting.
 - The dispatch is keyed on the path string; a malformed request without
   a valid path falls through to the existing WS-or-teardown logic.
+
+## Introspection (v0.5.47)
+
+`/connz` `/subz` `/routez` copy a bounded snapshot (64 / 256 / 32)
+under existing locks, then format JSON after unlock. User strings
+are escaped. Overflow sets `"truncated":1`. No passwords.
 
 ## Limitations
 

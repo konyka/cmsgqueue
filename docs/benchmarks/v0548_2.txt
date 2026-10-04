@@ -1,0 +1,5 @@
+v0.5.48 bench 2:
+- Capped path: CAS loop vs live counter; reject is -2 without
+  undo. Two racers cannot both increment past max_connections.
+- Payload cache is written once at CONNECT; publish does not
+  re-load the account object for the size check.

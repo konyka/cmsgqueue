@@ -15,6 +15,9 @@ typedef struct cmq_tls_session_cache cmq_tls_session_cache_t;
 
 int cmq_tls_session_cache_init(cmq_tls_config_t *cfg);
 void cmq_tls_session_cache_destroy(cmq_tls_config_t *cfg);
+/* v0.5.169: existing cache is left alone (no remount).
+ * Creates when cfg has none. */
+int cmq_tls_session_cache_reload_attach(cmq_tls_config_t *cfg);
 
 int cmq_tls_session_cache_insert(cmq_tls_config_t *cfg,
                                   const unsigned char *id,

@@ -84,13 +84,18 @@ typedef struct cmq_client {
     int sub_count;
     cmq_atomic_int inbox_pending;
     uint8_t trace_id[16];             /* F11: connection trace ID */
+    char trace_hex[33];               /* v0.5.44: pre-encoded for logs */
     char *username;
     char account_name[CMQ_ACCOUNT_NAME_SIZE];
     uint32_t account_epoch;         /* must match account->epoch after CONNECT */
+    uint64_t account_max_payload;   /* v0.5.48: cached at CONNECT; 0=unlimited */
+    uint64_t account_max_bytes_live; /* v0.5.52: cached; 0=unlimited */
     int session_accounted;          /* 1 after CONNECT inc; teardown must dec */
     int is_websocket;
     int is_route;                   /* 1 = cluster route peer (no re-forward) */
     int ws_upgrade_done;
+    int ws_deflate;                 /* v0.5.170: RFC 7692 negotiated */
+    int ws_msg_rsv1;                /* RSV1 on the current assembled message */
     int info_sent;
     int worker_id;
     uint64_t last_activity_ms;
@@ -209,6 +214,16 @@ struct cmq_server {
     /* P5: per-listener SSL_CTX slots. tls_config_count entries used. */
     /* F14: quota. NULL = no quota. */
     struct cmq_quota *quota;
+    struct cmq_idempo *idempo; /* v0.5.55: D5 pid+seq window; always on */
+    struct cmq_txn *txn;       /* v0.5.60: D5 coordinator; always on */
+    struct cmq_otel *otel;     /* v0.5.61: D1 span ring; always on */
+    struct cmq_kvb *kvb;       /* v0.5.67: D4 $KV.bucket.key; always on */
+    struct cmq_obj *obj;       /* v0.5.68: D4 $OBJ.name; persist_dir only */
+    struct cmq_js *js;         /* v0.5.93: D4 $JS.name; always on */
+    void *otlp;                /* v0.5.64: cmq_otlp_url_t*; NULL = off */
+    void *jwks;                /* v0.5.65/82: cmq_jwks_cache_t*; NULL = off */
+    void *jwks_refresh;        /* v0.5.82: cmq_jwks_refresher_t*; NULL = off */
+    int h2_lfd;                /* v0.5.81: HTTP/2 listen fd; -1 = off */
     /* F16: ACL. NULL handle = no ACL. Refcounted for reload safety (P1). */
     struct cmq_rch *acl_h;
     /* F15: blocklist. NULL handle = no blocklist. Refcounted for reload. */
@@ -238,9 +253,12 @@ struct cmq_server {
     cmq_atomic_u64 stat_messages_dropped;   /* worker queue full / push OOM */
     cmq_atomic_u64 stat_persist_fail;       /* F5: filestore append failures */
     cmq_atomic_u64 qg_rr_counter;           /* queue-group round-robin pick */
+    cmq_atomic_u64 stat_accept_aux;         /* v0.5.42: admits from accept_thread_func */
 
     cmq_thread_t route_reconn_thr;
     int route_reconn_started;               /* 1 if thread joinable */
+    cmq_thread_t accept_thr;                /* v0.5.42: aux accept thread */
+    int accept_thr_started;                 /* 1 if joinable */
     int workers_joinable;                   /* n worker threads still to join */
     cmq_atomic_int run_active;              /* 1 while cmq_server_run owns lifecycle */
 };
@@ -259,12 +277,15 @@ int srv_find_tls_slot(cmq_server_t *srv, int lfd);
 int cmq_server_publish(cmq_server_t *srv, const char *subject,
                        const uint8_t *payload, size_t payload_len,
                        const char *account_name);
+int cmq_server_h2_fd(const cmq_server_t *srv);
+int cmq_server_h2_port(const cmq_server_t *srv);
+int cmq_server_h2_accept(cmq_server_t *srv, const char *account);
 
 /* v0.5.39: bridge-specific WAL persist. Builds a self-describing
  * frame (magic 'CMQB' + version + topic_len + topic + payload)
- * and appends it to the server's filestore. The matching recovery
- * path is a future round. Best-effort: returns 0 on success, -1
- * on error or when the server has no filestore. */
+ * and appends it to the server's filestore. Replay is v0.5.40.
+ * Best-effort: returns 0 on success, -1 on error or when the
+ * server has no filestore. */
 int cmq_server_persist_bridge(cmq_server_t *srv, const char *topic,
                                 const uint8_t *payload, size_t payload_len);
 

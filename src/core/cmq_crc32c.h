@@ -39,6 +39,12 @@ uint32_t cmq_crc32c_raw(uint32_t crc, const uint8_t *data, size_t len);
 /* Reports whether the hardware-accelerated path is active. */
 int cmq_crc32c_is_hw(void);
 
+/* v0.5.171: if flags has CMQ_FLAG_CHECKSUM, verify the trailing
+ * little-endian CRC32C over wire[0..*len-5] and subtract 4 from *len.
+ * 0 / omitted / empty flags keep *len. Failed verify does not rewrite
+ * *len. NULL *len, short payload, or mismatch fail closed. */
+int cmq_checksum_consume(uint8_t flags, const uint8_t *wire, size_t *len);
+
 #ifdef __cplusplus
 }
 #endif

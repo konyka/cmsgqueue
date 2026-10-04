@@ -1,0 +1,3 @@
+v0.5.160 bench 1:
+- KV persist attach: one path copy when persist_dir is unset.
+- Existing persist: one pointer check, no remount.

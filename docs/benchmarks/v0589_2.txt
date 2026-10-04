@@ -1,0 +1,3 @@
+v0.5.89 bench 2:
+- Zero-subscriber publish does not touch the ring again.
+- Failed deliver does not enqueue CONSUME.

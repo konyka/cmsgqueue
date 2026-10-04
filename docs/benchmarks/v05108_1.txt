@@ -1,0 +1,4 @@
+v0.5.108 bench 1:
+- cap=0: one compare after append; no stat, no rewrite.
+- cap>0 under size: one stat after append.
+- cap hit: one sequential scan + tail copy; ring append unchanged.

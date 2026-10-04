@@ -1,0 +1,3 @@
+v0.5.72 bench 1:
+- Dynamic insert is a 4 KiB compact + slot shift; no heap.
+- Indexed static decode does not touch the table.

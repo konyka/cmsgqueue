@@ -1,0 +1,3 @@
+v0.5.66 bench 1:
+- HPACK is library-only; message port and ALPN unchanged.
+- Static table is const; no heap on encode/decode.

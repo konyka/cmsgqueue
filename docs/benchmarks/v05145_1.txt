@@ -1,0 +1,3 @@
+v0.5.145 bench 1:
+- Fetch apply: one HTTP GET + cache put. No refresher thread.
+- Existing cache: one pointer check, no GET.

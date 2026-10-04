@@ -1,0 +1,3 @@
+v0.5.166 bench 2:
+- test_oea: 4/4 pass (apply, omitted, empty, reject)
+- test_otel: 5/5 pass (ring / sidecar regression)

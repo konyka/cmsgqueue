@@ -70,4 +70,40 @@ TEST(compress, corrupt_data_rejected) {
     ASSERT(dec_len == -1);
 }
 
+TEST(compress, decompress_bound_exact) {
+    const char *data = "hello, CMSGQueue compression test!";
+    size_t n = strlen(data);
+    size_t cap = cmq_compress_bound(n);
+    uint8_t *enc = malloc(cap);
+    ASSERT_NOT_NULL(enc);
+    ssize_t enc_len = cmq_compress((const uint8_t *)data, n, enc, cap);
+    ASSERT(enc_len > 0);
+    ssize_t bound = cmq_decompress_bound(enc, (size_t)enc_len);
+    ASSERT_EQ(bound, (ssize_t)n);
+    free(enc);
+}
+
+TEST(compress, decompress_bound_high_ratio) {
+    /* 4 KiB of 'A' compresses far beyond 16x. A ratio cap would
+     * reject the documented zstd happy path; the bound must accept
+     * it (content size 4096 < 16 MiB). */
+    static uint8_t data[4096];
+    memset(data, 'A', sizeof(data));
+    size_t cap = cmq_compress_bound(sizeof(data));
+    uint8_t *enc = malloc(cap);
+    ASSERT_NOT_NULL(enc);
+    ssize_t enc_len = cmq_compress(data, sizeof(data), enc, cap);
+    ASSERT(enc_len > 0);
+    ASSERT((size_t)enc_len * 16 < sizeof(data));
+    ssize_t bound = cmq_decompress_bound(enc, (size_t)enc_len);
+    ASSERT_EQ(bound, (ssize_t)sizeof(data));
+    free(enc);
+}
+
+TEST(compress, decompress_bound_corrupt) {
+    static uint8_t enc[64];
+    for (size_t i = 0; i < sizeof(enc); i++) enc[i] = (uint8_t)i;
+    ASSERT_EQ(cmq_decompress_bound(enc, sizeof(enc)), -1);
+}
+
 TEST_MAIN()

@@ -1,0 +1,3 @@
+v0.5.105 bench 2:
+- consume_part scans that partition only (stream next_part).
+- Global consume / REQUEST-get unchanged.

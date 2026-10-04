@@ -1,0 +1,3 @@
+v0.5.50 bench 1:
+- Quota disabled: one pointer compare on CONNECT (srv->quota).
+- max_connects==0: one integer compare, no slot hash.

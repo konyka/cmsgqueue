@@ -1,0 +1,3 @@
+v0.5.127 bench 2:
+- Omitted/0: no appender change.
+- Path rotate: one fopen, swap, wait in_flight, fclose old.

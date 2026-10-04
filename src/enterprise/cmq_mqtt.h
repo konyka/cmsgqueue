@@ -46,6 +46,25 @@ size_t cmq_mqtt_mapping_count(cmq_mqtt_bridge_t *br);
 /* Copy mapping under lock (no interior pointer). 0 = found, -1 = miss. */
 int cmq_mqtt_find_mapping(cmq_mqtt_bridge_t *br, const char *mqtt_topic,
                            cmq_mqtt_mapping_t *out);
+/* v0.5.126: replace the live map table. n==0 keeps the current maps.
+ * n 1–8; empty subject/topic or qos outside 0–2 fails closed. */
+int cmq_mqtt_reload_maps(cmq_mqtt_bridge_t *br,
+                         const cmq_mqtt_mapping_t *maps, int n);
+/* v0.5.136: empty/omitted addr and port 0 keep the current
+ * endpoint. Non-IPv4 / bad port fail closed. A new endpoint
+ * calls connect (same-endpoint live peer is a no-op). */
+int cmq_mqtt_reload_endpoint(cmq_mqtt_bridge_t *br,
+                             const char **live_addr, int *live_port,
+                             const char *fresh_addr, int fresh_port);
+/* v0.5.142: empty/omitted addr and port 0 keep off. Non-IPv4 /
+ * bad port fail closed. Creates and dials when *br is NULL.
+ * Existing bridge is left to reload_endpoint. */
+int cmq_mqtt_reload_attach(cmq_mqtt_bridge_t **br,
+                           const char **live_addr, int *live_port,
+                           const char *fresh_addr, int fresh_port);
+/* 1 forwarded; 0 no mapping; -1 not connected / bad args / I/O. */
+int cmq_mqtt_bridge_publish(cmq_mqtt_bridge_t *br, const char *subject,
+                            const uint8_t *payload, size_t len);
 
 const char *cmq_mqtt_topic_to_subject(const char *mqtt_topic, char *buf, size_t len);
 const char *cmq_mqtt_subject_to_topic(const char *subject, char *buf, size_t len);

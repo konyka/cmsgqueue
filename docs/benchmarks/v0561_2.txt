@@ -1,0 +1,3 @@
+v0.5.61 bench 2:
+- 256 slots; full ring drops newest.
+- Sidecar nanosleep 1ms when empty.

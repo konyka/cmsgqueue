@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_account.h"
+#include "cmq.h"
 #include "cmq_thread.h"
 #include <errno.h>
 #include <pthread.h>
@@ -14,6 +15,8 @@ typedef struct {
     size_t export_count;
     cmq_account_import_t imports[CMQ_ACCOUNT_MAX_IMPORTS];
     size_t import_count;
+    cmq_account_map_t maps[CMQ_ACCOUNT_MAX_MAPS];
+    size_t map_count;
 } cmq_account_perms_t;
 
 struct cmq_account_manager {
@@ -26,6 +29,11 @@ struct cmq_account_manager {
     atomic_int dying;
     pthread_mutex_t mu;
     pthread_cond_t cv;
+    uint32_t default_max_connections;
+    uint32_t default_max_subscriptions;
+    uint64_t default_max_payload;
+    uint64_t default_max_bytes_live;
+    uint32_t map_total; /* v0.5.49: sum of per-account maps */
 };
 
 static int mgr_begin_op(cmq_account_manager_t *mgr) {
@@ -54,6 +62,25 @@ static void purge_peer_acl_refs_unlocked(cmq_account_manager_t *mgr,
 static void drop_empty_perms_unlocked(cmq_account_manager_t *mgr,
                                        cmq_account_perms_t *p);
 
+static void account_apply_defaults(cmq_account_manager_t *mgr, cmq_account_t *a) {
+    __atomic_store_n(&a->max_connections,
+                     __atomic_load_n(&mgr->default_max_connections,
+                                     __ATOMIC_ACQUIRE),
+                     __ATOMIC_RELEASE);
+    __atomic_store_n(&a->max_subscriptions,
+                     __atomic_load_n(&mgr->default_max_subscriptions,
+                                     __ATOMIC_ACQUIRE),
+                     __ATOMIC_RELEASE);
+    __atomic_store_n(&a->max_payload,
+                     __atomic_load_n(&mgr->default_max_payload,
+                                     __ATOMIC_ACQUIRE),
+                     __ATOMIC_RELEASE);
+    __atomic_store_n(&a->max_bytes_live,
+                     __atomic_load_n(&mgr->default_max_bytes_live,
+                                     __ATOMIC_ACQUIRE),
+                     __ATOMIC_RELEASE);
+}
+
 static void account_bump_epoch(cmq_account_t *a) {
     uint32_t e = __atomic_load_n(&a->epoch, __ATOMIC_RELAXED) + 1;
     if (e == 0) e = 1;
@@ -69,6 +96,7 @@ static void account_clear_counters(cmq_account_t *a) {
     __atomic_store_n(&a->messages_out, 0, __ATOMIC_RELAXED);
     __atomic_store_n(&a->bytes_in, 0, __ATOMIC_RELAXED);
     __atomic_store_n(&a->bytes_out, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&a->bytes_live, 0, __ATOMIC_RELAXED);
 }
 
 /* Undo stale fetch_add only while clear_gen still equals g0.
@@ -99,6 +127,139 @@ cmq_account_manager_t *cmq_account_manager_create(void) {
     pthread_cond_init(&mgr->cv, NULL);
     cmq_mutex_init(&mgr->lock);
     return mgr;
+}
+
+void cmq_account_manager_set_defaults(cmq_account_manager_t *mgr,
+                                      uint32_t max_conn, uint32_t max_sub,
+                                      uint64_t max_payload) {
+    if (!mgr) return;
+    __atomic_store_n(&mgr->default_max_connections, max_conn, __ATOMIC_RELEASE);
+    __atomic_store_n(&mgr->default_max_subscriptions, max_sub, __ATOMIC_RELEASE);
+    __atomic_store_n(&mgr->default_max_payload, max_payload, __ATOMIC_RELEASE);
+}
+
+void cmq_account_set_limits(cmq_account_t *acc, uint32_t max_conn,
+                            uint32_t max_sub, uint64_t max_payload) {
+    if (!acc) return;
+    __atomic_store_n(&acc->max_connections, max_conn, __ATOMIC_RELEASE);
+    __atomic_store_n(&acc->max_subscriptions, max_sub, __ATOMIC_RELEASE);
+    __atomic_store_n(&acc->max_payload, max_payload, __ATOMIC_RELEASE);
+}
+
+int cmq_account_check_payload(const cmq_account_t *acc, uint64_t bytes) {
+    if (!acc) return -1;
+    uint64_t maxp = __atomic_load_n(&acc->max_payload, __ATOMIC_ACQUIRE);
+    if (maxp > 0 && bytes > maxp) return -1;
+    return 0;
+}
+
+void cmq_account_manager_set_default_bytes_live(cmq_account_manager_t *mgr,
+                                                uint64_t max_bytes) {
+    if (!mgr) return;
+    __atomic_store_n(&mgr->default_max_bytes_live, max_bytes, __ATOMIC_RELEASE);
+}
+
+uint32_t cmq_account_manager_default_connections(const cmq_account_manager_t *mgr) {
+    return mgr ? __atomic_load_n(&mgr->default_max_connections, __ATOMIC_ACQUIRE) : 0;
+}
+
+uint32_t cmq_account_manager_default_subscriptions(const cmq_account_manager_t *mgr) {
+    return mgr ? __atomic_load_n(&mgr->default_max_subscriptions, __ATOMIC_ACQUIRE) : 0;
+}
+
+uint64_t cmq_account_manager_default_payload(const cmq_account_manager_t *mgr) {
+    return mgr ? __atomic_load_n(&mgr->default_max_payload, __ATOMIC_ACQUIRE) : 0;
+}
+
+uint64_t cmq_account_manager_default_bytes_live(const cmq_account_manager_t *mgr) {
+    return mgr ? __atomic_load_n(&mgr->default_max_bytes_live, __ATOMIC_ACQUIRE) : 0;
+}
+
+int cmq_account_reload_defaults(cmq_account_manager_t *mgr,
+                                int max_conn, int max_sub,
+                                int max_payload, int max_bytes_live) {
+    if (max_conn < 0 || max_conn > 1000000) return -1;
+    if (max_sub < 0 || max_sub > 1000000) return -1;
+    if (max_payload < 0 || max_payload > CMQ_MAX_PAYLOAD_LIMIT) return -1;
+    if (max_bytes_live < 0 || max_bytes_live > 1073741824) return -1;
+    if (!mgr) return (max_conn == 0 && max_sub == 0 &&
+                      max_payload == 0 && max_bytes_live == 0) ? 0 : -1;
+    if (max_conn == 0 && max_sub == 0 && max_payload == 0 &&
+        max_bytes_live == 0)
+        return 0;
+    uint32_t conn = max_conn > 0
+        ? (uint32_t)max_conn
+        : cmq_account_manager_default_connections(mgr);
+    uint32_t sub = max_sub > 0
+        ? (uint32_t)max_sub
+        : cmq_account_manager_default_subscriptions(mgr);
+    uint64_t pay = max_payload > 0
+        ? (uint64_t)max_payload
+        : cmq_account_manager_default_payload(mgr);
+    uint64_t liveb = max_bytes_live > 0
+        ? (uint64_t)max_bytes_live
+        : cmq_account_manager_default_bytes_live(mgr);
+    cmq_account_manager_set_defaults(mgr, conn, sub, pay);
+    cmq_account_manager_set_default_bytes_live(mgr, liveb);
+    return 0;
+}
+
+void cmq_account_set_max_bytes_live(cmq_account_t *acc, uint64_t max_bytes) {
+    if (!acc) return;
+    __atomic_store_n(&acc->max_bytes_live, max_bytes, __ATOMIC_RELEASE);
+}
+
+int cmq_account_credit_bytes_live(cmq_account_t *acc, uint32_t epoch,
+                                  uint64_t n) {
+    if (!acc) return -1;
+    if (n == 0) return 0;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return -1;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return -1;
+    uint64_t maxb = __atomic_load_n(&acc->max_bytes_live, __ATOMIC_ACQUIRE);
+    if (maxb == 0) return 0;
+    uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
+    uint64_t cur = __atomic_load_n(&acc->bytes_live, __ATOMIC_RELAXED);
+    for (;;) {
+        if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+            !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+            __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0)
+            return -1;
+        maxb = __atomic_load_n(&acc->max_bytes_live, __ATOMIC_ACQUIRE);
+        if (maxb == 0) return 0;
+        if (cur > (uint64_t)-1 - n || cur + n > maxb)
+            return -2;
+        if (__atomic_compare_exchange_n(&acc->bytes_live, &cur, cur + n,
+                                         0, __ATOMIC_RELAXED,
+                                         __ATOMIC_RELAXED))
+            break;
+    }
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) {
+        account_undo_stale_inc(&acc->bytes_live, n, cur, g0, acc);
+        return -1;
+    }
+    return 0;
+}
+
+void cmq_account_debit_bytes_live(cmq_account_t *acc, uint32_t epoch,
+                                  uint64_t n) {
+    if (!acc || n == 0) return;
+    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return;
+    if (__atomic_load_n(&acc->max_bytes_live, __ATOMIC_ACQUIRE) == 0)
+        return;
+    uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
+    uint64_t cur = __atomic_load_n(&acc->bytes_live, __ATOMIC_RELAXED);
+    while (cur > 0) {
+        if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return;
+        if (__atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) return;
+        uint64_t next = (cur > n) ? cur - n : 0;
+        if (__atomic_compare_exchange_n(&acc->bytes_live, &cur, next,
+                                         0, __ATOMIC_RELAXED,
+                                         __ATOMIC_RELAXED))
+            return;
+    }
 }
 
 void cmq_account_manager_destroy(cmq_account_manager_t *mgr) {
@@ -166,6 +327,7 @@ static int account_create_impl(cmq_account_manager_t *mgr, const char *name) {
         strncpy(slot->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
         slot->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
         account_clear_counters(slot);
+        account_apply_defaults(mgr, slot);
         __atomic_store_n(&slot->active, 1, __ATOMIC_RELEASE);
         cmq_mutex_unlock(&mgr->lock);
         return 0;
@@ -174,8 +336,9 @@ static int account_create_impl(cmq_account_manager_t *mgr, const char *name) {
     strncpy(a->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
     a->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
     __atomic_store_n(&a->epoch, 1, __ATOMIC_RELEASE);
-    __atomic_store_n(&a->active, 1, __ATOMIC_RELEASE);
     account_clear_counters(a);
+    account_apply_defaults(mgr, a);
+    __atomic_store_n(&a->active, 1, __ATOMIC_RELEASE);
     cmq_mutex_unlock(&mgr->lock);
     return 0;
 }
@@ -212,6 +375,7 @@ static int account_ensure_impl(cmq_account_manager_t *mgr, const char *name) {
         strncpy(slot->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
         slot->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
         account_clear_counters(slot);
+        account_apply_defaults(mgr, slot);
         __atomic_store_n(&slot->active, 1, __ATOMIC_RELEASE);
         cmq_mutex_unlock(&mgr->lock);
         return 0;
@@ -220,8 +384,9 @@ static int account_ensure_impl(cmq_account_manager_t *mgr, const char *name) {
     strncpy(a->name, name, CMQ_ACCOUNT_NAME_SIZE - 1);
     a->name[CMQ_ACCOUNT_NAME_SIZE - 1] = '\0';
     __atomic_store_n(&a->epoch, 1, __ATOMIC_RELEASE);
-    __atomic_store_n(&a->active, 1, __ATOMIC_RELEASE);
     account_clear_counters(a);
+    account_apply_defaults(mgr, a);
+    __atomic_store_n(&a->active, 1, __ATOMIC_RELEASE);
     cmq_mutex_unlock(&mgr->lock);
     return 0;
 }
@@ -289,20 +454,54 @@ static size_t account_count_impl(cmq_account_manager_t *mgr) {
     return c;
 }
 
-int cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch) {
+static int account_inc_counter(cmq_account_t *acc, uint32_t epoch,
+                               uint64_t *counter, uint32_t *max_field) {
     if (!acc) return -1;
     if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return -1;
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return -1;
     uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
-    uint64_t prev = __atomic_fetch_add(&acc->connections, 1, __ATOMIC_RELAXED);
-    /* Soft-delete may clear between fetch_add and here — undo if stale. */
+    uint32_t maxc = __atomic_load_n(max_field, __ATOMIC_ACQUIRE);
+    uint64_t prev = 0;
+    if (maxc == 0) {
+        prev = __atomic_fetch_add(counter, 1, __ATOMIC_RELAXED);
+    } else {
+        uint64_t cur = __atomic_load_n(counter, __ATOMIC_RELAXED);
+        int got = 0;
+        while (!got) {
+            if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
+                !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
+                __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0)
+                return -1;
+            maxc = __atomic_load_n(max_field, __ATOMIC_ACQUIRE);
+            if (maxc == 0) {
+                prev = __atomic_fetch_add(counter, 1, __ATOMIC_RELAXED);
+                got = 1;
+                break;
+            }
+            if (cur >= (uint64_t)maxc)
+                return -2;
+            if (__atomic_compare_exchange_n(counter, &cur, cur + 1,
+                                             0, __ATOMIC_RELAXED,
+                                             __ATOMIC_RELAXED)) {
+                prev = cur;
+                got = 1;
+            }
+        }
+    }
+    /* Soft-delete may clear between credit and here — undo if stale. */
     if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
         !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
         __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) {
-        account_undo_stale_inc(&acc->connections, 1, prev, g0, acc);
+        account_undo_stale_inc(counter, 1, prev, g0, acc);
         return -1;
     }
     return 0;
+}
+
+int cmq_account_inc_connections(cmq_account_t *acc, uint32_t epoch) {
+    if (!acc) return -1;
+    return account_inc_counter(acc, epoch, &acc->connections,
+                               &acc->max_connections);
 }
 void cmq_account_dec_connections(cmq_account_t *acc, uint32_t epoch) {
     if (!acc) return;
@@ -323,17 +522,8 @@ void cmq_account_dec_connections(cmq_account_t *acc, uint32_t epoch) {
 }
 int cmq_account_inc_subscriptions(cmq_account_t *acc, uint32_t epoch) {
     if (!acc) return -1;
-    if (!__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE)) return -1;
-    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch) return -1;
-    uint32_t g0 = __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED);
-    uint64_t prev = __atomic_fetch_add(&acc->subscriptions, 1, __ATOMIC_RELAXED);
-    if (__atomic_load_n(&acc->epoch, __ATOMIC_ACQUIRE) != epoch ||
-        !__atomic_load_n(&acc->active, __ATOMIC_ACQUIRE) ||
-        __atomic_load_n(&acc->clear_gen, __ATOMIC_RELAXED) != g0) {
-        account_undo_stale_inc(&acc->subscriptions, 1, prev, g0, acc);
-        return -1;
-    }
-    return 0;
+    return account_inc_counter(acc, epoch, &acc->subscriptions,
+                               &acc->max_subscriptions);
 }
 void cmq_account_dec_subscriptions(cmq_account_t *acc, uint32_t epoch) {
     if (!acc) return;
@@ -395,6 +585,10 @@ void cmq_account_inc_msgs_out(cmq_account_t *acc, uint32_t epoch, uint64_t bytes
 static void clear_account_perms_unlocked(cmq_account_manager_t *mgr, const char *name) {
     for (size_t i = 0; i < mgr->perms_count; i++) {
         if (strcmp(mgr->perms[i].account, name) == 0) {
+            if (mgr->perms[i].map_count)
+                __atomic_fetch_sub(&mgr->map_total,
+                                   (uint32_t)mgr->perms[i].map_count,
+                                   __ATOMIC_RELEASE);
             memmove(&mgr->perms[i], &mgr->perms[i + 1],
                     (mgr->perms_count - i - 1) * sizeof(cmq_account_perms_t));
             mgr->perms_count--;
@@ -433,7 +627,7 @@ static void purge_peer_acl_refs_unlocked(cmq_account_manager_t *mgr,
                 j++;
             }
         }
-        if (p->export_count == 0 && p->import_count == 0) {
+        if (p->export_count == 0 && p->import_count == 0 && p->map_count == 0) {
             drop_empty_perms_unlocked(mgr, p);
             continue; /* re-examine slot i (now the next row) */
         }
@@ -448,10 +642,11 @@ static cmq_account_perms_t *find_perms(cmq_account_manager_t *mgr, const char *a
     return NULL;
 }
 
-/* Caller holds mgr->lock. Drop perms row when both ACL tables are empty. */
+/* Caller holds mgr->lock. Drop perms row when ACL + map tables are empty. */
 static void drop_empty_perms_unlocked(cmq_account_manager_t *mgr,
                                        cmq_account_perms_t *p) {
-    if (!mgr || !p || p->export_count != 0 || p->import_count != 0)
+    if (!mgr || !p || p->export_count != 0 || p->import_count != 0 ||
+        p->map_count != 0)
         return;
     size_t idx = (size_t)(p - mgr->perms);
     if (idx >= mgr->perms_count) return;
@@ -470,7 +665,8 @@ static cmq_account_perms_t *find_or_create_perms(cmq_account_manager_t *mgr,
         /* Reclaim empty shells left by remove/purge before failing. */
         for (size_t i = 0; i < mgr->perms_count; ) {
             if (mgr->perms[i].export_count == 0 &&
-                mgr->perms[i].import_count == 0) {
+                mgr->perms[i].import_count == 0 &&
+                mgr->perms[i].map_count == 0) {
                 drop_empty_perms_unlocked(mgr, &mgr->perms[i]);
                 continue;
             }
@@ -521,6 +717,57 @@ static int acl_subject_ok(const char *subject) {
         if (*p == '.') p++;
     }
     return 1;
+}
+
+/* dest tokens: literal, *, $1..$9, final >. nstar / has_gt from src. */
+static int dest_template_ok(const char *dest, int nstar, int has_gt) {
+    if (!dest) return 0;
+    size_t n = strnlen(dest, CMQ_ACCOUNT_SUBJECT_SIZE);
+    if (n == 0 || n >= CMQ_ACCOUNT_SUBJECT_SIZE) return 0;
+    if (dest[0] == '.' || dest[n - 1] == '.') return 0;
+    int dest_stars = 0;
+    int max_ref = 0;
+    const char *p = dest;
+    while (*p) {
+        const char *start = p;
+        while (*p && *p != '.') p++;
+        size_t len = (size_t)(p - start);
+        if (len == 0) return 0;
+        int is_gt = (len == 1 && start[0] == '>');
+        int is_star = (len == 1 && start[0] == '*');
+        int is_ref = (len == 2 && start[0] == '$' &&
+                      start[1] >= '1' && start[1] <= '9');
+        if (is_gt && *p != '\0') return 0;
+        if (!is_gt && !is_star && !is_ref) {
+            if (memchr(start, '>', len) || memchr(start, '*', len) ||
+                memchr(start, '$', len))
+                return 0;
+        }
+        if (is_star) dest_stars++;
+        if (is_ref) {
+            int idx = start[1] - '0';
+            if (idx > max_ref) max_ref = idx;
+        }
+        if (is_gt && !has_gt) return 0;
+        if (*p == '.') p++;
+    }
+    if (dest_stars > nstar) return 0;
+    if (max_ref > nstar) return 0;
+    return 1;
+}
+
+static void count_src_wildcards(const char *src, int *nstar, int *has_gt) {
+    *nstar = 0;
+    *has_gt = 0;
+    const char *p = src;
+    while (*p) {
+        const char *pe = p;
+        while (*pe && *pe != '.') pe++;
+        size_t plen = (size_t)(pe - p);
+        if (plen == 1 && p[0] == '*') (*nstar)++;
+        if (plen == 1 && p[0] == '>') *has_gt = 1;
+        p = *pe ? pe + 1 : pe;
+    }
 }
 
 static int peer_account_ok(cmq_account_manager_t *mgr, const char *name) {
@@ -683,6 +930,202 @@ static int subject_match(const char *pattern, const char *subject) {
     /* Lone final '>' matches any remaining subject tokens (including none). */
     if (p[0] == '>' && p[1] == '\0') return 1;
     return *p == '\0' && *s == '\0';
+}
+
+#define CMQ_ACCOUNT_MAP_CAPS 8
+
+typedef struct {
+    const char *p;
+    size_t n;
+} cmq_map_tok_t;
+
+static int match_capture(const char *pattern, const char *subject,
+                         cmq_map_tok_t *stars, int *nstar, cmq_map_tok_t *gt) {
+    *nstar = 0;
+    gt->p = "";
+    gt->n = 0;
+    const char *p = pattern, *s = subject;
+    while (*p && *s) {
+        const char *pe = p, *se = s;
+        while (*pe && *pe != '.') pe++;
+        while (*se && *se != '.') se++;
+        size_t plen = (size_t)(pe - p), slen = (size_t)(se - s);
+        if (plen == 1 && p[0] == '>') {
+            if (*pe != '\0') return 0;
+            gt->p = s;
+            gt->n = strlen(s);
+            return 1;
+        }
+        int is_star = (plen == 1 && p[0] == '*');
+        if (is_star) {
+            if (*nstar >= CMQ_ACCOUNT_MAP_CAPS) return 0;
+            stars[*nstar].p = s;
+            stars[*nstar].n = slen;
+            (*nstar)++;
+        } else if (plen != slen || memcmp(p, s, plen) != 0) {
+            return 0;
+        }
+        p = *pe ? pe + 1 : pe;
+        s = *se ? se + 1 : se;
+    }
+    if (p[0] == '>' && p[1] == '\0') {
+        gt->p = s;
+        gt->n = strlen(s);
+        return 1;
+    }
+    return *p == '\0' && *s == '\0';
+}
+
+static int apply_dest(const char *dest, const cmq_map_tok_t *stars, int nstar,
+                      const cmq_map_tok_t *gt, char *out, size_t out_sz) {
+    size_t o = 0;
+    int star_i = 0;
+    int first = 1;
+    const char *d = dest;
+    while (*d) {
+        const char *de = d;
+        while (*de && *de != '.') de++;
+        size_t dlen = (size_t)(de - d);
+        const char *add = d;
+        size_t alen = dlen;
+        if (dlen == 2 && d[0] == '$' && d[1] >= '1' && d[1] <= '9') {
+            int i = d[1] - '1';
+            if (i < 0 || i >= nstar) return -1;
+            add = stars[i].p;
+            alen = stars[i].n;
+        } else if (dlen == 1 && d[0] == '*') {
+            if (star_i >= nstar) return -1;
+            add = stars[star_i].p;
+            alen = stars[star_i].n;
+            star_i++;
+        } else if (dlen == 1 && d[0] == '>') {
+            add = gt->p;
+            alen = gt->n;
+        }
+        if (!(dlen == 1 && d[0] == '>' && alen == 0)) {
+            if (!first) {
+                if (o + 1 >= out_sz) return -1;
+                out[o++] = '.';
+            }
+            if (o + alen >= out_sz) return -1;
+            if (alen) memcpy(out + o, add, alen);
+            o += alen;
+            first = 0;
+        }
+        d = *de ? de + 1 : de;
+    }
+    if (o == 0 || o >= out_sz) return -1;
+    out[o] = '\0';
+    return 0;
+}
+
+static int rewrite_one(const char *src, const char *dest, const char *in,
+                       char *out, size_t out_sz) {
+    cmq_map_tok_t stars[CMQ_ACCOUNT_MAP_CAPS];
+    cmq_map_tok_t gt;
+    int nstar = 0;
+    if (!match_capture(src, in, stars, &nstar, &gt)) return 1; /* no match */
+    return apply_dest(dest, stars, nstar, &gt, out, out_sz);
+}
+
+static int account_add_map_impl(cmq_account_manager_t *mgr, const char *account,
+                                const char *src, const char *dest) {
+    if (!mgr || !account_name_ok(account) || !acl_subject_ok(src))
+        return -1;
+    int nstar = 0, has_gt = 0;
+    count_src_wildcards(src, &nstar, &has_gt);
+    if (!dest_template_ok(dest, nstar, has_gt)) return -1;
+    cmq_mutex_lock(&mgr->lock);
+    if (!account_is_active(mgr, account)) {
+        cmq_mutex_unlock(&mgr->lock);
+        return -1;
+    }
+    cmq_account_perms_t *p = find_or_create_perms(mgr, account);
+    if (!p) { cmq_mutex_unlock(&mgr->lock); return -1; }
+    for (size_t i = 0; i < p->map_count; i++) {
+        if (strcmp(p->maps[i].src, src) == 0) {
+            size_t dlen = strlen(dest);
+            memcpy(p->maps[i].dest, dest, dlen);
+            p->maps[i].dest[dlen] = '\0';
+            cmq_mutex_unlock(&mgr->lock);
+            return 0;
+        }
+    }
+    if (p->map_count >= CMQ_ACCOUNT_MAX_MAPS) {
+        cmq_mutex_unlock(&mgr->lock);
+        return -1;
+    }
+    cmq_account_map_t *m = &p->maps[p->map_count++];
+    memset(m, 0, sizeof(*m));
+    size_t slen = strlen(src);
+    memcpy(m->src, src, slen);
+    m->src[slen] = '\0';
+    size_t dlen = strlen(dest);
+    memcpy(m->dest, dest, dlen);
+    m->dest[dlen] = '\0';
+    __atomic_fetch_add(&mgr->map_total, 1, __ATOMIC_RELEASE);
+    cmq_mutex_unlock(&mgr->lock);
+    return 0;
+}
+
+static int account_remove_map_impl(cmq_account_manager_t *mgr, const char *account,
+                                   const char *src) {
+    if (!mgr || !account || !src) return -1;
+    cmq_mutex_lock(&mgr->lock);
+    cmq_account_perms_t *p = find_perms(mgr, account);
+    if (!p) { cmq_mutex_unlock(&mgr->lock); return -1; }
+    int removed = 0;
+    for (size_t i = 0; i < p->map_count; ) {
+        if (strcmp(p->maps[i].src, src) == 0) {
+            memmove(&p->maps[i], &p->maps[i + 1],
+                    (p->map_count - i - 1) * sizeof(cmq_account_map_t));
+            p->map_count--;
+            __atomic_fetch_sub(&mgr->map_total, 1, __ATOMIC_RELEASE);
+            removed = 1;
+        } else {
+            i++;
+        }
+    }
+    if (removed)
+        drop_empty_perms_unlocked(mgr, p);
+    cmq_mutex_unlock(&mgr->lock);
+    return removed ? 0 : -1;
+}
+
+static size_t account_map_count_impl(cmq_account_manager_t *mgr, const char *account) {
+    if (!mgr || !account) return 0;
+    cmq_mutex_lock(&mgr->lock);
+    cmq_account_perms_t *p = find_perms(mgr, account);
+    size_t c = p ? p->map_count : 0;
+    cmq_mutex_unlock(&mgr->lock);
+    return c;
+}
+
+static int account_rewrite_impl(cmq_account_manager_t *mgr, const char *account,
+                                const char *in, char *out, size_t out_sz) {
+    if (!mgr || !account || !in || !out || out_sz == 0) return -1;
+    cmq_mutex_lock(&mgr->lock);
+    cmq_account_perms_t *p = find_perms(mgr, account);
+    if (p) {
+        for (size_t i = 0; i < p->map_count; i++) {
+            int rc = rewrite_one(p->maps[i].src, p->maps[i].dest, in,
+                                 out, out_sz);
+            if (rc == 0) {
+                cmq_mutex_unlock(&mgr->lock);
+                return 0;
+            }
+            if (rc < 0) {
+                cmq_mutex_unlock(&mgr->lock);
+                return -1;
+            }
+        }
+    }
+    cmq_mutex_unlock(&mgr->lock);
+    size_t n = strnlen(in, out_sz);
+    if (n >= out_sz) return -1;
+    memcpy(out, in, n);
+    out[n] = '\0';
+    return 0;
 }
 
 static int acct_eq_or_star(const char *rule, const char *actual) {
@@ -959,6 +1402,46 @@ size_t cmq_account_import_count(cmq_account_manager_t *mgr, const char *account)
     size_t c = account_import_count_impl(mgr, account);
     mgr_end_op(mgr);
     return c;
+}
+
+int cmq_account_add_map(cmq_account_manager_t *mgr, const char *account,
+                        const char *src, const char *dest) {
+    if (!mgr) return -1;
+    if (mgr_begin_op(mgr) != 0) return -1;
+    int rc = account_add_map_impl(mgr, account, src, dest);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+int cmq_account_remove_map(cmq_account_manager_t *mgr, const char *account,
+                           const char *src) {
+    if (!mgr) return -1;
+    if (mgr_begin_op(mgr) != 0) return -1;
+    int rc = account_remove_map_impl(mgr, account, src);
+    mgr_end_op(mgr);
+    return rc;
+}
+
+size_t cmq_account_map_count(cmq_account_manager_t *mgr, const char *account) {
+    if (!mgr) return 0;
+    if (mgr_begin_op(mgr) != 0) return 0;
+    size_t c = account_map_count_impl(mgr, account);
+    mgr_end_op(mgr);
+    return c;
+}
+
+uint32_t cmq_account_map_total(const cmq_account_manager_t *mgr) {
+    if (!mgr) return 0;
+    return __atomic_load_n(&mgr->map_total, __ATOMIC_ACQUIRE);
+}
+
+int cmq_account_rewrite_subject(cmq_account_manager_t *mgr, const char *account,
+                                const char *in, char *out, size_t out_sz) {
+    if (!mgr) return -1;
+    if (mgr_begin_op(mgr) != 0) return -1;
+    int rc = account_rewrite_impl(mgr, account, in, out, out_sz);
+    mgr_end_op(mgr);
+    return rc;
 }
 
 int cmq_account_can_import(cmq_account_manager_t *mgr, const char *account,

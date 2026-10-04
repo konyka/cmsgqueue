@@ -1,0 +1,3 @@
+v0.5.154 bench 1:
+- blocklist swap: one load + rch swap.
+- Same path: one strcmp, still re-reads the file.

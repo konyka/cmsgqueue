@@ -1,0 +1,429 @@
+# Remaining unimplemented work (HEAD after v0.5.176)
+
+Evidence-checked against `src/include/cmq.h`,
+`src/server/cmq_config.c`, `cmq_server.c` create/reload,
+and attach helpers on 2026-09-08. P2 (R1–R7) and P3
+D1–D8 phase cuts in this catalog are shipped.
+Required next cuts: none on the CHECKSUM data
+path (PUBLISH / REQUEST / RESPONSE / BATCH
+consume). Remaining items are create-time
+remount / rebind / redial / replay, or
+intentional out-of-scope library APIs.
+
+## Current-state config / production wiring audit
+
+Every `cmq_config_t` field has a parse key. Create
+`OWN`s every owned string. Reload either applies the
+value, attaches when create had none, or is an
+intentional create-time remount / rebind / redial /
+replay (unsafe on a live WAL / accept / route fd).
+
+| Field | Parse | Create / run | Reload |
+|---|---|---|---|
+| `host` / `port` | IPv4 / 0–65535 | slot-0 bind | rebind stays create-time |
+| `num_threads` | 0–64 | workers at run | remount stays create-time |
+| `max_clients` / payload / subs | yes | defaults + gates | `apply_caps` |
+| `ping` / `write_timeout` | yes | defaults + loop | `apply_limits` |
+| `max_connects_per_sec` / `inbox_max_pending` | yes | accept / REQUEST | `apply_limits` |
+| `config_file` | yes; load path if omitted | SIGHUP | `apply_config_file` (next SIGHUP; no fd remount) |
+| `log_*` | yes | sinks | attach + `apply_dynamic` + `reload_sinks` |
+| `auth_*` / `jwt_*` / `nkey_pub` | yes | CONNECT | `apply_auth` |
+| `jwks_json` / `jwks_url` / `jwks_ca` / refresh | yes | cache / GET / sidecar | cache + url/ca/sec + fetch + attach |
+| `otlp_endpoint` / `otlp_ca` | yes | ring + exporter | otel attach + url/ca + attach + set_export |
+| `cluster_name` / `cluster_node_id` | yes | cluster + empty pool | attach + empty pool if create left routes NULL |
+| `route=` | IPv4 `addr:port` | run dial | attach empty slots (no redial) |
+| quota / subject RL / `account_max_*` | yes | objects / defaults | reload (creates if none) |
+| `acl_allow` / `acl_deny` | yes | `acl_h` | `apply_dynamic` + live CSVs |
+| `blocklist_file` | yes | `blocklist_h` | swap (fail-closed + live path) + attach |
+| `h2_port` | yes | listen | bind when none (no rebind) |
+| `js_partitions` / `js_msgs_rotate_bytes` | yes | `$JS` | `cmq_js_reload` |
+| `tls_*` / `listener*_tls_*` | yes | SSL_CTX slots | `apply_tls` + live paths + attach + session cache |
+| `listener{1,2,3}_host/port` / count | yes | extra bind | bind empty slots (no rebind) |
+| `persist_dir` / `persist_sync_interval_ms` | yes | WAL + sidecars + replay | attach + sync + F18/obj/txn coordinator+log/kv manager+persist/$JS manager+persist (no remount / WAL replay) |
+| `mqtt_bridge_*` | yes | outbound bridge | attach + maps + endpoint + live maps |
+
+Intentional / out of scope (not unused create/conf paths):
+
+- MQTT inbound listen is API opt-in, default-off, `127.0.0.1:1883`.
+- COMPRESSED stays off CONNECT / SUBSCRIBE.
+- `cmq_tls_set_crl`, `cmq_jwt_sign_*`, encryption at rest,
+  group-commit fsync, `filestore_set_max_payload` /
+  `set_async` / `set_rotate_bytes` — library / out of scope.
+- Leaf / gateway are library APIs (no server conf keys).
+- Route TLS `sess` is unused (F17); do not invent a key.
+- README TLS stub / sublist-persist STUB heading — doc drift.
+- `msg_payload_pool` create miss is a documented malloc
+  fallback (`worker_push_msg`); not a fail-closed SIGHUP.
+
+## Shipped (do not re-open)
+
+| Ver | Item |
+|---|---|
+| v0.5.41–47 | F2 BATCH compress, aux accept, MQTT 5 props, trace logs, WAL compact/rotate, MQTT will/sessions, connz/subz/routez |
+| v0.5.48 | D8 concurrent account conn/sub/payload caps |
+| v0.5.49 | D7 publish-side subject rewrite |
+| v0.5.50 | F14 connect-rate on CONNECT |
+| v0.5.51 | Audit auth / persist / TLS events |
+| v0.5.52 | Per-account outstanding-byte (`bytes_live`) cap |
+| v0.5.53 | D6 Kafka-style key compact on sealed `.1` |
+| v0.5.54 | MQTT QoS 1 outbound inflight + local fanout |
+| v0.5.55 | D5 phase 1: idempotent publish pid+seq window |
+| v0.5.56 | D4 phase 1: durable stream consumer cursors |
+| v0.5.57 | MQTT outbound QoS 2 PUBREC/PUBREL/PUBCOMP |
+| v0.5.58 | D4 phase 2: KV last-value store |
+| v0.5.59 | D4 phase 3: named object store |
+| v0.5.60 | D5 phase 2: transaction coordinator |
+| v0.5.61 | D1 phase 1: OTel span ring + sidecar |
+| v0.5.62 | D3 phase 1: JWT HS256 + Ed25519 nkey verify |
+| v0.5.63 | D3 phase 2: nkey signature on CONNECT |
+| v0.5.64 | D1 phase 2: OTLP/HTTP JSON exporter |
+| v0.5.65 | D3 phase 3: JWKS oct-key cache |
+| v0.5.66 | D2 phase 1: HPACK static codec |
+| v0.5.67 | D4 phase 4: KV bucket PUBLISH path |
+| v0.5.68 | D4 phase 5: object-store PUBLISH path |
+| v0.5.69 | D2 phase 2: HTTP/2 frame state machine |
+| v0.5.70 | D4 phase 6: KV/object REQUEST-get |
+| v0.5.71 | D2 phase 3: HPACK Huffman |
+| v0.5.72 | D2 phase 4: HPACK 4 KiB dynamic table |
+| v0.5.73 | D2 phase 5: HTTP/2 dedicated listener |
+| v0.5.74 | D3 phase 4: JWT ES256 + JWKS EC |
+| v0.5.75 | D3 phase 5: nkey seed / base32 |
+| v0.5.76 | D3 phase 6: remote JWKS HTTP GET |
+| v0.5.77 | D3 phase 7: JWT RS256 + JWKS RSA |
+| v0.5.78 | D1 phase 3: OTLP HTTPS POST |
+| v0.5.79 | D3 phase 8: HTTPS JWKS GET |
+| v0.5.80 | D5 phase 3: multi-node 2PC |
+| v0.5.81 | D2 phase 6: ALPN h2 + h2_port |
+| v0.5.82 | D3 phase 9: JWKS refresh |
+| v0.5.83 | D2 phase 7: TLS-wrapped h2 I/O |
+| v0.5.84 | D1 phase 4: OTLP/gRPC |
+| v0.5.85 | D5 phase 4: route write retry |
+| v0.5.86 | Leaf/gateway CONNECT/CONNACK e2e |
+| v0.5.87 | D4 partitioned consume cursors |
+| v0.5.88 | D6 tombstone TTL + dirty-ratio compact |
+| v0.5.89 | D1 consume spans |
+| v0.5.90 | D3 JWT HS256 issuing |
+| v0.5.91 | D3 JWT ES256 / RS256 issuing |
+| v0.5.92 | D1 connect spans |
+| v0.5.93 | D4 `$JS.<name>` stream PUBLISH path |
+| v0.5.94 | D4 `$JS.<name>` REQUEST-get |
+| v0.5.95 | D4 `$JS.<name>.<consumer>` consume / ack |
+| v0.5.96 | F2 COMPRESSED on PUBLISH |
+| v0.5.97 | F2 COMPRESSED on MESSAGE |
+| v0.5.98 | F2 COMPRESSED on REQUEST |
+| v0.5.99 | F2 COMPRESSED on RESPONSE |
+| v0.5.100 | D1 request spans |
+| v0.5.101 | D1 response spans |
+| v0.5.102 | D1 disconnect spans |
+| v0.5.103 | D4 durable `$JS` last payload |
+| v0.5.104 | D4 durable `$JS` history WAL |
+| v0.5.105 | D4 `$JS` hash partitions |
+| v0.5.106 | D4 `$JS` consume-part subject |
+| v0.5.107 | D4 `$JS` default partitions |
+| v0.5.108 | D4 `$JS` history WAL rotate |
+| v0.5.109 | F5 `persist_dir` config-file key |
+| v0.5.110 | P3 `persist_sync_interval_ms` config-file key |
+| v0.5.111 | F6 MQTT bridge config-file keys |
+| v0.5.112 | F6 MQTT bridge outbound PUBLISH |
+| v0.5.113 | config string ownership (tls_ca / ACL / blocklist) |
+| v0.5.114 | listener TLS config keys |
+| v0.5.115 | extra-listener bind host/port |
+| v0.5.116 | reload log_level and acl_deny |
+| v0.5.117 | reload TLS cert/key |
+| v0.5.118 | SIGHUP / config_file |
+| v0.5.119 | reload auth / JWT / nkey |
+| v0.5.120 | reload JWKS cache from jwks_json |
+| v0.5.121 | reload persist_sync_interval_ms |
+| v0.5.122 | reload live rate / timeout scalars |
+| v0.5.123 | reload payload / sub / client caps |
+| v0.5.124 | reload F14 quota / N1 subject RL |
+| v0.5.125 | reload account_max_* defaults |
+| v0.5.126 | reload MQTT bridge maps |
+| v0.5.127 | reload log sinks |
+| v0.5.128 | omitted log_to_stdout defaults to 1 |
+| v0.5.129 | audit file from persist_dir |
+| v0.5.130 | reload $JS partitions / rotate |
+| v0.5.131 | reload jwks_refresh_sec |
+| v0.5.132 | empty host is NULL / IPv4 only |
+| v0.5.133 | empty log_file / slot-0 TLS store NULL |
+| v0.5.134 | reload jwks_ca |
+| v0.5.135 | reload otlp_ca |
+| v0.5.136 | reload MQTT bridge addr/port |
+| v0.5.137 | reload jwks_url |
+| v0.5.138 | reload otlp_endpoint |
+| v0.5.139 | attach OTLP exporter on reload |
+| v0.5.140 | bind h2_port on reload |
+| v0.5.141 | attach JWKS refresh on reload |
+| v0.5.142 | attach MQTT bridge on reload |
+| v0.5.143 | attach cluster on reload |
+| v0.5.144 | attach persist_dir on reload |
+| v0.5.145 | fetch JWKS on reload |
+| v0.5.146 | bind extra listeners on reload |
+| v0.5.147 | attach routes on reload |
+| v0.5.148 | attach TLS on reload |
+| v0.5.149 | attach blocklist on reload |
+| v0.5.150 | load persisted subscriptions on reload |
+| v0.5.151 | set h2 ALPN on reload |
+| v0.5.152 | apply config_file on reload |
+| v0.5.153 | apply TLS paths on reload |
+| v0.5.154 | apply blocklist path on reload |
+| v0.5.155 | apply ACL strings on reload |
+| v0.5.156 | apply MQTT maps on reload |
+| v0.5.157 | attach subscription persist on reload |
+| v0.5.158 | attach object store on reload |
+| v0.5.159 | attach txn log on reload |
+| v0.5.160 | attach KV persist on reload |
+| v0.5.161 | attach $JS persist on reload |
+| v0.5.162 | attach route pool on reload |
+| v0.5.163 | attach txn coordinator on reload |
+| v0.5.164 | attach KV manager on reload |
+| v0.5.165 | attach $JS manager on reload |
+| v0.5.166 | attach OTel ring on reload |
+| v0.5.167 | attach idempo window on reload |
+| v0.5.168 | attach log on reload |
+| v0.5.169 | attach TLS session cache on reload |
+| v0.5.170 | wire WS permessage-deflate on upgrade |
+| v0.5.171 | verify CHECKSUM on REQUEST |
+| v0.5.172 | verify CHECKSUM on RESPONSE |
+| v0.5.173 | verify CHECKSUM on BATCH |
+| v0.5.174 | quote INFO checksum JSON |
+| v0.5.175 | wire INFO host from live config |
+| v0.5.176 | wire INFO server_id from cluster_node_id |
+
+## Deferred — detailed designs
+
+### D1 OpenTelemetry exporter — phases 1–4 shipped v0.5.61–64, 0.5.78, 0.5.84
+
+Span ring, sidecar, OTLP/HTTP JSON, OTLP HTTPS POST, and
+OTLP/gRPC (`grpc://`, protobuf Export over HTTP/2) are
+live. A successful local fanout offers one `KIND_CONSUME`
+with the publisher trace (v0.5.89). CONNACK 0 offers
+`KIND_CONNECT` (v0.5.92). A successful local REQUEST
+answer offers `KIND_REQUEST` (v0.5.100). A successful
+local RESPONSE deliver offers `KIND_RESPONSE` (v0.5.101).
+A graceful inbound DISCONNECT offers `KIND_DISCONNECT`
+(v0.5.102).
+
+### D2 HTTP/2 listener — phases 1–7 shipped v0.5.66–73, 0.5.81, 0.5.83
+
+HPACK static codec, Huffman, the 4 KiB dynamic table, the
+preface/SETTINGS/32-stream machine, a loopback
+prior-knowledge listener, `h2_port` bind, TLS ALPN `h2`,
+and TLS-wrapped accept (`cmq_h2_accept_tls`) are live.
+
+### D3 JWT / NKEY / JWKS — phases 1–9 shipped v0.5.62–65, 0.5.74–79, 0.5.82
+
+HS256 JWT, ES256 (P-256), RS256 (2048–4096), Ed25519 nkey
+on CONNECT (`U…` or 64 hex), static JWKS (oct/EC/RSA),
+HTTP/HTTPS `jwks_url` fetch, and periodic refresh
+(`jwks_refresh_sec`) are live. Mint: `cmq_jwt_sign_hs256`,
+`cmq_jwt_sign_es256` (P-256 `d`), `cmq_jwt_sign_rs256`
+(`n`/`e`/`d`).
+
+### D4 JetStream / KV / Object Store — phases 1–6 shipped
+
+Durable cursors, KV last-value, named objects,
+`$KV.<bucket>.<key>` / `$OBJ.<name>` / `$JS.<name>` PUBLISH
+and REQUEST-get, `$JS.<name>.<consumer>` pull consume / ack,
+and partitioned consume cursors (1–16, `append_key` /
+`next_part` / `ack_part`, `CMQC2`) are live. The last
+`$JS` payload is durable (`{persist_dir}/js/{name}.last`,
+v0.5.103). History is a `CMQM` append WAL
+(`{persist_dir}/js/{name}.msgs`, v0.5.104) replayed on
+open. `$JS` hash partitions (`cmq_js_set_partitions`,
+`{name}.parts` `CMQP`, payload `append_key`,
+`consume_part`) are live (v0.5.105). REQUEST
+`$JS.<name>.<consumer>.<part>` reaches `consume_part`
+via `cmq_js_consume` (v0.5.106). New streams inherit
+`js_partitions` / `cmq_js_set_default_partitions` when no
+`.parts` file exists (v0.5.107). History WAL rotate
+(`js_msgs_rotate_bytes`, v0.5.108) rewrites `.msgs` to a
+bounded tail.
+
+### D5 Exactly-once / transactions — phases 1–4 shipped
+
+Idempotent publish is v0.5.55. The coordinator (`CMQT`
+begin/add/commit/abort + `{persist_dir}/cmq.txn`) is
+v0.5.60. Multi-node 2PC (PREPARE / VOTE / COMMIT across
+live routes, 200 ms) is v0.5.80. EAGAIN route writes
+retry from a 32-slot queue (v0.5.85).
+
+### D6 Kafka-style key compaction — shipped v0.5.53
+
+Sealed `.1` last-value-per-key + tombstone drop. Live append
+unchanged. Tombstone TTL (segment mtime) and dirty-ratio
+auto-compact (`set_compact_dirty`, after rotate / `maybe`)
+are live (v0.5.88).
+
+### Other known gaps (not P3 IDs)
+
+| Item | Evidence | Next cut |
+|---|---|---|
+| MQTT outbound QoS 2 | shipped v0.5.57 | — |
+| ALPN `h2` | shipped v0.5.81 / TLS wrap v0.5.83 | — |
+| Leaf/gateway e2e | shipped v0.5.86 (`test_leafe.c`) | — |
+| Bridge WAL recover | shipped v0.5.40 (`replay_one_record` CMQB) | — |
+| `$JS.<name>` PUBLISH | shipped v0.5.93 | — |
+| `$JS.<name>` REQUEST-get | shipped v0.5.94 | — |
+| `$JS.<name>.<consumer>` consume / ack | shipped v0.5.95 | — |
+| COMPRESSED on PUBLISH | shipped v0.5.96 | — |
+| COMPRESSED on MESSAGE | shipped v0.5.97 | — |
+| COMPRESSED on REQUEST | shipped v0.5.98 | — |
+| COMPRESSED on RESPONSE | shipped v0.5.99 | — |
+| REQUEST spans | shipped v0.5.100 | — |
+| RESPONSE spans | shipped v0.5.101 | — |
+| DISCONNECT spans | shipped v0.5.102 | — |
+| `$JS` last payload persist | shipped v0.5.103 | — |
+| `$JS` history WAL | shipped v0.5.104 | — |
+| `$JS` hash partitions | shipped v0.5.105 | — |
+| `$JS` consume-part subject | shipped v0.5.106 | — |
+| `$JS` default partitions | shipped v0.5.107 | — |
+| `$JS` history WAL rotate | shipped v0.5.108 | — |
+| `persist_dir` config key | shipped v0.5.109 | — |
+| `persist_sync_interval_ms` config key | shipped v0.5.110 | — |
+| MQTT bridge config keys | shipped v0.5.111 | — |
+| MQTT bridge outbound PUBLISH | shipped v0.5.112 | — |
+| config string ownership | shipped v0.5.113 | — |
+| listener TLS config keys | shipped v0.5.114 | — |
+| extra-listener bind host/port | shipped v0.5.115 | — |
+| reload log_level and acl_deny | shipped v0.5.116 | — |
+| reload TLS cert/key | shipped v0.5.117 | — |
+| SIGHUP / config_file | shipped v0.5.118 | — |
+| reload auth / JWT / nkey | shipped v0.5.119 | — |
+| reload JWKS cache from jwks_json | shipped v0.5.120 | — |
+| reload persist_sync_interval_ms | shipped v0.5.121 | — |
+| reload live rate / timeout scalars | shipped v0.5.122 | — |
+| reload payload / sub / client caps | shipped v0.5.123 | — |
+| reload F14 quota / N1 subject RL | shipped v0.5.124 | — |
+| reload account_max_* defaults | shipped v0.5.125 | — |
+| reload MQTT bridge maps | shipped v0.5.126 | — |
+| reload log sinks | shipped v0.5.127 | — |
+| omitted log_to_stdout defaults to 1 | shipped v0.5.128 | — |
+| audit file from persist_dir | shipped v0.5.129 | — |
+| reload $JS partitions / rotate | shipped v0.5.130 | — |
+| reload jwks_refresh_sec | shipped v0.5.131 | — |
+| empty host is NULL / IPv4 only | shipped v0.5.132 | — |
+| empty log_file / slot-0 TLS store NULL | shipped v0.5.133 | — |
+| reload jwks_ca | shipped v0.5.134 | — |
+| reload otlp_ca | shipped v0.5.135 | — |
+| reload MQTT bridge addr/port | shipped v0.5.136 | — |
+| reload jwks_url | shipped v0.5.137 | — |
+| reload otlp_endpoint | shipped v0.5.138 | — |
+| attach OTLP exporter on reload | shipped v0.5.139 | — |
+| bind h2_port on reload | shipped v0.5.140 | — |
+| attach JWKS refresh on reload | shipped v0.5.141 | — |
+| attach MQTT bridge on reload | shipped v0.5.142 | — |
+| attach cluster on reload | shipped v0.5.143 | — |
+| attach persist_dir on reload | shipped v0.5.144 | — |
+| fetch JWKS on reload | shipped v0.5.145 | — |
+| bind extra listeners on reload | shipped v0.5.146 | — |
+| attach routes on reload | shipped v0.5.147 | — |
+| attach TLS on reload | shipped v0.5.148 | — |
+| attach blocklist on reload | shipped v0.5.149 | — |
+| load persisted subscriptions on reload | shipped v0.5.150 | — |
+| set h2 ALPN on reload | shipped v0.5.151 | — |
+| apply config_file on reload | shipped v0.5.152 | — |
+| apply TLS paths on reload | shipped v0.5.153 | — |
+| apply blocklist path on reload | shipped v0.5.154 | — |
+| apply ACL strings on reload | shipped v0.5.155 | — |
+| apply MQTT maps on reload | shipped v0.5.156 | — |
+| attach subscription persist on reload | shipped v0.5.157 | — |
+| attach object store on reload | shipped v0.5.158 | — |
+| attach txn log on reload | shipped v0.5.159 | — |
+| attach KV persist on reload | shipped v0.5.160 | — |
+| attach $JS persist on reload | shipped v0.5.161 | — |
+| attach route pool on reload | shipped v0.5.162 | — |
+| attach txn coordinator on reload | shipped v0.5.163 | — |
+| attach KV manager on reload | shipped v0.5.164 | — |
+| attach $JS manager on reload | shipped v0.5.165 | — |
+| attach OTel ring on reload | shipped v0.5.166 | — |
+| attach idempo window on reload | shipped v0.5.167 | — |
+| attach log on reload | shipped v0.5.168 | — |
+| attach TLS session cache on reload | shipped v0.5.169 | — |
+| wire WS permessage-deflate on upgrade | shipped v0.5.170 | — |
+| verify CHECKSUM on REQUEST | shipped v0.5.171 | — |
+| verify CHECKSUM on RESPONSE | shipped v0.5.172 | — |
+| verify CHECKSUM on BATCH | shipped v0.5.173 | — |
+| quote INFO checksum JSON | shipped v0.5.174 | — |
+| wire INFO host from live config | shipped v0.5.175 | — |
+| wire INFO server_id from cluster_node_id | shipped v0.5.176 | — |
+| COMPRESSED on control ops | SUBSCRIBE / CONNECT still rejected (intentional) | — |
+
+## Optional follow-ups (not required next cuts)
+
+- Slot 0 TLS stays the legacy `tls_*` keys. Extra-listener
+  host/port shipped v0.5.115 (omit = `127.0.0.1:port+li`).
+  `config_file` / SIGHUP shipped v0.5.118. Auth / JWT /
+  nkey reload shipped v0.5.119. Static `jwks_json` cache
+  reload shipped v0.5.120. `persist_sync_interval_ms` reload shipped
+  v0.5.121. Live rate / timeout scalars shipped v0.5.122.
+  Payload / sub / client caps shipped v0.5.123. F14
+  quota / N1 subject RL reload shipped v0.5.124.
+  account_max_* defaults shipped v0.5.125. MQTT bridge
+  map reload shipped v0.5.126. MQTT addr/port reload
+  shipped v0.5.136.
+  Log sink reload shipped v0.5.127. Omitted
+  `log_to_stdout` defaults to 1 (v0.5.128). Audit file
+  from `persist_dir` shipped v0.5.129. `$JS` partitions /
+  rotate reload shipped v0.5.130. `jwks_refresh_sec`
+  interval reload shipped v0.5.131. Empty `host` is NULL / IPv4 only
+  (v0.5.132). Empty `log_file` / slot-0 TLS store NULL
+  (v0.5.133). `jwks_ca` reload shipped v0.5.134.
+  `otlp_ca` reload shipped v0.5.135. MQTT addr/port
+  reload shipped v0.5.136. `jwks_url` apply on a live
+  sidecar shipped v0.5.137 (first GET / start stays
+  create-time). `otlp_endpoint` apply on a live exporter
+  shipped v0.5.138. OTLP attach when create had none
+  shipped v0.5.139. `h2_port` bind when create had none
+  shipped v0.5.140. JWKS refresh attach when create had a
+  cache shipped v0.5.141. MQTT attach when create had none
+  shipped v0.5.142. Cluster attach when create had none
+  shipped v0.5.143. Persist attach when create had none
+  shipped v0.5.144. JWKS first GET when create had no
+  cache shipped v0.5.145. Extra-listener bind when create
+  left a slot empty shipped v0.5.146. Route attach when
+  create had no peers shipped v0.5.147. TLS attach when
+  create left a slot empty shipped v0.5.148. Blocklist
+  attach when create had none shipped v0.5.149. F18
+  persist_load when persist was just attached shipped
+  v0.5.150. h2 ALPN on an existing TLS slot shipped
+  v0.5.151. `config_file` apply for the next SIGHUP
+  shipped v0.5.152. TLS live path apply + fail-closed
+  `..` shipped v0.5.153. Blocklist swap fail-closed + live
+  path shipped v0.5.154. ACL live CSV apply shipped
+  v0.5.155. MQTT maps live apply shipped v0.5.156.
+  F18 persist attach when create left the handle
+  NULL shipped v0.5.157. Object-store attach when
+  create left obj NULL shipped v0.5.158. Txn log
+  attach when create left it unset shipped v0.5.159.
+  KV persist attach when create left it unset shipped
+  v0.5.160. `$JS` persist attach when create left it
+  unset shipped v0.5.161. Route pool attach when
+  create left `routes` NULL shipped v0.5.162.
+  Txn coordinator attach when create left `txn`
+  NULL shipped v0.5.163. KV manager attach when
+  create left `kvb` NULL shipped v0.5.164.
+  `$JS` manager attach when create left `js`
+  NULL shipped v0.5.165. OTel ring attach when
+  create left `otel` NULL shipped v0.5.166.
+  Idempo window attach when create left `idempo`
+  NULL shipped v0.5.167. Log attach when create
+  left `log` NULL shipped v0.5.168. TLS session
+  cache attach when load left it NULL shipped
+  v0.5.169. WS permessage-deflate on the live
+  upgrade / send / recv path shipped v0.5.170.
+  CHECKSUM on REQUEST shipped v0.5.171.
+  CHECKSUM on RESPONSE shipped v0.5.172.
+  CHECKSUM on BATCH shipped v0.5.173.
+  INFO checksum JSON quotes shipped v0.5.174.
+  INFO host from live config shipped v0.5.175.
+  INFO server_id from cluster_node_id shipped v0.5.176.
+  Create-time only: `persist_dir` remount,
+  WAL replay, `h2_port` / slot-0 rebind, route redial,
+  extra-listener rebind.
+
+## TDD rule for every increment
+
+1. Red tests for the new contract.
+2. Green on the smallest production path.
+3. Docs + benches + CHANGELOG + push.

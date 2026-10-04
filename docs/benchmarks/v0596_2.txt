@@ -1,0 +1,3 @@
+v0.5.96 bench 2:
+- MESSAGE+COMPRESSED still pending_error (no inbound bomb).
+- Corrupt zstd PUBLISH is rejected before subject parse.

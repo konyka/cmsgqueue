@@ -1,0 +1,3 @@
+v0.5.139 bench 2:
+- Reload omitted/empty: no alloc.
+- Reject ftp:// and path .. : no alloc.

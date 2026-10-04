@@ -1,0 +1,3 @@
+v0.5.53 bench 1:
+- Live append / PUBLISH: no extra load or compare.
+- compact_keys is operator I/O on sealed .1 only.

@@ -1,0 +1,4 @@
+v0.5.45 bench 1:
+- Default rotate_bytes=0: one false compare after append.
+- compact() is not on the publish path.
+- Rotate I/O happens once per cap (rename + reopen).

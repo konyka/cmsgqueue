@@ -1,0 +1,3 @@
+v0.5.85 bench 2:
+- Drain is a short write pass after broadcast.
+- Reconnect sidecar also drains. Oversize frames skip the queue.

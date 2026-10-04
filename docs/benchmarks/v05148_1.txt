@@ -1,0 +1,3 @@
+v0.5.148 bench 1:
+- Attach apply: one SSL_CTX from cert/key PEM.
+- Existing slot: one pointer compare, no remount.

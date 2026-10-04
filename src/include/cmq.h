@@ -61,7 +61,7 @@ typedef struct cmq_server cmq_server_t;
  * Zero-initialize and set fields as needed.
  */
 typedef struct cmq_config {
-    const char *host;              /* Bind host (default: "0.0.0.0") */
+    const char *host;              /* Bind host; NULL/empty = 0.0.0.0 */
     int port;                      /* Bind port (default: 7654) */
     int num_threads;               /* Worker threads (default: auto) */
     int max_clients;               /* Max concurrent clients */
@@ -69,13 +69,26 @@ typedef struct cmq_config {
     int max_subs_per_client;       /* Max subscriptions per client */
     int ping_interval_ms;          /* Ping interval in milliseconds */
     int write_timeout_ms;          /* Write timeout in milliseconds */
-    const char *config_file;       /* Path to config file (optional) */
-    const char *log_file;          /* Path to log file (optional) */
+    const char *config_file;       /* v0.5.118: SIGHUP reload path; NULL = off */
+    const char *log_file;          /* Path; NULL/empty = no file sink */
     int log_level;                 /* Log level: 0=trace,1=debug,2=info,3=warn,4=error,5=fatal */
     int log_to_stdout;             /* Log to stdout (default: 1) */
     int log_to_file;               /* Log to file (default: 0) */
     const char *auth_username;
     const char *auth_password;
+    const char *jwt_issuer;        /* v0.5.62: required with jwt_hmac_secret */
+    const char *jwt_hmac_secret;   /* v0.5.62: HS256; CONNECT password is JWT */
+    int jwt_leeway_sec;            /* v0.5.62: exp/nbf skew; 0 = 60 */
+    const char *nkey_pub;          /* v0.5.63/75: 64 hex or NATS U… pub */
+    const char *jwks_json;         /* v0.5.65: JWKS oct/HS256, EC/ES256, RSA */
+    const char *jwks_url;          /* v0.5.76/79: http(s):// JWKS GET */
+    const char *jwks_ca;           /* v0.5.79: optional PEM for https verify */
+    int jwks_refresh_sec;          /* v0.5.82: JWKS re-GET; 0 = once */
+    const char *jwt_ec_pub;        /* v0.5.74: 128 hex P-256 X||Y */
+    const char *jwt_rsa_n;         /* v0.5.77: base64url RSA modulus */
+    const char *jwt_rsa_e;         /* v0.5.77: base64url RSA exponent */
+    const char *otlp_endpoint;     /* v0.5.64/78: http(s)://host[:port][/path] */
+    const char *otlp_ca;           /* v0.5.78: optional PEM for https verify */
     const char *cluster_name;
     const char *cluster_node_id;
     struct { const char *addr; int port; } routes[8];
@@ -90,11 +103,20 @@ typedef struct cmq_config {
      * and cmq_quota_check_connect. Kept under the old name to avoid
      * breaking existing cmq.conf files. */
     int max_connections_per_account;
+    /* v0.5.48: concurrent / per-message hard caps (0 = unlimited).
+       Distinct from max_connections_per_account (F14 connect-rate). */
+    int account_max_connections;
+    int account_max_subscriptions;
+    int account_max_payload;
+    int account_max_bytes_live;    /* v0.5.52: in-flight bytes; 0=unlimited */
     /* F16 ACL: CSV patterns. NULL disables. */
     const char *acl_allow;
     const char *acl_deny;
     /* F15: connection blocklist file. NULL disables. */
     const char *blocklist_file;
+    int h2_port;                   /* v0.5.81: loopback HTTP/2; 0 = off */
+    int js_partitions;             /* v0.5.107: default $JS nparts; 0/1 = 1 */
+    int js_msgs_rotate_bytes;      /* v0.5.108: $JS .msgs cap; 0 = off */
     int tls_enabled;
     const char *tls_cert;
     const char *tls_key;
@@ -108,7 +130,8 @@ typedef struct cmq_config {
     int tls_no_tickets;
     /* P2 (v0.5.2): per-listener config slots. Slot 0 mirrors the
      * legacy tls_cert/tls_key/tls_ca fields above for back-compat.
-     * Slots 1..3 are reserved for future multi-listener support. */
+     * Slots 1..3: listener{1,2,3}_tls_{cert,key,ca,verify_peer}
+     * and listener_count (v0.5.114). Bind host/port are v0.5.115. */
     struct cmq_listener {
         const char *tls_cert;
         const char *tls_key;
@@ -127,6 +150,13 @@ typedef struct cmq_config {
      * mapping to the upstream broker. NULL = disabled. */
     const char *mqtt_bridge_addr;
     int mqtt_bridge_port;
+    /* v0.5.112: repeatable mqtt_bridge_map=subject,topic[,qos] */
+    struct {
+        const char *cmq_subject;
+        const char *mqtt_topic;
+        int qos;
+    } mqtt_bridge_maps[8];
+    int mqtt_bridge_map_count;
 } cmq_config_t;
 
 /**
@@ -136,8 +166,10 @@ typedef struct cmq_config {
 cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config);
 
 /* N2: Reload dynamic config from a config file. Updates
- * blocklist_file, audit path, log levels, and similar dynamic
- * fields. Returns 0 on success, -1 on failure. */
+ * blocklist_file, log_level, acl_allow / acl_deny, TLS cert
+ * paths + cmq_tls_reload, auth / JWT / nkey strings, and
+ * similar dynamic fields.
+ * Returns 0 on success, -1 on failure. */
 int cmq_server_reload(cmq_server_t *server, const char *config_path);
 
 /**

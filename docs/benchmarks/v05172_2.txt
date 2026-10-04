@@ -1,0 +1,2 @@
+v0.5.172 bench 2:
+- test_rsc: 4/4 pass (apply, omitted, empty, reject)

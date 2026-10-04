@@ -1,0 +1,3 @@
+v0.5.146 bench 2:
+- Reload omitted/empty: no socket.
+- Reject localhost / 65536: no socket; live host stays.

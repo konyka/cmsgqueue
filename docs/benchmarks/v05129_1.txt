@@ -1,0 +1,3 @@
+v0.5.129 bench 1:
+- Create: one snprintf + strdup of {persist_dir}/cmq-audit.log.
+- Event write cost unchanged (stderr + optional fopen append).

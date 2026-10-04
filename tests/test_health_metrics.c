@@ -9,8 +9,8 @@
  * verified by the metrics test, which exercises the same code path.
  *
  * The dispatch logic is in handle_ws_upgrade (src/server/cmq_server.c),
- * which routes GET /healthz, GET /readyz, GET /metrics to dedicated
- * handlers before the WebSocket handshake.
+ * which routes GET /healthz, GET /readyz, GET /metrics,
+ * GET /connz, GET /subz, GET /routez before the WebSocket handshake.
  */
 
 #include "cmq_test.h"
@@ -18,6 +18,8 @@
 #include "cmq_config.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -109,6 +111,85 @@ TEST(http, unknown_path_returns_404) {
     /* Unknown falls through to WS code path which returns -1 and
      * tears down. Connection is closed. */
     ASSERT(n >= 0);
+    cmq_server_destroy(srv);
+    pthread_join(tid, NULL);
+}
+
+static void http_get_body(int port, const char *path, char *buf, size_t cap) {
+    int fd = connect_to(port);
+    if (fd < 0) {
+        buf[0] = '\0';
+        return;
+    }
+    char req[128];
+    snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: x\r\n\r\n", path);
+    (void)send(fd, req, strlen(req), 0);
+    struct timeval tv = { .tv_sec = 1, .tv_usec = 500000 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    ssize_t n = recv(fd, buf, cap - 1, 0);
+    close(fd);
+    if (n < 0) n = 0;
+    buf[n] = '\0';
+}
+
+TEST(http, connz_json) {
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = HTTP_PORT + 4;
+    cfg.log_to_stdout = 0;
+    cfg.max_clients = 16;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    struct timespec ts = {0, 200000000};
+    nanosleep(&ts, NULL);
+    char buf[4096];
+    http_get_body(HTTP_PORT + 4, "/connz", buf, sizeof(buf));
+    ASSERT(strstr(buf, "num_connections") != NULL);
+    ASSERT(strstr(buf, "connections") != NULL);
+    cmq_server_destroy(srv);
+    pthread_join(tid, NULL);
+}
+
+TEST(http, subz_json) {
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = HTTP_PORT + 5;
+    cfg.log_to_stdout = 0;
+    cfg.max_clients = 16;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    struct timespec ts = {0, 200000000};
+    nanosleep(&ts, NULL);
+    char buf[4096];
+    http_get_body(HTTP_PORT + 5, "/subz", buf, sizeof(buf));
+    ASSERT(strstr(buf, "num_subscriptions") != NULL);
+    cmq_server_destroy(srv);
+    pthread_join(tid, NULL);
+}
+
+TEST(http, routez_json) {
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = HTTP_PORT + 6;
+    cfg.log_to_stdout = 0;
+    cfg.max_clients = 16;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    struct timespec ts = {0, 200000000};
+    nanosleep(&ts, NULL);
+    char buf[4096];
+    http_get_body(HTTP_PORT + 6, "/routez", buf, sizeof(buf));
+    ASSERT(strstr(buf, "num_routes") != NULL);
+    ASSERT(strstr(buf, "\"live\"") != NULL);
     cmq_server_destroy(srv);
     pthread_join(tid, NULL);
 }

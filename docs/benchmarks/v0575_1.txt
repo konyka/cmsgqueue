@@ -1,0 +1,3 @@
+v0.5.75 bench 1:
+- 64-char hex nkey_pub is the existing decode path.
+- U… decode is one base32 pass + CRC over 33 bytes.

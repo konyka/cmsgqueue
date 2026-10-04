@@ -1,0 +1,3 @@
+v0.5.123 bench 1:
+- PUBLISH / SUBSCRIBE / accept still read srv->config ints.
+- Reload: three integer stores. No extra work on the hot path.

@@ -29,11 +29,25 @@ int cmq_tls_set_server_name(cmq_tls_config_t *cfg, const char *name);
 /* F12: ALPN protocol list. Comma-separated (e.g. "h2,http/1.1").
  * Set BEFORE cmq_tls_load. NULL clears. */
 int cmq_tls_set_alpn(cmq_tls_config_t *cfg, const char *protos_csv);
+int cmq_tls_alpn_has(cmq_tls_config_t *cfg, const char *proto);
 
 /* F12: Reload the SSL_CTX from the current cert/key paths.
  * Atomically swaps; existing sessions continue with the old CTX
  * until they tear down. Returns 0 on success, -1 on failure. */
 int cmq_tls_reload(cmq_tls_config_t *cfg);
+/* v0.5.148: empty/omitted cert and key keep off. Unsafe paths,
+ * cert-without-key, and load failure fail closed. Creates when
+ * *slot is NULL. Existing slot is left alone (no remount). */
+int cmq_tls_reload_attach(cmq_tls_config_t **slot,
+                          const char **live_cert, const char **live_key,
+                          const char **live_ca, int *live_verify,
+                          const char *fresh_cert, const char *fresh_key,
+                          const char *fresh_ca, int fresh_verify,
+                          const char *alpn);
+/* v0.5.151: empty/omitted ALPN keeps off. Unsafe tokens fail
+ * closed. Sets ALPN when the slot has none. Existing ALPN is
+ * left alone (no remount). Rebuilds the CTX via cmq_tls_reload. */
+int cmq_tls_reload_alpn(cmq_tls_config_t *cfg, const char *alpn);
 
 /* Copy-out under begin_op — never return an interior pointer (destroy UAF). */
 int cmq_tls_cert_path(cmq_tls_config_t *cfg, char *out, size_t out_len);

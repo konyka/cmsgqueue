@@ -1,0 +1,3 @@
+v0.5.83 bench 2:
+- Loopback bind only. 200 ms I/O cap unchanged.
+- Failed handshake does not parse preface as h2.

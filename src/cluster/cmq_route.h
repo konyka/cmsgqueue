@@ -47,6 +47,12 @@ cmq_route_pool_t *cmq_route_pool_create(cmq_cluster_t *cluster);
 void cmq_route_pool_destroy(cmq_route_pool_t *pool);
 /* Optional: when *gate != 0, post-dial install is aborted (server drain). */
 void cmq_route_pool_set_dial_gate(cmq_route_pool_t *pool, cmq_atomic_int *gate);
+/* v0.5.162: no cluster keeps off. Existing pool is left
+ * alone (no remount / route redial). Creates when *pool
+ * is NULL and cluster is live. */
+int cmq_route_pool_reload_attach(cmq_route_pool_t **pool,
+                                 cmq_cluster_t *cluster,
+                                 cmq_atomic_int *gate);
 
 /* F17: install the TLS config used to build cmq_route_tls_sess_t for
    every fd added to the pool. Pass NULL to disable. Existing routes
@@ -61,6 +67,13 @@ cmq_route_tls_config_t *cmq_route_pool_get_tls_cfg(cmq_route_pool_t *pool);
 int cmq_route_connect(cmq_route_pool_t *pool, const char *node_id,
                        const char *addr, int port,
                        const char *auth_user, const char *auth_pass);
+/* v0.5.147: empty/omitted addr and port 0 keep off. Non-IPv4 /
+ * bad port fail closed. Dials when live slot is empty. Existing
+ * live addr is left alone (no redial). */
+int cmq_route_reload_attach(cmq_route_pool_t *pool, const char *nid,
+                            const char **live_addr, int *live_port,
+                            const char *fresh_addr, int fresh_port,
+                            const char *auth_user, const char *auth_pass);
 /* fd < 0: placeholder slot (connected=1, no I/O). fd >= 0: handshake then nonblock. */
 int cmq_route_add_conn(cmq_route_pool_t *pool, const char *node_id, int fd,
                         const char *auth_user, const char *auth_pass);
@@ -88,10 +101,23 @@ int cmq_route_disconnect_if_owned_fd(cmq_route_pool_t *pool, const char *node_id
 int cmq_route_forward(cmq_route_pool_t *pool, const char *subject,
                        const uint8_t *data, size_t len,
                        const char *exclude_id);
-/* out_eagain: peers not fully written (EAGAIN or hard-write failure). */
+/* out_eagain: peers not fully written (hard fail / vanished / queue full).
+   EAGAIN is queued (v0.5.85) and is not counted here. */
 size_t cmq_route_broadcast(cmq_route_pool_t *pool, const uint8_t *data,
                              size_t len, const char *exclude_id,
                              size_t *out_eagain);
+
+#define CMQ_ROUTE_RETRY_MAX   32
+#define CMQ_ROUTE_RETRY_BYTES 2048
+
+/* 0 queued; 1 dropped (full); -1 bad args. */
+int cmq_route_retry_offer(cmq_route_pool_t *pool, const char *node_id,
+                          const uint8_t *data, size_t len);
+/* Writes queued frames. Returns sent count; -1 on bad args. */
+int cmq_route_retry_drain(cmq_route_pool_t *pool);
+size_t cmq_route_retry_pending(cmq_route_pool_t *pool);
+uint64_t cmq_route_retry_dropped(cmq_route_pool_t *pool);
+uint64_t cmq_route_retry_sent(cmq_route_pool_t *pool);
 
 size_t cmq_route_pool_count(cmq_route_pool_t *pool);
 /* Connected peers with a live fd (excludes placeholders / staged / dead). */
@@ -103,6 +129,9 @@ size_t cmq_route_target_count(cmq_route_pool_t *pool);
 /* Copy connection snapshot under lock (no live pointer after unlock). */
 int cmq_route_get_conn(cmq_route_pool_t *pool, const char *node_id,
                         cmq_route_conn_t *out);
+/* v0.5.47: copy up to max occupied slots (no liveness probe). */
+int cmq_route_snapshot(cmq_route_pool_t *pool, cmq_route_conn_t *out,
+                        size_t max, size_t *out_n);
 /* 1 if peer has a probed-live fd (clears sticky dead slots). */
 int cmq_route_peer_live(cmq_route_pool_t *pool, const char *node_id);
 /* Serialize writes on a route fd (inbound borrow + client path). Returns idx or -1. */

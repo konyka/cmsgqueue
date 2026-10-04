@@ -2,6 +2,7 @@
 #include "cmq_tls.h"
 #include "cmq_tls_session_cache.h"
 #include "cmq_log.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
@@ -156,6 +157,14 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     SSL_CTX_set_cipher_list(cfg->ssl_ctx, ciphers);
     /* CRIME/BREACH mitigation: disable TLS-level compression. */
     SSL_CTX_set_options(cfg->ssl_ctx, SSL_OP_NO_COMPRESSION);
+    if (cfg->alpn_len > 0) {
+        if (SSL_CTX_set_alpn_protos(cfg->ssl_ctx, cfg->alpn_data,
+                                     cfg->alpn_len) != 0) {
+            SSL_CTX_free(cfg->ssl_ctx);
+            cfg->ssl_ctx = NULL;
+            return -1;
+        }
+    }
     /* Best-effort defaults. */
     SSL_CTX_set_mode(cfg->ssl_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER |
                                     SSL_MODE_ENABLE_PARTIAL_WRITE);
@@ -287,6 +296,7 @@ void cmq_tls_config_destroy(cmq_tls_config_t *cfg) {
         struct timespec ts = {0, 1000000L};
         nanosleep(&ts, NULL);
     }
+    cmq_tls_session_cache_destroy(cfg);
 #ifdef CMQ_TLS_OPENSSL
     if (cfg->ssl_ctx) {
         SSL_CTX_free(cfg->ssl_ctx);
@@ -332,8 +342,11 @@ int cmq_tls_load(cmq_tls_config_t *cfg) {
         cmq_tls_session_cache_init(cfg);
     }
     tls_end_op(cfg);
+    if (rc == 0)
+        (void)cmq_tls_session_cache_reload_attach(cfg);
     return rc;
 #else
+    (void)cmq_tls_session_cache_reload_attach(cfg);
     return 0;
 #endif
 }
@@ -419,6 +432,143 @@ int cmq_tls_set_alpn(cmq_tls_config_t *cfg, const char *protos_csv) {
     }
     tls_end_op(cfg);
     return 0;
+}
+
+int cmq_tls_alpn_has(cmq_tls_config_t *cfg, const char *proto) {
+    if (!cfg || !proto || !proto[0]) return 0;
+    size_t plen = strlen(proto);
+    if (tls_begin_op(cfg) != 0) return 0;
+    unsigned int i = 0;
+    int rc = 0;
+    while (i < cfg->alpn_len) {
+        unsigned int n = cfg->alpn_data[i++];
+        if (i + n > cfg->alpn_len) break;
+        if (n == plen && memcmp(cfg->alpn_data + i, proto, n) == 0) {
+            rc = 1;
+            break;
+        }
+        i += n;
+    }
+    tls_end_op(cfg);
+    return rc;
+}
+
+static int tls_reload_path_ok(const char *path) {
+    if (!path || !path[0]) return 0;
+    size_t n = strnlen(path, CMQ_TLS_PATH_MAX);
+    if (n == 0 || n >= CMQ_TLS_PATH_MAX) return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)path[i];
+        if (c == '\\' || c < 0x20 || c == 0x7f)
+            return 0;
+    }
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && path[i] == '/')
+            i++;
+        if (i >= n)
+            break;
+        size_t start = i;
+        while (i < n && path[i] != '/')
+            i++;
+        size_t len = i - start;
+        if (len == 1 && path[start] == '.')
+            return 0;
+        if (len == 2 && path[start] == '.' && path[start + 1] == '.')
+            return 0;
+    }
+    return 1;
+}
+
+static int tls_reload_dup(const char *fresh, const char **live) {
+    if (!fresh || !fresh[0] || !live) return 0;
+    char *owned = strdup(fresh);
+    if (!owned) return -1;
+    free((void *)*live);
+    *live = owned;
+    return 0;
+}
+
+int cmq_tls_reload_attach(cmq_tls_config_t **slot,
+                          const char **live_cert, const char **live_key,
+                          const char **live_ca, int *live_verify,
+                          const char *fresh_cert, const char *fresh_key,
+                          const char *fresh_ca, int fresh_verify,
+                          const char *alpn) {
+    if (!slot) return -1;
+    int has_cert = fresh_cert && fresh_cert[0];
+    int has_key = fresh_key && fresh_key[0];
+    if (!has_cert && !has_key && (!fresh_ca || !fresh_ca[0]))
+        return 0;
+    if (has_cert != has_key) return -1;
+    if (has_cert && !tls_reload_path_ok(fresh_cert)) return -1;
+    if (has_key && !tls_reload_path_ok(fresh_key)) return -1;
+    if (fresh_ca && fresh_ca[0] && !tls_reload_path_ok(fresh_ca)) return -1;
+    if (*slot)
+        return 0;
+    if (!has_cert || !has_key)
+        return -1;
+    if (!cmq_tls_backend_secure())
+        return -1;
+    cmq_tls_config_t *n = cmq_tls_config_create();
+    if (!n) return -1;
+    if (cmq_tls_set_cert(n, fresh_cert) != 0 ||
+        cmq_tls_set_key(n, fresh_key) != 0) {
+        cmq_tls_config_destroy(n);
+        return -1;
+    }
+    if (fresh_ca && fresh_ca[0] && cmq_tls_set_ca(n, fresh_ca) != 0) {
+        cmq_tls_config_destroy(n);
+        return -1;
+    }
+    if (fresh_verify)
+        (void)cmq_tls_set_verify(n, 1);
+    if (alpn && alpn[0])
+        (void)cmq_tls_set_alpn(n, alpn);
+    if (cmq_tls_load(n) != 0) {
+        cmq_tls_config_destroy(n);
+        return -1;
+    }
+    if (tls_reload_dup(fresh_cert, live_cert) != 0 ||
+        tls_reload_dup(fresh_key, live_key) != 0 ||
+        tls_reload_dup(fresh_ca, live_ca) != 0) {
+        cmq_tls_config_destroy(n);
+        return -1;
+    }
+    if (live_verify && fresh_verify)
+        *live_verify = 1;
+    *slot = n;
+    return 0;
+}
+
+static int tls_reload_alpn_ok(const char *alpn) {
+    if (!alpn || !alpn[0]) return 0;
+    size_t n = strnlen(alpn, 128);
+    if (n == 0 || n >= 128) return 0;
+    if (strstr(alpn, "..") || strchr(alpn, '\\'))
+        return 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)alpn[i];
+        if (c < 0x21 || c > 0x7e)
+            return 0;
+    }
+    return 1;
+}
+
+int cmq_tls_reload_alpn(cmq_tls_config_t *cfg, const char *alpn) {
+    if (!cfg) return -1;
+    if (!alpn || !alpn[0])
+        return 0;
+    if (!tls_reload_alpn_ok(alpn))
+        return -1;
+    if (tls_begin_op(cfg) != 0) return -1;
+    int have = cfg->alpn_len > 0;
+    tls_end_op(cfg);
+    if (have)
+        return 0;
+    if (cmq_tls_set_alpn(cfg, alpn) != 0)
+        return -1;
+    return cmq_tls_reload(cfg);
 }
 
 /* F12: Reload the SSL_CTX from the current cert/key paths.

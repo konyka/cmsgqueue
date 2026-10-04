@@ -1,0 +1,3 @@
+v0.5.62 bench 2:
+- HS256: one HMAC-SHA256 of header.payload.
+- Ed25519 nkey verify is library-only this increment.

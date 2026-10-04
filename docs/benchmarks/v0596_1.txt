@@ -1,0 +1,3 @@
+v0.5.96 bench 1:
+- Uncompressed PUBLISH: one flags-bit compare.
+- Compressed PUBLISH: inflate + recurse, then plaintext fanout.

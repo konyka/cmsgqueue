@@ -1,0 +1,3 @@
+v0.5.58 bench 2:
+- Persist: one CMQK encode + filestore append per put/del.
+- Replay is O(live last_seq) at set_persist only.

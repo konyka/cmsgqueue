@@ -18,6 +18,7 @@
  */
 
 #include "cmq_crc32c.h"
+#include "cmq_proto.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -97,4 +98,23 @@ int cmq_crc32c_is_hw(void) {
 #else
     return 0;
 #endif
+}
+
+int cmq_checksum_consume(uint8_t flags, const uint8_t *wire, size_t *len) {
+    if (!len)
+        return -1;
+    if ((flags & (uint8_t)CMQ_FLAG_CHECKSUM) == 0)
+        return 0;
+    if (!wire || *len < 4)
+        return -1;
+    size_t n = *len - 4;
+    uint32_t expect = (uint32_t)wire[n] |
+                      ((uint32_t)wire[n + 1] << 8) |
+                      ((uint32_t)wire[n + 2] << 16) |
+                      ((uint32_t)wire[n + 3] << 24);
+    uint32_t got = cmq_crc32c(0, wire, n);
+    if (expect != got)
+        return -1;
+    *len = n;
+    return 0;
 }

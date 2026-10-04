@@ -1,0 +1,3 @@
+v0.5.117 bench 2:
+- Failed reload keeps the old SSL_CTX; ACL/log not applied.
+- Empty cert/key strings do not overwrite a live path.

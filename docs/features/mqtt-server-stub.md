@@ -34,7 +34,8 @@ spec text below is kept for historical reference.
 - `tests/test_mqtt_bridge*.c` — bridge modes (insert/cleanup/
   freelist_load).
 
-## Verification gates
+`tests/test_mqtt_will.c` — CONNECT parse, will take-once / fire+retain,
+session save/load/drop.
 
 - All `test_mqtt_*` pass; full non-stress ctest at 90/90 PASS.
 

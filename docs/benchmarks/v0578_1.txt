@@ -1,0 +1,3 @@
+v0.5.78 bench 1:
+- http:// endpoints skip TLS (existing POST path).
+- HTTPS handshake runs only on the sidecar, never on offer.

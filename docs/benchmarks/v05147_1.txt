@@ -1,0 +1,3 @@
+v0.5.147 bench 1:
+- Attach apply: one IPv4 CONNECT + CONNACK.
+- Existing live slot: one addr compare, no redial.

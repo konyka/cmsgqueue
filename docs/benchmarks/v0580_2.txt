@@ -1,0 +1,3 @@
+v0.5.80 bench 2:
+- 200 ms vote cap. Timeout and missing votes are NO.
+- Route peers do not re-fanout PREPARE (is_route).

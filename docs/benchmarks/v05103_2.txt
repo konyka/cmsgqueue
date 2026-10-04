@@ -1,0 +1,3 @@
+v0.5.103 bench 2:
+- Last file is one payload (CMQ_JS_VAL_MAX 64 KiB cap).
+- Earlier bodies stay on the ring; consume history not durable.

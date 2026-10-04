@@ -1,0 +1,3 @@
+v0.5.113 bench 1:
+- Keys omitted: no strdup. Create path matches prior NULL fields.
+- Keys set: four strdup at create, four free at destroy.

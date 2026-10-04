@@ -1,0 +1,3 @@
+v0.5.110 bench 1:
+- Key omitted/0: one extra strcmp at parse; create path unchanged.
+- Key >0: existing set_sync_interval call; no new I/O at parse.

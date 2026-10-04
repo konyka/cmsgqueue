@@ -1,0 +1,3 @@
+v0.5.56 bench 1:
+- Default create: cursor_path empty; append/read unchanged.
+- Persist only on add/ack/remove (not append).

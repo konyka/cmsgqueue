@@ -1,0 +1,3 @@
+v0.5.160 bench 2:
+- Empty / omitted: one length check, keep KV persist off.
+- Reject: kvb_dir_safe rules, persist_dir unchanged.

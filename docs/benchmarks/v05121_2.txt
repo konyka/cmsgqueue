@@ -1,0 +1,3 @@
+v0.5.121 bench 2:
+- Omitted/0: no setter call; current interval unchanged.
+- Reject >86400000: live policy stays.

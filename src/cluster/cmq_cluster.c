@@ -96,6 +96,46 @@ void cmq_cluster_destroy(cmq_cluster_t *cluster) {
     free(cluster);
 }
 
+int cmq_cluster_reload_attach(cmq_cluster_t **c,
+                              const char **live_name, const char **live_id,
+                              const char *fresh_name, const char *fresh_id) {
+    if (!c) return -1;
+    if ((!fresh_name || !fresh_name[0]) && (!fresh_id || !fresh_id[0]))
+        return 0;
+    if (*c)
+        return 0;
+    const char *use_name = (fresh_name && fresh_name[0])
+                               ? fresh_name
+                               : (live_name ? *live_name : NULL);
+    const char *use_id = (fresh_id && fresh_id[0])
+                             ? fresh_id
+                             : (live_id ? *live_id : NULL);
+    if (!use_name || !use_name[0] || !use_id || !use_id[0])
+        return 0;
+    cmq_cluster_t *n = cmq_cluster_create(use_name, use_id);
+    if (!n) return -1;
+    if (fresh_name && fresh_name[0] && live_name) {
+        char *owned = strdup(fresh_name);
+        if (!owned) {
+            cmq_cluster_destroy(n);
+            return -1;
+        }
+        free((void *)*live_name);
+        *live_name = owned;
+    }
+    if (fresh_id && fresh_id[0] && live_id) {
+        char *owned = strdup(fresh_id);
+        if (!owned) {
+            cmq_cluster_destroy(n);
+            return -1;
+        }
+        free((void *)*live_id);
+        *live_id = owned;
+    }
+    *c = n;
+    return 0;
+}
+
 int cmq_cluster_name(cmq_cluster_t *cluster, char *out, size_t out_len) {
     if (!cluster || !out || out_len == 0) return -1;
     if (cluster_begin_op(cluster) != 0) return -1;

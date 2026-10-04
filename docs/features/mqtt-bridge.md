@@ -10,7 +10,9 @@ bridge CMQ → MQTT had to run a separate client process.
 ## Design
 
 A new config field pair `mqtt_bridge_addr` / `mqtt_bridge_port`
-(default NULL/0 = disabled). When set, `cmq_server_create`:
+(default NULL/0 = disabled). The config file keys are the same
+(v0.5.111). Empty addr disables. `/` `\` controls and spaces
+are rejected. When set, `cmq_server_create`:
 
 1. Creates an `cmq_mqtt_bridge_t` with a fixed client_id
    `"cmsgbridge"`.
@@ -21,9 +23,25 @@ A new config field pair `mqtt_bridge_addr` / `mqtt_bridge_port`
 
 On shutdown, `cmq_mqtt_bridge_disconnect` + destroy.
 
-Subject mapping (which CMQ subjects to forward) is left to the
-operator via the existing `cmq_mqtt_add_mapping` API. A future
-PR can wire an automatic "forward everything" mode.
+Subject mapping is `mqtt_bridge_map=subject,topic[,qos]`
+(repeatable, max 8, v0.5.112) or `cmq_mqtt_add_mapping`.
+A matching CMQ PUBLISH is written as MQTT PUBLISH
+(`cmq_mqtt_bridge_publish`). Route ingress, WAL replay, and
+`mqtt_bridge*` accounts are not re-bridged.
+SIGHUP replaces a non-empty map table on the live bridge
+(v0.5.126). Omitted maps keep the current table.
+v0.5.156: SIGHUP also copies that table onto the live
+config. Count 0 / omitted keeps the current rows.
+`..` / `\` / empty subject or topic / qos outside 0–2
+fail closed.
+v0.5.136: reload applies a non-empty `mqtt_bridge_addr`
+and/or non-zero `mqtt_bridge_port` via
+`cmq_mqtt_bridge_connect` (same-endpoint live peer is a
+no-op). Omitted / empty keeps the current endpoint.
+Non-IPv4 and out-of-range port fail closed.
+v0.5.142: reload creates and dials the bridge when create
+had none. Omitted / empty keeps off. An existing bridge is
+left to v0.5.136.
 
 ## Files touched
 

@@ -6,12 +6,18 @@ Operators investigating incidents need to correlate log entries from a single co
 
 ## Design
 
-Each connection gets a 16-byte UUID at the earliest point in its lifecycle. The ID is stored in `cmq_client_t.trace_id` and can be propagated through logs and (eventually) the audit trail.
+Each connection gets a 16-byte UUID at accept (`cmq_client_create`).
+The ID is stored in `cmq_client_t.trace_id` and pre-encoded as
+`trace_hex[33]`.
 
 - `cmq_trace_id(out)` — generates 128 random bytes via OpenSSL `RAND_bytes`.
 - `cmq_trace_id_hex(id, out, out_len)` — formats as 32 lowercase hex chars.
+- `cmq_trace_assign(id, hex)` — generate + encode (accept path).
 
-The server assigns the ID at the start of the `CMQ_OP_CONNECT` dispatch. Future work: thread the ID through every log entry and audit event.
+`client_dispatch_parser` calls `cmq_log_set_thread_trace(c->trace_hex)`
+around `handle_frame`. Log lines become
+`[LEVEL] [time] [tid=hex] file:line: msg`. Unset threads keep the
+old format. Blocklist audit events carry the same hex.
 
 ## Files touched
 
@@ -27,6 +33,10 @@ The server assigns the ID at the start of the `CMQ_OP_CONNECT` dispatch. Future 
 - `trace.generate_id_is_unique` — two calls produce different IDs.
 - `trace.encode_hex` — round-trip encoding.
 - `trace.encode_short_buffer_truncates` — short buffer handling.
+- `trace.assign_fills_hex` — generate + hex agree.
+
+`tests/test_log.c`:
+- `log.thread_trace_in_line` / `cleared` / `rejects_junk`.
 
 ## Verification gates
 
@@ -49,8 +59,8 @@ Threats NOT closed:
 
 ## Limitations
 
-- Trace ID is not yet propagated to log entries. Future work: thread the ID through `cmq_log` calls.
 - No integration with external tracing systems (OpenTelemetry, etc.).
+- The ID is not sent on the wire (by design).
 
 ## See also
 

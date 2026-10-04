@@ -1,0 +1,3 @@
+v0.5.93 bench 2:
+- Bad $JS. subject fails closed before fanout.
+- Empty payload does not touch the ring.

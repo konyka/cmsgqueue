@@ -16,12 +16,48 @@ public configuration keys above.
 
 ## Design
 
-A new config field `persist_dir` (default NULL = disabled). When
+A new config field `persist_dir` (default NULL = disabled). The
+config file key is `persist_dir` (v0.5.109). Empty value means
+disabled. Paths with `.` / `..` components are rejected. When
 set, `cmq_server_create` opens a filestore at `persist_dir/<prefix>`
 and appends every **validated publish** to it via
 `cmq_filestore_append`. The append happens in `handle_publish`
 **after** subject validation and ACL check, **before** the sublist
 match — so a publish with no subscribers is still persisted.
+
+`persist_sync_interval_ms` (v0.5.110, 0 = off, max 86400000)
+installs `cmq_filestore_set_sync_interval` at create.
+SIGHUP / `cmq_server_reload` applies a non-zero interval
+to the live filestore (v0.5.121). 0 / omitted keeps the
+current policy.
+v0.5.144: reload opens the WAL and persist sidecars
+(audit already applied, sublist / txn / kv / `$JS` / obj)
+when create had no `persist_dir`. Omitted / empty keeps
+off. Unsafe paths fail closed. An existing filestore is
+not remounted and WAL replay stays create-time.
+v0.5.150: the just-opened `cmq-subs.wal` is loaded
+once into ghost SUB refs. A second load is skipped.
+WAL message replay stays create-time.
+v0.5.157: reload also opens `cmq-subs.wal` when
+create left persist NULL (live filestore, missing
+F18 handle). Empty / omitted keeps off. An existing
+handle is not remounted. `..` / `\` fail closed.
+v0.5.158: reload opens `{persist_dir}/obj` when
+create left the object-store handle NULL. Same
+empty / omitted / no-remount / fail-closed rules.
+v0.5.159: reload enables `{persist_dir}/cmq.txn`
+when create left the txn log unset. Same rules.
+v0.5.163: reload creates the coordinator when
+create left `txn` NULL so persist attach is not
+fail-closed.
+v0.5.160: reload enables `{persist_dir}/kv_<bucket>`
+when create left KV persist unset. Same rules.
+v0.5.164: reload creates the manager when create
+left `kvb` NULL so persist attach is not fail-closed.
+v0.5.161: reload enables `{persist_dir}/js` when
+create left `$JS` persist unset. Same rules.
+v0.5.165: reload creates the manager when create
+left `js` NULL so persist attach is not fail-closed.
 
 The wiring is **best-effort**: a failed append increments
 `stat_persist_fail` but does not block delivery. This matches
@@ -60,6 +96,8 @@ single-threaded; future work can parallelize.
 - `src/server/cmq_server.c` — create/destroy lifecycle, `credit_msgs_in` append.
 
 ## Tests
+
+`tests/test_psa.c` — attach, omitted, empty, reject (v0.5.144).
 
 `tests/test_persist_unit.c`:
 - `filestore_not_opened_when_null` — server starts without any
@@ -117,6 +155,39 @@ Threats NOT closed:
   `cmq_filestore_sync` but a crash between write() and fsync() may
   leave a torn record. Detected by CRC32 on read.
 
+## Rotation / compact (v0.5.45)
+
+- `cmq_filestore_compact(fs, retain)` keeps the newest `retain`
+  records (renumbered 1..N) or empties the live WAL when
+  `retain == 0`.
+- `cmq_filestore_set_rotate_bytes(cap)` archives the live pair to
+  `prefix.data.1` / `prefix.idx.1` when the data file reaches `cap`
+  and opens empty live files. Default cap is 0 (off). Hot path is
+  one compare.
+
+## Key compaction (v0.5.53)
+
+`cmq_filestore_compact_keys(fs)` rewrites sealed
+`prefix.data.1` / `.idx.1` only. The live append path is
+unchanged.
+
+A record is keyed when its payload starts with `CMQK` +
+little-endian u16 key length + key + value
+(`cmq_filestore_key_encode` / `key_decode`). Last value wins.
+An empty value is a tombstone and drops that key. Records
+without the envelope are kept. No archive file is a no-op.
+
+## Tombstone TTL / dirty compact (v0.5.88)
+
+Default compact still drops a last-is-tombstone immediately.
+`cmq_filestore_set_tombstone_ttl_ms` keeps that tombstone
+when the sealed `.1` mtime is younger than the TTL (no
+header change). `set_compact_dirty(num, den)` runs
+`compact_keys` after rotate (and via `compact_keys_maybe`)
+when `drop * den >= total * num`. `den=0` disables.
+`key_dirty` is read-only. Live append is unchanged except
+one compare after rotate.
+
 ## Limitations
 
 - Replay is single-threaded; large WALs take O(N) time on restart.
@@ -125,6 +196,7 @@ Threats NOT closed:
   `cmq_filestore_read`.
 - fsync per message (no group-commit batching). Batched fsync
   is a follow-up.
+- Auto-rotate applies to the sync append path.
 
 ## See also
 
@@ -132,3 +204,4 @@ Threats NOT closed:
 - `docs/reviews/round2_deep_attack.md` C2 (WAL design).
 - Plan reference: `docs/reviews/hyperplan-final-plan.md` Part 2, F5.
 - `src/store/cmq_filestore.{c,h}` — library.
+- `docs/reviews/v0.5.88.enumeration.md`

@@ -1,0 +1,3 @@
+v0.5.63 bench 1:
+- nkey_pub unset: one pointer on CONNECT.
+- Existing password and JWT paths unchanged.

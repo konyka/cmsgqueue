@@ -77,16 +77,25 @@ void cmq_ws_server_set_callback(cmq_ws_server_t *srv,
 
 int cmq_ws_frame_parse(const uint8_t *buf, size_t buf_len,
                         cmq_ws_frame_t *out_frame) {
+    return cmq_ws_frame_parse_ex(buf, buf_len, out_frame, 0);
+}
+
+int cmq_ws_frame_parse_ex(const uint8_t *buf, size_t buf_len,
+                           cmq_ws_frame_t *out_frame, int allow_rsv1) {
     if (!buf || !out_frame) return -1;
     if (buf_len < 2) return 0; /* need more */
 
-    /* RFC 6455 §5.2: RSV1-3 MUST be 0; §5.5: control frames MUST be FIN=1. */
-    if (buf[0] & 0x70) return -1;
+    /* RFC 6455 §5.2: RSV2/3 MUST be 0. RSV1 is only legal on data
+     * frames after permessage-deflate is negotiated. */
     uint8_t opcode = (uint8_t)(buf[0] & 0x0F);
+    int rsv1 = (buf[0] & 0x40) ? 1 : 0;
+    if (buf[0] & 0x30) return -1;
+    if (rsv1 && (!allow_rsv1 || opcode >= 0x08)) return -1;
     int fin = (buf[0] >> 7) & 0x01;
     if (opcode >= 0x08 && !fin) return -1;
 
     out_frame->fin = fin;
+    out_frame->rsv1 = rsv1;
     out_frame->opcode = (cmq_ws_opcode_t)opcode;
     out_frame->masked = (buf[1] >> 7) & 0x01;
 
@@ -143,7 +152,9 @@ static int ws_encode_header(const cmq_ws_frame_t *frame, uint8_t *buf,
     size_t header_len = ws_header_len(frame->payload_len);
     if (buf_len < header_len) return -1;
 
-    buf[0] = (uint8_t)((frame->fin ? 0x80 : 0x00) | (frame->opcode & 0x0F));
+    buf[0] = (uint8_t)((frame->fin ? 0x80 : 0x00) |
+                       (frame->rsv1 == 1 ? 0x40 : 0x00) |
+                       (frame->opcode & 0x0F));
     if (frame->payload_len <= 125) {
         buf[1] = (uint8_t)frame->payload_len;
     } else if (frame->payload_len <= 65535) {
@@ -322,6 +333,49 @@ int cmq_ws_build_response(const char *accept_key, char *out, size_t out_len) {
         "Sec-WebSocket-Accept: %s\r\n\r\n", accept_key);
     if (n < 0 || (size_t)n >= out_len) return -1;
     return 0;
+}
+
+int cmq_ws_build_response_ext(const char *accept_key, const char *ext_line,
+                              char *out, size_t out_len) {
+    if (!ext_line || !ext_line[0])
+        return cmq_ws_build_response(accept_key, out, out_len);
+    if (!accept_key || !out || out_len == 0) return -1;
+    for (const char *p = accept_key; *p; p++) {
+        if (*p == '\r' || *p == '\n') return -1;
+    }
+    {
+        size_t elen = strlen(ext_line);
+        for (size_t i = 0; i < elen; i++) {
+            if (ext_line[i] != '\r' && ext_line[i] != '\n')
+                continue;
+            if (i == elen - 2 && ext_line[i] == '\r' &&
+                ext_line[i + 1] == '\n')
+                break;
+            return -1;
+        }
+    }
+    int n = snprintf(out, out_len,
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: %s\r\n"
+        "%s\r\n", accept_key, ext_line);
+    if (n < 0 || (size_t)n >= out_len) return -1;
+    return 0;
+}
+
+int cmq_ws_negotiate_deflate(const char *req, size_t req_len,
+                             char *ext_out, size_t ext_cap) {
+    if (!ext_out || ext_cap == 0) return -1;
+    ext_out[0] = '\0';
+    if (!req || req_len == 0)
+        return 0;
+    int rc = cmq_ws_parse_extensions(req, req_len);
+    if (rc <= 0)
+        return rc;
+    if (cmq_ws_build_extensions_response(ext_out, ext_cap) < 0)
+        return -1;
+    return 1;
 }
 
 /* === RFC 7692 permessage-deflate ====================================== */

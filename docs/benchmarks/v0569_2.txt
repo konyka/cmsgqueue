@@ -1,0 +1,3 @@
+v0.5.69 bench 2:
+- Stream table is 32 slots; open is a linear scan.
+- Frame payload cap 16 KiB; no per-frame heap.

@@ -1,0 +1,3 @@
+v0.5.61 bench 1:
+- offer: CAS + store; no malloc, no I/O.
+- otel NULL: one pointer compare on PUBLISH.

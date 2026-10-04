@@ -1,0 +1,3 @@
+v0.5.131 bench 1:
+- Reload apply: one atomic store of interval_sec.
+- Sidecar wake remains 1 s; GET cadence follows the new span.

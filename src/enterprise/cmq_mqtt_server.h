@@ -3,12 +3,13 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* F19: Server-side MQTT 5.0 listener.
+/* F19: Server-side MQTT 3.1.1 / 5.0 listener.
  *
  * Implemented. The listener accepts CONNECT/CONNACK, SUBSCRIBE/
  * SUBACK, PUBLISH/PUBACK, PINGREQ/PINGRESP, and DISCONNECT for
@@ -28,6 +29,72 @@ extern "C" {
  *        tests/test_mqtt_retained_file.c,
  *        tests/test_mqtt_retained_wildcard.c.
  */
+
+#define CMQ_MQTT_USER_PROPS_MAX 4
+
+typedef struct cmq_mqtt_props {
+    uint8_t payload_format;   /* 0 or 1; 0xFF = unset */
+    uint32_t expiry_interval; /* 0 = unset */
+    uint16_t topic_alias;     /* 0 = unset */
+    uint32_t sub_id;          /* 0 = unset */
+    const uint8_t *content_type;
+    uint16_t content_type_len;
+    const uint8_t *response_topic;
+    uint16_t response_topic_len;
+    const uint8_t *corr_data;
+    uint16_t corr_data_len;
+    int user_count;
+    struct {
+        const uint8_t *key;
+        uint16_t key_len;
+        const uint8_t *val;
+        uint16_t val_len;
+    } user[CMQ_MQTT_USER_PROPS_MAX];
+    size_t consumed;          /* VBI + property bytes */
+} cmq_mqtt_props_t;
+
+/* Decode an MQTT 5 Property Length + Properties region.
+ * Strings/binary point into buf (borrowed). Returns 0 or -1. */
+int cmq_mqtt_props_decode(const uint8_t *buf, size_t len,
+                           cmq_mqtt_props_t *props);
+
+/* Payload offset in a PUBLISH variable header. v5=0 skips properties. */
+ssize_t cmq_mqtt_publish_payload_off(const uint8_t *vh, size_t vh_len,
+                                      int qos, int v5,
+                                      cmq_mqtt_props_t *props);
+
+#define CMQ_MQTT_WILL_PAYLOAD_MAX 4096
+#define CMQ_MQTT_SESSIONS_MAX 32
+#define CMQ_MQTT_SESSION_SUBS 8
+
+typedef struct cmq_mqtt_connect_info {
+    int is_v5;
+    int clean_session;
+    int will_flag;
+    uint8_t will_qos;
+    int will_retain;
+    char client_id[64];
+    char username[64];
+    char password[64];
+    char will_topic[128];
+    const uint8_t *will_payload; /* borrowed from CONNECT buffer */
+    uint16_t will_payload_len;
+} cmq_mqtt_connect_info_t;
+
+int cmq_mqtt_parse_connect(const uint8_t *buf, size_t len,
+                            cmq_mqtt_connect_info_t *out);
+
+int cmq_mqtt_will_store(const char *client_id,
+                         const cmq_mqtt_connect_info_t *ci);
+int cmq_mqtt_will_take(const char *client_id, char *topic, size_t topic_cap,
+                        uint8_t **payload, size_t *len, int *retain);
+void cmq_mqtt_will_clear(const char *client_id);
+int cmq_mqtt_will_fire(const char *client_id);
+
+int cmq_mqtt_session_save(const char *client_id,
+                           const char *const *filters, int n);
+int cmq_mqtt_session_load(const char *client_id, char out[][128], int max);
+void cmq_mqtt_session_drop(const char *client_id);
 
 int cmq_mqtt_server_listen(const char *bind_addr, int port);
 
@@ -96,10 +163,53 @@ int cmq_mqtt_test_freelist_count(void);
  * Pure function; no allocations, no globals, no locks. */
 int cmq_mqtt_topic_match(const char *pattern, const char *topic);
 
-/* P1 (v0.5.2): record a SUBSCRIBE topic filter. The listener calls
- * this on every accepted SUBSCRIBE. The cmq-sublist bridge (forwarding
- * matching PUBLISH into cmq_sublist) is v0.6 work; today this only
- * maintains an internal record. */
+/* v0.5.54/57: per-session QoS 1/2 outbound inflight. Fixed slots. */
+#define CMQ_MQTT_INFLIGHT_MAX 16
+#define CMQ_MQTT_INFLIGHT_PAYLOAD_MAX 1024
+#define CMQ_MQTT_INFLIGHT_TOPIC_MAX 128
+#define CMQ_MQTT_INFLIGHT_PKT_MAX 1280
+
+typedef struct {
+    uint16_t packet_id;
+    uint8_t qos;
+    uint8_t used;
+    uint8_t phase; /* 0=wait PUBACK/PUBREC, 1=wait PUBCOMP */
+    uint16_t topic_len;
+    uint16_t payload_len;
+    char topic[CMQ_MQTT_INFLIGHT_TOPIC_MAX];
+    uint8_t payload[CMQ_MQTT_INFLIGHT_PAYLOAD_MAX];
+} cmq_mqtt_inflight_slot_t;
+
+typedef struct {
+    cmq_mqtt_inflight_slot_t slots[CMQ_MQTT_INFLIGHT_MAX];
+    uint16_t next_id;
+    uint8_t count;
+} cmq_mqtt_inflight_t;
+
+void cmq_mqtt_inflight_init(cmq_mqtt_inflight_t *w);
+/* 0 ok; -1 bad args; -2 window full; -3 payload too large. */
+int cmq_mqtt_inflight_offer(cmq_mqtt_inflight_t *w, const char *topic,
+                            const uint8_t *payload, size_t payload_len,
+                            uint8_t qos, uint16_t *out_id);
+int cmq_mqtt_inflight_ack(cmq_mqtt_inflight_t *w, uint16_t packet_id);
+int cmq_mqtt_inflight_rec(cmq_mqtt_inflight_t *w, uint16_t packet_id);
+int cmq_mqtt_inflight_encode(const cmq_mqtt_inflight_t *w, uint16_t packet_id,
+                             uint8_t *out, size_t out_sz, size_t *out_len);
+int cmq_mqtt_inflight_encode_pubrel(const cmq_mqtt_inflight_t *w,
+                                    uint16_t packet_id, uint8_t *out,
+                                    size_t out_sz, size_t *out_len);
+int cmq_mqtt_inflight_count(const cmq_mqtt_inflight_t *w);
+
+int cmq_mqtt_session_attach(int fd, cmq_mqtt_inflight_t *w);
+void cmq_mqtt_session_detach(int fd);
+int cmq_mqtt_session_add_filter(int fd, const char *filter, uint8_t qos);
+int cmq_mqtt_session_ack(int fd, uint16_t packet_id);
+int cmq_mqtt_session_rec(int fd, uint16_t packet_id);
+/* Deliver to matching live MQTT sessions. Returns sends started. */
+int cmq_mqtt_fanout(const char *topic, const uint8_t *payload, size_t len);
+
+/* Record a SUBSCRIBE topic filter. The listener calls this on every
+ * accepted SUBSCRIBE. The live bridge uses cmq_mqtt_set_bridge_server. */
 int cmq_mqtt_record_subscriber(const char *topic_filter);
 
 /* v0.5.42: test-only wrappers around the static QoS2 retransmit
@@ -145,13 +255,8 @@ void cmq_mqtt_store_retained(const char *topic, const uint8_t *payload,
 int cmq_mqtt_fetch_retained(const char *topic, const uint8_t **out,
                              size_t *out_len);
 
-/* P1 (v0.5.3): bridge surface. v0.5.2 only stored retained messages
- * and recorded subscriptions; it never actually routed PUBLISH into
- * cmq_sublist. The full bridge requires server_t* plumbing across
- * the listener pthread — deferred to v0.6 per the WBS. For now
- * this API surface returns the most recent retained payload as a
- * primitive bridge: cmq callers can poll cmq_mqtt_fetch_retained
- * for topics they care about. */
+/* Bridge: cmq_mqtt_set_bridge_server wires PUBLISH into
+ * cmq_server_publish. cmq_mqtt_fetch_retained remains for retain. */
 
 #ifdef __cplusplus
 }

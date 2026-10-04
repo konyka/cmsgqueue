@@ -1,0 +1,3 @@
+v0.5.124 bench 1:
+- PUBLISH still walks the same quota / subject_rl slots.
+- Reload: in-place uint32 stores. No table realloc.

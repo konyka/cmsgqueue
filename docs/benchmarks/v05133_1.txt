@@ -1,0 +1,3 @@
+v0.5.133 bench 1:
+- Load log_file: persist_dir_ok + strdup (same as persist_dir).
+- Empty: one free + NULL store.

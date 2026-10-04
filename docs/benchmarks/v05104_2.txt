@@ -1,0 +1,3 @@
+v0.5.104 bench 2:
+- History file is append-only (CMQM records).
+- Ring cap 1024 on replay; prefix eviction matches live.

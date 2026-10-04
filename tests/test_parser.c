@@ -481,9 +481,10 @@ TEST(parser, accept_flag_compressed_on_batch) {
 
 TEST(parser, reject_flag_checksum) {
     /* CMQ_FLAG_CHECKSUM (0x02) is now implemented by F3 — the parser
-     * does NOT reject it. The server-side handle_publish is responsible
-     * for verifying the trailing 4-byte CRC32C. This test verifies the
-     * parser accepts the flag (no pending_error). */
+     * does NOT reject it. handle_publish / handle_request /
+     * handle_response / handle_batch consume the trailing CRC32C
+     * (v0.5.171–173). This test verifies the parser accepts the
+     * flag (no pending_error). */
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
     size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,

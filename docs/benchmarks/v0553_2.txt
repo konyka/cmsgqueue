@@ -1,0 +1,3 @@
+v0.5.53 bench 2:
+- CRC verified before a record is eligible to keep.
+- Rewrite is tmp + fsync + rename; failure leaves .1 intact.

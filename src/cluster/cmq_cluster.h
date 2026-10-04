@@ -29,6 +29,12 @@ typedef struct cmq_cluster cmq_cluster_t;
 
 cmq_cluster_t *cmq_cluster_create(const char *cluster_name, const char *self_id);
 void cmq_cluster_destroy(cmq_cluster_t *cluster);
+/* v0.5.143: empty/omitted name and id keep off. Oversize fails
+ * closed. Creates when *c is NULL. Existing cluster is left
+ * alone (no remount / route redial). */
+int cmq_cluster_reload_attach(cmq_cluster_t **c,
+                              const char **live_name, const char **live_id,
+                              const char *fresh_name, const char *fresh_id);
 
 /* Copy-out under begin_op — never return an interior pointer (destroy UAF). */
 int cmq_cluster_name(cmq_cluster_t *cluster, char *out, size_t out_len);

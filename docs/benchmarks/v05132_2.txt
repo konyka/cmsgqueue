@@ -1,0 +1,3 @@
+v0.5.132 bench 2:
+- Create with host NULL: one strdup of 0.0.0.0 (unchanged).
+- Reject localhost: no store.

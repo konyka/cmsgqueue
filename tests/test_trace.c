@@ -38,4 +38,20 @@ TEST(trace, encode_short_buffer_truncates) {
     ASSERT(strlen(hex) < 10);
 }
 
+TEST(trace, assign_fills_hex) {
+    uint8_t id[16];
+    char hex[33];
+    memset(id, 0, sizeof(id));
+    hex[0] = '\0';
+    cmq_trace_assign(id, hex);
+    int nz = 0;
+    for (int i = 0; i < 16; i++)
+        if (id[i] != 0) nz = 1;
+    ASSERT(nz);
+    ASSERT_EQ((int)strlen(hex), 32);
+    char again[33];
+    ASSERT_EQ(cmq_trace_id_hex(id, again, sizeof(again)), 32);
+    ASSERT_EQ(strcmp(hex, again), 0);
+}
+
 TEST_MAIN()

@@ -1,0 +1,3 @@
+v0.5.71 bench 1:
+- Huffman encode is a 256-entry table lookup + bit pack.
+- Literal H=0 encode path is unchanged (no Huffman tax).

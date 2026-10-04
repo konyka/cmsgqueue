@@ -1,0 +1,4 @@
+v0.5.46 will micro-note:
+- Fire is one table walk + optional retain/bridge enqueue.
+- Graceful DISCONNECT clears will without publish.
+- Durable restore is O(filters) record_subscriber calls.

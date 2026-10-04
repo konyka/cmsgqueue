@@ -1,0 +1,3 @@
+v0.5.161 bench 1:
+- $JS persist attach: mkdir js/ when persist_dir is unset.
+- Existing persist: one pointer check, no remount.

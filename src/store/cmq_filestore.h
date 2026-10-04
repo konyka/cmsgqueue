@@ -40,6 +40,17 @@ uint64_t cmq_filestore_async_enqueued_count(cmq_filestore_t *fs);
  * interval_ms milliseconds. */
 void cmq_filestore_set_sync_interval(cmq_filestore_t *fs,
                                        unsigned interval_ms);
+unsigned cmq_filestore_sync_interval(const cmq_filestore_t *fs);
+/* v0.5.121: apply a fresh persist_sync_interval_ms.
+ * 0 keeps the current interval. >86400000 fails closed.
+ * fs may be NULL (no WAL); live_ms is still updated. */
+int cmq_filestore_reload_sync(cmq_filestore_t *fs, unsigned *live_ms,
+                              unsigned fresh_ms);
+/* v0.5.144: empty/omitted keeps off. Unsafe dir fails closed.
+ * Opens prefix "cmq" when *fs is NULL. Existing WAL is left
+ * alone (no remount / replay). */
+int cmq_filestore_reload_attach(cmq_filestore_t **fs, const char **live_dir,
+                                const char *fresh_dir);
 
 /* P1: enable async WAL writes via SPSC ring + worker thread.
  * queue_capacity: max in-flight writes (each ~4 KiB avg). 0 = off.
@@ -49,7 +60,7 @@ int cmq_filestore_set_async(cmq_filestore_t *fs, unsigned queue_capacity);
 /* v0.5.39: bridge-specific append. Builds a self-describing frame
  * (magic 'CMQB' + version byte + topic_len + topic + payload)
  * and writes it to the FILESTORE via the regular append path. The
- * recovery path (future round) detects this format by the magic and
+ * recovery path (v0.5.40) detects this format by the magic and
  * dispatches via cmq_server_publish instead of handle_publish.
  *
  * Returns 0 on success, -1 on error (mirrors cmq_filestore_append).
@@ -62,6 +73,39 @@ int cmq_filestore_append_bridge(cmq_filestore_t *fs,
 /* P1 v0.5.5: cap the per-record payload size accepted by the async
  * enqueue. Default 1 MiB. 0 disables the cap (NOT recommended). */
 void cmq_filestore_set_max_payload_size(cmq_filestore_t *fs, size_t bytes);
+
+/* v0.5.45: keep the newest `retain` records (renumbered 1..retain).
+ * retain=0 empties the live WAL. No-op if retain >= last_seq. */
+int cmq_filestore_compact(cmq_filestore_t *fs, uint64_t retain);
+
+/* v0.5.45: after a sync append, if live .data is >= cap bytes,
+ * archive to prefix.data.1 / .idx.1 and start empty. 0 = off. */
+void cmq_filestore_set_rotate_bytes(cmq_filestore_t *fs, uint64_t cap);
+
+/* v0.5.53: optional compact key. Payload prefix CMQK + u16le
+ * key_len + key + value. Empty value is a tombstone. */
+#define CMQ_FS_KEY_MAX 256
+int cmq_filestore_key_encode(uint8_t *out, size_t out_sz,
+                             const char *key, size_t key_len,
+                             const uint8_t *val, size_t val_len,
+                             size_t *out_len);
+/* 0 if the payload is keyed; -1 otherwise. */
+int cmq_filestore_key_decode(const uint8_t *p, size_t n,
+                             const uint8_t **key, size_t *key_len,
+                             const uint8_t **val, size_t *val_len);
+/* Rewrite sealed prefix.data.1 / .idx.1: last value per key,
+ * drop tombstones, keep unkeyed. No-op if no archive. Live WAL
+ * is not rewritten. */
+int cmq_filestore_compact_keys(cmq_filestore_t *fs);
+
+/* v0.5.88: 0 = drop last-is-tombstone immediately (default).
+ * >0 keep it when sealed .1 mtime is younger than ttl. */
+void cmq_filestore_set_tombstone_ttl_ms(cmq_filestore_t *fs, uint64_t ms);
+/* Auto compact_keys when drop*den >= total*num. den=0 disables. */
+int cmq_filestore_set_compact_dirty(cmq_filestore_t *fs, unsigned num,
+                                    unsigned den);
+int cmq_filestore_key_dirty(cmq_filestore_t *fs, size_t *drop, size_t *total);
+int cmq_filestore_compact_keys_maybe(cmq_filestore_t *fs);
 
 /* P1: enqueue a record for async write. Returns 0 if queued, -1 if
  * queue full / dying / async not enabled. The worker will fwrite +

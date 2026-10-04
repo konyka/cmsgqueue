@@ -1,0 +1,3 @@
+v0.5.90 bench 1:
+- Sign is one HMAC-SHA256 of header.payload.
+- PUBLISH / verify path unchanged.

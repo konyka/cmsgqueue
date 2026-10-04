@@ -91,15 +91,30 @@ set(CMQ_PROTO_SOURCES
 set(CMQ_SERVER_SOURCES
     src/server/cmq_server.c
     src/server/cmq_config.c
+    src/server/cmq_dynreload.c
     src/server/cmq_sublist.c
     src/server/cmq_sublist_persist.c
     src/server/cmq_subject_rl.c
+    src/server/cmq_monitor.c
+    src/server/cmq_idempo.c
+    src/server/cmq_txn.c
+    src/server/cmq_otel.c
+    src/server/cmq_otlp.c
+    src/server/cmq_hpack.c
+    src/server/cmq_h2.c
+    src/server/cmq_jwt.c
+    src/server/cmq_jwksf.c
+    src/server/cmq_info.c
 )
 
 set(CMQ_STORE_SOURCES
     src/store/cmq_store.c
     src/store/cmq_stream.c
     src/store/cmq_filestore.c
+    src/store/cmq_kv.c
+    src/store/cmq_kvb.c
+    src/store/cmq_obj.c
+    src/store/cmq_js.c
 )
 
 set(CMQ_CLUSTER_SOURCES

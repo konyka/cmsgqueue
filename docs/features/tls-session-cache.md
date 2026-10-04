@@ -51,11 +51,22 @@ backing store for OpenSSL's
 - Restart forces full handshakes for the first 1024 connections;
   acceptable trade-off vs. on-disk persistence complexity.
 
+## Attach
+
+v0.5.23 wired the OpenSSL callbacks but never called
+`cmq_tls_session_cache_init` from create or reload, so
+insert always missed. v0.5.169: `cmq_tls_load` attaches
+the cache after a successful CTX build. SIGHUP attaches
+every live slot when create left the cache NULL. An
+existing cache is not remounted. `cmq_tls_config_destroy`
+frees owned sessions.
+
 ## API
 
 ```c
 int   cmq_tls_session_cache_init(cmq_tls_config_t *cfg);
 void  cmq_tls_session_cache_destroy(cmq_tls_config_t *cfg);
+int   cmq_tls_session_cache_reload_attach(cmq_tls_config_t *cfg);
 int   cmq_tls_session_cache_insert(cmq_tls_config_t *cfg,
                                     const unsigned char *id,
                                     unsigned int id_len,
@@ -72,6 +83,7 @@ size_t cmq_tls_session_cache_size(cmq_tls_config_t *cfg);
 - `src/enterprise/cmq_tls.{c,h}` — opaque accessor functions for the
   cache state pointer.
 - `tests/test_tls_session_cache.c` — 6 cache tests (was 1 placeholder).
+- `tests/test_tsa.c` — attach on reload (v0.5.169).
 - `CMakeLists.txt` — registers the new source.
 
 ## Bench impact

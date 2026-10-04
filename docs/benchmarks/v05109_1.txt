@@ -1,0 +1,4 @@
+v0.5.109 bench 1:
+- Unknown-key path is one extra strcmp (persist_dir) per line.
+- persist_dir omitted: no strdup, server create unchanged.
+- persist_dir set: one strdup at create, one free at destroy.

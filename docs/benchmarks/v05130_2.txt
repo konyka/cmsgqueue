@@ -1,0 +1,3 @@
+v0.5.130 bench 2:
+- Reload omitted: no store.
+- Reject: no store; live ints stay.

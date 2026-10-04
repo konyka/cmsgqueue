@@ -1,0 +1,3 @@
+v0.5.143 bench 1:
+- Attach apply: cluster_create + empty route pool. No dial.
+- Existing cluster: one pointer check.

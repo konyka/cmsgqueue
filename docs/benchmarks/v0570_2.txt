@@ -1,0 +1,3 @@
+v0.5.70 bench 2:
+- Miss returns empty body (no extra fanout).
+- Inbox pending is dropped on the local reply path.

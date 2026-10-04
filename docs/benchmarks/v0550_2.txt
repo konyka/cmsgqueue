@@ -1,0 +1,3 @@
+v0.5.50 bench 2:
+- Enabled: same open-address CAS as publish quota (1024 slots).
+- Fail-open if the table is full (align publish path).

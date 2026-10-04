@@ -1,0 +1,3 @@
+v0.5.94 bench 2:
+- Missing stream: empty body, no fanout.
+- Malformed $JS. falls through like malformed $KV.

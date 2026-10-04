@@ -1,0 +1,3 @@
+v0.5.130 bench 1:
+- Reload apply: two mutex stores (def_parts, rotate_bytes).
+- New stream create path unchanged (one compare on def_parts).

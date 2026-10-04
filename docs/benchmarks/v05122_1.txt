@@ -1,0 +1,3 @@
+v0.5.122 bench 1:
+- Accept / REQUEST / keepalive still read srv->config ints.
+- Reload: four integer stores. No extra lock on PUBLISH.

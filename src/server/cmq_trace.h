@@ -24,6 +24,9 @@ void cmq_trace_id(uint8_t out[16]);
  * null terminator). Returns chars written (32 on success). */
 int cmq_trace_id_hex(const uint8_t id[16], char *out, size_t out_len);
 
+/* Generate id and hex-encode into hex[33]. One accept-path call. */
+void cmq_trace_assign(uint8_t id[16], char hex[33]);
+
 #ifdef __cplusplus
 }
 #endif

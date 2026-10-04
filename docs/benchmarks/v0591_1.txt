@@ -1,0 +1,3 @@
+v0.5.91 bench 1:
+- Sign is one DigestSign (P-256 or RSA-2048).
+- PUBLISH / verify path unchanged.

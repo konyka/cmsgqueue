@@ -19,7 +19,17 @@ Fields:
 - `subject` — the user, account, or IP the event is about.
 - `details` — free-form context.
 
-Output destinations: stderr (always) and an optional audit file (`cmq-audit.log` in `persist_dir`).
+Output destinations: stderr (always) and an optional audit file
+(`cmq-audit.log` in `persist_dir`). v0.5.129: create calls
+`cmq_audit_from_persist` after the WAL opens. Destroy clears
+the path. Reload applies a non-empty `persist_dir`; omitted
+or empty keeps the current file. `..` / `\` / controls fail
+closed.
+
+v0.5.51 wires the remaining events at their natural sites
+(CONNECT auth, WAL append/replay, TLS handshake). Successful
+PUBLISH does not call the auditor. `cmq_audit_auth` never
+takes a password.
 
 JSON escaping: `"` and `\\` are escaped, control chars (including `\n`/`\r`) are escaped as `\n`/`\r`, and other low-ASCII bytes as `\uXXXX`.
 
@@ -36,6 +46,13 @@ JSON escaping: `"` and `\\` are escaped, control chars (including `\n`/`\r`) are
 - `audit.log_writes_event_to_stderr` — exercise.
 - `audit.log_writes_event_to_file` — file contains expected substrings.
 - `audit.json_escape_special_chars` — quote/backslash/newline escape.
+- `audit.event_names` — enum → string map, including unknown.
+- `audit.auth_helper_no_secret` — `cmq_audit_auth` writes ok/fail.
+
+`tests/test_adt.c` (v0.5.129):
+- `adt.apply` — `{dir}/cmq-audit.log` receives the event.
+- `adt.omitted` / `adt.empty` — reload keeps the current file.
+- `adt.reject` — `..` / `\` leave the current file.
 
 ## Verification gates
 
@@ -64,5 +81,5 @@ Threats NOT closed:
 ## See also
 
 - `docs/reviews/hyperplan-v030-plan.md` F13.
-- `docs/features/password-hash.md` — F8 calls `cmq_audit_log(CMQ_AUDIT_AUTH_OK/FAIL, ...)`.
+- `docs/features/password-hash.md` — F8 CONNECT calls `cmq_audit_auth` (v0.5.51).
 - `docs/features/blocklist.md` — F15 calls `cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, ...)`.

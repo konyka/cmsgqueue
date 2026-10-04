@@ -1,0 +1,3 @@
+v0.5.124 bench 2:
+- Omitted/0: no stores; live caps unchanged.
+- Create-from-NULL: one calloc of the existing table size.

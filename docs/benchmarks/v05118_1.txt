@@ -1,0 +1,3 @@
+v0.5.118 bench 1:
+- Idle tick: one atomic CAS fail (flag 0). No reload.
+- SIGHUP: one store in the handler, one take + reload off PUBLISH.

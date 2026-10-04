@@ -1,0 +1,3 @@
+v0.5.95 bench 1:
+- $JS.<name> REQUEST: get-last only (no consumer parse).
+- $JS.<name>.<consumer> REQUEST: next + 8-byte seq prefix.

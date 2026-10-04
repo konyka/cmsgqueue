@@ -20,7 +20,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
  - **Enterprise** account counters, OpenSSL TLS listeners and inter-node BIO-wrap, MQTT bridge plus server-side MQTT 3.1.1/5.0 listener, and WebSocket transport with frame reassembly
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
-- **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes; rejects bit-flips with 1 - 2⁻³² probability
+- **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes on PUBLISH / REQUEST / RESPONSE / BATCH (v0.5.171–173); rejects bit-flips with 1 - 2⁻³² probability
 - **Capability Negotiation (F4)**: extended INFO frame advertises server_id, max_payload, auth, tls, compression, checksum, headers, batch
 - **Wire flags**: CMQ_FLAG_HEADERS, CMQ_FLAG_BATCH, CMQ_FLAG_ROUTE are implemented; **CMQ_FLAG_CHECKSUM is now implemented (F3)** with CRC32C verification (RFC 3309 / SSE4.2 HW-accelerated); **CMQ_FLAG_COMPRESSED is now implemented (F2)** for BATCH-level zstd (level 1) with a 16 MiB decompression cap; per-message compression remains rejected (F11 interop safety).
 - **v0.5.0 hot path**:
@@ -83,6 +83,15 @@ auth_password = secret
 
 # Limits
 max_payload_size = 1048576
+
+# Persistence (omit or empty = disabled)
+persist_dir = /var/lib/cmsgqueue
+persist_sync_interval_ms = 1000
+
+# MQTT bridge (omit or empty addr = disabled)
+mqtt_bridge_addr = 127.0.0.1
+mqtt_bridge_port = 1883
+mqtt_bridge_map = events.alerts,events/alerts,0
 ```
 
 ## Binary Protocol

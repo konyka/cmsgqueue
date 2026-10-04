@@ -1,0 +1,3 @@
+v0.5.87 bench 1:
+- nparts=1: append does not touch the sidecar.
+- nparts>1: one byte store per append (seq % cap).

@@ -1,0 +1,3 @@
+v0.5.156 bench 2:
+- Count 0 / omitted: one integer check, keep live table.
+- Reject: subject/topic/qos rules, live rows unchanged.

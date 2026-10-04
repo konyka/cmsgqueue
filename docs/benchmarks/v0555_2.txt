@@ -1,0 +1,3 @@
+v0.5.55 bench 2:
+- Parsed header: mutex + slot probe; duplicate returns before WAL.
+- 256 pids / 64-seq window; table-full rejects a new pid.

@@ -1,0 +1,4 @@
+v0.5.49 bench 2:
+- Mapped path: one extra account-manager lock (same family as
+  export ACL) plus a token walk of src/dest (16 rows max).
+- First match wins; remaining rows are not applied.

@@ -1,0 +1,3 @@
+v0.5.141 bench 2:
+- Reload 0 / empty URL: no thread.
+- Reject ftp:// and interval 4: no thread.

@@ -1,0 +1,3 @@
+v0.5.64 bench 2:
+- Encode + POST run on the sidecar only.
+- Connect/IO budget 200 ms; failures do not block offer.

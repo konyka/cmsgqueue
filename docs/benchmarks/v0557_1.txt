@@ -1,0 +1,3 @@
+v0.5.57 bench 1:
+- Same 16 inline slots; one phase byte; no malloc on offer.
+- Fanout still copies under lock then send() after unlock.

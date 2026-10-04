@@ -1,0 +1,3 @@
+v0.5.117 bench 1:
+- No TLS slots: four NULL checks, no CTX rebuild.
+- Paths omitted: cmq_tls_reload only, no set_cert.

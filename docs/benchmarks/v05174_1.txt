@@ -1,0 +1,3 @@
+v0.5.174 bench 1:
+- INFO: one cmq_info_json_str + snprintf per CONNECT.
+- No per-message path.

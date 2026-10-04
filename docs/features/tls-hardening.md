@@ -14,6 +14,9 @@ The TLS backend in v0.3.0 (`src/enterprise/cmq_tls.c`) had a single SSL_CTX per 
 `src/enterprise/cmq_tls.h`:
 - `cmq_tls_set_alpn(cfg, "h2,http/1.1")` — sets the ALPN protocol list (CSV).
 - `cmq_tls_reload(cfg)` — rebuilds the SSL_CTX from the current cert/key paths and atomically swaps.
+  `cmq_server_reload` (v0.5.117) updates live slot paths from
+  `tls_*` / `listener{1,2,3}_tls_*` then calls this on each
+  non-NULL slot. Empty/omitted paths keep the current files.
 
 `src/enterprise/cmq_tls.c`:
 - New `alpn_data[256]` field on `cmq_tls_config_t`.
@@ -35,6 +38,34 @@ The TLS backend in v0.3.0 (`src/enterprise/cmq_tls.c`) had a single SSL_CTX per 
 
 - 46/46 tests pass.
 - Existing `test_enterprise` tls tests continue to pass.
+
+## Config file (v0.5.114)
+
+`listener_count` (0–4; 0/1 = single listener) and
+`listener{1,2,3}_tls_cert`, `_tls_key`, `_tls_ca`,
+`_tls_verify_peer` load into `cfg.listeners[1..3]`. Empty
+path disables that string. Slot 0 remains `tls_cert` /
+`tls_key` / `tls_ca` / `tls_verify_peer`. v0.5.133: empty
+slot-0 `tls_cert` / `tls_key` store NULL, same as
+`tls_ca` and extra-listener paths. Create `strdup`s
+every listener string so destroy owns them.
+
+`listener{1,2,3}_host` (IPv4) and `_port` (v0.5.115) select
+the extra bind. Empty host / port 0 keep `127.0.0.1` and
+`port+index`. Slot 0 remains `host` / `port`.
+v0.5.146: reload binds an extra slot when create left it
+empty. Omitted / empty keeps off. Non-IPv4 and bad port
+fail closed. An existing accept fd is not rebound.
+v0.5.148: reload attaches TLS when create left a slot
+empty (`tls_enabled` + cert/key for slot 0;
+`listener{1,2,3}_tls_*` for extra slots). Existing
+SSL_CTX is not remounted.
+v0.5.151: reload sets `h2` ALPN on a live slot that
+had none after `h2_port` binds. Existing ALPN is not
+remounted.
+v0.5.153: reload copies non-empty TLS paths onto the
+live config and rejects `..` / `\` before `set_*`.
+Omitted / empty keeps the current files.
 
 ## Limitations
 

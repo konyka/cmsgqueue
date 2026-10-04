@@ -1,0 +1,4 @@
+v0.5.44 log-format micro-note:
+- Unset TLS keeps the historic line shape (existing tests).
+- Set TLS adds 38 bytes: " [tid=" + 32 hex + "]".
+- Setter rejects non-hex / wrong length (no format injection).
