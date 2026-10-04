@@ -14,6 +14,14 @@ spec text below is kept for historical reference.
 
 ## Configuration
 
+`cmq_mqtt_server_listen(bind_addr, port)` is a bind/listen availability probe.
+It validates the IPv4 bind address, accepts ports from `0` through `65535`,
+and returns `1` on success or `0` on invalid input, socket, bind, or listen
+failure. The temporary socket is closed before returning, so port `0` only
+probes ephemeral-port allocation and does not expose or retain a listener.
+The long-lived opt-in listener is started separately by
+`cmq_mqtt_server_start_listener`.
+
 - `cmq_mqtt_set_credentials(user, pass)` — when both non-empty,
   CONNECT must include matching Username/Password.
 - `cmq_mqtt_set_listener_enabled(int)` — opt-in toggle; default off.

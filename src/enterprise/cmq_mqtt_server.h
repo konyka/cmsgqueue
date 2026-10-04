@@ -96,6 +96,10 @@ int cmq_mqtt_session_save(const char *client_id,
 int cmq_mqtt_session_load(const char *client_id, char out[][128], int max);
 void cmq_mqtt_session_drop(const char *client_id);
 
+/* Probe whether an IPv4 address/port can be bound and listened on.
+ * Returns 1 on success and 0 on invalid input or socket failure. The
+ * temporary socket is closed before returning; this does not start the
+ * long-lived listener. Port 0 only probes ephemeral-port allocation. */
 int cmq_mqtt_server_listen(const char *bind_addr, int port);
 
 /* F19: launch the MQTT listener thread on the server. Idempotent
