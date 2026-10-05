@@ -32,7 +32,7 @@ produce different hashes.
 
 Use `cmq-password --help` for the short usage line. The tool is built under
 `tools/` independently of the optional example programs, so it is available
-with `-DCMQ_BUILD_EXAMPLES=OFF`.
+with `-DCMQ_BUILD_EXAMPLES=OFF` on POSIX builds.
 
 ## Library API
 
