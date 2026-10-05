@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 
 /* Raw input may contain a 255-byte password plus CRLF and a terminator. */
 #define CMQ_PASSWORD_CLI_MAX (CMQ_PASSWORD_MAX - 1)
@@ -15,11 +16,29 @@ static int finish(unsigned char *password, char *hash, int status) {
     return status;
 }
 
+static volatile sig_atomic_t interrupted;
+
+static void handle_interrupt(int signal_number) {
+    (void)signal_number;
+    interrupted = 1;
+}
+
 int main(int argc, char **argv) {
     unsigned char password[CMQ_PASSWORD_INPUT_CAP] = {0};
     char hash[CMQ_PASSWORD_MAX] = {0};
     size_t len = 0;
     int ch;
+    struct sigaction action = {0};
+    struct sigaction ignore_pipe = {0};
+
+    action.sa_handler = handle_interrupt;
+    sigemptyset(&action.sa_mask);
+    ignore_pipe.sa_handler = SIG_IGN;
+    sigemptyset(&ignore_pipe.sa_mask);
+    if (sigaction(SIGINT, &action, NULL) != 0 ||
+        sigaction(SIGTERM, &action, NULL) != 0 ||
+        sigaction(SIGPIPE, &ignore_pipe, NULL) != 0)
+        return finish(password, hash, 1);
 
     if (argc == 2 && strcmp(argv[1], "--help") == 0) {
         if (fputs("Usage: cmq-password < password-file\n", stdout) == EOF ||
@@ -30,12 +49,12 @@ int main(int argc, char **argv) {
     if (argc != 1 || isatty(STDIN_FILENO))
         return finish(password, hash, 1);
 
-    while ((ch = getchar()) != EOF) {
+    while (!interrupted && (ch = getchar()) != EOF) {
         if (len >= sizeof(password) - 1)
             return finish(password, hash, 1);
         password[len++] = (unsigned char)ch;
     }
-    if (ferror(stdin) || len == 0)
+    if (interrupted || ferror(stdin) || len == 0)
         return finish(password, hash, 1);
 
     if (password[len - 1] == '\n') {
@@ -52,6 +71,8 @@ int main(int argc, char **argv) {
     }
 
     if (cmq_password_hash((const char *)password, hash, sizeof(hash)) != 0)
+        return finish(password, hash, 1);
+    if (interrupted)
         return finish(password, hash, 1);
     if (fputs(hash, stdout) == EOF || fputc('\n', stdout) == EOF ||
         fflush(stdout) != 0)
