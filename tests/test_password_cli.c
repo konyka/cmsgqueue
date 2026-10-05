@@ -22,6 +22,7 @@ typedef struct {
 static cli_result_t run_cli(const unsigned char *input, size_t input_len,
                             int argc, char *const argv[]) {
     cli_result_t result = {.status = -1, .runner_error = 1};
+    (void)argc;
     int in_pipe[2] = {-1, -1}, out_pipe[2] = {-1, -1}, err_pipe[2] = {-1, -1};
     struct sigaction ignore = {.sa_handler = SIG_IGN};
     struct sigaction old_pipe;
@@ -82,8 +83,10 @@ static cli_result_t run_cli(const unsigned char *input, size_t input_len,
     }
     close(out_pipe[0]); out_pipe[0] = -1;
     close(err_pipe[0]); err_pipe[0] = -1;
-    if (pipe_ignored && sigaction(SIGPIPE, &old_pipe, NULL) != 0)
-        result.runner_error = 1;
+    if (pipe_ignored && sigaction(SIGPIPE, &old_pipe, NULL) != 0) {
+        fprintf(stderr, "failed to restore SIGPIPE disposition\n");
+        abort();
+    }
     for (;;) {
         if (waitpid(pid, &result.status, 0) >= 0) break;
         if (errno != EINTR) {

@@ -6,6 +6,9 @@ include(CTest)
 
 # Discover all test_*.c files in this directory
 file(GLOB TEST_SOURCES "test_*.c")
+if(NOT UNIX)
+  list(FILTER TEST_SOURCES EXCLUDE REGEX "test_password_cli\\.c$")
+endif()
 
 set(CMQ_TCP_TESTS
   test_coro_integration
