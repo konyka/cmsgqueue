@@ -258,6 +258,22 @@ cmake .. \
   -DCMQ_STATIC=ON
 ```
 
+## Password Hash Tool
+
+Build the stdin-only password hash utility with the normal CMake build:
+
+```bash
+cmake -S . -B build -DCMQ_BUILD_TESTS=ON
+cmake --build build --target cmq-password
+cmq-password < protected-password-file
+```
+
+`cmq-password` accepts 1 to 255 password bytes from a non-terminal stdin,
+strips one final LF or CRLF, and writes one scrypt hash plus LF to stdout. It
+rejects embedded line breaks, NUL bytes, empty input, and overlong input. Use a
+protected file or pipe; never put a plaintext password in argv or shell
+history. See `docs/features/password-hash.md` for the complete contract.
+
 ## CI
 
 Cross-platform CI via GitHub Actions:
