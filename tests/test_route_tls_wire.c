@@ -25,6 +25,7 @@
 
 #include <openssl/ssl.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
