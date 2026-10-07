@@ -97,7 +97,10 @@ TEST(persist_unit, server_emits_persist_fail_audit_on_append_failure) {
     /* fopen relative to the repository root. The build directory
      * contains both build/tests and src/server, so two candidates
      * cover both working-directory layouts. */
-    FILE *f = fopen("/home/timeshift/opensource/cmsgqueue/src/server/cmq_server.c", "r");
+    char path[1024];
+    ASSERT(snprintf(path, sizeof(path), "%s/src/server/cmq_server.c",
+                    CMQ_SOURCE_DIR) > 0);
+    FILE *f = fopen(path, "r");
     ASSERT_NOT_NULL(f);
     static char buf[1 << 20];
     size_t n = fread(buf, 1, sizeof(buf) - 1, f);

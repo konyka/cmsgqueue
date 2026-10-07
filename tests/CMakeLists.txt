@@ -25,6 +25,10 @@ set(CMQ_TCP_TESTS
   test_health_metrics
 )
 
+set(CMQ_JS_PERSIST_TESTS
+  test_jsd test_jsh test_jsl test_jsm test_jsp
+)
+
 foreach(TEST_SRC ${TEST_SOURCES})
   get_filename_component(TEST_NAME ${TEST_SRC} NAME_WE)
   add_executable(${TEST_NAME} ${TEST_SRC})
@@ -58,6 +62,7 @@ foreach(TEST_SRC ${TEST_SOURCES})
   endif()
   # Expose that we are building a shared component
   target_compile_definitions(${TEST_NAME} PRIVATE CMQ_BUILDING_SHARED _POSIX_C_SOURCE=200809L)
+  target_compile_definitions(${TEST_NAME} PRIVATE CMQ_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
   # Add asCTest entry
   include(CTest)
   if(TARGET ${TEST_NAME})
@@ -73,6 +78,10 @@ foreach(TEST_SRC ${TEST_SOURCES})
     list(FIND CMQ_TCP_TESTS ${TEST_NAME} CMQ_TCP_TEST_INDEX)
     if(NOT CMQ_TCP_TEST_INDEX EQUAL -1)
       set_tests_properties(${TEST_NAME} PROPERTIES RESOURCE_LOCK cmq_tcp_server)
+    endif()
+    list(FIND CMQ_JS_PERSIST_TESTS ${TEST_NAME} CMQ_JS_PERSIST_TEST_INDEX)
+    if(NOT CMQ_JS_PERSIST_TEST_INDEX EQUAL -1)
+      set_tests_properties(${TEST_NAME} PROPERTIES RESOURCE_LOCK cmq_js_persist)
     endif()
   endif()
 endforeach()
