@@ -8069,21 +8069,72 @@ const char *cmq_version(void) {
     return CMQ_VERSION_STRING;
 }
 
-/* P3: F18 subscription-recovery callback. Re-inserts each persisted
- * SUB record into the sublist as a "ghost" reference (client=NULL).
- * The ref is owned by the sublist and freed via cmq_sublist_free_data
- * during destroy. No live client means messages match the pattern
- * but get no delivery target — see ADR 0012-persistent-subs-wal.md. */
+/* P3: F18 subscription recovery callback. Replays persisted state as
+ * server-owned ghost references while preserving final WAL state. */
+typedef struct cmq_sub_recovery_entry {
+    uint64_t sub_id;
+    cmq_sub_ref_t *ref;
+    struct cmq_sub_recovery_entry *next;
+} cmq_sub_recovery_entry_t;
+
+typedef struct {
+    cmq_server_t *srv;
+    cmq_sub_recovery_entry_t *entries;
+} cmq_sub_recovery_ctx_t;
+
+static cmq_sub_recovery_entry_t *cmq_sub_recovery_find(
+    cmq_sub_recovery_ctx_t *ctx, uint64_t sub_id,
+    cmq_sub_recovery_entry_t **prev_out) {
+    cmq_sub_recovery_entry_t *prev = NULL;
+    cmq_sub_recovery_entry_t *entry = ctx->entries;
+    while (entry) {
+        if (entry->sub_id == sub_id) {
+            if (prev_out) *prev_out = prev;
+            return entry;
+        }
+        prev = entry;
+        entry = entry->next;
+    }
+    if (prev_out) *prev_out = NULL;
+    return NULL;
+}
+
+/* F18 recovery replays the WAL in order. Track recovered refs by sub_id so
+ * an UNSUBSCRIBE removes the ghost created by its earlier SUBSCRIBE. */
 static int cmq_sublist_recover_cb(void *ctx, int is_sub,
-                                    uint64_t sub_id,
-                                    const char *subject,
-                                    const char *account) {
-    cmq_server_t *srv = (cmq_server_t *)ctx;
+                                  uint64_t sub_id,
+                                  const char *subject,
+                                  const char *account) {
+    cmq_sub_recovery_ctx_t *recovery = (cmq_sub_recovery_ctx_t *)ctx;
+    cmq_server_t *srv = recovery->srv;
+    cmq_sub_recovery_entry_t *prev = NULL;
+    cmq_sub_recovery_entry_t *entry = cmq_sub_recovery_find(recovery, sub_id,
+                                                             &prev);
     if (!is_sub) {
-        /* UNSUB during recovery: nothing to do (no live subs). */
+        if (entry) {
+            if (cmq_sublist_remove(srv->sublist, entry->ref->subject,
+                                   entry->ref) != 0)
+                return -1;
+            free(entry->ref);
+            if (prev) prev->next = entry->next;
+            else recovery->entries = entry->next;
+            free(entry);
+        }
         return 0;
     }
     (void)account;
+    if (!subject || strnlen(subject, CMQ_MAX_SUBJECT) >= CMQ_MAX_SUBJECT ||
+        cmq_sublist_subject_valid(subject) != 0)
+        return -1;
+    if (entry) {
+        if (cmq_sublist_remove(srv->sublist, entry->ref->subject,
+                               entry->ref) != 0)
+            return -1;
+        free(entry->ref);
+        if (prev) prev->next = entry->next;
+        else recovery->entries = entry->next;
+        free(entry);
+    }
     cmq_sub_ref_t *ref = calloc(1, sizeof(*ref));
     if (!ref) return -1;
     ref->client = NULL;
@@ -8093,7 +8144,42 @@ static int cmq_sublist_recover_cb(void *ctx, int is_sub,
         free(ref);
         return -1;
     }
+    entry = calloc(1, sizeof(*entry));
+    if (!entry) {
+        if (cmq_sublist_remove(srv->sublist, subject, ref) == 0)
+            free(ref);
+        return -1;
+    }
+    entry->sub_id = sub_id;
+    entry->ref = ref;
+    entry->next = recovery->entries;
+    recovery->entries = entry;
     return 0;
+}
+
+static int cmq_sublist_recover_load(cmq_server_t *srv) {
+    cmq_sub_recovery_ctx_t recovery = { .srv = srv, .entries = NULL };
+    int n = cmq_sublist_persist_load(srv->persist,
+                                     cmq_sublist_recover_cb, &recovery);
+    while (recovery.entries) {
+        cmq_sub_recovery_entry_t *entry = recovery.entries;
+        recovery.entries = entry->next;
+        free(entry);
+    }
+    return n;
+}
+
+static int cmq_sublist_recover_reload_load(cmq_server_t *srv, int *loaded) {
+    cmq_sub_recovery_ctx_t recovery = { .srv = srv, .entries = NULL };
+    int rc = cmq_sublist_persist_reload_load(srv->persist, loaded,
+                                             cmq_sublist_recover_cb,
+                                             &recovery);
+    while (recovery.entries) {
+        cmq_sub_recovery_entry_t *entry = recovery.entries;
+        recovery.entries = entry->next;
+        free(entry);
+    }
+    return rc;
 }
 
 /* P1: replay one WAL record through handle_publish. Extracted so
@@ -8692,8 +8778,14 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
          * client, but matching publishes can land in any active subscriber
          * (the "cluster" or a re-connecting client that re-subscribes). */
         if (srv->persist) {
-            int n = cmq_sublist_persist_load(srv->persist,
-                                              cmq_sublist_recover_cb, srv);
+            int n = cmq_sublist_recover_load(srv);
+            if (n < 0) {
+                cmq_log_error(srv->log,
+                              "Subscription persist recovery failed");
+                cmq_server_destroy(srv);
+                *server = NULL;
+                return CMQ_ERR_INVALID_ARG;
+            }
             cmq_log_info(srv->log,
                 "Subscription persist loaded: %d entries", n);
         }
@@ -9378,10 +9470,7 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         }
         if (server->persist && !persist_was) {
             int loaded = 0;
-            if (cmq_sublist_persist_reload_load(server->persist,
-                                                &loaded,
-                                                cmq_sublist_recover_cb,
-                                                server) != 0) {
+            if (cmq_sublist_recover_reload_load(server, &loaded) != 0) {
                 cmq_config_free(&fresh);
                 return -1;
             }
