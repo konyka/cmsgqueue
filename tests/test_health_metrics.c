@@ -70,9 +70,15 @@ TEST(http, metrics_returns_prometheus) {
     char buf[4096];
     struct timeval tv = { .tv_sec = 1, .tv_usec = 500000 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
+    size_t used = 0;
+    ssize_t n;
+    do {
+        n = recv(fd, buf + used, sizeof(buf) - 1 - used, 0);
+        if (n > 0) used += (size_t)n;
+    } while (n > 0 && used < sizeof(buf) - 1);
     close(fd);
-    ASSERT(n > 0);
+    ASSERT(used > 0);
+    buf[used] = '\0';
     /* F13: Prometheus exposition format. */
     ASSERT(strstr(buf, "# HELP cmq_connections") != NULL);
     ASSERT(strstr(buf, "# TYPE cmq_connections gauge") != NULL);
