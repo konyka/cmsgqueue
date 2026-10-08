@@ -33,7 +33,9 @@ to CLOSING. The Prometheus exposition advertises
 ## Files touched
 
 - `src/server/cmq_server.c` — `handle_ws_upgrade` dispatcher.
-- `tests/test_health_metrics.c` — 2 tests (metrics + 404).
+- `tests/test_health_metrics.c` — metrics, unknown-path, and introspection
+  snapshot tests. The metrics test accumulates the complete response before
+  parsing it, because HTTP headers and body may arrive in separate TCP reads.
 
 ## Tests
 
@@ -42,6 +44,8 @@ to CLOSING. The Prometheus exposition advertises
   body structure (HELP, TYPE, metric samples).
 - `http.unknown_path_returns_404` — verifies unknown paths fall through
   to the WS code path (connection closed).
+- `http.connz_json`, `http.subz_json`, and `http.routez_json` — verify the
+  JSON snapshot endpoints and their bounded response contracts.
 
 ## Verification gates
 

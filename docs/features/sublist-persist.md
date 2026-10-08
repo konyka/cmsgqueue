@@ -2,59 +2,76 @@
 
 ## Status
 
-**Shipped.** `SUBSCRIBE` and `UNSUBSCRIBE` record state in the
-subscription WAL; server startup loads the WAL before accepting new
-clients; server destruction closes it. Restored entries are server-side
-subject references only — TCP clients and their connection state cannot
-be replayed. Publish replay runs before subscription WAL load, so a
-persisted subscription does not receive historical publishes from the
-same restart; fresh clients can subscribe and receive new publishes.
+**Shipped.** `SUBSCRIBE` and `UNSUBSCRIBE` record state in the subscription
+WAL. On startup, the server replays that WAL sequentially before accepting
+clients and keeps the final state for each `sub_id`. Restored entries are
+server-side ghost subject references, not TCP clients or connection state.
+Publish replay runs before subscription WAL replay, so restored subscriptions
+do not receive historical publishes from the same restart.
 
-The library API (`cmq_sublist_persist.{h,c}`) is wired into the server
-when `persist_dir` is configured. The historical deferred design below
-is retained as context only.
+The library API (`cmq_sublist_persist.{h,c}`) is wired into the server when
+`persist_dir` is configured. A malformed WAL record, an invalid subject, or a
+recovery callback failure rejects startup. The server cleans up and returns
+`CMQ_ERR_INVALID_ARG` rather than accepting clients with partial subscription
+state.
 
-## Design (deferred)
+## Design
 
 The flow is:
 
-1. `SUBSCRIBE`: `cmq_sublist_add` writes the subscription to a dedicated WAL stream (separate from the publish WAL in F5).
-2. `UNSUBSCRIBE`: `cmq_sublist_remove` deletes from the WAL.
-3. Startup: `cmq_sublist_persist_load` reads all entries from the WAL into the in-memory sublist, restoring the state.
-4. Recovery: the F5 replay loop dispatches persisted publishes to currently-subscribed subjects only. Subscriptions in the WAL at the time of the crash are restored; clients that were connected at the time of the crash are NOT restored (TCP connections cannot be replayed).
+1. `SUBSCRIBE`: `cmq_sublist_add` writes the subscription to a dedicated WAL
+   stream, separate from the publish WAL in F5.
+2. `UNSUBSCRIBE`: `cmq_sublist_remove` writes an unsubscribe record to the WAL.
+3. Startup: `cmq_sublist_persist_load` reads records in file order. A
+   `SUBSCRIBE` creates or replaces the ghost ref for its `sub_id`; an
+   `UNSUBSCRIBE` removes that ref when present. The resulting sublist is the
+   WAL's final state.
+4. Recovery: the F5 publish replay loop runs first. Subscription recovery then
+   restores subject patterns for routing and for new live subscriptions, but it
+   cannot restore clients that were connected at the time of the crash.
 
-## Files touched (stub only)
+## WAL format and validation
 
-- `src/server/cmq_sublist_persist.{h,c}` (new) — API contract.
-- `tests/test_sublist_persist_stub.c` (new) — verifies stub returns -1.
+The WAL is plaintext with one record per line:
+
+- `S <sub_id> <subject> <account>` for subscribe.
+- `U <sub_id>` for unsubscribe.
+
+Record syntax is strict. Malformed or truncated lines, malformed numeric IDs,
+missing fields, and invalid subjects fail the load. The `sub_id` in the WAL is
+not client-scoped, so reuse or collision across clients is not disambiguated
+during recovery.
 
 ## Tests
 
-`tests/test_sublist_persist_stub.c`:
-- `sublist_persist.open_returns_null_until_implemented` — stub returns NULL.
-- `sublist_persist.record_returns_error` — record APIs return -1.
+- Startup recovery tests cover restored subscriptions and final-state
+  unsubscribe replay.
+- WAL parser tests cover malformed IDs and subjects, and callback failure
+  propagation.
 
 ## Verification gates
 
-- 2/2 stub tests pass.
-- 45/45 total tests pass.
+The shipped implementation is covered by the repository's startup recovery,
+unsubscribe replay, malformed WAL, and callback failure tests.
 
 ## Performance
 
-(Implementation pending.) Expected: O(N_subs) recovery on startup where N_subs is the number of subscriptions. For 100K subscriptions, ~10 ms recovery on warm storage.
+Recovery is a sequential scan of the WAL. Its cost is O(N_records), where
+N_records includes superseded subscriptions and unsubscribe records.
 
 ## Security
 
-(Implementation pending.) The WAL is plaintext (encryption at rest is out of scope for F18).
+The WAL is plaintext. Encryption at rest is out of scope for F18.
 
 ## Limitations
 
-- Full implementation deferred.
-- No replay of TCP connections (impossible).
-- No "imports" between subscription streams.
+- TCP connections and per-client connection state are not replayed.
+- `sub_id` is not client-scoped in the WAL, so identical IDs from different
+  clients cannot be distinguished during recovery.
+- There are no imports between subscription streams.
 
 ## See also
 
 - `docs/reviews/hyperplan-v030-plan.md` F18.
-- `docs/features/persistence.md` — F5 publish WAL (separate stream).
-- `docs/reviews/round3_deep_gap_analysis.md` — the gap analysis that motivated F18.
+- `docs/features/persistence.md` - F5 publish WAL, a separate stream.
+- `docs/reviews/round3_deep_gap_analysis.md` - the gap analysis that motivated F18.

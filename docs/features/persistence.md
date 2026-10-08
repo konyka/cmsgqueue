@@ -81,8 +81,10 @@ dispatch uses a synthesized internal client (no fd) so the publish
 path runs end-to-end subject validation, ACL check, and sublist
 match. The sublist matches against current subscribers — a
 recovered message only reaches subscribers who have re-subscribed
-after the restart. There is no persistent subscription state in
-v0.2.0 (that requires durable sublist, a follow-up).
+after the restart. F18 subscription state is restored separately by replaying
+`cmq-subs.wal` after publish replay. The restored entries are ghost subject
+references, not live TCP clients; see `docs/features/sublist-persist.md` for
+the final-state and validation contract.
 
 Limits: replay runs synchronously during `cmq_server_create`.
 Operators with millions of WAL records should snapshot/compact
