@@ -34,6 +34,8 @@ struct cmq_mqtt_bridge {
     int connected;
     int keepalive_ms;
     int clean_session;
+    char *username;
+    char *password;
     uint64_t messages_in;
     uint64_t messages_out;
     cmq_mqtt_mapping_t mappings[CMQ_MQTT_MAX_MAPPINGS];
@@ -45,6 +47,24 @@ struct cmq_mqtt_bridge {
     atomic_int in_flight; /* connect/is_connected unlocked dial/probe */
     atomic_int dying;
 };
+
+static void mqtt_free_secret(char **secret) {
+    if (!secret || !*secret) return;
+    volatile char *p = *secret;
+    for (size_t i = 0; i < strlen(*secret); i++) p[i] = 0;
+    free(*secret);
+    *secret = NULL;
+}
+
+static void mqtt_free_owned_string(const char **value, int secret) {
+    if (!value || !*value) return;
+    if (secret) {
+        char *copy = (char *)(uintptr_t)*value;
+        mqtt_free_secret(&copy);
+    } else {
+        free((void *)(uintptr_t)*value);
+    }
+}
 
 static int mqtt_begin_op(cmq_mqtt_bridge_t *br) {
     if (atomic_load_explicit(&br->dying, memory_order_acquire))
@@ -107,6 +127,8 @@ void cmq_mqtt_bridge_destroy(cmq_mqtt_bridge_t *br) {
     cmq_mutex_lock(&br->lock);
     mqtt_disconnect_unlocked(br);
     cmq_mutex_unlock(&br->lock);
+    mqtt_free_secret(&br->username);
+    mqtt_free_secret(&br->password);
     cmq_mutex_destroy(&br->lock);
     free(br);
 }
@@ -173,11 +195,26 @@ static int mqtt_read_connack(int fd) {
     return cmq_mqtt_decode_connack(buf, got);
 }
 
-int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
+int cmq_mqtt_bridge_connect_auth(cmq_mqtt_bridge_t *br, const char *addr, int port,
+                                 const char *username, const char *password) {
     if (!br || !addr) return -1;
+    if (password && !username) return -1;
     if (strnlen(addr, sizeof(br->addr)) >= sizeof(br->addr)) return -1;
     if (port <= 0 || port > 65535) return -1;
-    if (mqtt_begin_op(br) != 0) return -1;
+    if (username && strnlen(username, 65536) >= 65536) return -1;
+    if (password && strnlen(password, 65536) >= 65536) return -1;
+    char *new_username = username ? strdup(username) : NULL;
+    char *new_password = password ? strdup(password) : NULL;
+    if ((username && !new_username) || (password && !new_password)) {
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
+        return -1;
+    }
+    if (mqtt_begin_op(br) != 0) {
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
+        return -1;
+    }
     cmq_mutex_lock(&br->lock);
     /* Sticky only for the same endpoint — addr/port change must reconnect. */
     if (br->connected) {
@@ -190,9 +227,21 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
             strncmp(ea, addr, sizeof(ea)) == 0 &&
             mqtt_fd_alive(efd) && br->connected && br->fd == efd &&
             br->port == ep && strncmp(br->addr, ea, sizeof(br->addr)) == 0) {
-            cmq_mutex_unlock(&br->lock);
-            mqtt_end_op(br);
-            return 0;
+            int same_auth = ((!br->username && !username) ||
+                             (br->username && username &&
+                              strcmp(br->username, username) == 0)) &&
+                            ((!br->password && !password) ||
+                             (br->password && password &&
+                              strcmp(br->password, password) == 0));
+            if (!same_auth) {
+                /* Auth changes must issue a fresh CONNECT on the live endpoint. */
+            } else {
+                mqtt_free_secret(&new_username);
+                mqtt_free_secret(&new_password);
+                cmq_mutex_unlock(&br->lock);
+                mqtt_end_op(br);
+                return 0;
+            }
         }
         /* Dead peer or endpoint move — drop before dialing the new broker.
            fd recycle must not kill a peer that replaced efd under the lock. */
@@ -221,6 +270,8 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
         cmq_mutex_lock(&br->lock);
         br->dialing = 0;
         cmq_mutex_unlock(&br->lock);
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
         mqtt_end_op(br);
         return -1;
     }
@@ -233,6 +284,8 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
         cmq_mutex_lock(&br->lock);
         br->dialing = 0;
         cmq_mutex_unlock(&br->lock);
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
         mqtt_end_op(br);
         return -1;
     }
@@ -243,25 +296,49 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
         cmq_mutex_lock(&br->lock);
         br->dialing = 0;
         cmq_mutex_unlock(&br->lock);
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
         mqtt_end_op(br);
         return -1;
     }
     mqtt_set_nonblock(fd);
 
-    uint8_t cbuf[256];
+    size_t cbuf_len = 32 + strlen(client_id) +
+                      (username ? 2 + strlen(username) : 0) +
+                      (password ? 2 + strlen(password) : 0);
+    uint8_t *cbuf = malloc(cbuf_len);
+    if (!cbuf) {
+        close(fd);
+        cmq_mutex_lock(&br->lock);
+        br->dialing = 0;
+        cmq_mutex_unlock(&br->lock);
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
+        mqtt_end_op(br);
+        return -1;
+    }
     int keepalive_s = keepalive_ms > 0 ? keepalive_ms / 1000 : 60;
     if (keepalive_s < 1) keepalive_s = 1;
-    int clen = cmq_mqtt_encode_connect(cbuf, sizeof(cbuf), client_id,
-                                        keepalive_s, clean_session);
+    int clen = cmq_mqtt_encode_connect_auth(cbuf, cbuf_len, client_id,
+                                             keepalive_s, clean_session,
+                                             username, password);
     if (clen < 0 || mqtt_write_all(fd, cbuf, (size_t)clen) != 0 ||
         mqtt_read_connack(fd) != 0) {
+        volatile uint8_t *secret_buf = cbuf;
+        for (size_t i = 0; i < cbuf_len; i++) secret_buf[i] = 0;
+        free(cbuf);
         close(fd);
         cmq_mutex_lock(&br->lock);
         br->dialing = 0;
         cmq_mutex_unlock(&br->lock);
         mqtt_end_op(br);
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
         return -1;
     }
+    volatile uint8_t *secret_buf = cbuf;
+    for (size_t i = 0; i < cbuf_len; i++) secret_buf[i] = 0;
+    free(cbuf);
 
     cmq_mutex_lock(&br->lock);
     br->dialing = 0;
@@ -269,28 +346,54 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     if (br->cancel_gen != gen) {
         cmq_mutex_unlock(&br->lock);
         close(fd);
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
         mqtt_end_op(br);
         return -1;
     }
     if (br->connected && br->fd >= 0) {
         int efd = br->fd;
         /* Sticky only if the live peer is already the requested endpoint. */
+        int same_auth = ((!br->username && !username) ||
+                         (br->username && username &&
+                          strcmp(br->username, username) == 0)) &&
+                        ((!br->password && !password) ||
+                         (br->password && password &&
+                          strcmp(br->password, password) == 0));
         if (mqtt_fd_alive(efd) && br->connected && br->fd == efd &&
             br->port == port &&
-            strncmp(br->addr, addr, sizeof(br->addr)) == 0) {
+            strncmp(br->addr, addr, sizeof(br->addr)) == 0 && same_auth) {
             cmq_mutex_unlock(&br->lock);
             close(fd);
+            mqtt_free_secret(&new_username);
+            mqtt_free_secret(&new_password);
             mqtt_end_op(br);
             return 0;
         }
         if (br->fd == efd && !mqtt_fd_alive(efd))
             mqtt_disconnect_unlocked(br);
-        else if (br->connected && br->fd >= 0) {
+        else if (br->connected && br->fd >= 0 && !same_auth) {
+            if (br->port == port && strncmp(br->addr, addr, sizeof(br->addr)) == 0)
+                mqtt_disconnect_unlocked(br);
+            else {
+                /* Another connect won for a different endpoint. */
+                int same_ep = (br->port == port &&
+                               strncmp(br->addr, addr, sizeof(br->addr)) == 0);
+                cmq_mutex_unlock(&br->lock);
+                close(fd);
+                mqtt_free_secret(&new_username);
+                mqtt_free_secret(&new_password);
+                mqtt_end_op(br);
+                return same_ep ? 0 : -1;
+            }
+        } else if (br->connected && br->fd >= 0) {
             /* Another connect won — success only if it is our endpoint. */
             int same_ep = (br->port == port &&
                            strncmp(br->addr, addr, sizeof(br->addr)) == 0);
             cmq_mutex_unlock(&br->lock);
             close(fd);
+            mqtt_free_secret(&new_username);
+            mqtt_free_secret(&new_password);
             mqtt_end_op(br);
             return same_ep ? 0 : -1;
         }
@@ -300,9 +403,21 @@ int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
     br->connected = 1;
     snprintf(br->addr, sizeof(br->addr), "%s", addr);
     br->port = port;
+    mqtt_free_secret(&br->username);
+    mqtt_free_secret(&br->password);
+    br->username = new_username;
+    br->password = new_password;
+    new_username = NULL;
+    new_password = NULL;
     cmq_mutex_unlock(&br->lock);
+    mqtt_free_secret(&new_username);
+    mqtt_free_secret(&new_password);
     mqtt_end_op(br);
     return 0;
+}
+
+int cmq_mqtt_bridge_connect(cmq_mqtt_bridge_t *br, const char *addr, int port) {
+    return cmq_mqtt_bridge_connect_auth(br, addr, port, NULL, NULL);
 }
 
 static int mqtt_bridge_disconnect_impl(cmq_mqtt_bridge_t *br) {
@@ -537,12 +652,17 @@ static int mqtt_reload_addr_ok(const char *addr) {
 
 int cmq_mqtt_reload_endpoint(cmq_mqtt_bridge_t *br,
                              const char **live_addr, int *live_port,
-                             const char *fresh_addr, int fresh_port) {
+                             const char **live_username,
+                             const char **live_password,
+                             const char *fresh_addr, int fresh_port,
+                             const char *fresh_username,
+                             const char *fresh_password) {
     if (!live_port) return -1;
     if (fresh_port < 0 || fresh_port > 65535) return -1;
     if (fresh_addr && fresh_addr[0] && !mqtt_reload_addr_ok(fresh_addr))
         return -1;
-    if ((!fresh_addr || !fresh_addr[0]) && fresh_port == 0)
+    if ((!fresh_addr || !fresh_addr[0]) && fresh_port == 0 &&
+        !fresh_username && !fresh_password)
         return 0;
 
     const char *use_addr = (fresh_addr && fresh_addr[0])
@@ -553,28 +673,67 @@ int cmq_mqtt_reload_endpoint(cmq_mqtt_bridge_t *br,
         return 0;
     if (!mqtt_reload_addr_ok(use_addr))
         return -1;
-    if (br && cmq_mqtt_bridge_connect(br, use_addr, use_port) != 0)
+    const char *use_username = fresh_username ? fresh_username :
+                               (live_username ? *live_username : NULL);
+    const char *use_password = fresh_password ? fresh_password :
+                               (live_password ? *live_password : NULL);
+    char *new_username = fresh_username ? strdup(fresh_username) : NULL;
+    char *new_password = fresh_password ? strdup(fresh_password) : NULL;
+    char *new_addr = (fresh_addr && fresh_addr[0]) ? strdup(fresh_addr) : NULL;
+    if ((fresh_username && !new_username) || (fresh_password && !new_password)) {
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
+        free(new_addr);
         return -1;
+    }
+    if (fresh_addr && fresh_addr[0] && !new_addr) {
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
+        return -1;
+    }
+    if (br && cmq_mqtt_bridge_connect_auth(br, use_addr, use_port,
+                                           use_username, use_password) != 0) {
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
+        free(new_addr);
+        return -1;
+    }
     if (fresh_addr && fresh_addr[0] && live_addr) {
-        char *owned = strdup(fresh_addr);
-        if (!owned)
-            return -1;
-        free((void *)*live_addr);
-        *live_addr = owned;
+        mqtt_free_owned_string(live_addr, 0);
+        *live_addr = new_addr;
+        new_addr = NULL;
     }
     if (fresh_port > 0)
         *live_port = fresh_port;
+    if (fresh_username && live_username) {
+        mqtt_free_owned_string(live_username, 1);
+        *live_username = new_username;
+        new_username = NULL;
+    }
+    if (fresh_password && live_password) {
+        mqtt_free_owned_string(live_password, 1);
+        *live_password = new_password;
+        new_password = NULL;
+    }
+    mqtt_free_secret(&new_username);
+    mqtt_free_secret(&new_password);
+    free(new_addr);
     return 0;
 }
 
 int cmq_mqtt_reload_attach(cmq_mqtt_bridge_t **br,
                            const char **live_addr, int *live_port,
-                           const char *fresh_addr, int fresh_port) {
+                           const char **live_username,
+                           const char **live_password,
+                           const char *fresh_addr, int fresh_port,
+                           const char *fresh_username,
+                           const char *fresh_password) {
     if (!br || !live_port) return -1;
     if (fresh_port < 0 || fresh_port > 65535) return -1;
     if (fresh_addr && fresh_addr[0] && !mqtt_reload_addr_ok(fresh_addr))
         return -1;
-    if ((!fresh_addr || !fresh_addr[0]) && fresh_port == 0)
+    if ((!fresh_addr || !fresh_addr[0]) && fresh_port == 0 &&
+        !fresh_username && !fresh_password)
         return 0;
     if (*br)
         return 0;
@@ -586,24 +745,57 @@ int cmq_mqtt_reload_attach(cmq_mqtt_bridge_t **br,
         return 0;
     if (!mqtt_reload_addr_ok(use_addr))
         return -1;
+    const char *use_username = fresh_username ? fresh_username :
+                               (live_username ? *live_username : NULL);
+    const char *use_password = fresh_password ? fresh_password :
+                               (live_password ? *live_password : NULL);
+    char *new_addr = (fresh_addr && fresh_addr[0]) ? strdup(fresh_addr) : NULL;
+    char *new_username = fresh_username ? strdup(fresh_username) : NULL;
+    char *new_password = fresh_password ? strdup(fresh_password) : NULL;
+    if ((fresh_addr && fresh_addr[0] && !new_addr) ||
+        (fresh_username && !new_username) ||
+        (fresh_password && !new_password)) {
+        free(new_addr);
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
+        return -1;
+    }
     cmq_mqtt_bridge_t *n = cmq_mqtt_bridge_create("cmsgbridge");
-    if (!n) return -1;
-    if (cmq_mqtt_bridge_connect(n, use_addr, use_port) != 0) {
+    if (!n) {
+        free(new_addr);
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
+        return -1;
+    }
+    if (cmq_mqtt_bridge_connect_auth(n, use_addr, use_port,
+                                     use_username, use_password) != 0) {
         cmq_mqtt_bridge_destroy(n);
+        free(new_addr);
+        mqtt_free_secret(&new_username);
+        mqtt_free_secret(&new_password);
         return -1;
     }
     if (fresh_addr && fresh_addr[0] && live_addr) {
-        char *owned = strdup(fresh_addr);
-        if (!owned) {
-            cmq_mqtt_bridge_destroy(n);
-            return -1;
-        }
-        free((void *)*live_addr);
-        *live_addr = owned;
+        mqtt_free_owned_string(live_addr, 0);
+        *live_addr = new_addr;
+        new_addr = NULL;
     }
     if (fresh_port > 0)
         *live_port = fresh_port;
+    if (fresh_username && live_username) {
+        mqtt_free_owned_string(live_username, 1);
+        *live_username = new_username;
+        new_username = NULL;
+    }
+    if (fresh_password && live_password) {
+        mqtt_free_owned_string(live_password, 1);
+        *live_password = new_password;
+        new_password = NULL;
+    }
     *br = n;
+    free(new_addr);
+    mqtt_free_secret(&new_username);
+    mqtt_free_secret(&new_password);
     return 0;
 }
 
@@ -719,33 +911,62 @@ static int encode_remaining_length(uint8_t *buf, size_t offset, size_t len_size,
     return (int)i;
 }
 
-int cmq_mqtt_encode_connect(uint8_t *buf, size_t len, const char *client_id,
-                             int keepalive, int clean_session) {
+int cmq_mqtt_encode_connect_auth(uint8_t *buf, size_t len, const char *client_id,
+                                  int keepalive, int clean_session,
+                                  const char *username, const char *password) {
     if (!buf || len < 20 || !client_id) return -1;
+    if (password && !username) return -1;
     /* Wire Keep Alive is uint16 — never silently truncate (65536 → 0 disables KA). */
     if (keepalive < 0 || keepalive > 65535) return -1;
     size_t id_len = strlen(client_id);
-    if (id_len > 0xFFFFu || id_len > SIZE_MAX - 10) return -1;
-    size_t var_len = 10 + id_len;
+    if (id_len > 0xFFFFu || id_len > SIZE_MAX - 12) return -1;
+    size_t user_len = username ? strlen(username) : 0;
+    size_t pass_len = password ? strlen(password) : 0;
+    if (user_len > 0xFFFFu || pass_len > 0xFFFFu) return -1;
+    if (id_len > SIZE_MAX - 12 - (username ? 2 + user_len : 0) -
+        (password ? 2 + pass_len : 0)) return -1;
+    size_t var_len = 12 + id_len + (username ? 2 + user_len : 0) +
+                     (password ? 2 + pass_len : 0);
     if (var_len > 0x0FFFFFFFu || len < 5 || var_len > len - 5) return -1;
 
     buf[0] = CMQ_MQTT_CONNECT;
     int rl = encode_remaining_length(buf, 1, len, (uint32_t)var_len);
     if (rl < 0) return -1;
     size_t pos = (size_t)(1 + rl);
-    if (pos > len || len - pos < 10 + id_len) return -1;
+    if (pos > len || len - pos < 12 + id_len) return -1;
 
     buf[pos++] = 0x00; buf[pos++] = 0x04;
     buf[pos++] = 'M';  buf[pos++] = 'Q';
     buf[pos++] = 'T';  buf[pos++] = 'T';
     buf[pos++] = 0x04;
-    buf[pos++] = (uint8_t)((clean_session ? 0x02 : 0x00));
+    buf[pos++] = (uint8_t)((clean_session ? 0x02 : 0x00) |
+                           (username ? 0x80 : 0x00) |
+                           (password ? 0x40 : 0x00));
     buf[pos++] = (uint8_t)((keepalive >> 8) & 0xFF);
     buf[pos++] = (uint8_t)(keepalive & 0xFF);
     buf[pos++] = (uint8_t)((id_len >> 8) & 0xFF);
     buf[pos++] = (uint8_t)(id_len & 0xFF);
     memcpy(&buf[pos], client_id, id_len);
-    return (int)(pos + id_len);
+    pos += id_len;
+    if (username) {
+        buf[pos++] = (uint8_t)((user_len >> 8) & 0xFF);
+        buf[pos++] = (uint8_t)(user_len & 0xFF);
+        memcpy(&buf[pos], username, user_len);
+        pos += user_len;
+    }
+    if (password) {
+        buf[pos++] = (uint8_t)((pass_len >> 8) & 0xFF);
+        buf[pos++] = (uint8_t)(pass_len & 0xFF);
+        memcpy(&buf[pos], password, pass_len);
+        pos += pass_len;
+    }
+    return (int)pos;
+}
+
+int cmq_mqtt_encode_connect(uint8_t *buf, size_t len, const char *client_id,
+                             int keepalive, int clean_session) {
+    return cmq_mqtt_encode_connect_auth(buf, len, client_id, keepalive,
+                                        clean_session, NULL, NULL);
 }
 
 int cmq_mqtt_encode_publish(uint8_t *buf, size_t len, const char *topic,

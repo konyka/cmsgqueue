@@ -8393,6 +8393,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.acl_deny = NULL;
     srv->config.blocklist_file = NULL;
     srv->config.mqtt_bridge_addr = NULL;
+    srv->config.mqtt_bridge_username = NULL;
+    srv->config.mqtt_bridge_password = NULL;
     for (int i = 0; i < 4; i++) {
         srv->config.listeners[i].tls_cert = NULL;
         srv->config.listeners[i].tls_key = NULL;
@@ -8443,6 +8445,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.acl_deny, src.acl_deny);
     OWN(srv->config.blocklist_file, src.blocklist_file);
     OWN(srv->config.mqtt_bridge_addr, src.mqtt_bridge_addr);
+    OWN(srv->config.mqtt_bridge_username, src.mqtt_bridge_username);
+    OWN(srv->config.mqtt_bridge_password, src.mqtt_bridge_password);
     for (int i = 0; i < 4; i++) {
         OWN(srv->config.listeners[i].tls_cert, src.listeners[i].tls_cert);
         OWN(srv->config.listeners[i].tls_key, src.listeners[i].tls_key);
@@ -8931,9 +8935,11 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     if (srv->config.mqtt_bridge_addr && srv->config.mqtt_bridge_port > 0) {
         srv->mqtt_bridge = cmq_mqtt_bridge_create("cmsgbridge");
         if (srv->mqtt_bridge) {
-            if (cmq_mqtt_bridge_connect(srv->mqtt_bridge,
+            if (cmq_mqtt_bridge_connect_auth(srv->mqtt_bridge,
                                           srv->config.mqtt_bridge_addr,
-                                          srv->config.mqtt_bridge_port) != 0) {
+                                          srv->config.mqtt_bridge_port,
+                                          srv->config.mqtt_bridge_username,
+                                          srv->config.mqtt_bridge_password) != 0) {
                 cmq_log_warn(srv->log,
                     "MQTT bridge connect failed; bridge disabled");
                 cmq_mqtt_bridge_destroy(srv->mqtt_bridge);
@@ -9581,8 +9587,12 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         if (cmq_mqtt_reload_attach(&server->mqtt_bridge,
                                    &server->config.mqtt_bridge_addr,
                                    &server->config.mqtt_bridge_port,
+                                   &server->config.mqtt_bridge_username,
+                                   &server->config.mqtt_bridge_password,
                                    fresh.mqtt_bridge_addr,
-                                   fresh.mqtt_bridge_port) != 0) {
+                                   fresh.mqtt_bridge_port,
+                                   fresh.mqtt_bridge_username,
+                                   fresh.mqtt_bridge_password) != 0) {
             cmq_config_free(&fresh);
             return -1;
         }
@@ -9615,8 +9625,12 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         if (cmq_mqtt_reload_endpoint(server->mqtt_bridge,
                                      &server->config.mqtt_bridge_addr,
                                      &server->config.mqtt_bridge_port,
+                                     &server->config.mqtt_bridge_username,
+                                     &server->config.mqtt_bridge_password,
                                      fresh.mqtt_bridge_addr,
-                                     fresh.mqtt_bridge_port) != 0) {
+                                     fresh.mqtt_bridge_port,
+                                     fresh.mqtt_bridge_username,
+                                     fresh.mqtt_bridge_password) != 0) {
             cmq_config_free(&fresh);
             return -1;
         }

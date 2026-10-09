@@ -49,6 +49,14 @@ static void cfg_free_owned(const char *ptr) {
     free((void *)(uintptr_t)ptr);
 }
 
+static void cfg_free_secret(const char *ptr) {
+    if (!ptr) return;
+    volatile char *p = (volatile char *)(uintptr_t)ptr;
+    size_t len = strlen(ptr);
+    for (size_t i = 0; i < len; i++) p[i] = 0;
+    free((void *)(uintptr_t)ptr);
+}
+
 static int cfg_set_str(const char **dst, const char *value) {
     char *copy = strdup(value);
     if (!copy) return -1;
@@ -198,6 +206,19 @@ static int cfg_set_str_empty(const char **dst, const char *value) {
     return cfg_set_str(dst, value);
 }
 
+static int cfg_set_secret_empty(const char **dst, const char *value) {
+    if (!value[0]) {
+        cfg_free_secret(*dst);
+        *dst = NULL;
+        return 0;
+    }
+    char *copy = strdup(value);
+    if (!copy) return -1;
+    cfg_free_secret(*dst);
+    *dst = copy;
+    return 0;
+}
+
 static int parse_listener_key(const char *key, const char *value,
                               cmq_config_t *config) {
     if (strcmp(key, "listener_count") == 0)
@@ -299,6 +320,10 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->mqtt_bridge_addr, value);
     } else if (strcmp(key, "mqtt_bridge_port") == 0) {
         return parse_int_range(value, 0, 65535, &config->mqtt_bridge_port);
+    } else if (strcmp(key, "mqtt_bridge_username") == 0) {
+        return cfg_set_secret_empty(&config->mqtt_bridge_username, value);
+    } else if (strcmp(key, "mqtt_bridge_password") == 0) {
+        return cfg_set_secret_empty(&config->mqtt_bridge_password, value);
     } else if (strcmp(key, "mqtt_bridge_map") == 0) {
         return parse_mqtt_bridge_map(value, config);
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
@@ -493,6 +518,8 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->config_file);
     cfg_free_owned(config->persist_dir);
     cfg_free_owned(config->mqtt_bridge_addr);
+    cfg_free_secret(config->mqtt_bridge_username);
+    cfg_free_secret(config->mqtt_bridge_password);
     for (int i = 0; i < 4; i++) {
         cfg_free_owned(config->listeners[i].tls_cert);
         cfg_free_owned(config->listeners[i].tls_key);
@@ -543,6 +570,8 @@ void cmq_config_free(cmq_config_t *config) {
     config->config_file = NULL;
     config->persist_dir = NULL;
     config->mqtt_bridge_addr = NULL;
+    config->mqtt_bridge_username = NULL;
+    config->mqtt_bridge_password = NULL;
     for (int i = 0; i < 8; i++) {
         config->routes[i].addr = NULL;
         config->routes[i].port = 0;
