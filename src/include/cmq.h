@@ -33,6 +33,7 @@ extern "C" {
     ((4 * 1024 * 1024) - (256 * 2 + 65536 + 64 + 10))
 #define CMQ_DEFAULT_MAX_SUBS_PER_CLIENT 1024
 #define CMQ_RATE_LIMIT_SLOTS 1024
+#define CMQ_DEFAULT_AUTH_FAILED_CONNECTS_PER_SEC 10
 #define CMQ_DEFAULT_PING_INTERVAL 30000  /* 30 seconds */
 #define CMQ_DEFAULT_WRITE_TIMEOUT  5000  /* 5 seconds */
 
@@ -161,6 +162,9 @@ typedef struct cmq_config {
         int qos;
     } mqtt_bridge_maps[8];
     int mqtt_bridge_map_count;
+    /* F8b: failed CONNECT attempts per IPv4 address per second.
+       0 disables. Kept at the end for positional initializer compatibility. */
+    int auth_failed_connects_per_sec;
 } cmq_config_t;
 
 /**

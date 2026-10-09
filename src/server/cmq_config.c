@@ -420,6 +420,9 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->auth_username, value);
     } else if (strcmp(key, "auth_password") == 0) {
         return cfg_set_str(&config->auth_password, value);
+    } else if (strcmp(key, "auth_failed_connects_per_sec") == 0) {
+        return parse_int_range(value, 0, 100000,
+                               &config->auth_failed_connects_per_sec);
     } else if (strcmp(key, "jwt_issuer") == 0) {
         return cfg_set_str_empty(&config->jwt_issuer, value);
     } else if (strcmp(key, "jwt_hmac_secret") == 0) {
@@ -592,6 +595,9 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
     config->log_level = 2;
     /* Omitted log_to_stdout → on (cmq.h default 1; 0 is explicit off). */
     config->log_to_stdout = 1;
+    /* Omitted auth limiter key → documented default; explicit 0 disables. */
+    config->auth_failed_connects_per_sec =
+        CMQ_DEFAULT_AUTH_FAILED_CONNECTS_PER_SEC;
 
     FILE *fp = fopen(path, "r");
     if (!fp) return CMQ_ERR_IO;
@@ -709,6 +715,9 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         return CMQ_ERR_INVALID_ARG;
     if (config->max_clients < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_clients > CMQ_MAX_CLIENTS_LIMIT)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->auth_failed_connects_per_sec < 0 ||
+        config->auth_failed_connects_per_sec > 100000)
         return CMQ_ERR_INVALID_ARG;
     if (config->num_threads < 0 || config->num_threads > 64)
         return CMQ_ERR_INVALID_ARG;

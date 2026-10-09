@@ -80,6 +80,106 @@ static int auth_configured(const cmq_server_t *srv) {
            (ec && ec[0] != '\0') || (rn && rn[0] != '\0');
 }
 
+typedef struct {
+    uint32_t ip;
+    uint64_t window_start_ms;
+    int slot;
+    int active;
+} auth_rate_reservation_t;
+
+static uint64_t auth_rate_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL +
+           (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+/* Reserve before parsing/verifying credentials. The auth table is separate
+ * from F10 so connection floods cannot consume authentication capacity. */
+static int auth_rate_reserve(cmq_server_t *srv, int fd,
+                             auth_rate_reservation_t *reservation) {
+    struct sockaddr_in peer;
+    socklen_t plen = sizeof(peer);
+    if (!srv || !reservation) return -1;
+    cmq_mutex_lock(&srv->auth_rate_lock);
+    int configured_limit = srv->config.auth_failed_connects_per_sec;
+    cmq_mutex_unlock(&srv->auth_rate_lock);
+    if (configured_limit <= 0) return 0;
+    if (fd < 0 ||
+        getpeername(fd, (struct sockaddr *)&peer, &plen) != 0 ||
+        peer.sin_family != AF_INET)
+        return -1;
+
+    uint32_t ip = (uint32_t)peer.sin_addr.s_addr;
+    uint64_t now_ms = auth_rate_now_ms();
+    int admitted = 0;
+    cmq_mutex_lock(&srv->auth_rate_lock);
+    int limit = srv->config.auth_failed_connects_per_sec;
+    if (limit <= 0) {
+        cmq_mutex_unlock(&srv->auth_rate_lock);
+        return 0;
+    }
+    for (int i = 0; i < CMQ_RATE_LIMIT_SLOTS; i++) {
+        if (srv->auth_rate_slots[i].ip == ip) {
+            if (now_ms - srv->auth_rate_slots[i].window_start_ms >= 1000 &&
+                srv->auth_rate_slots[i].inflight == 0) {
+                srv->auth_rate_slots[i].window_start_ms = now_ms;
+                srv->auth_rate_slots[i].count = 0;
+            }
+            if ((int)srv->auth_rate_slots[i].count < limit) {
+                srv->auth_rate_slots[i].count++;
+                srv->auth_rate_slots[i].inflight++;
+                reservation->ip = ip;
+                reservation->window_start_ms =
+                    srv->auth_rate_slots[i].window_start_ms;
+                reservation->slot = i;
+                reservation->active = 1;
+                admitted = 1;
+            }
+            break;
+        }
+        if (srv->auth_rate_slots[i].ip == 0 ||
+            (now_ms - srv->auth_rate_slots[i].window_start_ms >= 1000 &&
+             srv->auth_rate_slots[i].inflight == 0)) {
+            srv->auth_rate_slots[i].ip = ip;
+            srv->auth_rate_slots[i].window_start_ms = now_ms;
+            srv->auth_rate_slots[i].count = 1;
+            srv->auth_rate_slots[i].inflight = 1;
+            reservation->ip = ip;
+            reservation->window_start_ms = now_ms;
+            reservation->slot = i;
+            reservation->active = 1;
+            admitted = 1;
+            break;
+        }
+    }
+    cmq_mutex_unlock(&srv->auth_rate_lock);
+    return admitted ? 1 : -1;
+}
+
+static void auth_rate_finish(cmq_server_t *srv,
+                             auth_rate_reservation_t *reservation,
+                             int failed) {
+    if (!srv || !reservation || !reservation->active) return;
+    cmq_mutex_lock(&srv->auth_rate_lock);
+    if (reservation->slot >= 0 && reservation->slot < CMQ_RATE_LIMIT_SLOTS) {
+        cmq_auth_rate_slot_t *slot =
+            &srv->auth_rate_slots[reservation->slot];
+        if (slot->ip == reservation->ip && slot->inflight > 0) {
+            if (slot->window_start_ms != reservation->window_start_ms && failed) {
+                slot->window_start_ms = auth_rate_now_ms();
+                slot->count = 0;
+            }
+            slot->inflight--;
+            if (!failed && slot->window_start_ms == reservation->window_start_ms &&
+                slot->count > 0)
+                slot->count--;
+        }
+    }
+    cmq_mutex_unlock(&srv->auth_rate_lock);
+    reservation->active = 0;
+}
+
 static const cmq_jwks_t *srv_jwks_live(const cmq_server_t *srv) {
     if (!srv || !srv->jwks) return NULL;
     return cmq_jwks_cache_get((const cmq_jwks_cache_t *)srv->jwks);
@@ -5445,61 +5545,18 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             }
         }
         cmq_rch_release(srv->blocklist_h, bl);
-        /* F8b: per-IP auth brute-force rate limit. The check uses the
-         * peer IP of the connected socket. If the IP is over its
-         * per-second budget, reject without invoking password verify. */
-        if (auth_configured(srv) && c->fd >= 0) {
-            struct sockaddr_in peer;
-            socklen_t plen = sizeof(peer);
-            if (getpeername(c->fd, (struct sockaddr *)&peer, &plen) == 0 &&
-                peer.sin_family == AF_INET) {
-                uint32_t ip = (uint32_t)peer.sin_addr.s_addr;
-                cmq_mutex_lock(&srv->rate_lock);
-                int admitted = 1;
-                for (int i = 0; i < 1024; i++) {
-                    if (srv->rate_slots[i].ip == ip) {
-                        struct timespec ts_now;
-                        clock_gettime(CLOCK_MONOTONIC, &ts_now);
-                        uint64_t now_ms = (uint64_t)ts_now.tv_sec * 1000ULL +
-                                          (uint64_t)ts_now.tv_nsec / 1000000ULL;
-                        if (now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
-                            srv->rate_slots[i].window_start_ms = now_ms;
-                            srv->rate_slots[i].count = 0;
-                        }
-                        if (srv->rate_slots[i].count >= 10) {
-                            admitted = 0;
-                        }
-                        break;
-                    }
-                    if (srv->rate_slots[i].ip == 0) {
-                        srv->rate_slots[i].ip = ip;
-                        struct timespec ts_now;
-                        clock_gettime(CLOCK_MONOTONIC, &ts_now);
-                        srv->rate_slots[i].window_start_ms =
-                            (uint64_t)ts_now.tv_sec * 1000ULL +
-                            (uint64_t)ts_now.tv_nsec / 1000000ULL;
-                        srv->rate_slots[i].count = 0;
-                        break;
-                    }
-                }
-                cmq_mutex_unlock(&srv->rate_lock);
-                if (!admitted) {
-                    cmq_send_connack(c, 4);
-                    client_set_state(c, CMQ_CLIENT_CLOSING);
-                    break;
-                }
-                /* Record the attempt; bumped on success below. */
-                cmq_mutex_lock(&srv->rate_lock);
-                for (int i = 0; i < 1024; i++) {
-                    if (srv->rate_slots[i].ip == ip) {
-                        srv->rate_slots[i].count++;
-                        break;
-                    }
-                }
-                cmq_mutex_unlock(&srv->rate_lock);
+        /* F8b: reserve before parsing or verifying credentials. */
+        auth_rate_reservation_t auth_reservation = {0};
+        if (auth_configured(srv)) {
+            int auth_rate_rc = auth_rate_reserve(srv, c->fd, &auth_reservation);
+            if (auth_rate_rc < 0) {
+                cmq_send_connack(c, 4);
+                client_set_state(c, CMQ_CLIENT_CLOSING);
+                break;
             }
         }
         if (client_state(c) == CMQ_CLIENT_CONNECTED) {
+            auth_rate_finish(srv, &auth_reservation, 0);
             cmq_send_connack(c, 1);
             break;
         }
@@ -5653,6 +5710,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                     password_is_hashed = 1;
                     int v = cmq_password_verify(srv->config.auth_password, passwd);
                     if (v < 0) {
+                        auth_rate_finish(srv, &auth_reservation, 1);
                         cmq_audit_auth(0, c->trace_hex, uname, "auth failed");
                         cmq_send_connack(c, 1);
                         client_set_state(c, CMQ_CLIENT_CLOSING);
@@ -5680,6 +5738,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             else
                 bad |= !ct_memeq(passwd, passwd, sizeof(passwd));
             if (bad) {
+                auth_rate_finish(srv, &auth_reservation, 1);
                 char trace_hex[33];
                 cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
                 cmq_audit_log(CMQ_AUDIT_AUTH_FAIL, trace_hex,
@@ -5688,6 +5747,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
+            auth_rate_finish(srv, &auth_reservation, 0);
             char trace_hex[33];
             cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
             cmq_audit_log(CMQ_AUDIT_AUTH_OK, trace_hex, "connect", "auth_ok");
@@ -8503,11 +8563,13 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
 
     cmq_mutex_init(&srv->clients_lock);
     cmq_mutex_init(&srv->rate_lock);
+    cmq_mutex_init(&srv->auth_rate_lock);
 
     srv->sublist = cmq_sublist_create();
     if (!srv->sublist) {
         cmq_mutex_destroy(&srv->clients_lock);
         cmq_mutex_destroy(&srv->rate_lock);
+        cmq_mutex_destroy(&srv->auth_rate_lock);
         cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_NO_MEMORY;
@@ -9532,7 +9594,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
-    if (cmq_reload_apply_limits(&server->config, &fresh) != 0) {
+    cmq_mutex_lock(&server->auth_rate_lock);
+    int limits_rc = cmq_reload_apply_limits(&server->config, &fresh);
+    cmq_mutex_unlock(&server->auth_rate_lock);
+    if (limits_rc != 0) {
         cmq_config_free(&fresh);
         return -1;
     }
@@ -10153,6 +10218,7 @@ void cmq_server_destroy(cmq_server_t *srv) {
     srv->tls_config_count = 0;
     cmq_mutex_destroy(&srv->clients_lock);
     cmq_mutex_destroy(&srv->rate_lock);
+    cmq_mutex_destroy(&srv->auth_rate_lock);
     cmq_config_free(&srv->config);
     free(srv);
 }
