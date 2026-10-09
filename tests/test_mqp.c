@@ -41,6 +41,40 @@ struct dummy {
     size_t gotn;
 };
 
+struct auth_dummy {
+    int lfd;
+    uint8_t got[256];
+    size_t gotn;
+};
+
+static int read_full(int fd, uint8_t *buf, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = recv(fd, buf + off, len - off, 0);
+        if (n <= 0) return -1;
+        off += (size_t)n;
+    }
+    return 0;
+}
+
+static void *auth_dummy_main(void *arg) {
+    struct auth_dummy *d = arg;
+    int cfd = accept(d->lfd, NULL, NULL);
+    if (cfd < 0) return NULL;
+    uint8_t header[2];
+    if (read_full(cfd, header, sizeof(header)) == 0 &&
+        header[0] == 0x10 && header[1] < sizeof(d->got) - 2) {
+        d->got[0] = header[0];
+        d->got[1] = header[1];
+        d->gotn = (size_t)header[1] + 2;
+        if (read_full(cfd, d->got + 2, header[1]) != 0) d->gotn = 0;
+    }
+    uint8_t ack[] = { 0x20, 0x02, 0x00, 0x00 };
+    (void)send(cfd, ack, sizeof(ack), 0);
+    close(cfd);
+    return NULL;
+}
+
 static void *dummy_main(void *arg) {
     struct dummy *d = arg;
     int cfd = accept(d->lfd, NULL, NULL);
@@ -85,6 +119,38 @@ TEST(mqp, hit) {
     ASSERT_EQ((int)(d.got[0] & 0xF0), 0x30);
     cmq_mqtt_bridge_info_t info = cmq_mqtt_bridge_info(br);
     ASSERT_EQ((int)info.messages_out, 1);
+    cmq_mqtt_bridge_destroy(br);
+}
+
+TEST(mqp, bridge_connect_auth) {
+    int port = 0;
+    int lfd = listen_loopback(&port);
+    ASSERT(lfd >= 0);
+    struct auth_dummy d;
+    memset(&d, 0, sizeof(d));
+    d.lfd = lfd;
+    pthread_t th;
+    ASSERT_EQ(pthread_create(&th, NULL, auth_dummy_main, &d), 0);
+
+    cmq_mqtt_bridge_t *br = cmq_mqtt_bridge_create("auth-client");
+    ASSERT_NOT_NULL(br);
+    ASSERT_EQ(cmq_mqtt_bridge_connect_auth(br, "127.0.0.1", port,
+                                           "bridge-user", "bridge-secret"), 0);
+    pthread_join(th, NULL);
+    close(lfd);
+
+    ASSERT_EQ(d.gotn, (size_t)53);
+    ASSERT_EQ((int)(d.got[0] & 0xF0), 0x10);
+    ASSERT_EQ((int)d.got[9], 0xC2);
+    ASSERT_EQ((int)d.got[12], 0x00);
+    ASSERT_EQ((int)d.got[13], 0x0B);
+    ASSERT(memcmp(d.got + 14, "auth-client", 11) == 0);
+    ASSERT_EQ((int)d.got[25], 0x00);
+    ASSERT_EQ((int)d.got[26], 0x0B);
+    ASSERT(memcmp(d.got + 27, "bridge-user", 11) == 0);
+    ASSERT_EQ((int)d.got[38], 0x00);
+    ASSERT_EQ((int)d.got[39], 0x0D);
+    ASSERT(memcmp(d.got + 40, "bridge-secret", 13) == 0);
     cmq_mqtt_bridge_destroy(br);
 }
 

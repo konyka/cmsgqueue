@@ -417,6 +417,21 @@ TEST(mqtt, encode_connect) {
     ASSERT_EQ(cmq_mqtt_decode_packet_type(buf, (size_t)len), 1);
 }
 
+TEST(mqtt, encode_connect_with_credentials) {
+    uint8_t buf[256];
+    int len = cmq_mqtt_encode_connect_auth(buf, sizeof(buf), "client1", 60, 1,
+                                            "alice", "secret");
+    ASSERT(len > 0);
+    ASSERT_EQ(buf[9], 0xC2);
+    static const uint8_t payload[] = {
+        0x00, 0x07, 'c', 'l', 'i', 'e', 'n', 't', '1',
+        0x00, 0x05, 'a', 'l', 'i', 'c', 'e',
+        0x00, 0x06, 's', 'e', 'c', 'r', 'e', 't'
+    };
+    ASSERT((size_t)len >= sizeof(payload));
+    ASSERT(memcmp(buf + len - sizeof(payload), payload, sizeof(payload)) == 0);
+}
+
 TEST(mqtt, decode_connack) {
     uint8_t ok[] = {0x20, 0x02, 0x00, 0x00};
     ASSERT_EQ(cmq_mqtt_decode_connack(ok, sizeof(ok)), 0);
