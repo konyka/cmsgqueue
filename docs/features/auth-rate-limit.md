@@ -6,15 +6,23 @@ scrypt verify (F8) is ~100ms per call. An attacker can mount an online brute-for
 
 ## Design
 
-A per-IP rate limit on failed `CONNECT` attempts. After 10 attempts within a 1-second window, subsequent attempts from the same IP are rejected with `cmq_send_connack(c, 4)` ("rate limit") without invoking the password verify. The check uses `getpeername` on the connected socket, keyed on the source IP.
+A configurable per-IP rate limit on failed `CONNECT` attempts. The default is 10 failed attempts within a 1-second fixed window. Subsequent attempts from the same IP are rejected with `cmq_send_connack(c, 4)` ("rate limit") without invoking password verification. The check uses `getpeername` on the connected socket, keyed on the source IP.
 
-The rate lock (F10) is reused. The auth path is mutual-exclusion with the connect path but distinct from the publish hot path.
+Set `auth_failed_connects_per_sec` in `cmq.conf` to change the limit. A value of `0` disables this limiter; when the key is omitted, the parser uses the default of `10`. Programmatic zero-initialized configs use `0` as disabled. Successful authentication releases its reservation and does not consume the failed-attempt budget.
+
+Authentication failures use a dedicated fixed-size table and mutex, separate from
+the F10 ordinary connection-rate table. The reservation is made before credential
+parsing or verification, so concurrent workers cannot exceed the configured
+budget. A failed `getpeername`, unsupported address family, or full auth table is
+fail-closed with a rate-limit CONNACK; expired idle slots are reclaimed.
 
 ## Files touched
 
+- `src/include/cmq.h` — public `auth_failed_connects_per_sec` field.
+- `src/server/cmq_config.c` — `auth_failed_connects_per_sec` parser key.
 - `src/server/cmq_server.c` — `CMQ_OP_CONNECT` handler includes the rate check.
-- `src/server/cmq_server.{h}` — already has the F10 rate_lock.
-- `tests/test_auth_ratelimit.c` (new).
+- `src/server/cmq_server.{h}` — dedicated auth-rate slots/lock alongside F10.
+- `tests/test_auth_ratelimit.c` — production-path socket tests.
 
 ## Tests
 
@@ -45,8 +53,9 @@ Threats NOT closed:
 
 ## Limitations
 
-- 1024-slot fixed table. New IPs after table full are admitted (same as F10).
-- 10 attempts/sec is hardcoded. Future work: configurable via `cmq_config_t`.
+- 1024-slot fixed table. When all slots are occupied in the current window,
+  new authentication attempts are rejected until an idle slot expires.
+- The limit is configurable via `cmq_config_t`; `0` disables it and omitted config defaults to 10 attempts/sec.
 - Cap is uniform across all IPs. Premium accounts could get higher caps (future work).
 
 ## See also
