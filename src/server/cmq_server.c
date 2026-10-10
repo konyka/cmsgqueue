@@ -6449,7 +6449,7 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
         const char *path_end = strchr(path_start, ' ');
         if (path_end) {
             size_t plen = (size_t)(path_end - path_start);
-            if (plen == 9 && memcmp(path_start, "/healthz", 9) == 0) {
+            if (plen == 8 && memcmp(path_start, "/healthz", 8) == 0) {
                 free(req);
                 /* P4 (v0.5.3): report async WAL + reload state. We
                  * surface degraded status if the filestore has any
@@ -6472,22 +6472,22 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                     "HTTP/1.1 200 OK\r\n"
                     "Content-Type: application/json\r\n"
                     "Content-Length: %zu\r\n"
-                    "Connection: close\r\n%s%s",
+                    "Connection: close\r\n%s\r\n%s",
                     strlen(body), hsts, body);
-                if (rl > 0) (void)client_sock_write(c, (const uint8_t *)resp, (size_t)rl);
+                if (rl > 0) (void)cmq_client_send(c, (const uint8_t *)resp, (size_t)rl);
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 if (consumed) *consumed = hdr_end;
                 return 0;
             }
-            if (plen == 8 && memcmp(path_start, "/readyz", 8) == 0) {
+            if (plen == 7 && memcmp(path_start, "/readyz", 7) == 0) {
                 free(req);
                 int draining = (c && c->server &&
                                 cmq_atomic_load_int(&c->server->acceptor_drain,
                                                      CMQ_ATOMIC_RELAXED) != 0);
                 const char *body = draining
-                    ? "{\"status\":\"ready\"}\n"
-                    : "{\"status\":\"draining\"}\n";
-                const char *status = draining ? "200 OK" : "503 Service Unavailable";
+                    ? "{\"status\":\"draining\"}\n"
+                    : "{\"status\":\"ready\"}\n";
+                const char *status = draining ? "503 Service Unavailable" : "200 OK";
                 char resp[256];
                 int rl = snprintf(resp, sizeof(resp),
                     "HTTP/1.1 %s\r\n"
@@ -6495,7 +6495,7 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                     "Content-Length: %zu\r\n"
                     "Connection: close\r\n\r\n%s",
                     status, strlen(body), body);
-                if (rl > 0) cmq_client_send(c, (const uint8_t *)resp, (size_t)rl);
+                if (rl > 0) (void)cmq_client_send(c, (const uint8_t *)resp, (size_t)rl);
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 if (consumed) *consumed = hdr_end;
                 return 0;
