@@ -17,7 +17,7 @@ HTTP request. Three paths are recognized:
 
 | Path | Status | Body |
 |---|---|---|
-| `/healthz` | 200 OK | `{"status":"ok"}` |
+| `/healthz` | 200 OK | `{"status":"ok","async_blocked":0}` (or the current async-blocked count) |
 | `/readyz` | 200 OK / 503 | `{"status":"ready"\|"draining"}` |
 | `/metrics` | 200 OK | Prometheus exposition |
 | `/connz` | 200 OK | connections snapshot (v0.5.47) |
@@ -33,15 +33,18 @@ to CLOSING. The Prometheus exposition advertises
 ## Files touched
 
 - `src/server/cmq_server.c` — `handle_ws_upgrade` dispatcher.
-- `tests/test_health_metrics.c` — metrics, unknown-path, and introspection
-  snapshot tests. The metrics test accumulates the complete response before
-  parsing it, because HTTP headers and body may arrive in separate TCP reads.
+- `tests/test_health_metrics.c` — health/readiness, metrics, unknown-path,
+  and introspection snapshot tests. HTTP tests accumulate complete responses
+  before parsing them, because headers and bodies may arrive in separate TCP
+  reads.
 
 ## Tests
 
 `tests/test_health_metrics.c`:
 - `http.metrics_returns_prometheus` — verifies the full Prometheus
   body structure (HELP, TYPE, metric samples).
+- `http.health_and_ready_contract` — verifies complete `/healthz` and
+  `/readyz` responses while serving and while draining.
 - `http.unknown_path_returns_404` — verifies unknown paths fall through
   to the WS code path (connection closed).
 - `http.connz_json`, `http.subz_json`, and `http.routez_json` — verify the
@@ -50,6 +53,8 @@ to CLOSING. The Prometheus exposition advertises
 ## Verification gates
 
 - 31/31 tests pass (was 30, +1 test_health_metrics with 2 tests).
+- The health/readiness test reads until the complete `Content-Length` body
+  arrives, rather than assuming one TCP read contains the response.
 - Server creates successfully even when TLS is not requested.
 
 ## Performance
