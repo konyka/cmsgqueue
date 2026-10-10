@@ -1,4 +1,4 @@
-/* v0.5.96: COMPRESSED on PUBLISH (zstd, same bomb cap as BATCH). */
+/* F2/F11: per-message COMPRESSED flags are rejected; only BATCH supports it. */
 #include "cmq_test.h"
 #include "cmq_parser.h"
 #include "cmq_proto.h"
@@ -6,18 +6,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-TEST(pubc, accept_publish) {
+TEST(pubc, reject_compressed_publish) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
     size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
                                 CMQ_FLAG_COMPRESSED, NULL, 0);
     ASSERT(n > 0);
-    ASSERT_EQ(cmq_parser_feed(p, buf, n), 1);
-    ASSERT_EQ(cmq_parser_pending_error(p), 0);
-    const cmq_frame_t *f = cmq_parser_frame(p);
-    ASSERT_NOT_NULL(f);
-    ASSERT_EQ(f->hdr.op, CMQ_OP_PUBLISH);
-    ASSERT_EQ(f->hdr.flags, CMQ_FLAG_COMPRESSED);
+    (void)cmq_parser_feed(p, buf, n);
+    ASSERT_EQ(cmq_parser_pending_error(p), 1);
     cmq_parser_destroy(p);
 }
 

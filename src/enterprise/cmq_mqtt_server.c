@@ -18,6 +18,7 @@
 
 #define MQTT_LISTEN_PORT 1883
 #define MQTT_MAX_PACKET  65536
+#define MQTT_MAX_RETAINED_PAYLOAD MQTT_MAX_PACKET
 #define MQTT_TYPE_CONNECT     0x10
 #define MQTT_TYPE_CONNACK     0x20
 #define MQTT_TYPE_PUBLISH     0x30
@@ -577,23 +578,31 @@ static struct qos2_entry g_qos2[MQTT_QOS2_MAX];
 static int g_qos2_count = 0;
 static pthread_mutex_t g_qos2_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* v0.5.42: return 1 on update (entry existed), 0 on insert (new
+ * entry added), -1 on overflow (table full, entry NOT added). The
+ * previous implementation returned 0 on both insert and overflow,
+ * which made it impossible for callers to distinguish a successful
+ * new insert from a silently-dropped overflow case. */
 static int qos2_record_or_lookup(uint16_t packet_id, int new_phase) {
     pthread_mutex_lock(&g_qos2_lock);
-    int found = 0;
+    int rc = 0;
     for (int i = 0; i < g_qos2_count; i++) {
         if (g_qos2[i].packet_id == packet_id) {
             g_qos2[i].phase = new_phase;
-            found = 1;
-            break;
+            rc = 1;
+            goto out;
         }
     }
-    if (!found && g_qos2_count < MQTT_QOS2_MAX) {
-        g_qos2[g_qos2_count].packet_id = packet_id;
-        g_qos2[g_qos2_count].phase = new_phase;
-        g_qos2_count++;
+    if (g_qos2_count >= MQTT_QOS2_MAX) {
+        rc = -1;
+        goto out;
     }
+    g_qos2[g_qos2_count].packet_id = packet_id;
+    g_qos2[g_qos2_count].phase = new_phase;
+    g_qos2_count++;
+out:
     pthread_mutex_unlock(&g_qos2_lock);
-    return found;
+    return rc;
 }
 
 static int qos2_get_phase(uint16_t packet_id) {
@@ -631,44 +640,35 @@ int cmq_mqtt_inflight_offer(cmq_mqtt_inflight_t *w, const char *topic,
     if (w->count >= CMQ_MQTT_INFLIGHT_MAX) return -2;
     int slot = -1;
     for (int i = 0; i < CMQ_MQTT_INFLIGHT_MAX; i++) {
-        if (!w->slots[i].used) {
-            slot = i;
-            break;
-        }
+        if (!w->slots[i].used) { slot = i; break; }
     }
     if (slot < 0) return -2;
-    uint16_t id = w->next_id;
-    if (id == 0) id = 1;
+    uint16_t id = w->next_id ? w->next_id : 1;
     w->next_id = (uint16_t)(id + 1);
-    if (w->next_id == 0) w->next_id = 1;
-    w->slots[slot].used = 1;
-    w->slots[slot].qos = qos;
-    w->slots[slot].phase = 0;
-    w->slots[slot].packet_id = id;
-    w->slots[slot].topic_len = (uint16_t)tlen;
-    w->slots[slot].payload_len = (uint16_t)payload_len;
-    memcpy(w->slots[slot].topic, topic, tlen);
-    w->slots[slot].topic[tlen] = '\0';
-    if (payload_len > 0)
-        memcpy(w->slots[slot].payload, payload, payload_len);
+    if (!w->next_id) w->next_id = 1;
+    cmq_mqtt_inflight_slot_t *s = &w->slots[slot];
+    memset(s, 0, sizeof(*s));
+    s->used = 1;
+    s->qos = qos;
+    s->packet_id = id;
+    s->topic_len = (uint16_t)tlen;
+    s->payload_len = (uint16_t)payload_len;
+    memcpy(s->topic, topic, tlen);
+    if (payload_len) memcpy(s->payload, payload, payload_len);
     w->count++;
     *out_id = id;
     return 0;
 }
 
 int cmq_mqtt_inflight_ack(cmq_mqtt_inflight_t *w, uint16_t packet_id) {
-    if (!w || packet_id == 0) return -1;
+    if (!w || !packet_id) return -1;
     for (int i = 0; i < CMQ_MQTT_INFLIGHT_MAX; i++) {
-        if (!w->slots[i].used || w->slots[i].packet_id != packet_id)
-            continue;
-        if (w->slots[i].qos == 1 && w->slots[i].phase == 0) {
-            w->slots[i].used = 0;
-            if (w->count > 0) w->count--;
-            return 0;
-        }
-        if (w->slots[i].qos == 2 && w->slots[i].phase == 1) {
-            w->slots[i].used = 0;
-            if (w->count > 0) w->count--;
+        cmq_mqtt_inflight_slot_t *s = &w->slots[i];
+        if (!s->used || s->packet_id != packet_id) continue;
+        if ((s->qos == 1 && s->phase == 0) ||
+            (s->qos == 2 && s->phase == 1)) {
+            s->used = 0;
+            if (w->count) w->count--;
             return 0;
         }
         return -1;
@@ -677,48 +677,43 @@ int cmq_mqtt_inflight_ack(cmq_mqtt_inflight_t *w, uint16_t packet_id) {
 }
 
 int cmq_mqtt_inflight_rec(cmq_mqtt_inflight_t *w, uint16_t packet_id) {
-    if (!w || packet_id == 0) return -1;
+    if (!w || !packet_id) return -1;
     for (int i = 0; i < CMQ_MQTT_INFLIGHT_MAX; i++) {
-        if (w->slots[i].used && w->slots[i].packet_id == packet_id &&
-            w->slots[i].qos == 2 && w->slots[i].phase == 0) {
-            w->slots[i].phase = 1;
+        cmq_mqtt_inflight_slot_t *s = &w->slots[i];
+        if (s->used && s->packet_id == packet_id && s->qos == 2 && !s->phase) {
+            s->phase = 1;
             return 0;
         }
     }
     return -1;
 }
 
+static cmq_mqtt_inflight_slot_t *inflight_find(cmq_mqtt_inflight_t *w,
+                                                uint16_t packet_id) {
+    if (!w || !packet_id) return NULL;
+    for (int i = 0; i < CMQ_MQTT_INFLIGHT_MAX; i++)
+        if (w->slots[i].used && w->slots[i].packet_id == packet_id)
+            return &w->slots[i];
+    return NULL;
+}
+
 int cmq_mqtt_inflight_encode(const cmq_mqtt_inflight_t *w, uint16_t packet_id,
                              uint8_t *out, size_t out_sz, size_t *out_len) {
-    if (!w || !out || !out_len || packet_id == 0) return -1;
-    const cmq_mqtt_inflight_slot_t *s = NULL;
-    for (int i = 0; i < CMQ_MQTT_INFLIGHT_MAX; i++) {
-        if (w->slots[i].used && w->slots[i].packet_id == packet_id) {
-            s = &w->slots[i];
-            break;
-        }
-    }
+    if (!w || !out || !out_len || !packet_id) return -1;
+    const cmq_mqtt_inflight_slot_t *s = inflight_find((cmq_mqtt_inflight_t *)w, packet_id);
     if (!s) return -1;
-    uint32_t rem = 2u + (uint32_t)s->topic_len + 2u + (uint32_t)s->payload_len;
+    uint32_t rem = 4u + s->topic_len + s->payload_len;
     uint8_t rl[4];
     int rln = encode_remaining_length(rl, rem);
-    if (rln <= 0) return -1;
-    size_t need = 1u + (size_t)rln + (size_t)rem;
-    if (need > out_sz || need > CMQ_MQTT_INFLIGHT_PKT_MAX) return -1;
+    size_t need = 1u + (size_t)rln + rem;
+    if (rln <= 0 || need > out_sz || need > CMQ_MQTT_INFLIGHT_PKT_MAX) return -1;
     size_t o = 0;
-    out[o++] = (uint8_t)(0x30 | ((s->qos & 0x03) << 1));
-    memcpy(out + o, rl, (size_t)rln);
-    o += (size_t)rln;
-    out[o++] = (uint8_t)(s->topic_len >> 8);
-    out[o++] = (uint8_t)(s->topic_len & 0xFF);
-    memcpy(out + o, s->topic, s->topic_len);
-    o += s->topic_len;
-    out[o++] = (uint8_t)(s->packet_id >> 8);
-    out[o++] = (uint8_t)(s->packet_id & 0xFF);
-    if (s->payload_len > 0) {
-        memcpy(out + o, s->payload, s->payload_len);
-        o += s->payload_len;
-    }
+    out[o++] = (uint8_t)(0x30 | ((s->qos & 3u) << 1));
+    memcpy(out + o, rl, (size_t)rln); o += (size_t)rln;
+    out[o++] = (uint8_t)(s->topic_len >> 8); out[o++] = (uint8_t)s->topic_len;
+    memcpy(out + o, s->topic, s->topic_len); o += s->topic_len;
+    out[o++] = (uint8_t)(s->packet_id >> 8); out[o++] = (uint8_t)s->packet_id;
+    memcpy(out + o, s->payload, s->payload_len); o += s->payload_len;
     *out_len = o;
     return 0;
 }
@@ -726,22 +721,11 @@ int cmq_mqtt_inflight_encode(const cmq_mqtt_inflight_t *w, uint16_t packet_id,
 int cmq_mqtt_inflight_encode_pubrel(const cmq_mqtt_inflight_t *w,
                                     uint16_t packet_id, uint8_t *out,
                                     size_t out_sz, size_t *out_len) {
-    if (!w || !out || !out_len || packet_id == 0 || out_sz < 4)
-        return -1;
-    int found = 0;
-    for (int i = 0; i < CMQ_MQTT_INFLIGHT_MAX; i++) {
-        if (w->slots[i].used && w->slots[i].packet_id == packet_id &&
-            w->slots[i].qos == 2 && w->slots[i].phase == 1) {
-            found = 1;
-            break;
-        }
-    }
-    if (!found) return -1;
-    out[0] = 0x62;
-    out[1] = 0x02;
-    out[2] = (uint8_t)(packet_id >> 8);
-    out[3] = (uint8_t)(packet_id & 0xFF);
-    *out_len = 4;
+    if (!w || !out || !out_len || out_sz < 4 || !packet_id) return -1;
+    cmq_mqtt_inflight_slot_t *s = inflight_find((cmq_mqtt_inflight_t *)w, packet_id);
+    if (!s || s->qos != 2 || s->phase != 1) return -1;
+    out[0] = 0x62; out[1] = 2; out[2] = (uint8_t)(packet_id >> 8);
+    out[3] = (uint8_t)packet_id; *out_len = 4;
     return 0;
 }
 
@@ -761,126 +745,92 @@ static pthread_mutex_t g_live_lock = PTHREAD_MUTEX_INITIALIZER;
 int cmq_mqtt_session_attach(int fd, cmq_mqtt_inflight_t *w) {
     if (fd < 0 || !w) return -1;
     pthread_mutex_lock(&g_live_lock);
-    int rc = -1;
-    for (int i = 0; i < MQTT_LIVE_MAX; i++) {
-        if (!g_live[i].used) {
-            memset(&g_live[i], 0, sizeof(g_live[i]));
-            g_live[i].used = 1;
-            g_live[i].fd = fd;
-            g_live[i].inf = w;
-            rc = 0;
-            break;
-        }
+    for (int i = 0; i < MQTT_LIVE_MAX; i++) if (!g_live[i].used) {
+        memset(&g_live[i], 0, sizeof(g_live[i])); g_live[i].used = 1;
+        g_live[i].fd = fd; g_live[i].inf = w;
+        pthread_mutex_unlock(&g_live_lock); return 0;
     }
     pthread_mutex_unlock(&g_live_lock);
-    return rc;
+    return -1;
 }
 
 void cmq_mqtt_session_detach(int fd) {
     pthread_mutex_lock(&g_live_lock);
-    for (int i = 0; i < MQTT_LIVE_MAX; i++) {
-        if (g_live[i].used && g_live[i].fd == fd) {
-            memset(&g_live[i], 0, sizeof(g_live[i]));
-            break;
-        }
-    }
+    for (int i = 0; i < MQTT_LIVE_MAX; i++)
+        if (g_live[i].used && g_live[i].fd == fd) memset(&g_live[i], 0, sizeof(g_live[i]));
     pthread_mutex_unlock(&g_live_lock);
 }
 
 int cmq_mqtt_session_add_filter(int fd, const char *filter, uint8_t qos) {
     if (fd < 0 || !filter || !*filter) return -1;
-    if (qos > 2) qos = 2;
     pthread_mutex_lock(&g_live_lock);
-    int rc = -1;
-    for (int i = 0; i < MQTT_LIVE_MAX; i++) {
-        if (!g_live[i].used || g_live[i].fd != fd) continue;
+    for (int i = 0; i < MQTT_LIVE_MAX; i++) if (g_live[i].used && g_live[i].fd == fd) {
         if (g_live[i].nfilters >= MQTT_LIVE_FILTERS) break;
-        int n = g_live[i].nfilters++;
-        snprintf(g_live[i].filters[n], 128, "%s", filter);
-        g_live[i].qos[n] = qos;
-        rc = 0;
-        break;
+        int n = g_live[i].nfilters++; snprintf(g_live[i].filters[n], 128, "%s", filter);
+        g_live[i].qos[n] = qos > 1 ? 1 : qos;
+        pthread_mutex_unlock(&g_live_lock); return 0;
     }
-    pthread_mutex_unlock(&g_live_lock);
-    return rc;
+    pthread_mutex_unlock(&g_live_lock); return -1;
 }
 
 int cmq_mqtt_session_ack(int fd, uint16_t packet_id) {
     pthread_mutex_lock(&g_live_lock);
-    int rc = -1;
-    for (int i = 0; i < MQTT_LIVE_MAX; i++) {
-        if (g_live[i].used && g_live[i].fd == fd && g_live[i].inf) {
-            rc = cmq_mqtt_inflight_ack(g_live[i].inf, packet_id);
-            break;
-        }
+    for (int i = 0; i < MQTT_LIVE_MAX; i++) if (g_live[i].used && g_live[i].fd == fd) {
+        int rc = cmq_mqtt_inflight_ack(g_live[i].inf, packet_id);
+        pthread_mutex_unlock(&g_live_lock); return rc;
     }
-    pthread_mutex_unlock(&g_live_lock);
-    return rc;
+    pthread_mutex_unlock(&g_live_lock); return -1;
 }
 
 int cmq_mqtt_session_rec(int fd, uint16_t packet_id) {
-    uint8_t pkt[8];
-    size_t n = 0;
-    int send_fd = -1;
     pthread_mutex_lock(&g_live_lock);
-    int rc = -1;
-    for (int i = 0; i < MQTT_LIVE_MAX; i++) {
-        if (g_live[i].used && g_live[i].fd == fd && g_live[i].inf) {
-            rc = cmq_mqtt_inflight_rec(g_live[i].inf, packet_id);
-            if (rc == 0 &&
-                cmq_mqtt_inflight_encode_pubrel(g_live[i].inf, packet_id, pkt,
-                                                sizeof(pkt), &n) == 0)
-                send_fd = g_live[i].fd;
-            break;
-        }
+    for (int i = 0; i < MQTT_LIVE_MAX; i++) if (g_live[i].used && g_live[i].fd == fd) {
+        int rc = cmq_mqtt_inflight_rec(g_live[i].inf, packet_id);
+        pthread_mutex_unlock(&g_live_lock); return rc;
     }
-    pthread_mutex_unlock(&g_live_lock);
-    if (rc == 0 && send_fd >= 0)
-        (void)send(send_fd, pkt, n, 0);
-    return rc;
+    pthread_mutex_unlock(&g_live_lock); return -1;
 }
 
 int cmq_mqtt_fanout(const char *topic, const uint8_t *payload, size_t len) {
-    if (!topic || !*topic || (len > 0 && !payload)) return 0;
-    struct {
-        int fd;
-        uint8_t pkt[CMQ_MQTT_INFLIGHT_PKT_MAX];
-        size_t n;
-    } pending[MQTT_LIVE_MAX];
-    int np = 0;
+    if (!topic || !*topic || (len && !payload)) return 0;
+    int sent = 0;
     pthread_mutex_lock(&g_live_lock);
-    for (int i = 0; i < MQTT_LIVE_MAX; i++) {
-        if (!g_live[i].used || !g_live[i].inf) continue;
-        uint8_t grant = 0;
-        int match = 0;
-        for (int f = 0; f < g_live[i].nfilters; f++) {
+    for (int i = 0; i < MQTT_LIVE_MAX; i++) if (g_live[i].used && g_live[i].inf) {
+        uint8_t qos = 0; int match = 0;
+        for (int f = 0; f < g_live[i].nfilters; f++)
             if (cmq_mqtt_topic_match(g_live[i].filters[f], topic) == 1) {
-                match = 1;
-                if (g_live[i].qos[f] > grant)
-                    grant = g_live[i].qos[f];
+                match = 1; if (g_live[i].qos[f] > qos) qos = g_live[i].qos[f];
             }
-        }
-        if (!match || grant < 1) continue;
-        uint16_t id = 0;
-        if (cmq_mqtt_inflight_offer(g_live[i].inf, topic, payload, len, grant,
-                                     &id) != 0)
+        if (!match || qos == 0) continue;
+        uint16_t id; uint8_t pkt[CMQ_MQTT_INFLIGHT_PKT_MAX]; size_t pkt_len;
+        if (cmq_mqtt_inflight_offer(g_live[i].inf, topic, payload, len, qos, &id) != 0 ||
+            cmq_mqtt_inflight_encode(g_live[i].inf, id, pkt, sizeof(pkt), &pkt_len) != 0)
             continue;
-        if (cmq_mqtt_inflight_encode(g_live[i].inf, id, pending[np].pkt,
-                                      sizeof(pending[np].pkt),
-                                      &pending[np].n) != 0) {
-            cmq_mqtt_inflight_ack(g_live[i].inf, id);
-            continue;
-        }
-        pending[np].fd = g_live[i].fd;
-        np++;
+        if (send(g_live[i].fd, pkt, pkt_len, 0) >= 0) sent++;
     }
     pthread_mutex_unlock(&g_live_lock);
-    int sent = 0;
-    for (int i = 0; i < np; i++) {
-        if (send(pending[i].fd, pending[i].pkt, pending[i].n, 0) >= 0)
-            sent++;
-    }
     return sent;
+}
+
+/* v0.5.42: test-only wrappers. Forward to the static helpers.
+ * qos2_record_or_lookup / qos2_get_phase remain file-static so
+ * production code can't accidentally bypass the table. */
+int cmq_mqtt_qos2_record_or_lookup_test(uint16_t packet_id,
+                                          int new_phase) {
+    return qos2_record_or_lookup(packet_id, new_phase);
+}
+
+int cmq_mqtt_qos2_get_phase_test(uint16_t packet_id) {
+    return qos2_get_phase(packet_id);
+}
+
+/* v0.5.42: test-only reset. Wipes the global QoS2 retransmit
+ * table so tests start from a clean state. Production code must
+ * not call this. */
+void cmq_mqtt_qos2_reset_test(void) {
+    pthread_mutex_lock(&g_qos2_lock);
+    g_qos2_count = 0;
+    pthread_mutex_unlock(&g_qos2_lock);
 }
 
 int cmq_mqtt_record_subscriber(const char *topic_filter) {
@@ -904,6 +854,29 @@ int cmq_mqtt_subscriber_count(void) {
     return n;
 }
 
+/* v0.5.43: test-only retained-message dispatch. Walks the
+ * subscriber list and invokes cb for each whose topic_filter
+ * matches the published topic. Mirrors the SUBSCRIBE dispatch
+ * loop without driving a real MQTT client. */
+void cmq_mqtt_dispatch_retained(const char *topic, const uint8_t *payload,
+                                  size_t payload_len,
+                                  cmq_mqtt_test_dispatch_cb cb,
+                                  void *user) {
+    if (!topic || !cb) return;
+    pthread_mutex_lock(&g_mqtt_sub_lock);
+    for (int i = 0; i < g_mqtt_sub_count; i++) {
+        if (cmq_mqtt_topic_match(g_mqtt_sub_topics[i], topic) == 1) {
+            /* cb may invoke test-only inspection helpers; release
+             * the lock first to avoid any nested-locking hazards. */
+            const char *sub_topic = g_mqtt_sub_topics[i];
+            pthread_mutex_unlock(&g_mqtt_sub_lock);
+            cb(i, sub_topic, payload, payload_len, user);
+            pthread_mutex_lock(&g_mqtt_sub_lock);
+        }
+    }
+    pthread_mutex_unlock(&g_mqtt_sub_lock);
+}
+
 int cmq_mqtt_get_subscribed_topic(int index, char *out, size_t out_len) {
     if (!out || out_len == 0 || index < 0) return -1;
     pthread_mutex_lock(&g_mqtt_sub_lock);
@@ -914,6 +887,14 @@ int cmq_mqtt_get_subscribed_topic(int index, char *out, size_t out_len) {
     }
     pthread_mutex_unlock(&g_mqtt_sub_lock);
     return rc;
+}
+
+/* v0.5.43: test-only reset of the subscriber list. Production code
+ * must not call this. */
+void cmq_mqtt_subs_reset_test(void) {
+    pthread_mutex_lock(&g_mqtt_sub_lock);
+    g_mqtt_sub_count = 0;
+    pthread_mutex_unlock(&g_mqtt_sub_lock);
 }
 
 /* P4 (v0.5.2): retained-message store. Last retained payload per
@@ -956,12 +937,12 @@ void cmq_mqtt_store_retained(const char *topic, const uint8_t *payload,
     }
     g_mqtt_retained[idx].payload_len = len;
     pthread_mutex_unlock(&g_mqtt_retained_lock);
-    /* P3: append to the persistent retain file (best-effort). */
+    /* v0.5.84: append to the persistent retain file (best-effort).
+     * Format: "<topic> <len> <payload>\n" — single length field. */
     if (g_mqtt_retain_path[0]) {
         FILE *f = fopen(g_mqtt_retain_path, "a");
         if (f) {
-            fprintf(f, "%s %d %zu ", g_mqtt_retained[idx].topic,
-                    (int)g_mqtt_retained[idx].payload_len, len);
+            fprintf(f, "%s %zu ", g_mqtt_retained[idx].topic, len);
             if (len > 0) fwrite(payload, 1, len, f);
             fputc('\n', f);
             fclose(f);
@@ -1000,25 +981,45 @@ void cmq_mqtt_set_credentials(const char *user, const char *pass) {
 
 void cmq_mqtt_set_retain_path(const char *path) {
     if (path) {
-        snprintf(g_mqtt_retain_path, sizeof(g_mqtt_retain_path),
-                  "%s", path);
-        FILE *f = fopen(g_mqtt_retain_path, "r");
+        /* v0.5.84: read the file BEFORE enabling the write path.
+         * cmq_mqtt_store_retained (called for each entry) would
+         * re-append the entry to the same file, causing the fscanf
+         * loop to read the new entries and loop forever. We
+         * therefore clear g_mqtt_retain_path for the duration of
+         * the read, then restore it on the way out. */
+        g_mqtt_retain_path[0] = '\0';
+        FILE *f = fopen(path, "r");
         if (f) {
             char topic[128];
-            int tlen;
             size_t plen;
-            while (fscanf(f, "%127s %d %zu ", topic, &tlen, &plen) == 3) {
-                if (tlen <= 0 || tlen >= 128 || plen == 0) continue;
+            /* Format: "<topic> <len> <payload>\n" — single length
+             * field. */
+            while (fscanf(f, "%127s %zu ", topic, &plen) == 2) {
+                if (plen == 0) continue;
+                if (plen > MQTT_MAX_RETAINED_PAYLOAD) {
+                    /* A retained record is bounded by the MQTT packet
+                     * limit. The format scanner has already consumed
+                     * the record header's separator, so continue at the
+                     * next record without allocating the payload. */
+                    continue;
+                }
                 uint8_t *buf = malloc(plen);
                 if (buf) {
                     if (fread(buf, 1, plen, f) == plen) {
                         cmq_mqtt_store_retained(topic, buf, plen);
+                    } else {
+                        /* A short payload is truncated; do not publish
+                         * partial data or attempt to parse past EOF. */
+                        clearerr(f);
                     }
                     free(buf);
                 }
             }
             fclose(f);
         }
+        /* Restore the path so subsequent stores append to it. */
+        snprintf(g_mqtt_retain_path, sizeof(g_mqtt_retain_path),
+                  "%s", path);
     } else {
         g_mqtt_retain_path[0] = '\0';
     }
@@ -1643,15 +1644,21 @@ static void *mqtt_thread(void *arg) {
 }
 
 int cmq_mqtt_server_listen(const char *bind_addr, int port) {
-    (void)bind_addr;
-    (void)port;
+    if (!bind_addr || !bind_addr[0] || port < 0 || port > 65535)
+        return 0;
+
     int s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) return 0;
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(MQTT_LISTEN_PORT);
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, bind_addr, &addr.sin_addr) != 1) {
+        close(s);
+        return 0;
+    }
     int rc = bind(s, (struct sockaddr *)&addr, sizeof(addr));
+    if (rc == 0)
+        rc = listen(s, 16);
     close(s);
     return (rc == 0) ? 1 : 0;
 }

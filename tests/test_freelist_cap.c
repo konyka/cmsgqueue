@@ -13,7 +13,10 @@ TEST(freelist_cap, cap_is_64) {
      * exactly CMQ_WORKER_MSG_FREELIST_MAX (64). If a regression
      * changes this constant, this test fails. */
     /* Verify the constant by checking the source file. */
-    FILE *f = fopen("/home/timeshift/opensource/cmsgqueue/src/server/cmq_server.h", "r");
+    char path[1024];
+    ASSERT(snprintf(path, sizeof(path), "%s/src/server/cmq_server.h",
+                    CMQ_SOURCE_DIR) > 0);
+    FILE *f = fopen(path, "r");
     ASSERT_NOT_NULL(f);
     char line[512];
     int found = 0;

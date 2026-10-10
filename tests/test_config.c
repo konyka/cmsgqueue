@@ -30,6 +30,23 @@ TEST(config, load_basic) {
     ASSERT_EQ(config.num_threads, 4);
     ASSERT_EQ(config.max_clients, 1000);
     ASSERT_EQ(config.max_payload_size, 1048576);
+    ASSERT_EQ(config.auth_failed_connects_per_sec, 10);
+    cmq_config_free(&config);
+}
+
+TEST(config, auth_failed_connect_rate_limit_is_configurable_or_disabled) {
+    const char *path = write_test_config(
+        "auth_failed_connects_per_sec = 3\n");
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_EQ(config.auth_failed_connects_per_sec, 3);
+    cmq_config_free(&config);
+
+    path = write_test_config("auth_failed_connects_per_sec = 0\n");
+    memset(&config, 0, sizeof(config));
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_EQ(config.auth_failed_connects_per_sec, 0);
     cmq_config_free(&config);
 }
 
@@ -427,6 +444,21 @@ TEST(config, reject_overlong_line) {
     memset(&config, 0, sizeof(config));
     cmq_status_t rc = cmq_config_load(path, &config);
     ASSERT_EQ(rc, CMQ_ERR_INVALID_ARG);
+}
+
+
+TEST(config, load_persistence_keys) {
+    const char *path = write_test_config(
+        "persist_dir = /tmp/cmq-persist\n"
+        "persist_sync_interval_ms = 250\n");
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    cmq_status_t rc = cmq_config_load(path, &config);
+    ASSERT_EQ(rc, CMQ_OK);
+    ASSERT_NOT_NULL(config.persist_dir);
+    ASSERT_STR_EQ(config.persist_dir, "/tmp/cmq-persist");
+    ASSERT_EQ(config.persist_sync_interval_ms, 250u);
+    cmq_config_free(&config);
 }
 
 TEST_MAIN()

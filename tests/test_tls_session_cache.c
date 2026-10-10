@@ -220,6 +220,54 @@ TEST(tls_session_cache, callbacks_registered_on_load) {
     cmq_tls_config_destroy(cfg);
 }
 
+/* v0.5.95: production-load cache initialization.
+ *
+ * The direct unit tests (init_destroy_roundtrip etc.) call
+ * cmq_tls_session_cache_init explicitly, which masks a
+ * production defect: cmq_tls_session_cache_init was never
+ * called by cmq_tls_load, so the per-config cache never worked
+ * in production. v0.5.95 fixes cmq_tls_load to call init
+ * itself.
+ *
+ * This test creates a TLS config through the production load
+ * path (no explicit init call), then asserts that the cache
+ * is initialized and accepts an insert/lookup. If a future
+ * change reverts cmq_tls_load, this test fails — proving
+ * the regression at the production-load boundary, not just
+ * at the unit-cache boundary.
+ */
+TEST(tls_session_cache, initialized_on_load) {
+    v0527_gen_cert();
+
+    cmq_tls_config_t *cfg = cmq_tls_config_create();
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cmq_tls_set_cert(cfg, V0527_CERT), 0);
+    ASSERT_EQ(cmq_tls_set_key(cfg, V0527_KEY), 0);
+    /* Deliberately NOT calling cmq_tls_session_cache_init here.
+     * cmq_tls_load must initialize the cache itself. */
+    ASSERT_EQ(cmq_tls_load(cfg), 0);
+
+    /* The cache must be reachable via insert/lookup without an
+     * explicit init. We probe via the test-only cache size
+     * accessor (returns 0 when uninitialized but never fails). */
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg), 0);
+
+    unsigned char id[8] = {0xaa, 0xbb, 0xcc, 0xdd, 0x01, 0x02, 0x03, 0x04};
+    SSL_SESSION *s = make_session();
+    ASSERT_NOT_NULL(s);
+    /* Insert must succeed — would return -1 if the cache
+     * wasn't initialized by cmq_tls_load. */
+    ASSERT_EQ(cmq_tls_session_cache_insert(cfg, id, sizeof(id), s), 0);
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg), 1);
+
+    /* Lookup must also succeed. */
+    SSL_SESSION *got = cmq_tls_session_cache_lookup(cfg, id, sizeof(id));
+    ASSERT_NOT_NULL(got);
+
+    cmq_tls_session_cache_destroy(cfg);
+    cmq_tls_config_destroy(cfg);
+}
+
 /* v0.5.28: real end-to-end TLS handshake using the production server
  * SSL_CTX (with v0.5.27 callbacks wired). Drives both sides with a
  * select() loop, verifies the cache grows. */

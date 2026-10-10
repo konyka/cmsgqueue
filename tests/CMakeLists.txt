@@ -6,6 +6,9 @@ include(CTest)
 
 # Discover all test_*.c files in this directory
 file(GLOB TEST_SOURCES "test_*.c")
+if(NOT UNIX)
+  list(FILTER TEST_SOURCES EXCLUDE REGEX "test_password_cli\\.c$")
+endif()
 
 set(CMQ_TCP_TESTS
   test_coro_integration
@@ -20,6 +23,10 @@ set(CMQ_TCP_TESTS
   test_compress_wire
   test_multi_thread_accept
   test_health_metrics
+)
+
+set(CMQ_JS_PERSIST_TESTS
+  test_jsd test_jsh test_jsl test_jsm test_jsp
 )
 
 foreach(TEST_SRC ${TEST_SOURCES})
@@ -48,8 +55,14 @@ foreach(TEST_SRC ${TEST_SOURCES})
     endif()
   endif()
   cmq_harden_executable(${TEST_NAME})
+  if("${TEST_NAME}" STREQUAL "test_password_cli" AND TARGET cmq-password)
+    target_compile_definitions(${TEST_NAME} PRIVATE
+      CMQ_PASSWORD_CLI_PATH="$<TARGET_FILE:cmq-password>")
+    add_dependencies(${TEST_NAME} cmq-password)
+  endif()
   # Expose that we are building a shared component
   target_compile_definitions(${TEST_NAME} PRIVATE CMQ_BUILDING_SHARED _POSIX_C_SOURCE=200809L)
+  target_compile_definitions(${TEST_NAME} PRIVATE CMQ_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
   # Add asCTest entry
   include(CTest)
   if(TARGET ${TEST_NAME})
@@ -59,12 +72,16 @@ foreach(TEST_SRC ${TEST_SOURCES})
         add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
         set_tests_properties(${TEST_NAME} PROPERTIES LABELS "BENCH")
       endif()
-    else()
+    elseif(NOT "${TEST_NAME}" STREQUAL "test_password_cli" OR TARGET cmq-password)
       add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
     endif()
     list(FIND CMQ_TCP_TESTS ${TEST_NAME} CMQ_TCP_TEST_INDEX)
     if(NOT CMQ_TCP_TEST_INDEX EQUAL -1)
       set_tests_properties(${TEST_NAME} PROPERTIES RESOURCE_LOCK cmq_tcp_server)
+    endif()
+    list(FIND CMQ_JS_PERSIST_TESTS ${TEST_NAME} CMQ_JS_PERSIST_TEST_INDEX)
+    if(NOT CMQ_JS_PERSIST_TEST_INDEX EQUAL -1)
+      set_tests_properties(${TEST_NAME} PROPERTIES RESOURCE_LOCK cmq_js_persist)
     endif()
   endif()
 endforeach()

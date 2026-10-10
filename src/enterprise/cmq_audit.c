@@ -22,7 +22,8 @@ const char *cmq_audit_event_name(cmq_audit_event_t e) {
     }
 }
 
-#define AUDIT_MAX_BYTES (100u * 1024u * 1024u)
+#define AUDIT_DEFAULT_MAX_BYTES (100u * 1024u * 1024u)
+static uint64_t g_audit_max_bytes = AUDIT_DEFAULT_MAX_BYTES;
 
 void cmq_audit_set_path(const char *path) {
     pthread_mutex_lock(&g_audit_lock);
@@ -56,26 +57,47 @@ int cmq_audit_reload_persist(const char *dir) {
     return cmq_audit_from_persist(dir);
 }
 
-static void json_escape(const char *in, char *out, size_t out_cap) {
+void cmq_audit_set_max_bytes(uint64_t bytes) {
+    g_audit_max_bytes = bytes ? bytes : AUDIT_DEFAULT_MAX_BYTES;
+}
+
+/* Escape `in` into `out` (cap `out_cap`). Returns 1 if the entire input
+ * was encoded, 0 if `in` was truncated because the output buffer ran
+ * out. The caller must check the return value and either truncate the
+ * log line or drop the event; emitting a partial line breaks the
+ * JSON-lines contract. */
+static int json_escape(const char *in, char *out, size_t out_cap) {
     size_t o = 0;
-    for (size_t i = 0; in[i] && o + 2 < out_cap; i++) {
+    int truncated = 0;
+    /* out_cap - 1 leaves room for the trailing NUL. Each branch checks
+     * that the post-write byte count stays <= out_cap - 1; if not, the
+     * input is truncated. */
+    size_t i = 0;
+    while (in[i]) {
         unsigned char c = (unsigned char)in[i];
         if (c == '"' || c == '\\') {
-            if (o + 3 > out_cap) break;
+            if (o + 2 > out_cap - 1) { truncated = 1; break; }
             out[o++] = '\\';
             out[o++] = c;
-        } else if (c == '\n' || c == '\r') {
-            if (o + 3 > out_cap) break;
+        } else if (c == '\n') {
+            if (o + 2 > out_cap - 1) { truncated = 1; break; }
             out[o++] = '\\';
             out[o++] = 'n';
+        } else if (c == '\r') {
+            if (o + 2 > out_cap - 1) { truncated = 1; break; }
+            out[o++] = '\\';
+            out[o++] = 'r';
         } else if (c < 0x20) {
-            if (o + 7 > out_cap) break;
+            if (o + 6 > out_cap - 1) { truncated = 1; break; }
             o += (size_t)snprintf(out + o, out_cap - o, "\\u%04x", c);
         } else {
+            if (o + 1 > out_cap - 1) { truncated = 1; break; }
             out[o++] = (char)c;
         }
+        i++;
     }
     out[o] = '\0';
+    return truncated ? 0 : 1;
 }
 
 void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
@@ -89,8 +111,14 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
 
     char subj_esc[256];
     char det_esc[512];
-    json_escape(subject ? subject : "", subj_esc, sizeof(subj_esc));
-    json_escape(details ? details : "", det_esc, sizeof(det_esc));
+    char trace_esc[64];
+    /* Each escape returns 0 if the input was truncated; drop the whole
+     * event in that case so we never emit a partial JSON line. */
+    if (!json_escape(trace_id ? trace_id : "", trace_esc, sizeof(trace_esc)) ||
+        !json_escape(subject ? subject : "", subj_esc, sizeof(subj_esc)) ||
+        !json_escape(details ? details : "", det_esc, sizeof(det_esc))) {
+        return;
+    }
 
     char line[1024];
     int n = snprintf(line, sizeof(line),
@@ -98,8 +126,7 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
                      "\"subject\":\"%s\",\"details\":\"%s\"}\n",
                      ts_buf, (long)(ts.tv_nsec / 1000000),
                      cmq_audit_event_name(event),
-                     trace_id ? trace_id : "",
-                     subj_esc, det_esc);
+                     trace_esc, subj_esc, det_esc);
     if (n <= 0 || (size_t)n >= sizeof(line)) return;
 
     pthread_mutex_lock(&g_audit_lock);
@@ -115,7 +142,7 @@ void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,
              * silent-non-rotation bug, see v0.5.1.bundle.md B7). */
             struct stat st;
             int needs_rotate = (fstat(fileno(f), &st) == 0 &&
-                                 (uint64_t)st.st_size >= AUDIT_MAX_BYTES);
+                                 (uint64_t)st.st_size >= g_audit_max_bytes);
             fclose(f);
             if (needs_rotate) {
                 char rotated[1024];

@@ -10,10 +10,9 @@ extern "C" {
 
 /* F18: Persistent subscription state.
  *
- * STUB. The full persistent sublist requires refactoring the
- * in-memory cmq_sublist to also write to a WAL stream. The
- * minimal API below is the contract; the implementation is
- * deferred (sublist currently has no WAL integration).
+ * Implemented. The API below records server-side subscription
+ * state in a dedicated WAL stream. The server opens/loads it at
+ * startup and records SUBSCRIBE/UNSUBSCRIBE changes while running.
  *
  * The flow is:
  *   1. SUBSCRIBE: cmq_sublist_add writes the sub to the WAL.
@@ -23,10 +22,13 @@ extern "C" {
  *   4. Recovery: replay loop dispatches persisted publishes to
  *      currently-subscribed subjects only.
  *
- * On restart, subscriptions in the WAL are restored. Clients
- * that were connected at the time of the crash are NOT restored;
- * only the server-side state. The recovery loop's handle_publish
- * already iterates records and dispatches via the in-memory sublist.
+ * On restart, subscriptions in the WAL are restored as server-side
+ * subject references. Clients that were connected at the time of
+ * the crash are NOT restored; only server-side state survives. The
+ * recovery loop's handle_publish iterates records and dispatches via
+ * the in-memory sublist; publish replay runs before subscription WAL
+ * load, so restored subscriptions do not receive historical records
+ * from the same restart.
  */
 
 typedef struct cmq_sublist_persist cmq_sublist_persist_t;

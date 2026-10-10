@@ -254,14 +254,14 @@ static int parser_parse_inbuf(cmq_parser_t *p) {
             return parser_have_frames(p, produced);
         }
 
-        /* F2 / v0.5.99: data-path COMPRESSED (BATCH/PUBLISH/MESSAGE/
-         * REQUEST/RESPONSE). Control ops still fail closed. */
-        if ((hb[3] & (uint8_t)CMQ_FLAG_COMPRESSED) &&
-            hb[4] != (uint8_t)CMQ_OP_BATCH &&
-            hb[4] != (uint8_t)CMQ_OP_PUBLISH &&
-            hb[4] != (uint8_t)CMQ_OP_MESSAGE &&
-            hb[4] != (uint8_t)CMQ_OP_REQUEST &&
-            hb[4] != (uint8_t)CMQ_OP_RESPONSE) {
+        /* F11 + F2: CMQ_FLAG_COMPRESSED (0x01) is rejected pre-CONNACK
+         * EXCEPT on CMQ_OP_BATCH. F2 ships BATCH-level zstd compression;
+         * per-message compression remains rejected to avoid silently
+         * round-tripping opaque payload bytes to subscribers.
+         * CMQ_FLAG_CHECKSUM (0x02) is accepted unconditionally — the
+         * trailing-4-byte CRC32C verification lives in handle_publish()
+         * (F3). */
+        if ((hb[3] & (uint8_t)CMQ_FLAG_COMPRESSED) && hb[4] != (uint8_t)CMQ_OP_BATCH) {
             p->pending_error = 1;
             return parser_have_frames(p, produced);
         }

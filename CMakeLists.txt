@@ -211,6 +211,8 @@ endif()
 # ---------------------------------------------------------------------------
 # Subdirectories
 # ---------------------------------------------------------------------------
+add_subdirectory(tools)
+
 if(CMQ_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

@@ -16,7 +16,10 @@ are rejected. When set, `cmq_server_create`:
 
 1. Creates an `cmq_mqtt_bridge_t` with a fixed client_id
    `"cmsgbridge"`.
-2. Calls `cmq_mqtt_bridge_connect(addr, port)`.
+2. Calls the credential-capable bridge connect API with the optional
+   `mqtt_bridge_username` and `mqtt_bridge_password` fields. Empty or omitted
+   credentials leave the MQTT CONNECT packet unauthenticated. The password is
+   never logged.
 3. On connect failure, logs a warning and disables the bridge
    (server starts anyway — the bridge is best-effort).
 4. On success, logs the connection.
@@ -41,21 +44,37 @@ no-op). Omitted / empty keeps the current endpoint.
 Non-IPv4 and out-of-range port fail closed.
 v0.5.142: reload creates and dials the bridge when create
 had none. Omitted / empty keeps off. An existing bridge is
-left to v0.5.136.
+left to v0.5.136. Reload also applies non-omitted username/password values;
+changing credentials reconnects an existing bridge at the same endpoint.
+Omitted or empty credential keys retain the live values.
+
+Bridge authentication keys:
+
+```ini
+mqtt_bridge_username = bridge-user
+mqtt_bridge_password = bridge-secret
+```
+
+Both values are optional and are owned by the loaded/server configuration.
+The bridge copies them for CONNECT setup and cleanses its stored copies on
+destroy. SIGHUP reloads replace the live values only after a successful
+reconnect. Do not put credentials in logs.
 
 ## Files touched
 
-- `src/include/cmq.h` — `mqtt_bridge_addr` / `mqtt_bridge_port` config.
+- `src/include/cmq.h` — bridge endpoint and optional authentication config.
 - `src/server/cmq_server.h` — `mqtt_bridge` server field.
 - `src/server/cmq_server.c` — create/destroy lifecycle.
 
 ## Tests
 
-The existing `test_enterprise.c` covers the MQTT bridge library
+`test_mqb.c` covers parser fields/defaults, `test_mqp.c` covers the
+credential-bearing MQTT CONNECT packet, and `test_mqe.c` covers credential
+rotation during endpoint reload. `test_mqa.c` covers reload validation. The
+existing `test_enterprise.c` also covers the MQTT bridge library
 (bridge_create_destroy, mapping, topic_conversion, encode/decode
-of all message types). No new test added for the wire-up (an
-end-to-end test would require a running MQTT broker, out of
-scope for this PR).
+of all message types). Mock-broker tests check the CONNECT wire payload
+without requiring an external MQTT service.
 
 ## Verification gates
 
@@ -77,9 +96,9 @@ Threats closed:
   client process; the bridge is managed by the server's lifecycle.
 
 Threats NOT closed:
-- **Authentication** — the bridge uses no auth. Production should
-  add username/password (out of scope; `cmq_mqtt_bridge_connect`
-  already supports it but isn't wired here).
+- **Authentication** — username/password authentication is supported for
+  initial connect and reload. Credentials are not logged and are cleared from
+  bridge/config buffers when released.
 - **QoS mapping** — the current bridge uses QoS 0 (at most once).
   QoS 1/2 mapping is a follow-up.
 

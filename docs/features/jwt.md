@@ -1,5 +1,39 @@
 # JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–79, 0.5.82, 0.5.90–91, D3)
 
+## CONNECT verification regression fix
+
+The `sync-remote-20260921` regression introduced by commit `1eac466`
+initialized `jwt_fail` and `nkey_fail` to zero but did not verify the
+CONNECT credentials. Configured JWT and NKey listeners consequently accepted
+invalid tokens and signatures. CONNECT now performs the existing HS256,
+ES256, RS256/JWKS, and Ed25519 NKey checks before accepting a connection;
+plaintext and hashed password authentication remain unchanged. Live JWKS
+verification reads through the server's cache getter so key storage remains
+owned by the JWKS cache.
+
+The regression was reproduced before the production change with:
+
+```sh
+cmake --build build --target test_server -j2 && ./build/tests/test_server
+```
+
+RED result: `server.connect_jwt_verifies_wire_credentials` and
+`server.connect_nkey_verifies_wire_signature` failed because invalid
+credentials received CONNACK success.
+
+After the fix, the focused GREEN command was:
+
+```sh
+cmake --build build --target test_server test_jwt test_nkey_auth \
+  test_rs256 test_es256 test_jwks test_jwkss test_jwksr -j2 && \
+./build/tests/test_server && ./build/tests/test_jwt && \
+./build/tests/test_nkey_auth && ./build/tests/test_rs256 && \
+./build/tests/test_es256 && ./build/tests/test_jwks && \
+./build/tests/test_jwkss && ./build/tests/test_jwksr
+```
+
+GREEN result: all focused wire, JWT, NKey, ES256, RS256, and JWKS tests pass.
+
 CONNECT may present a compact JWT in the password field
 when `jwt_issuer` is set with `jwt_hmac_secret`,
 `jwt_ec_pub`, `jwt_rsa_n`/`jwt_rsa_e`, and/or `jwks_json`.

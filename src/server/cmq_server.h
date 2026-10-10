@@ -118,6 +118,13 @@ typedef struct cmq_client {
     struct cmq_client *next;
 } cmq_client_t;
 
+typedef struct cmq_auth_rate_slot {
+    uint32_t ip;
+    uint64_t window_start_ms;
+    uint32_t count;
+    uint32_t inflight;
+} cmq_auth_rate_slot_t;
+
 typedef struct cmq_worker_msg {
     uint32_t target_id;             /* client id */
     uint32_t target_gen;            /* must match client->conn_gen */
@@ -194,10 +201,12 @@ struct cmq_server {
         uint64_t window_start_ms;
         uint32_t count;
     } rate_slots[CMQ_RATE_LIMIT_SLOTS];
+    cmq_auth_rate_slot_t auth_rate_slots[CMQ_RATE_LIMIT_SLOTS];
     struct cmq_idmap *idmap;        /* acceptor-thread clients */
     cmq_atomic_u32 next_client_id;
     cmq_atomic_u32 next_conn_gen;   /* per-connection generation (id wrap safe) */
     cmq_mutex_t clients_lock;
+    cmq_mutex_t auth_rate_lock;
 
     cmq_sublist_t *sublist;
     /* cmq_sublist is internally self-locking (cmq_rwlock inside cmq_sublist_t);

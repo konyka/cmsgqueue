@@ -15,45 +15,25 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Backpressure** 4MB write buffer limit per client; validated by tests/test_parser_backpressure.c
 - **Connection Limit** atomic `active_clients` gate on accept (`max_clients`)
 - **Graceful Shutdown** cmq_server_drain() sends DISCONNECT to all clients before stopping; validated by tests/test_server_ops.c shutdown path
-- **Persistence** ring buffer memstore, durable stream cursors, file-based WAL (`persist_dir` in `cmq.conf`, v0.5.109) with CRC32
-  Note: `$JS.<name>` PUBLISH appends; REQUEST returns last; `$JS.<name>.<consumer>` pull consume / ack (v0.5.93–95); `$JS.<name>.<consumer>.<part>` consume-part (v0.5.106). Last payload persists as `{persist_dir}/js/{name}.last` (v0.5.103); history as `{persist_dir}/js/{name}.msgs` (v0.5.104); cursors persist under `{persist_dir}/js` when set. `js_partitions` (v0.5.107) sets the default hash-partition count for new streams. `js_msgs_rotate_bytes` (v0.5.108) bounds the history WAL.
-- **Clustering** node membership and outbound route broadcast; leaf/gateway CONNECT/CONNACK e2e (v0.5.86)
-- **Enterprise** account counters, TLS accept stub (plaintext until OpenSSL wired, F1 pending), MQTT bridge library with **5.0 property decode (v0.5.43)** and **will / durable sessions (v0.5.46)**, WebSocket transport with frame reassembly
-- **Connection tracing (v0.5.44)**: 16-byte ID at accept, `[tid=hex]` on `cmq_log` lines for that connection
-- **WAL compact / rotate (v0.5.45)**: `cmq_filestore_compact` keeps a tail; `set_rotate_bytes` archives to `.1` so the live WAL stays bounded
-- **HTTP introspection (v0.5.47)**: `/connz` `/subz` `/routez` JSON snapshots beside `/healthz` `/readyz` `/metrics`
-- **Per-account limits (v0.5.48)**: concurrent conn/sub + per-message payload caps (`account_max_*`; `0` = unlimited)
-- **Subject rewrite (v0.5.49)**: per-account publish maps (`foo.*` → `bar.$1`); skipped when `map_total` is 0
-- **Connect-rate (v0.5.50)**: `max_connections_per_account` is live on CONNECT (per-second window; distinct from concurrent `account_max_connections`)
-- **Audit trail (v0.5.51)**: `auth_ok` / `auth_fail` / `persist_*` / `tls_handshake_fail` on their real paths (not only `rate_limit_reject`)
-- **Outstanding-byte cap (v0.5.52)**: `account_max_bytes_live` bounds concurrent in-flight ingress per account (`0` = unlimited)
-- **Key compaction (v0.5.53 / v0.5.88)**: `cmq_filestore_compact_keys` last-value-wins on sealed `.1`; optional tombstone TTL + dirty-ratio auto-compact (D6)
-- **MQTT QoS 1 inflight (v0.5.54)**: 16-slot outbound window; local fanout + PUBACK (SUBSCRIBE still grants at most QoS 1)
-- **Idempotent publish (v0.5.55)**: `CMQI`+pid+seq sliding window drops retries before WAL (D5 phase 1)
-- **Durable stream cursors (v0.5.56 / v0.5.87 / v0.5.93–95 / v0.5.103–108)**: opt-in `{dir}/{name}.cursors` ack watermarks; last `$JS` payload in `{dir}/js/{name}.last`; history WAL `{dir}/js/{name}.msgs` with optional `js_msgs_rotate_bytes` tail rewrite; `$JS` 1–16 hash partitions (`set_partitions` / `js_partitions` default / `{name}.parts` / payload `append_key` / `consume_part`); `$JS.<name>` PUBLISH + REQUEST-get; `$JS.<name>.<consumer>` consume / ack (D4)
-- **MQTT QoS 2 outbound (v0.5.57)**: grant 2; PUBLISH/PUBREC/PUBREL/PUBCOMP on the 16-slot window
-- **KV store (v0.5.58–70)**: last-value put/get/del; `$KV.<bucket>.<key>` PUBLISH + REQUEST-get
-- **Object store (v0.5.59–70)**: named blobs; `$OBJ.<name>` PUBLISH + REQUEST-get when persist_dir is set
-- **Transactions (v0.5.60 / v0.5.80 / v0.5.85)**: `CMQT` begin/add/commit/abort + 2PC PREPARE/VOTE across live routes + EAGAIN write retry queue (D5 phases 2–4)
-- **OTel / OTLP (v0.5.61–64, 0.5.78, 0.5.84, 0.5.89, 0.5.92, 0.5.100–102)**: lock-free 256-slot sidecar; OTLP/HTTP(S) JSON or `grpc://` protobuf Export when `otlp_endpoint` is set; consume span after fanout; connect span after CONNACK 0; request/response spans on local answer/deliver; disconnect span on graceful DISCONNECT (D1)
-- **JWT / NKEY / JWKS (v0.5.62–65, 0.5.74–79, 0.5.82, 0.5.90–91)**: HS256 / ES256 / RS256 JWT on CONNECT; mint HS256 / ES256 / RS256; Ed25519 nkey of `CMQNK1|<user>` (`nkey_pub` is 64 hex or NATS `U…`); JWKS oct/EC/RSA `kid` cache + HTTP/HTTPS `jwks_url` + `jwks_refresh_sec` (D3)
-- **HTTP/2 (v0.5.66–73, 0.5.81, 0.5.83)**: HPACK static + Huffman + 4 KiB dynamic table + preface/SETTINGS/32-stream machine + loopback listener + `h2_port` / ALPN `h2` + TLS-wrapped accept (D2 phases 1–7)
+ - **Persistence** ring buffer memstore, durable streams with consumers, and server-integrated file WAL persistence with CRC32. Set `persist_dir` in `cmq.conf` to enable publish replay and persistent subscription state; durable stream APIs remain library-level.
+- **Clustering** node membership and outbound route broadcast (gateway/leaf APIs available as libraries)
+ - **Enterprise** account counters, OpenSSL TLS listeners and inter-node BIO-wrap, MQTT bridge plus server-side MQTT 3.1.1/5.0 listener, and WebSocket transport with frame reassembly
 - **Build Hardening (F7)**: FORTIFY_SOURCE=2, PIE, RELRO, stack-protector-strong (with hot-path exclusions for cmq_parser.c, cmq_slab.c, cmq_mpool.c)
 - **Hardware CRC32C (F9)**: SSE4.2 / aarch64 CRC32 hardware acceleration with software fallback
 - **Wire Checksum (F3)**: CMQ_FLAG_CHECKSUM with CRC32C trailing 4 bytes on PUBLISH / REQUEST / RESPONSE / BATCH (v0.5.171–173); rejects bit-flips with 1 - 2⁻³² probability
 - **Capability Negotiation (F4)**: extended INFO frame advertises server_id, max_payload, auth, tls, compression, checksum, headers, batch
-- **Wire flags**: CMQ_FLAG_HEADERS, CMQ_FLAG_BATCH, CMQ_FLAG_ROUTE are implemented; **CMQ_FLAG_CHECKSUM is now implemented (F3)** with CRC32C verification (RFC 3309 / SSE4.2 HW-accelerated); **CMQ_FLAG_COMPRESSED is implemented for the data path (BATCH, PUBLISH, MESSAGE, REQUEST, RESPONSE; F2, v0.5.41 / v0.5.96–99)** — zstd, dest size from the frame content-size header, 16 MiB bomb cap. COMPRESSED on control opcodes is still rejected (F11 interop).
+- **Wire flags**: CMQ_FLAG_HEADERS, CMQ_FLAG_BATCH, CMQ_FLAG_ROUTE are implemented; **CMQ_FLAG_CHECKSUM is now implemented (F3)** with CRC32C verification (RFC 3309 / SSE4.2 HW-accelerated); **CMQ_FLAG_COMPRESSED is now implemented (F2)** for BATCH-level zstd (level 1) with a 16 MiB decompression cap; per-message compression remains rejected (F11 interop safety).
 - **v0.5.0 hot path**:
   - **F1** test_stress flake fix: subscribe-publish barrier + deterministic drain.
   - **F2** audit log rotation at 100 MiB (`cmq-audit.log` → `cmq-audit.log.1`).
   - **F3** N1 per-subject rate limit enforced in `handle_publish`.
-  - **F4** N2 hot config reload (SIGHUP → `cmq_server_reload` of `config_file`: blocklist, log_level, ACL, TLS certs).
+   - **F4** N2 hot config reload (`cmq_server_reload` applies blocklist, ACL, and logger threshold; SIGHUP/audit-path reload remain future work).
   - **F5** F14/F15/F16 wire-up: blocklist in `accept_cb`, ACL + quota in `handle_publish`.
   - **F6** N3 audit log file creation test.
   - **F7** mTLS API surface tests.
   - **F8** F17 BIO-wrap write_full/read wiring (`cmq_route_tls_sess_t` integration; full socket BIO-wrap in v0.5.1).
   - **F9** F18 wire-up: subscriptions persisted on sub/unsub.
-  - **F10** F19 server-side MQTT listener tests (full state machine deferred to v0.5.3).
+   - **F10** F19 server-side MQTT listener tests (full CONNECT/CONNACK, SUBSCRIBE/SUBACK, PUBLISH/PUBACK, QoS, retain, and wildcard state machine shipped).
 - **Performance**: 33,784 msg/s end-to-end, 30 µs avg latency (v0.5.0 baseline; preserved by v0.5.0).
 - **Assembly Coroutines** x86_64 + ARM64 context switching; high-fanout delivery uses value snapshots (no live ref UAF)
 - **Multi-Worker** N worker threads with eventfd cross-thread messaging keyed by stable client id
@@ -277,6 +257,22 @@ cmake .. \
   -DCMQ_ENABLE_COVERAGE=ON \
   -DCMQ_STATIC=ON
 ```
+
+## Password Hash Tool
+
+Build the stdin-only password hash utility with the normal CMake build:
+
+```bash
+cmake -S . -B build -DCMQ_BUILD_TESTS=ON
+cmake --build build --target cmq-password
+cmq-password < protected-password-file
+```
+
+`cmq-password` accepts 1 to 255 password bytes from a non-terminal stdin,
+strips one final LF or CRLF, and writes one scrypt hash plus LF to stdout. It
+rejects embedded line breaks, NUL bytes, empty input, and overlong input. Use a
+protected file or pipe; never put a plaintext password in argv or shell
+history. See `docs/features/password-hash.md` for the complete contract.
 
 ## CI
 

@@ -36,6 +36,15 @@ int cmq_route_tls_configured(cmq_route_tls_config_t *cfg);
  * against OpenSSL and the inter-node TLS module is functional). */
 int cmq_route_tls_available(void);
 
+#ifdef CMQ_TLS_OPENSSL
+#include <openssl/ssl.h>
+/* F17: build (or reuse) the SSL_CTX for this config. The returned
+ * pointer is owned by cfg — do not free it. Returns NULL on failure
+ * (missing cert/key, OpenSSL error). The SSL_CTX is suitable as the
+ * ssl_ctx argument of cmq_route_tls_sess_create. */
+SSL_CTX *cmq_route_tls_get_ssl_ctx(cmq_route_tls_config_t *cfg);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

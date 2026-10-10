@@ -33,6 +33,7 @@ extern "C" {
     ((4 * 1024 * 1024) - (256 * 2 + 65536 + 64 + 10))
 #define CMQ_DEFAULT_MAX_SUBS_PER_CLIENT 1024
 #define CMQ_RATE_LIMIT_SLOTS 1024
+#define CMQ_DEFAULT_AUTH_FAILED_CONNECTS_PER_SEC 10
 #define CMQ_DEFAULT_PING_INTERVAL 30000  /* 30 seconds */
 #define CMQ_DEFAULT_WRITE_TIMEOUT  5000  /* 5 seconds */
 
@@ -97,6 +98,11 @@ typedef struct cmq_config {
     int max_msgs_per_sec_per_account;
     int max_msgs_per_sec_per_subject;
     int max_bytes_per_sec_per_account;
+    /* Misleading legacy name. Despite "connections", the quota is a
+     * fixed-window per-account rate limit on CONNECTs/sec (reset every
+     * 1 s), not a simultaneous-connection cap. See docs/features/quota.md
+     * and cmq_quota_check_connect. Kept under the old name to avoid
+     * breaking existing cmq.conf files. */
     int max_connections_per_account;
     /* v0.5.48: concurrent / per-message hard caps (0 = unlimited).
        Distinct from max_connections_per_account (F14 connect-rate). */
@@ -117,6 +123,12 @@ typedef struct cmq_config {
     const char *tls_key;
     const char *tls_ca;       /* P1: CA bundle for client cert verification. */
     int tls_verify_peer;     /* P1: 1 = require + verify client certs. */
+    const char *tls_crl;      /* v0.5.47: CRL file for client cert revocation check. NULL disables. */
+    /* v0.5.94: disable TLS session tickets (NewSessionTicket).
+     * When non-zero, the server's SSL_CTX is configured with
+     * SSL_OP_NO_TICKET. ID-based session resumption still works.
+     * Default 0 (tickets enabled — OpenSSL default). */
+    int tls_no_tickets;
     /* P2 (v0.5.2): per-listener config slots. Slot 0 mirrors the
      * legacy tls_cert/tls_key/tls_ca fields above for back-compat.
      * Slots 1..3: listener{1,2,3}_tls_{cert,key,ca,verify_peer}
@@ -126,8 +138,10 @@ typedef struct cmq_config {
         const char *tls_key;
         const char *tls_ca;
         int tls_verify_peer;
-        const char *host;      /* v0.5.115: IPv4; NULL = 127.0.0.1 */
-        int port;              /* v0.5.115: 0 = port+index */
+        const char *tls_crl; /* v0.5.47: per-listener CRL. */
+        int tls_no_tickets;   /* v0.5.94: per-listener no-tickets flag. */
+        const char *host;      /* v0.5.115: listener bind address. */
+        int port;              /* v0.5.115: listener port; 0 = ephemeral. */
     } listeners[4];
     int listener_count;
     int max_connects_per_sec;  /* F10: per-IP connect rate cap; 0=disabled */
@@ -139,6 +153,8 @@ typedef struct cmq_config {
      * mapping to the upstream broker. NULL = disabled. */
     const char *mqtt_bridge_addr;
     int mqtt_bridge_port;
+    const char *mqtt_bridge_username;
+    const char *mqtt_bridge_password;
     /* v0.5.112: repeatable mqtt_bridge_map=subject,topic[,qos] */
     struct {
         const char *cmq_subject;
@@ -146,6 +162,9 @@ typedef struct cmq_config {
         int qos;
     } mqtt_bridge_maps[8];
     int mqtt_bridge_map_count;
+    /* F8b: failed CONNECT attempts per IPv4 address per second.
+       0 disables. Kept at the end for positional initializer compatibility. */
+    int auth_failed_connects_per_sec;
 } cmq_config_t;
 
 /**

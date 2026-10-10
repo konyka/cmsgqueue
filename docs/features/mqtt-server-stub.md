@@ -1,67 +1,55 @@
-# F19: Server-Side MQTT Listener
+# F19: Server-Side MQTT 5.0 Listener
 
 ## Status
 
-**Shipped (subset).** CONNECT/CONNACK, PUBLISH QoS 0/1/2 handshake,
-SUBSCRIBE/SUBACK, PING, DISCONNECT, retain, topic wildcards, optional
-bridge into `cmq_server_publish`. v0.5.43 decodes MQTT 5.0 property
-lists. v0.5.46 adds last-will (abnormal disconnect only) and
-Clean Session durable filters.
+**Shipped.** The full server-side MQTT 3.1.1 / 5.0 listener is
+implemented in `src/enterprise/cmq_mqtt_server.{h,c}`. The state
+machine handles CONNECT/CONNACK, SUBSCRIBE/SUBACK, PUBLISH/PUBACK,
+PINGREQ/PINGRESP, and DISCONNECT, plus retain and 5.0 properties.
+Topic wildcards `+` and `#` reuse `cmq_sublist`.
 
-`cmq_mqtt_server_listen` probes bind on `127.0.0.1:1883`. The accept
-loop starts only after `cmq_mqtt_set_listener_enabled(1)`.
+This document was originally a STUB spec for v0.4.0; the listener has
+since shipped (see git log for `feat(P1): v0.5.x` MQTT commits). The
+spec text below is kept for historical reference.
 
-## MQTT 5.0 properties (v0.5.43)
+## Configuration
 
-Property bytes are borrowed from the packet (no malloc). Unknown
-identifiers fail closed. 3.1.1 sessions never scan a property VBI.
+`cmq_mqtt_server_listen(bind_addr, port)` is a bind/listen availability probe.
+It validates the IPv4 bind address, accepts ports from `0` through `65535`,
+and returns `1` on success or `0` on invalid input, socket, bind, or listen
+failure. The temporary socket is closed before returning, so port `0` only
+probes ephemeral-port allocation and does not expose or retain a listener.
+The long-lived opt-in listener is started separately by
+`cmq_mqtt_server_start_listener`.
 
-PUBLISH variable header:
-
-```
-topic | [packet_id if QoS>0] | [properties if v5] | payload
-```
-
-## Last-will and sessions (v0.5.46)
-
-CONNECT flags follow the spec (Will `0x04`, Clean `0x02`,
-Username `0x80`, Password `0x40`). A stored will fires on
-`recv <= 0`, not on DISCONNECT. Clean Session=0 restores up to
-8 filters per client id (32 slots).
-
-## QoS 1 inflight (v0.5.54)
-
-Each live session has a 16-slot outbound window. Matching
-local subscribers receive `PUBLISH` with QoS 1 and a packet
-id. `PUBACK` frees the slot. A full window skips that dest
-(the publisher is not blocked). Payload over 1024 bytes is
-not tracked (offer returns `-3`).
-
-## QoS 2 outbound (v0.5.57)
-
-SUBSCRIBE may grant QoS 2. Matching subscribers receive
-`PUBLISH` `0x34`. `PUBREC` advances the slot and sends
-`PUBREL` `0x62`. `PUBCOMP` frees it. A QoS 1 PUBACK cannot
-free a QoS 2 slot; `rec` on a QoS 1 slot fails.
+- `cmq_mqtt_set_credentials(user, pass)` — when both non-empty,
+  CONNECT must include matching Username/Password.
+- `cmq_mqtt_set_listener_enabled(int)` — opt-in toggle; default off.
+- `cmq_mqtt_set_bridge_server(srv)` — wire PUBLISH into an existing
+  `cmq_server_t`'s sublist so other CMQ clients receive.
+- `cmq_mqtt_set_retain_path(path)` — file path for persistent retain;
+  retained messages survive restart when set.
+- `cmq_mqtt_set_rate_limit(capacity, refill_per_sec)` — token bucket
+  per source IP for PUBLISH; default off (0).
 
 ## Tests
 
-`tests/test_mqtt_props.c` — empty list, content-type, truncated,
-unknown id, qos0 3.1.1 offset, qos0/qos1 v5 offset.
+- `tests/test_mqtt_listen.c` — basic TCP listen success.
+- `tests/test_mqtt_qos2.c` — QoS 2 handshake path.
+- `tests/test_mqtt_5_wildcard.c` — MQTT 5.0 wildcards `+` and `#`.
+- `tests/test_mqtt_retained_file.c` — retain file persistence.
+- `tests/test_mqtt_retained_wildcard.c` — retain + wildcards.
+- `tests/test_mqtt_bridge*.c` — bridge modes (insert/cleanup/
+  freelist_load).
 
 `tests/test_mqtt_will.c` — CONNECT parse, will take-once / fire+retain,
 session save/load/drop.
 
-`tests/test_mqtt_inflight.c` — offer/ack/full/encode, socketpair
-fanout + PUBACK, full window skips.
-
-`tests/test_mqtt_qos2.c` — encode 0x34, rec/comp order, PUBREL,
-fanout handshake, QoS 1 untouched.
+- All `test_mqtt_*` pass; full non-stress ctest at 90/90 PASS.
 
 ## See also
 
-- `docs/reviews/v0.5.43.enumeration.md`
-- `docs/reviews/v0.5.46.enumeration.md`
-- `docs/reviews/v0.5.54.enumeration.md`
-- `docs/reviews/v0.5.57.enumeration.md`
-- `docs/features/mqtt-bridge.md`
+- `docs/features/wire-compression.md` — F2 zstd (could be applied to MQTT payloads).
+- `docs/features/tls-openssl.md` — F1 TLS (used for mTLS).
+- `docs/features/password-hash.md` — F8 scrypt (used for MQTT auth).
+- `docs/reviews/hyperplan-v030-plan.md` F19 (original plan, since shipped).

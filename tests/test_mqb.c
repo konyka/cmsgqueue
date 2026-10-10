@@ -17,12 +17,16 @@ TEST(mqb, apply) {
     const char *path = write_conf(
         "mqtt_bridge_addr = 127.0.0.1\n"
         "mqtt_bridge_port = 1883\n"
+        "mqtt_bridge_username = bridge-user\n"
+        "mqtt_bridge_password = bridge-secret\n"
     );
     cmq_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     ASSERT_EQ(cmq_config_load(path, &cfg), CMQ_OK);
     ASSERT_STR_EQ(cfg.mqtt_bridge_addr, "127.0.0.1");
     ASSERT_EQ(cfg.mqtt_bridge_port, 1883);
+    ASSERT_STR_EQ(cfg.mqtt_bridge_username, "bridge-user");
+    ASSERT_STR_EQ(cfg.mqtt_bridge_password, "bridge-secret");
     cmq_config_free(&cfg);
 }
 
@@ -33,6 +37,8 @@ TEST(mqb, omitted) {
     ASSERT_EQ(cmq_config_load(path, &cfg), CMQ_OK);
     ASSERT(cfg.mqtt_bridge_addr == NULL);
     ASSERT_EQ(cfg.mqtt_bridge_port, 0);
+    ASSERT(cfg.mqtt_bridge_username == NULL);
+    ASSERT(cfg.mqtt_bridge_password == NULL);
     cmq_config_free(&cfg);
 }
 
@@ -46,6 +52,8 @@ TEST(mqb, empty) {
     ASSERT_EQ(cmq_config_load(path, &cfg), CMQ_OK);
     ASSERT(cfg.mqtt_bridge_addr == NULL);
     ASSERT_EQ(cfg.mqtt_bridge_port, 0);
+    ASSERT(cfg.mqtt_bridge_username == NULL);
+    ASSERT(cfg.mqtt_bridge_password == NULL);
     cmq_config_free(&cfg);
 }
 

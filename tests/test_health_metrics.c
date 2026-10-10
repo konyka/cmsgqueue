@@ -2,11 +2,8 @@
  *
  * Tests verify the response structure via the existing HTTP dispatch
  * path. The metrics endpoint is tested end-to-end (520 bytes pass).
- * Healthz and readyz share the same dispatcher but tests for those
- * short responses are flaky on the loopback interface when the server
- * closes the connection immediately (data can flush with FIN and the
- * test's recv can race with the FIN). The dispatcher code itself is
- * verified by the metrics test, which exercises the same code path.
+ * Healthz and readyz are read to EOF so headers and bodies may arrive in
+ * separate TCP reads without making the test depend on packet boundaries.
  *
  * The dispatch logic is in handle_ws_upgrade (src/server/cmq_server.c),
  * which routes GET /healthz, GET /readyz, GET /metrics,
@@ -70,9 +67,15 @@ TEST(http, metrics_returns_prometheus) {
     char buf[4096];
     struct timeval tv = { .tv_sec = 1, .tv_usec = 500000 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
+    size_t used = 0;
+    ssize_t n;
+    do {
+        n = recv(fd, buf + used, sizeof(buf) - 1 - used, 0);
+        if (n > 0) used += (size_t)n;
+    } while (n > 0 && used < sizeof(buf) - 1);
     close(fd);
-    ASSERT(n > 0);
+    ASSERT(used > 0);
+    buf[used] = '\0';
     /* F13: Prometheus exposition format. */
     ASSERT(strstr(buf, "# HELP cmq_connections") != NULL);
     ASSERT(strstr(buf, "# TYPE cmq_connections gauge") != NULL);
@@ -115,21 +118,94 @@ TEST(http, unknown_path_returns_404) {
     pthread_join(tid, NULL);
 }
 
-static void http_get_body(int port, const char *path, char *buf, size_t cap) {
-    int fd = connect_to(port);
+static void http_read_body(int fd, char *buf, size_t cap) {
     if (fd < 0) {
         buf[0] = '\0';
         return;
     }
-    char req[128];
-    snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: x\r\n\r\n", path);
-    (void)send(fd, req, strlen(req), 0);
     struct timeval tv = { .tv_sec = 1, .tv_usec = 500000 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    ssize_t n = recv(fd, buf, cap - 1, 0);
+    size_t total = 0;
+    size_t expected = 0;
+    for (;;) {
+        ssize_t n = recv(fd, buf + total, cap - 1 - total, 0);
+        if (n <= 0) break;
+        total += (size_t)n;
+        buf[total] = '\0';
+        if (total == cap - 1) break;
+        if (expected == 0) {
+            char *headers_end = strstr(buf, "\r\n\r\n");
+            if (headers_end) {
+                char *length = strstr(buf, "Content-Length: ");
+                if (length && length < headers_end)
+                    expected = (size_t)strtoul(length + 16, NULL, 10);
+            }
+        }
+        if (expected > 0 && strstr(buf, "\r\n\r\n") &&
+            total >= (size_t)(strstr(buf, "\r\n\r\n") - buf) + 4 + expected)
+            break;
+    }
     close(fd);
-    if (n < 0) n = 0;
-    buf[n] = '\0';
+    buf[total] = '\0';
+}
+
+static void http_get_body(int port, const char *path, char *buf, size_t cap) {
+    int fd = -1;
+    struct timespec retry = {0, 10000000L};
+    for (int attempt = 0; attempt < 100 && fd < 0; attempt++) {
+        fd = connect_to(port);
+        if (fd < 0) nanosleep(&retry, NULL);
+    }
+    if (fd >= 0) {
+        char req[128];
+        snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: x\r\n\r\n", path);
+        (void)send(fd, req, strlen(req), 0);
+    }
+    http_read_body(fd, buf, cap);
+}
+
+TEST(http, health_and_ready_contract) {
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = HTTP_PORT + 7;
+    cfg.log_to_stdout = 0;
+    cfg.max_clients = 16;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    struct timespec ts = {0, 200000000};
+    nanosleep(&ts, NULL);
+
+    char response[1024];
+    http_get_body(HTTP_PORT + 7, "/readyz", response, sizeof(response));
+    ASSERT(strstr(response, "HTTP/1.1 200 OK\r\n") == response);
+    ASSERT(strstr(response, "Content-Length: 19\r\n") != NULL);
+    ASSERT(strstr(response, "\r\n\r\n{\"status\":\"ready\"}\n") != NULL);
+
+    http_get_body(HTTP_PORT + 7, "/healthz", response, sizeof(response));
+    ASSERT(strstr(response, "HTTP/1.1 200 OK\r\n") == response);
+    ASSERT(strstr(response, "Content-Length: 34\r\n") != NULL);
+    ASSERT(strstr(response, "\r\n\r\n{\"status\":\"ok\",\"async_blocked\":0}\n") != NULL);
+
+    /* The drain gate is raised before the listener is closed by
+     * cmq_server_drain(), so exercise the same state used by the handler
+     * while keeping this listener available for the probe. */
+    int draining_fd = connect_to(HTTP_PORT + 7);
+    ASSERT(draining_fd >= 0);
+    const char *partial = "GET /readyz HTTP/1.1\r\nHost: x\r\n";
+    ASSERT(send(draining_fd, partial, strlen(partial), 0) > 0);
+    nanosleep(&ts, NULL);
+    cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
+    ASSERT(send(draining_fd, "\r\n", 2, 0) == 2);
+    http_read_body(draining_fd, response, sizeof(response));
+    ASSERT(strstr(response, "HTTP/1.1 503 Service Unavailable\r\n") == response);
+    ASSERT(strstr(response, "Content-Length: 22\r\n") != NULL);
+    ASSERT(strstr(response, "\r\n\r\n{\"status\":\"draining\"}\n") != NULL);
+
+    cmq_server_destroy(srv);
+    pthread_join(tid, NULL);
 }
 
 TEST(http, connz_json) {

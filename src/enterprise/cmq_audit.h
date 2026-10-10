@@ -39,6 +39,10 @@ int cmq_audit_reload_persist(const char *dir);
 
 const char *cmq_audit_event_name(cmq_audit_event_t event);
 
+/* Override the rotation size cap (bytes). 0 restores the 100 MiB
+ * default. Intended for tests; production code should not call this. */
+void cmq_audit_set_max_bytes(uint64_t bytes);
+
 /* Write a JSON-lines event. The trace_id is the 16-byte connection
  * ID (hex-encoded) or NULL for non-connection events. */
 void cmq_audit_log(cmq_audit_event_t event, const char *trace_id,

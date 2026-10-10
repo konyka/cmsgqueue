@@ -1,4 +1,5 @@
 build/
+build-*/
 .sisyphus/
 CMakeCache.txt
 CMakeFiles/
