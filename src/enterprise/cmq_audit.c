@@ -51,6 +51,18 @@ int cmq_audit_from_persist(const char *dir) {
     return 0;
 }
 
+int cmq_audit_reload_path(const char *path) {
+    if (!path || !path[0]) {
+        cmq_audit_set_path(NULL);
+        return 0;
+    }
+    if (strstr(path, "..") || strchr(path, '\\')) return -1;
+    for (const char *p = path; *p; p++)
+        if ((unsigned char)*p < 0x20) return -1;
+    cmq_audit_set_path(path);
+    return 0;
+}
+
 int cmq_audit_reload_persist(const char *dir) {
     if (!dir || !dir[0])
         return 0;

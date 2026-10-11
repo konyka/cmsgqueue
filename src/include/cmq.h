@@ -165,6 +165,7 @@ typedef struct cmq_config {
     /* F8b: failed CONNECT attempts per IPv4 address per second.
        0 disables. Kept at the end for positional initializer compatibility. */
     int auth_failed_connects_per_sec;
+    const char *audit_path;    /* F13: explicit audit JSONL path */
 } cmq_config_t;
 
 /**

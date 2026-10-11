@@ -398,6 +398,8 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return parse_int_range(value, 0, 86400000, &config->write_timeout_ms);
     } else if (strcmp(key, "persist_dir") == 0) {
         return cfg_set_str(&config->persist_dir, value);
+    } else if (strcmp(key, "audit_path") == 0) {
+        return cfg_set_str_empty(&config->audit_path, value);
     } else if (strcmp(key, "log_file") == 0) {
         if (!value[0]) {
             cfg_free_owned(config->log_file);
@@ -520,6 +522,7 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->blocklist_file);
     cfg_free_owned(config->config_file);
     cfg_free_owned(config->persist_dir);
+    cfg_free_owned(config->audit_path);
     cfg_free_owned(config->mqtt_bridge_addr);
     cfg_free_secret(config->mqtt_bridge_username);
     cfg_free_secret(config->mqtt_bridge_password);

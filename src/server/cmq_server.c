@@ -8463,6 +8463,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         srv->config.listeners[i].host = NULL;
     }
     srv->config.persist_dir = NULL;
+    srv->config.audit_path = NULL;
     srv->config.route_count = 0;
     for (int i = 0; i < 8; i++) {
         srv->config.routes[i].addr = NULL;
@@ -8515,6 +8516,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         OWN(srv->config.listeners[i].host, src.listeners[i].host);
     }
     OWN(srv->config.persist_dir, src.persist_dir);
+    OWN(srv->config.audit_path, src.audit_path);
 #undef OWN
     /* Fail closed before copy — truncating/skipping would hide invalid
        programmatic configs from cmq_config_validate. */
@@ -8774,7 +8776,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                 srv->config.persist_sync_interval_ms);
         }
         cmq_log_info(srv->log, "Persistence enabled: dir=%s", srv->config.persist_dir);
-        if (cmq_audit_from_persist(srv->config.persist_dir) != 0)
+    if ((srv->config.audit_path && srv->config.audit_path[0]
+             ? cmq_audit_reload_path(srv->config.audit_path)
+             : cmq_audit_from_persist(srv->config.persist_dir)) != 0)
             cmq_log_error(srv->log, "audit file path rejected");
         /* F18: also open the subscription persistence file. */
         srv->persist = cmq_sublist_persist_open(srv->config.persist_dir);
@@ -9510,7 +9514,9 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
     if (fresh.persist_dir && server->filestore) {
         cmq_log_info(server->log, "Persist dir reload: %s", fresh.persist_dir);
     }
-    if (cmq_audit_reload_persist(fresh.persist_dir) != 0) {
+    if ((fresh.audit_path && fresh.audit_path[0]
+             ? cmq_audit_reload_path(fresh.audit_path)
+             : cmq_audit_reload_persist(fresh.persist_dir)) != 0) {
         cmq_config_free(&fresh);
         return -1;
     }
