@@ -4,6 +4,7 @@
 #include "cmq_server.h"
 #include "cmq_config.h"
 #include "cmq_log.h"
+#include "cmq_audit.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,8 @@
 #define RELOAD_PORT 19100
 #define RELOAD_CFG  "/tmp/cmq-test-reload.cfg"
 #define RELOAD_MISSING "/tmp/cmq-test-reload-missing.cfg"
+#define RELOAD_AUDIT_OLD "/tmp/cmq-test-reload-audit-old.log"
+#define RELOAD_AUDIT_NEW "/tmp/cmq-test-reload-audit-new.log"
 
 static char reload_log_buffer[4096];
 static size_t reload_log_buffer_pos;
@@ -61,6 +64,43 @@ static void write_cfg(const char *path, int port, int log_level) {
     fprintf(f, "port = %d\n", port);
     fprintf(f, "log_level = %d\n", log_level);
     fclose(f);
+}
+
+TEST(reload, audit_path_switches_after_reload) {
+    unlink(RELOAD_AUDIT_OLD);
+    unlink(RELOAD_AUDIT_NEW);
+    FILE *f = fopen(RELOAD_CFG, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "host = 127.0.0.1\nport = 0\naudit_path = %s\n", RELOAD_AUDIT_OLD);
+    fclose(f);
+
+    cmq_config_t cfg = {0};
+    cfg.host = "127.0.0.1";
+    cfg.port = 0;
+    cfg.num_threads = 1;
+    cfg.config_file = RELOAD_CFG;
+    cfg.audit_path = RELOAD_AUDIT_OLD;
+    cmq_server_t *server = NULL;
+    ASSERT_EQ(cmq_server_create(&server, &cfg), CMQ_OK);
+    cmq_audit_log(CMQ_AUDIT_AUTH_OK, NULL, "", "before reload");
+
+    f = fopen(RELOAD_CFG, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "host = 127.0.0.1\nport = 0\naudit_path = %s\n", RELOAD_AUDIT_NEW);
+    fclose(f);
+    ASSERT_EQ(cmq_server_reload(server, RELOAD_CFG), 0);
+    cmq_audit_log(CMQ_AUDIT_AUTH_FAIL, NULL, "", "after reload");
+
+    f = fopen(RELOAD_AUDIT_NEW, "r");
+    ASSERT_NOT_NULL(f);
+    char line[512] = {0};
+    ASSERT_NOT_NULL(fgets(line, sizeof(line), f));
+    fclose(f);
+    ASSERT(strstr(line, "auth_fail") != NULL);
+    cmq_server_destroy(server);
+    unlink(RELOAD_CFG);
+    unlink(RELOAD_AUDIT_OLD);
+    unlink(RELOAD_AUDIT_NEW);
 }
 
 static void *server_thread(void *arg) {

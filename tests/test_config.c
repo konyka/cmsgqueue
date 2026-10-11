@@ -50,6 +50,15 @@ TEST(config, auth_failed_connect_rate_limit_is_configurable_or_disabled) {
     cmq_config_free(&config);
 }
 
+TEST(config, audit_path_is_configurable) {
+    const char *path = write_test_config("audit_path = /tmp/cmq-audit.jsonl\n");
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_STR_EQ(config.audit_path, "/tmp/cmq-audit.jsonl");
+    cmq_config_free(&config);
+}
+
 TEST(config, load_with_comments) {
     const char *path = write_test_config(
         "# Server config\n"
