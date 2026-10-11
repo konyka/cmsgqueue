@@ -19,11 +19,11 @@ Fields:
 - `subject` — the user, account, or IP the event is about.
 - `details` — free-form context.
 
-Output destinations: stderr (always) and an optional audit file
-(`cmq-audit.log` in `persist_dir`). v0.5.129: create calls
-`cmq_audit_from_persist` after the WAL opens. Destroy clears
-the path. Reload applies a non-empty `persist_dir`; omitted
-or empty keeps the current file. `..` / `\` / controls fail
+Output destinations: stderr (always) and an optional audit file. By default
+the file is `cmq-audit.log` in `persist_dir`; `audit_path` selects an explicit
+JSONL destination. Create and reload validate the replacement path before
+switching output. Reload applies a non-empty `audit_path`, while omitted or
+empty values retain the current file. `..`, `\`, and control characters fail
 closed.
 
 v0.5.51 wires the remaining events at their natural sites
@@ -53,6 +53,10 @@ JSON escaping: `"` and `\\` are escaped, control chars (including `\n`/`\r`) are
 - `adt.apply` — `{dir}/cmq-audit.log` receives the event.
 - `adt.omitted` / `adt.empty` — reload keeps the current file.
 - `adt.reject` — `..` / `\` leave the current file.
+
+`tests/test_reload.c`:
+- `reload.audit_path_switches_after_reload` — changes `audit_path`, reloads the
+  server, and verifies new audit events are written to the replacement file.
 
 ## Verification gates
 
