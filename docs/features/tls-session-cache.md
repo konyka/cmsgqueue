@@ -82,7 +82,9 @@ size_t cmq_tls_session_cache_size(cmq_tls_config_t *cfg);
 - `src/enterprise/cmq_tls_session_cache.{c,h}` — new module (~200 lines).
 - `src/enterprise/cmq_tls.{c,h}` — opaque accessor functions for the
   cache state pointer.
-- `tests/test_tls_session_cache.c` — 6 cache tests (was 1 placeholder).
+- `tests/test_tls_session_cache.c` — cache ownership and callback setup tests.
+- `tests/test_tls_e2e_handshake.c` — TLS 1.2 reconnect test asserts
+  `SSL_session_reused()` after `SSL_set_session()`.
 - `tests/test_tsa.c` — attach on reload (v0.5.169).
 - `CMakeLists.txt` — registers the new source.
 
