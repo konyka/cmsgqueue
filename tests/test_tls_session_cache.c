@@ -148,6 +148,13 @@ TEST(tls_session_cache, eviction_when_full) {
     }
     ASSERT_EQ(cmq_tls_session_cache_size(cfg), (size_t)1024);
 
+    /* ID 19 occupies slot 0 for this deterministic indexed-id sequence.
+     * Touch it immediately before the cache fills so true LRU must retain it
+     * even though slot 0 is the first slot scanned during eviction. */
+    unsigned char recently_used[8];
+    make_indexed_id(recently_used, 19);
+    ASSERT_NOT_NULL(cmq_tls_session_cache_lookup(cfg, recently_used, 8));
+
     make_indexed_id(id, N - 1);
     SSL_SESSION *s = make_session();
     ASSERT_NOT_NULL(s);
@@ -159,6 +166,11 @@ TEST(tls_session_cache, eviction_when_full) {
     make_indexed_id(last, N - 1);
     SSL_SESSION *g = cmq_tls_session_cache_lookup(cfg, last, 8);
     ASSERT_NOT_NULL(g);
+    ASSERT_NOT_NULL(cmq_tls_session_cache_lookup(cfg, recently_used, 8));
+
+    unsigned char oldest[8];
+    make_indexed_id(oldest, 0);
+    ASSERT_NULL(cmq_tls_session_cache_lookup(cfg, oldest, 8));
 
     cmq_tls_session_cache_destroy(cfg);
     cmq_tls_config_destroy(cfg);
