@@ -19,6 +19,9 @@ backing store for OpenSSL's
 - **64 hash start buckets** with linear probing across 1024 slots
   (FNV-1a hash).
 - **Capacity 1024 sessions**; LRU eviction only when all slots are full.
+- **Deterministic LRU metadata**: each insert or lookup advances a per-cache
+  monotonic access sequence, so accesses in the same clock tick still have a
+  strict order.
 - **`pthread_mutex_t`** guards all operations. Lock-free lookup would
   shave ~50 ns off the hot path, but handshake rates are far lower than
   data-plane read rates — the contention profile is acceptable.
