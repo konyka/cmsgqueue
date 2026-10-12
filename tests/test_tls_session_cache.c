@@ -43,6 +43,17 @@ static SSL_SESSION *make_session(void) {
     return SSL_SESSION_new();
 }
 
+static void make_indexed_id(unsigned char id[8], unsigned int index) {
+    id[0] = (unsigned char)(index >> 24);
+    id[1] = (unsigned char)(index >> 16);
+    id[2] = (unsigned char)(index >> 8);
+    id[3] = (unsigned char)index;
+    id[4] = 0x43;
+    id[5] = 0x4d;
+    id[6] = 0x51;
+    id[7] = 0x53;
+}
+
 TEST(tls_session_cache, init_destroy_roundtrip) {
     cmq_tls_config_t *cfg = cmq_tls_config_create();
     ASSERT_NOT_NULL(cfg);
@@ -117,21 +128,35 @@ TEST(tls_session_cache, eviction_when_full) {
     ASSERT_EQ(cmq_tls_session_cache_init(cfg), 0);
 
     /* Insert 1025 sessions; the 1025th must trigger eviction (LRU).
-     * We don't check WHICH entry got evicted (LRU order depends on
-     * timing); just verify size is bounded at 1024. */
+     * The cache must first hold more than the 64 hash buckets, then
+     * evict only when its documented 1024-entry capacity is reached. */
     enum { N = 1025 };
     unsigned char id[8];
-    for (int i = 0; i < N; i++) {
-        for (int k = 0; k < 8; k++) id[k] = (unsigned char)((i * 7 + k) & 0xFF);
+    for (int i = 0; i < 65; i++) {
+        make_indexed_id(id, (unsigned int)i);
         SSL_SESSION *s = make_session();
         ASSERT_NOT_NULL(s);
         ASSERT_EQ(cmq_tls_session_cache_insert(cfg, id, 8, s), 0);
     }
-    ASSERT_TRUE(cmq_tls_session_cache_size(cfg) <= 1024);
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg), (size_t)65);
+
+    for (int i = 65; i < N - 1; i++) {
+        make_indexed_id(id, (unsigned int)i);
+        SSL_SESSION *s = make_session();
+        ASSERT_NOT_NULL(s);
+        ASSERT_EQ(cmq_tls_session_cache_insert(cfg, id, 8, s), 0);
+    }
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg), (size_t)1024);
+
+    make_indexed_id(id, N - 1);
+    SSL_SESSION *s = make_session();
+    ASSERT_NOT_NULL(s);
+    ASSERT_EQ(cmq_tls_session_cache_insert(cfg, id, 8, s), 0);
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg), (size_t)1024);
 
     /* Most-recently-inserted MUST still be present. */
     unsigned char last[8];
-    for (int k = 0; k < 8; k++) last[k] = (unsigned char)(((N-1) * 7 + k) & 0xFF);
+    make_indexed_id(last, N - 1);
     SSL_SESSION *g = cmq_tls_session_cache_lookup(cfg, last, 8);
     ASSERT_NOT_NULL(g);
 

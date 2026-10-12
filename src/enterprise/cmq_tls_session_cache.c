@@ -33,7 +33,7 @@ struct cmq_tls_session_cache_entry {
 typedef struct cmq_tls_session_cache_entry cmq_tls_session_cache_entry_t;
 
 struct cmq_tls_session_cache {
-    struct cmq_tls_session_cache_entry buckets[CMQ_TLS_SESSION_CACHE_BUCKETS];
+    struct cmq_tls_session_cache_entry slots[CMQ_TLS_SESSION_CACHE_MAX];
     size_t count;
     int initialized;
     pthread_mutex_t lock;
@@ -97,8 +97,8 @@ void cmq_tls_session_cache_destroy(cmq_tls_config_t *cfg) {
     if (!cache) return;
     if (cache->initialized) {
         pthread_mutex_lock(&cache->lock);
-        for (size_t i = 0; i < CMQ_TLS_SESSION_CACHE_BUCKETS; i++)
-            cache_entry_free(&cache->buckets[i]);
+        for (size_t i = 0; i < CMQ_TLS_SESSION_CACHE_MAX; i++)
+            cache_entry_free(&cache->slots[i]);
         cache->initialized = 0;
         pthread_mutex_unlock(&cache->lock);
         pthread_mutex_destroy(&cache->lock);
@@ -125,9 +125,9 @@ int cmq_tls_session_cache_insert(cmq_tls_config_t *cfg,
     unsigned int idx = h % CMQ_TLS_SESSION_CACHE_BUCKETS;
 
     int evicted = 0;
-    for (size_t step = 0; step < CMQ_TLS_SESSION_CACHE_BUCKETS; step++) {
-        cmq_tls_session_cache_entry_t *e = &cache->buckets[(idx + step) %
-            CMQ_TLS_SESSION_CACHE_BUCKETS];
+    for (size_t step = 0; step < CMQ_TLS_SESSION_CACHE_MAX; step++) {
+        cmq_tls_session_cache_entry_t *e = &cache->slots[(idx + step) %
+            CMQ_TLS_SESSION_CACHE_MAX];
         if (!e->occupied) {
             memcpy(e->id, id, id_len);
             e->id_len = id_len;
@@ -151,13 +151,13 @@ int cmq_tls_session_cache_insert(cmq_tls_config_t *cfg,
         /* Cache full — find LRU slot and evict. */
         size_t oldest = 0;
         uint64_t oldest_ts = UINT64_MAX;
-        for (size_t i = 0; i < CMQ_TLS_SESSION_CACHE_BUCKETS; i++) {
-            if (cache->buckets[i].last_used_ms < oldest_ts) {
-                oldest_ts = cache->buckets[i].last_used_ms;
+        for (size_t i = 0; i < CMQ_TLS_SESSION_CACHE_MAX; i++) {
+            if (cache->slots[i].last_used_ms < oldest_ts) {
+                oldest_ts = cache->slots[i].last_used_ms;
                 oldest = i;
             }
         }
-        cmq_tls_session_cache_entry_t *e = &cache->buckets[oldest];
+        cmq_tls_session_cache_entry_t *e = &cache->slots[oldest];
         cmq_tls_session_free_slot(e->sess);
         memcpy(e->id, id, id_len);
         e->id_len = id_len;
@@ -184,9 +184,9 @@ void *cmq_tls_session_cache_lookup(cmq_tls_config_t *cfg,
     unsigned int h = cache_hash(id, id_len);
     unsigned int idx = h % CMQ_TLS_SESSION_CACHE_BUCKETS;
     void *found = NULL;
-    for (size_t step = 0; step < CMQ_TLS_SESSION_CACHE_BUCKETS; step++) {
-        cmq_tls_session_cache_entry_t *e = &cache->buckets[(idx + step) %
-            CMQ_TLS_SESSION_CACHE_BUCKETS];
+    for (size_t step = 0; step < CMQ_TLS_SESSION_CACHE_MAX; step++) {
+        cmq_tls_session_cache_entry_t *e = &cache->slots[(idx + step) %
+            CMQ_TLS_SESSION_CACHE_MAX];
         if (!e->occupied) break;
         if (e->id_len == id_len && memcmp(e->id, id, id_len) == 0) {
             e->last_used_ms = now_ms();
