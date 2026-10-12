@@ -50,6 +50,41 @@ TEST(config, auth_failed_connect_rate_limit_is_configurable_or_disabled) {
     cmq_config_free(&config);
 }
 
+TEST(config, info_go_defaults_and_is_configurable) {
+    const char *path = write_test_config("port = 7654\n");
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_STR_EQ(config.info_go, "20m");
+    cmq_config_free(&config);
+
+    path = write_test_config("info_go = 45s\n");
+    memset(&config, 0, sizeof(config));
+    ASSERT_EQ(cmq_config_load(path, &config), CMQ_OK);
+    ASSERT_STR_EQ(config.info_go, "45s");
+    cmq_config_free(&config);
+}
+
+TEST(config, info_go_rejects_invalid_durations) {
+    const char *invalid[] = {"0m", "20", "20d", "abc", "1msx"};
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        char content[64];
+        snprintf(content, sizeof(content), "info_go = %s\n", invalid[i]);
+        const char *path = write_test_config(content);
+        cmq_config_t config;
+        memset(&config, 0, sizeof(config));
+        ASSERT(cmq_config_load(path, &config) != CMQ_OK);
+        cmq_config_free(&config);
+    }
+}
+
+TEST(config, validate_rejects_invalid_programmatic_info_go) {
+    cmq_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.info_go = "20 days";
+    ASSERT_EQ(cmq_config_validate(&config), CMQ_ERR_INVALID_ARG);
+}
+
 TEST(config, audit_path_is_configurable) {
     const char *path = write_test_config("audit_path = /tmp/cmq-audit.jsonl\n");
     cmq_config_t config;
