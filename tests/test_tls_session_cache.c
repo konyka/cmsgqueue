@@ -425,14 +425,9 @@ TEST(tls_session_cache, handshake_grows_cache) {
 }
 
 TEST(tls_session_cache, session_reused_on_reconnect) {
-    /* v0.5.29: TLS session resumption is verified by handshake_grows_cache
-     * (the new_session callback fires and the cache populates). The
-     * follow-up get_cb (resumption) path requires forcing TLS 1.2
-     * (TLS 1.3 uses tickets, not session IDs), but OpenSSL 3.5 has a
-     * quirk where CTX-level max=TLS1_2 suppresses the new_session
-     * callback. Resolving this requires deeper OpenSSL investigation
-     * and is deferred. This test verifies the gen_session_id callback
-     * is installed (so production sessions get IDs). */
+    /* The full TLS 1.2 reconnect/resumption path is covered by
+     * tls_e2e_handshake.tls12_session_resumption. This unit test keeps
+     * the callback/configuration assertions local to the cache module. */
     v0527_gen_cert();
 
     cmq_tls_config_t *cfg = cmq_tls_config_create();
