@@ -6183,11 +6183,12 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
         return;
     int info_len = snprintf(info_json, sizeof(info_json),
         "{\"server_id\":%s,\"version\":\"0.2.0\",\"proto\":1,"
-        "\"go\":\"20m\",\"host\":%s,\"port\":%d,"
+        "\"go\":\"%s\",\"host\":%s,\"port\":%d,"
         "\"max_payload\":%d,\"connections\":%llu,\"subscriptions\":%llu,"
         "\"auth\":%s,\"tls\":%s,\"compression\":\"%s\","
         "\"checksum\":%s,\"headers\":true,\"batch\":true}",
         sid,
+        srv->config.info_go ? srv->config.info_go : "20m",
         hostj,
         (int)srv->config.port,
         (int)srv->config.max_payload_size,
@@ -8429,6 +8430,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     /* Copy scalars; strings are duplicated below so server owns them. */
     srv->config = src;
     srv->config.host = NULL;
+    srv->config.info_go = NULL;
     srv->config.config_file = NULL;
     srv->config.log_file = NULL;
     srv->config.auth_username = NULL;
@@ -8473,6 +8475,12 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     const char *host_src = src.host ? src.host : CMQ_DEFAULT_HOST;
     srv->config.host = strdup(host_src);
     if (!srv->config.host) {
+        free(srv);
+        return CMQ_ERR_NO_MEMORY;
+    }
+    srv->config.info_go = strdup(src.info_go ? src.info_go : "20m");
+    if (!srv->config.info_go) {
+        cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_NO_MEMORY;
     }
@@ -9836,6 +9844,15 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
                              fresh.h2_port) != 0) {
         cmq_config_free(&fresh);
         return -1;
+    }
+    {
+        char *info_go = strdup(fresh.info_go ? fresh.info_go : "20m");
+        if (!info_go) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+        free((void *)server->config.info_go);
+        server->config.info_go = info_go;
     }
     if (server->h2_lfd >= 0) {
         for (int ti = 0; ti < CMQ_MAX_LISTENERS; ti++) {

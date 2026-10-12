@@ -166,6 +166,7 @@ typedef struct cmq_config {
        0 disables. Kept at the end for positional initializer compatibility. */
     int auth_failed_connects_per_sec;
     const char *audit_path;    /* F13: explicit audit JSONL path */
+    const char *info_go;       /* INFO max idle timeout; NULL = 20m */
 } cmq_config_t;
 
 /**

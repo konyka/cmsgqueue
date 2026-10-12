@@ -140,6 +140,26 @@ static int mqtt_bridge_addr_ok(const char *addr) {
 
 static int parse_int_range(const char *value, int min, int max, int *out);
 
+static int info_go_ok(const char *value) {
+    size_t n;
+    size_t digits = 0;
+    unsigned long number = 0;
+
+    if (!value || !value[0]) return 0;
+    n = strlen(value);
+    if (n < 2 || n > 12) return 0;
+    while (digits < n && isdigit((unsigned char)value[digits])) {
+        number = number * 10UL + (unsigned long)(value[digits] - '0');
+        if (number > 365UL * 24UL * 60UL * 60UL) return 0;
+        digits++;
+    }
+    if (digits == 0 || number == 0 || n - digits < 1 || n - digits > 2)
+        return 0;
+    if (n - digits == 1)
+        return value[digits] == 's' || value[digits] == 'm' || value[digits] == 'h';
+    return value[digits] == 'm' && value[digits + 1] == 's';
+}
+
 static int mqtt_map_subject_ok(const char *s, size_t n) {
     if (!s || n == 0 || n >= 256) return 0;
     for (size_t i = 0; i < n; i++) {
@@ -396,6 +416,9 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return parse_int_range(value, 0, 86400000, &config->ping_interval_ms);
     } else if (strcmp(key, "write_timeout") == 0 || strcmp(key, "write_timeout_ms") == 0) {
         return parse_int_range(value, 0, 86400000, &config->write_timeout_ms);
+    } else if (strcmp(key, "info_go") == 0) {
+        if (!info_go_ok(value)) return -1;
+        return cfg_set_str(&config->info_go, value);
     } else if (strcmp(key, "persist_dir") == 0) {
         return cfg_set_str(&config->persist_dir, value);
     } else if (strcmp(key, "audit_path") == 0) {
@@ -521,6 +544,7 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->acl_deny);
     cfg_free_owned(config->blocklist_file);
     cfg_free_owned(config->config_file);
+    cfg_free_owned(config->info_go);
     cfg_free_owned(config->persist_dir);
     cfg_free_owned(config->audit_path);
     cfg_free_owned(config->mqtt_bridge_addr);
@@ -574,6 +598,7 @@ void cmq_config_free(cmq_config_t *config) {
     config->acl_deny = NULL;
     config->blocklist_file = NULL;
     config->config_file = NULL;
+    config->info_go = NULL;
     config->persist_dir = NULL;
     config->mqtt_bridge_addr = NULL;
     config->mqtt_bridge_username = NULL;
@@ -649,6 +674,10 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
     }
 
     fclose(fp);
+    if (!config->info_go && cfg_set_str(&config->info_go, "20m") != 0) {
+        cmq_config_free(config);
+        return CMQ_ERR_NO_MEMORY;
+    }
     if (!cfg_saw_config_file && persist_dir_ok(path))
         (void)cfg_set_str(&config->config_file, path);
     return CMQ_OK;
@@ -656,6 +685,8 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
 
 cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (!config) return CMQ_ERR_INVALID_ARG;
+    if (config->info_go && !info_go_ok(config->info_go))
+        return CMQ_ERR_INVALID_ARG;
     if (config->port < 0 || config->port > 65535) return CMQ_ERR_INVALID_ARG;
     if (config->h2_port < 0 || config->h2_port > 65535)
         return CMQ_ERR_INVALID_ARG;
