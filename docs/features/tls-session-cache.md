@@ -16,8 +16,9 @@ backing store for OpenSSL's
 
 ### Data structure
 
-- **64 open-addressing buckets** with linear probing (FNV-1a hash).
-- **Capacity 1024 sessions**; LRU eviction when full.
+- **64 hash start buckets** with linear probing across 1024 slots
+  (FNV-1a hash).
+- **Capacity 1024 sessions**; LRU eviction only when all slots are full.
 - **`pthread_mutex_t`** guards all operations. Lock-free lookup would
   shave ~50 ns off the hot path, but handshake rates are far lower than
   data-plane read rates — the contention profile is acceptable.
@@ -40,7 +41,7 @@ backing store for OpenSSL's
 | Memory leak on shutdown | Destroy frees every occupied slot. |
 | Stale reference after eviction | `SSL_SESSION_up_ref` would be safer; we accept borrow-only semantics matching OpenSSL's `SSL_get1_session` (caller can up_ref if needed). |
 | Lock contention | Single mutex; in practice handshakes are an order of magnitude rarer than reads. |
-| Bucket overflow | Open addressing with linear probe. After 64 probes we trigger LRU eviction. |
+| Bucket collisions | Open addressing probes the bounded 1024-slot table before triggering LRU eviction. |
 | Corrupted slot state | `occupied` flag gates every read/write; `id_len` bounds memcpy. |
 
 ### Reliability
