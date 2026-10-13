@@ -8,6 +8,7 @@
 #include "cmq_platform.h"
 #include "cmq_types.h"
 #include "cmq_proto.h"
+#include "cmq_compress.h"
 #include "cmq_slab.h"
 
 /* Internal parser state */
@@ -501,18 +502,41 @@ size_t cmq_frame_encode(uint8_t *buf, size_t buf_size, cmq_op_t op, cmq_u8_t fla
     if (payload_len > SIZE_MAX - sizeof(cmq_frame_hdr_t)) return 0;
     size_t needed = sizeof(cmq_frame_hdr_t) + payload_len;
     if (buf_size < needed) return 0;
+
+    /* Compression is encoder-local: callers continue to own only `buf`. */
+    uint8_t *compressed = NULL;
+    size_t encoded_len = payload_len;
+    if (op == CMQ_OP_BATCH && !(flags & CMQ_FLAG_COMPRESSED) &&
+        payload_len >= 512) {
+        size_t bound = cmq_compress_bound(payload_len);
+        if (bound > 0) {
+            compressed = malloc(bound);
+            if (compressed) {
+                ssize_t clen = cmq_compress(payload, payload_len,
+                                            compressed, bound);
+                if (clen > 0 && (size_t)clen < payload_len &&
+                    sizeof(cmq_frame_hdr_t) + (size_t)clen <= buf_size) {
+                    encoded_len = (size_t)clen;
+                    flags = (cmq_u8_t)(flags | CMQ_FLAG_COMPRESSED);
+                }
+            }
+        }
+    }
     buf[0] = CMQ_PROTO_MAGIC_0;
     buf[1] = CMQ_PROTO_MAGIC_1;
     buf[2] = CMQ_PROTO_VERSION;
     buf[3] = flags;
     buf[4] = (uint8_t)op;
     /* Wire length is little-endian (matches cmq_parser_feed). */
-    uint32_t le = (uint32_t)payload_len;
+    uint32_t le = (uint32_t)encoded_len;
     buf[5] = (uint8_t)(le);
     buf[6] = (uint8_t)(le >> 8);
     buf[7] = (uint8_t)(le >> 16);
     buf[8] = (uint8_t)(le >> 24);
-    if (payload_len > 0)
-        memcpy(buf + sizeof(cmq_frame_hdr_t), payload, payload_len);
-    return sizeof(cmq_frame_hdr_t) + payload_len;
+    if (encoded_len > 0)
+        memcpy(buf + sizeof(cmq_frame_hdr_t),
+               compressed && (flags & CMQ_FLAG_COMPRESSED) ? compressed : payload,
+               encoded_len);
+    free(compressed);
+    return sizeof(cmq_frame_hdr_t) + encoded_len;
 }
