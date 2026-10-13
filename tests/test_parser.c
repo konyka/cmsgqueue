@@ -1,5 +1,6 @@
 #include "cmq_parser.h"
 #include "cmq_proto.h"
+#include "cmq_compress.h"
 #include "cmq_test.h"
 #include <string.h>
 #include <stdlib.h>
@@ -246,6 +247,58 @@ TEST(parser, frame_encode_null_payload) {
     uint8_t buf[64];
     ASSERT_EQ(cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH, 0, NULL, 8),
               (size_t)0);
+}
+
+TEST(parser, frame_encode_compresses_beneficial_batch) {
+    uint8_t payload[512];
+    uint8_t buf[sizeof(cmq_frame_hdr_t) + cmq_compress_bound(sizeof(payload))];
+    uint8_t decoded[sizeof(payload)];
+    memset(payload, 'X', sizeof(payload));
+
+    size_t len = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_BATCH, 0,
+                                  payload, sizeof(payload));
+    ASSERT(len > sizeof(cmq_frame_hdr_t));
+    ASSERT((buf[3] & CMQ_FLAG_COMPRESSED) != 0);
+    ASSERT(((size_t)buf[5] | ((size_t)buf[6] << 8) |
+            ((size_t)buf[7] << 16) | ((size_t)buf[8] << 24)) <
+           sizeof(payload));
+    ASSERT_EQ(cmq_decompress(buf + sizeof(cmq_frame_hdr_t),
+                             len - sizeof(cmq_frame_hdr_t), decoded,
+                             sizeof(decoded)), (ssize_t)sizeof(decoded));
+    ASSERT(memcmp(decoded, payload, sizeof(payload)) == 0);
+}
+
+TEST(parser, frame_encode_skips_small_or_unhelpful_batch) {
+    uint8_t small[511];
+    uint8_t randomish[512];
+    uint8_t publish[1024];
+    uint8_t small_buf[sizeof(cmq_frame_hdr_t) + sizeof(small)];
+    uint8_t random_buf[sizeof(cmq_frame_hdr_t) + sizeof(randomish)];
+    uint8_t publish_buf[sizeof(cmq_frame_hdr_t) + sizeof(publish)];
+    uint32_t state = 0x9e3779b9u;
+    memset(small, 'X', sizeof(small));
+    memset(publish, 'X', sizeof(publish));
+    for (size_t i = 0; i < sizeof(randomish); i++) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        randomish[i] = (uint8_t)state;
+    }
+
+    size_t small_len = cmq_frame_encode(small_buf, sizeof(small_buf),
+                                        CMQ_OP_BATCH, 0, small, sizeof(small));
+    size_t random_len = cmq_frame_encode(random_buf, sizeof(random_buf),
+                                         CMQ_OP_BATCH, 0, randomish,
+                                         sizeof(randomish));
+    size_t publish_len = cmq_frame_encode(publish_buf, sizeof(publish_buf),
+                                          CMQ_OP_PUBLISH, 0, publish,
+                                          sizeof(publish));
+    ASSERT_EQ(small_len, sizeof(cmq_frame_hdr_t) + sizeof(small));
+    ASSERT_EQ(random_len, sizeof(cmq_frame_hdr_t) + sizeof(randomish));
+    ASSERT_EQ(publish_len, sizeof(cmq_frame_hdr_t) + sizeof(publish));
+    ASSERT_EQ(small_buf[3] & CMQ_FLAG_COMPRESSED, 0);
+    ASSERT_EQ(random_buf[3] & CMQ_FLAG_COMPRESSED, 0);
+    ASSERT_EQ(publish_buf[3] & CMQ_FLAG_COMPRESSED, 0);
 }
 
 TEST(parser, large_payload) {
