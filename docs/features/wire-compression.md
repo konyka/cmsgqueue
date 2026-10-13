@@ -43,19 +43,28 @@ forwarded without an explicit decompression boundary.
 
 ### Threshold policy
 
-The producer auto-skips compression for payloads < 512 B (zstd
-dictionary overhead exceeds savings on short frames). The decision
-is made by the encoder. The server accepts any compressed payload
-that decompresses cleanly.
+`cmq_frame_encode` automatically attempts compression only for `BATCH`
+payloads of at least 512 B when the caller has not already set
+`CMQ_FLAG_COMPRESSED`. It emits the zstd payload and sets the flag only when
+the compressed bytes are strictly smaller than the original payload.
+Allocation or compression failure, payloads below the threshold, and payloads
+without a size benefit all fall back to the unchanged uncompressed frame.
+Non-`BATCH` frames are never auto-compressed, preserving the parser's
+per-message compressed-flag rejection rule.
+
+Compression uses an encoder-owned temporary buffer that is freed before
+`cmq_frame_encode` returns. The returned frame remains entirely in the
+caller-provided output buffer, so the API and its ownership contract are
+unchanged. The server accepts any compressed `BATCH` payload that decompresses
+cleanly.
 
 ### Bomb protection
 
-Zstd refuses to write past `dst_cap`. The server passes
-`cmq_compress_bound(payload_len)` (which is bounded by
-ZSTD_compressBound, ~1.1× input size + tiny overhead) as the
-upper-bound cap. The `handle_batch` also caps the bound at 16 MiB
-before allocating, preventing an attacker from sending a 1-byte
-compressed frame that decompresses to 1 GiB.
+Zstd refuses to write past `dst_cap`. The server obtains the frame's exact
+declared content size through `cmq_decompress_bound`, which rejects unknown,
+invalid, zero, or greater-than-16-MiB sizes before allocation. `handle_batch`
+then allocates exactly that validated size, preventing a small compressed
+frame from expanding into an unbounded allocation.
 
 ## Files touched
 
