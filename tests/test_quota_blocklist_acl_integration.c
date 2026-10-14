@@ -148,4 +148,81 @@ TEST(integration, blocklist_rejects_at_accept_cb) {
     system("rm -rf " INTEGRATION_DIR);
 }
 
+TEST(integration, ipv6_primary_listener_admits_normal_client) {
+    const int port = INTEGRATION_PORT + 5;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "::1";
+    cfg.port = port;
+    cfg.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread_fn, srv);
+    struct timespec ts = {0, 200000000};
+    nanosleep(&ts, NULL);
+
+    int fd = socket(AF_INET6, SOCK_STREAM, 0);
+    ASSERT(fd >= 0);
+    struct sockaddr_in6 addr = {0};
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port = htons((uint16_t)port);
+    inet_pton(AF_INET6, "::1", &addr.sin6_addr);
+    ASSERT_EQ(connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
+
+    uint8_t connect_frame[sizeof(cmq_frame_hdr_t)];
+    size_t connect_len = cmq_frame_encode(connect_frame, sizeof(connect_frame),
+                                          CMQ_OP_CONNECT, 0, NULL, 0);
+    ASSERT_EQ(send(fd, connect_frame, connect_len, 0), (ssize_t)connect_len);
+    struct timeval to = {1, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to));
+    uint8_t buf[CMQ_CLIENT_BUF_SIZE];
+    ASSERT(recv(fd, buf, sizeof(buf), 0) > 0);
+    close(fd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+TEST(integration, ipv6_primary_listener_rejects_blocked_peer_at_accept_cb) {
+    system("rm -rf " INTEGRATION_DIR " && mkdir -p " INTEGRATION_DIR);
+    write_file(INTEGRATION_DIR "/blocklist.txt", "::1\n");
+
+    const int port = INTEGRATION_PORT + 6;
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "::1";
+    cfg.port = port;
+    cfg.log_to_stdout = 0;
+    cfg.blocklist_file = INTEGRATION_DIR "/blocklist.txt";
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread_fn, srv);
+    struct timespec ts = {0, 200000000};
+    nanosleep(&ts, NULL);
+
+    int fd = socket(AF_INET6, SOCK_STREAM, 0);
+    ASSERT(fd >= 0);
+    struct sockaddr_in6 addr = {0};
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port = htons((uint16_t)port);
+    inet_pton(AF_INET6, "::1", &addr.sin6_addr);
+    ASSERT_EQ(connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
+
+    struct timeval to = {0, 500000};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to));
+    uint8_t buf[16];
+    ASSERT(recv(fd, buf, sizeof(buf), 0) <= 0);
+    close(fd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    system("rm -rf " INTEGRATION_DIR);
+}
+
 TEST_MAIN()
