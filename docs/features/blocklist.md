@@ -12,9 +12,22 @@ A new `cmq_blocklist` module loads a file at startup. Format: one IP or CIDR per
 10.0.0.1
 192.168.0.0/16
 172.16.0.0/12
+2001:db8::1
+2001:db8:1234::/64
+::/0
 ```
 
-Empty lines and malformed entries are skipped. The blocklist is checked at `accept_cb` after the OS `accept()` returns. Banned IPs are closed immediately.
+Empty lines and malformed entries are skipped. IPv4 and IPv6 entries support
+exact addresses and every CIDR prefix from `/0` through `/32` or `/128`.
+The library can match IPv4 and IPv6 `sockaddr` values through
+`cmq_blocklist_check_sockaddr`; the existing `cmq_blocklist_check` IPv4 API is
+unchanged for ABI compatibility.
+
+The current server accept/listener wiring remains IPv4-only: `accept_cb` uses
+`sockaddr_in` and the IPv4 API, so this change does not provide end-to-end
+server IPv6 support. Banned IPv4 addresses are closed immediately at
+`accept_cb`; server IPv6 listener and accept-path integration is a separate
+follow-up.
 
 The blocklist is reloadable at runtime via `cmq_blocklist_reload`. Updates are lock-protected.
 v0.5.149: SIGHUP attaches `blocklist_file` when create had none.
@@ -23,7 +36,8 @@ v0.5.154: an existing handle is swapped through
 `cmq_blocklist_reload_swap` (fail-closed + live path).
 In-flight readers keep the old list until the rch swap.
 
-The module is shipped as a library; the server-c-side wiring is a follow-up. The library API is complete and tested.
+The module is shipped as a library. Library IPv6 support is complete and
+tested; server-side IPv6 socket/listener wiring is intentionally a follow-up.
 
 ## Files touched
 
@@ -38,6 +52,9 @@ The module is shipped as a library; the server-c-side wiring is a follow-up. The
 - `blocklist.single_ip_blocked` — `10.0.0.1` admitted, `10.0.0.2` blocked.
 - `blocklist.multiple_ips` — multiple entries + CIDR.
 - `blocklist.malformed_lines_skipped` — garbage lines ignored.
+- `blocklist.ipv6_exact_and_prefixes` — IPv6 exact, `/64`, and `/0` matches.
+- `blocklist.ipv6_non_match_and_mixed_families` — IPv6 non-match plus mixed input.
+- `blocklist.ipv6_malformed_prefixes_skipped` — invalid IPv6 prefixes ignored.
 
 ## Verification gates
 
@@ -55,12 +72,12 @@ Threats closed:
 - **Blocklist hot-reload** — operators can update without restart.
 
 Threats NOT closed:
-- **IPv6** — only IPv4 supported in v0.3.0.
-- **CIDR with non-byte-aligned prefix** — not validated; entry is silently dropped.
+- **Server IPv6 wiring** — listener and accept-path integration remain IPv4-only.
 
 ## Limitations
 
-- Server-side wiring (config + accept_cb) is a follow-up. The library is complete and tested.
+- Server-side IPv6 wiring (listener + accept path) is a follow-up; the library
+  API supports both IPv4 and IPv6.
 - 4096-entry hard cap.
 - No persistence: blocklist lives in memory; restart requires re-loading the file.
 
