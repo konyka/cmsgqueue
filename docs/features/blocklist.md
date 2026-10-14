@@ -23,11 +23,10 @@ The library can match IPv4 and IPv6 `sockaddr` values through
 `cmq_blocklist_check_sockaddr`; the existing `cmq_blocklist_check` IPv4 API is
 unchanged for ABI compatibility.
 
-The current server accept/listener wiring remains IPv4-only: `accept_cb` uses
-`sockaddr_in` and the IPv4 API, so this change does not provide end-to-end
-server IPv6 support. Banned IPv4 addresses are closed immediately at
-`accept_cb`; server IPv6 listener and accept-path integration is a separate
-follow-up.
+The primary server listener supports IPv4 and IPv6 addresses and closes
+blocked peers immediately in both accept paths, before handshake or admission.
+Secondary listeners remain IPv4-only; IPv6 support for those listeners and for
+TLS-listener expansion is deferred.
 
 The blocklist is reloadable at runtime via `cmq_blocklist_reload`. Updates are lock-protected.
 v0.5.149: SIGHUP attaches `blocklist_file` when create had none.
@@ -37,7 +36,7 @@ v0.5.154: an existing handle is swapped through
 In-flight readers keep the old list until the rch swap.
 
 The module is shipped as a library. Library IPv6 support is complete and
-tested; server-side IPv6 socket/listener wiring is intentionally a follow-up.
+tested; server integration is intentionally scoped to the primary listener.
 
 ## Files touched
 
