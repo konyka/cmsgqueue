@@ -65,6 +65,13 @@ static int cfg_set_str(const char **dst, const char *value) {
     return 0;
 }
 
+static int valid_primary_host(const char *value) {
+    struct in_addr addr4;
+    struct in6_addr addr6;
+    return inet_pton(AF_INET, value, &addr4) == 1 ||
+           inet_pton(AF_INET6, value, &addr6) == 1;
+}
+
 static int cfg_eq_ci(const char *a, const char *b) {
     if (!a || !b) return 0;
     while (*a && *b) {
@@ -263,11 +270,7 @@ static int parse_listener_key(const char *key, const char *value,
             config->listeners[idx].host = NULL;
             return 0;
         }
-        {
-            struct in_addr ha;
-            if (inet_pton(AF_INET, value, &ha) != 1)
-                return -1;
-        }
+        if (!valid_primary_host(value)) return -1;
         return cfg_set_str(&config->listeners[idx].host, value);
     }
     if (strcmp(rest, "_port") == 0)
@@ -863,8 +866,7 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     }
     {
         const char *host = config->host ? config->host : CMQ_DEFAULT_HOST;
-        struct in_addr ha;
-        if (inet_pton(AF_INET, host, &ha) != 1)
+        if (!valid_primary_host(host))
             return CMQ_ERR_INVALID_ARG;
     }
     /* Routes without cluster identity would silently disable forwarding. */

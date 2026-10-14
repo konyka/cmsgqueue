@@ -119,7 +119,9 @@ typedef struct cmq_client {
 } cmq_client_t;
 
 typedef struct cmq_auth_rate_slot {
-    uint32_t ip;
+    uint8_t addr_key[sizeof(struct sockaddr_storage)];
+    socklen_t addr_key_len;
+    int addr_key_family;
     uint64_t window_start_ms;
     uint32_t count;
     uint32_t inflight;
@@ -197,7 +199,9 @@ struct cmq_server {
     int clients_count;
     int clients_cap;
     struct {
-        uint32_t ip;
+        uint8_t addr_key[sizeof(struct sockaddr_storage)];
+        socklen_t addr_key_len;
+        int addr_key_family;
         uint64_t window_start_ms;
         uint32_t count;
     } rate_slots[CMQ_RATE_LIMIT_SLOTS];

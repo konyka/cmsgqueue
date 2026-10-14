@@ -81,7 +81,9 @@ static int auth_configured(const cmq_server_t *srv) {
 }
 
 typedef struct {
-    uint32_t ip;
+    uint8_t addr_key[sizeof(struct sockaddr_storage)];
+    socklen_t addr_key_len;
+    int addr_key_family;
     uint64_t window_start_ms;
     int slot;
     int active;
@@ -94,12 +96,43 @@ static uint64_t auth_rate_now_ms(void) {
            (uint64_t)ts.tv_nsec / 1000000ULL;
 }
 
+static int sockaddr_rate_key(const struct sockaddr *addr, socklen_t addrlen,
+                             uint8_t *key, socklen_t *key_len, int *family) {
+    if (!addr || !key || !key_len || !family) return -1;
+    memset(key, 0, sizeof(struct sockaddr_storage));
+    if (addr->sa_family == AF_INET) {
+        key[0] = (uint8_t)AF_INET;
+        memcpy(key + 1, &((const struct sockaddr_in *)addr)->sin_addr,
+               sizeof(struct in_addr));
+    } else if (addr->sa_family == AF_INET6) {
+        key[0] = (uint8_t)AF_INET6;
+        memcpy(key + 1, &((const struct sockaddr_in6 *)addr)->sin6_addr,
+               sizeof(struct in6_addr));
+    } else {
+        (void)addrlen;
+        return -1;
+    }
+    *key_len = 1 + sizeof(struct in6_addr);
+    *family = addr->sa_family;
+    return 0;
+}
+
+static int sockaddr_rate_key_equal(const uint8_t *a, socklen_t a_len,
+                                   int a_family, const uint8_t *b,
+                                   socklen_t b_len, int b_family) {
+    return a_family == b_family && a_len == b_len &&
+           memcmp(a, b, (size_t)a_len) == 0;
+}
+
 /* Reserve before parsing/verifying credentials. The auth table is separate
  * from F10 so connection floods cannot consume authentication capacity. */
 static int auth_rate_reserve(cmq_server_t *srv, int fd,
                              auth_rate_reservation_t *reservation) {
-    struct sockaddr_in peer;
+    struct sockaddr_storage peer;
     socklen_t plen = sizeof(peer);
+    uint8_t addr_key[sizeof(struct sockaddr_storage)];
+    socklen_t addr_key_len;
+    int addr_key_family;
     if (!srv || !reservation) return -1;
     cmq_mutex_lock(&srv->auth_rate_lock);
     int configured_limit = srv->config.auth_failed_connects_per_sec;
@@ -107,10 +140,9 @@ static int auth_rate_reserve(cmq_server_t *srv, int fd,
     if (configured_limit <= 0) return 0;
     if (fd < 0 ||
         getpeername(fd, (struct sockaddr *)&peer, &plen) != 0 ||
-        peer.sin_family != AF_INET)
+        sockaddr_rate_key((struct sockaddr *)&peer, plen, addr_key,
+                          &addr_key_len, &addr_key_family) != 0)
         return -1;
-
-    uint32_t ip = (uint32_t)peer.sin_addr.s_addr;
     uint64_t now_ms = auth_rate_now_ms();
     int admitted = 0;
     cmq_mutex_lock(&srv->auth_rate_lock);
@@ -120,7 +152,10 @@ static int auth_rate_reserve(cmq_server_t *srv, int fd,
         return 0;
     }
     for (int i = 0; i < CMQ_RATE_LIMIT_SLOTS; i++) {
-        if (srv->auth_rate_slots[i].ip == ip) {
+        if (sockaddr_rate_key_equal(srv->auth_rate_slots[i].addr_key,
+                                    srv->auth_rate_slots[i].addr_key_len,
+                                    srv->auth_rate_slots[i].addr_key_family,
+                                    addr_key, addr_key_len, addr_key_family)) {
             if (now_ms - srv->auth_rate_slots[i].window_start_ms >= 1000 &&
                 srv->auth_rate_slots[i].inflight == 0) {
                 srv->auth_rate_slots[i].window_start_ms = now_ms;
@@ -129,7 +164,9 @@ static int auth_rate_reserve(cmq_server_t *srv, int fd,
             if ((int)srv->auth_rate_slots[i].count < limit) {
                 srv->auth_rate_slots[i].count++;
                 srv->auth_rate_slots[i].inflight++;
-                reservation->ip = ip;
+                memcpy(reservation->addr_key, addr_key, addr_key_len);
+                reservation->addr_key_len = addr_key_len;
+                reservation->addr_key_family = addr_key_family;
                 reservation->window_start_ms =
                     srv->auth_rate_slots[i].window_start_ms;
                 reservation->slot = i;
@@ -138,14 +175,18 @@ static int auth_rate_reserve(cmq_server_t *srv, int fd,
             }
             break;
         }
-        if (srv->auth_rate_slots[i].ip == 0 ||
+        if (srv->auth_rate_slots[i].addr_key_len == 0 ||
             (now_ms - srv->auth_rate_slots[i].window_start_ms >= 1000 &&
              srv->auth_rate_slots[i].inflight == 0)) {
-            srv->auth_rate_slots[i].ip = ip;
+            memcpy(srv->auth_rate_slots[i].addr_key, addr_key, addr_key_len);
+            srv->auth_rate_slots[i].addr_key_len = addr_key_len;
+            srv->auth_rate_slots[i].addr_key_family = addr_key_family;
             srv->auth_rate_slots[i].window_start_ms = now_ms;
             srv->auth_rate_slots[i].count = 1;
             srv->auth_rate_slots[i].inflight = 1;
-            reservation->ip = ip;
+            memcpy(reservation->addr_key, addr_key, addr_key_len);
+            reservation->addr_key_len = addr_key_len;
+            reservation->addr_key_family = addr_key_family;
             reservation->window_start_ms = now_ms;
             reservation->slot = i;
             reservation->active = 1;
@@ -165,7 +206,12 @@ static void auth_rate_finish(cmq_server_t *srv,
     if (reservation->slot >= 0 && reservation->slot < CMQ_RATE_LIMIT_SLOTS) {
         cmq_auth_rate_slot_t *slot =
             &srv->auth_rate_slots[reservation->slot];
-        if (slot->ip == reservation->ip && slot->inflight > 0) {
+        if (sockaddr_rate_key_equal(slot->addr_key, slot->addr_key_len,
+                                    slot->addr_key_family,
+                                    reservation->addr_key,
+                                    reservation->addr_key_len,
+                                    reservation->addr_key_family) &&
+            slot->inflight > 0) {
             if (slot->window_start_ms != reservation->window_start_ms && failed) {
                 slot->window_start_ms = auth_rate_now_ms();
                 slot->count = 0;
@@ -5528,12 +5574,11 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
          * P1: rch handle refcounted to survive reload races. */
         cmq_blocklist_t *bl = (cmq_blocklist_t *)cmq_rch_acquire(srv->blocklist_h);
         if (bl && c->fd >= 0) {
-            struct sockaddr_in peer;
+            struct sockaddr_storage peer;
             socklen_t plen = sizeof(peer);
             if (getpeername(c->fd, (struct sockaddr *)&peer, &plen) == 0 &&
-                peer.sin_family == AF_INET) {
-                uint32_t ip = (uint32_t)peer.sin_addr.s_addr;
-                if (cmq_blocklist_check(bl, ip)) {
+                cmq_blocklist_check_sockaddr(bl,
+                    (const struct sockaddr *)&peer, plen)) {
                     cmq_rch_release(srv->blocklist_h, bl);
                     char trace_hex[33];
                     cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
@@ -5541,7 +5586,6 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                                   "", "blocklist reject");
                     client_finish_closing(c);
                     break;
-                }
             }
         }
         cmq_rch_release(srv->blocklist_h, bl);
@@ -7668,8 +7712,21 @@ static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
 /* v0.5.42: shared admit path for accept_cb and accept_thread_func.
  * Takes ownership of client_fd. Returns 1 if the session is live. */
 static int admit_one_client(cmq_server_t *srv, int listener_fd,
-                             int client_fd, const struct sockaddr_in *addr) {
+                             int client_fd, const struct sockaddr_storage *addr,
+                             socklen_t addrlen) {
         if (set_nonblocking(client_fd) != 0) {
+            close(client_fd);
+            return 0;
+        }
+
+        cmq_blocklist_t *bl =
+            (cmq_blocklist_t *)cmq_rch_acquire(srv->blocklist_h);
+        int denied = bl && cmq_blocklist_check_sockaddr(
+            bl, (const struct sockaddr *)addr, addrlen);
+        cmq_rch_release(srv->blocklist_h, bl);
+        if (denied) {
+            cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, NULL,
+                          "blocklist reject at accept", "");
             close(client_fd);
             return 0;
         }
@@ -7701,10 +7758,22 @@ static int admit_one_client(cmq_server_t *srv, int listener_fd,
          * over a 1-second bucket. Bucket key is the 32-bit IPv4
          * address; collisions are tolerable (worst case, an attacker
          * shares the same source address with itself). The cap is
-         * uniform across all IPs. rate_lock is per-server, initialized
+         * uniform across all IPs. The key is the address family plus raw
+         * address bytes, so IPv4 and IPv6 never collide. rate_lock is
+         * per-server, initialized
          * in cmq_server_create. */
-        if (srv->config.max_connects_per_sec > 0 && addr->sin_family == AF_INET) {
-            uint32_t ip = (uint32_t)addr->sin_addr.s_addr;
+        if (srv->config.max_connects_per_sec > 0) {
+            uint8_t addr_key[sizeof(struct sockaddr_storage)];
+            socklen_t addr_key_len;
+            int addr_key_family;
+            if (sockaddr_rate_key((const struct sockaddr *)addr, addrlen,
+                                  addr_key, &addr_key_len,
+                                  &addr_key_family) != 0) {
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1,
+                                         CMQ_ATOMIC_RELAXED);
+                close(client_fd);
+                return 0;
+            }
             int admitted_rate = 0;
             struct timespec ts_now;
             clock_gettime(CLOCK_MONOTONIC, &ts_now);
@@ -7712,7 +7781,11 @@ static int admit_one_client(cmq_server_t *srv, int listener_fd,
                               (uint64_t)ts_now.tv_nsec / 1000000ULL;
             cmq_mutex_lock(&srv->rate_lock);
             for (int i = 0; i < CMQ_RATE_LIMIT_SLOTS; i++) {
-                if (srv->rate_slots[i].ip == ip) {
+                if (sockaddr_rate_key_equal(srv->rate_slots[i].addr_key,
+                                            srv->rate_slots[i].addr_key_len,
+                                            srv->rate_slots[i].addr_key_family,
+                                            addr_key, addr_key_len,
+                                            addr_key_family)) {
                     if (now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
                         srv->rate_slots[i].window_start_ms = now_ms;
                         srv->rate_slots[i].count = 0;
@@ -7724,8 +7797,10 @@ static int admit_one_client(cmq_server_t *srv, int listener_fd,
                     }
                     break;
                 }
-                if (srv->rate_slots[i].ip == 0) {
-                    srv->rate_slots[i].ip = ip;
+                if (srv->rate_slots[i].addr_key_len == 0) {
+                    memcpy(srv->rate_slots[i].addr_key, addr_key, addr_key_len);
+                    srv->rate_slots[i].addr_key_len = addr_key_len;
+                    srv->rate_slots[i].addr_key_family = addr_key_family;
                     srv->rate_slots[i].window_start_ms = now_ms;
                     srv->rate_slots[i].count = 1;
                     admitted_rate = 1;
@@ -7885,7 +7960,7 @@ static void accept_cb(int fd, int events, void *data) {
         if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
             cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
             return;
-        struct sockaddr_in addr;
+        struct sockaddr_storage addr;
         socklen_t addrlen = sizeof(addr);
         int client_fd = accept(fd, (struct sockaddr *)&addr, &addrlen);
         if (client_fd < 0) {
@@ -7908,15 +7983,15 @@ static void accept_cb(int fd, int events, void *data) {
          * denied IPs never receive INFO/CONNACK and never burn a
          * rate-limit slot. The CONNECT-time check stays as belt-and-
          * suspenders for racy reloads. */
-        if (addr.sin_family == AF_INET) {
+        {
             cmq_blocklist_t *bl = (cmq_blocklist_t *)cmq_rch_acquire(srv->blocklist_h);
             if (bl) {
-                int denied = cmq_blocklist_check(bl, (uint32_t)addr.sin_addr.s_addr);
+                int denied = cmq_blocklist_check_sockaddr(
+                    bl, (const struct sockaddr *)&addr, addrlen);
                 cmq_rch_release(srv->blocklist_h, bl);
                 if (denied) {
                     cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, NULL,
-                                  "blocklist reject at accept",
-                                  "");
+                                  "blocklist reject at accept", "");
                     close(client_fd);
                     continue;
                 }
@@ -7946,14 +8021,20 @@ static void accept_cb(int fd, int events, void *data) {
             cmq_atomic_fetch_add_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
         }
 
-        /* F10: per-IP connect rate limit. Fixed-window counter
-         * over a 1-second bucket. Bucket key is the 32-bit IPv4
-         * address; collisions are tolerable (worst case, an attacker
-         * shares the same source address with itself). The cap is
-         * uniform across all IPs. rate_lock is per-server, initialized
-         * in cmq_server_create. */
-        if (srv->config.max_connects_per_sec > 0 && addr.sin_family == AF_INET) {
-            uint32_t ip = (uint32_t)addr.sin_addr.s_addr;
+        /* F10: per-IP connect rate limit. Fixed-window counter over a
+         * 1-second bucket keyed by address family and raw address bytes. */
+        if (srv->config.max_connects_per_sec > 0) {
+            uint8_t addr_key[sizeof(struct sockaddr_storage)];
+            socklen_t addr_key_len;
+            int addr_key_family;
+            if (sockaddr_rate_key((const struct sockaddr *)&addr, addrlen,
+                                  addr_key, &addr_key_len,
+                                  &addr_key_family) != 0) {
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1,
+                                         CMQ_ATOMIC_RELAXED);
+                close(client_fd);
+                continue;
+            }
             int admitted_rate = 0;
             struct timespec ts_now;
             clock_gettime(CLOCK_MONOTONIC, &ts_now);
@@ -7961,7 +8042,11 @@ static void accept_cb(int fd, int events, void *data) {
                               (uint64_t)ts_now.tv_nsec / 1000000ULL;
             cmq_mutex_lock(&srv->rate_lock);
             for (int i = 0; i < CMQ_RATE_LIMIT_SLOTS; i++) {
-                if (srv->rate_slots[i].ip == ip) {
+                if (sockaddr_rate_key_equal(srv->rate_slots[i].addr_key,
+                                            srv->rate_slots[i].addr_key_len,
+                                            srv->rate_slots[i].addr_key_family,
+                                            addr_key, addr_key_len,
+                                            addr_key_family)) {
                     if (now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
                         srv->rate_slots[i].window_start_ms = now_ms;
                         srv->rate_slots[i].count = 0;
@@ -7973,8 +8058,10 @@ static void accept_cb(int fd, int events, void *data) {
                     }
                     break;
                 }
-                if (srv->rate_slots[i].ip == 0) {
-                    srv->rate_slots[i].ip = ip;
+                if (srv->rate_slots[i].addr_key_len == 0) {
+                    memcpy(srv->rate_slots[i].addr_key, addr_key, addr_key_len);
+                    srv->rate_slots[i].addr_key_len = addr_key_len;
+                    srv->rate_slots[i].addr_key_family = addr_key_family;
                     srv->rate_slots[i].window_start_ms = now_ms;
                     srv->rate_slots[i].count = 1;
                     admitted_rate = 1;
@@ -8367,7 +8454,7 @@ static void *accept_thread_func(void *arg) {
                 if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
                     cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
                     break;
-                struct sockaddr_in addr;
+                struct sockaddr_storage addr;
                 socklen_t addrlen = sizeof(addr);
                 int client_fd = accept(lfd,
                     (struct sockaddr *)&addr, &addrlen);
@@ -8381,7 +8468,7 @@ static void *accept_thread_func(void *arg) {
                     close(client_fd);
                     continue;
                 }
-                if (admit_one_client(srv, lfd, client_fd, &addr) == 1) {
+                if (admit_one_client(srv, lfd, client_fd, &addr, addrlen) == 1) {
                     cmq_atomic_fetch_add_u64(&srv->stat_accept_aux, 1,
                                               CMQ_ATOMIC_RELAXED);
                 }
@@ -9078,7 +9165,11 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     if (srv->listen_fds[0] >= 0 || srv->ev_loop || srv->workers)
         return CMQ_ERR_INVALID_ARG;
 
-    srv->listen_fds[0] = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_storage addr;
+    socklen_t addrlen;
+    int family = strchr(srv->config.host ? srv->config.host : "", ':')
+                     ? AF_INET6 : AF_INET;
+    srv->listen_fds[0] = socket(family, SOCK_STREAM, 0);
     if (srv->listen_fds[0] < 0) return CMQ_ERR_IO;
 
     int opt = 1;
@@ -9090,18 +9181,32 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         return CMQ_ERR_IO;
     }
 
-    struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)srv->config.port);
-    if (!srv->config.host ||
-        inet_pton(AF_INET, srv->config.host, &addr.sin_addr) != 1) {
-        close(srv->listen_fds[0]);
-        srv->listen_fds[0] = -1;
-        return CMQ_ERR_INVALID_ARG;
+    if (family == AF_INET6) {
+        struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&addr;
+        addr6->sin6_family = AF_INET6;
+        addr6->sin6_port = htons((uint16_t)srv->config.port);
+        if (!srv->config.host ||
+            inet_pton(AF_INET6, srv->config.host, &addr6->sin6_addr) != 1) {
+            close(srv->listen_fds[0]);
+            srv->listen_fds[0] = -1;
+            return CMQ_ERR_INVALID_ARG;
+        }
+        addrlen = sizeof(*addr6);
+    } else {
+        struct sockaddr_in *addr4 = (struct sockaddr_in *)&addr;
+        addr4->sin_family = AF_INET;
+        addr4->sin_port = htons((uint16_t)srv->config.port);
+        if (!srv->config.host ||
+            inet_pton(AF_INET, srv->config.host, &addr4->sin_addr) != 1) {
+            close(srv->listen_fds[0]);
+            srv->listen_fds[0] = -1;
+            return CMQ_ERR_INVALID_ARG;
+        }
+        addrlen = sizeof(*addr4);
     }
 
-    if (bind(srv->listen_fds[0], (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+    if (bind(srv->listen_fds[0], (struct sockaddr *)&addr, addrlen) != 0) {
         close(srv->listen_fds[0]);
         srv->listen_fds[0] = -1;
         return CMQ_ERR_IO;
