@@ -2,6 +2,7 @@
 #define CMQ_BLOCKLIST_H
 
 #include <stdint.h>
+#include <sys/socket.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,6 +14,8 @@ extern "C" {
  * Examples:
  *   10.0.0.1
  *   192.168.0.0/16
+ *   2001:db8::1
+ *   2001:db8:1234::/64
  * Malformed lines are skipped.
  *
  * Used by accept_cb to reject banned IPs pre-handshake. Updates
@@ -40,6 +43,12 @@ int cmq_blocklist_reload_swap(cmq_blocklist_t **out,
 
 /* Returns 1 if IP is blocked, 0 if admitted. */
 int cmq_blocklist_check(const cmq_blocklist_t *bl, uint32_t ip_be);
+
+/* Returns 1 if the address in addr is blocked, 0 if admitted. Supports
+ * AF_INET and AF_INET6 without changing the legacy IPv4 API above. */
+int cmq_blocklist_check_sockaddr(const cmq_blocklist_t *bl,
+                                 const struct sockaddr *addr,
+                                 socklen_t addrlen);
 
 #ifdef __cplusplus
 }
