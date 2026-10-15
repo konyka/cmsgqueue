@@ -166,20 +166,27 @@ static int mqtt_write_all(int fd, const uint8_t *data, size_t len) {
     return 0;
 }
 
-static int mqtt_read_all_timeout(int fd, uint8_t *data, size_t len) {
+static int64_t mqtt_now_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return -1;
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int mqtt_read_all_until(int fd, uint8_t *data, size_t len,
+                               int64_t deadline) {
     size_t got = 0;
-    int waited = 0;
-    while (got < len && waited < CMQ_MQTT_IO_MS) {
+    while (got < len) {
+        int64_t now = mqtt_now_ms();
+        if (now < 0 || now >= deadline) return -1;
+        int64_t left = deadline - now;
+        int timeout = left > 100 ? 100 : (int)left;
         struct pollfd pfd = { .fd = fd, .events = POLLIN };
-        int pr = poll(&pfd, 1, 100);
+        int pr = poll(&pfd, 1, timeout);
         if (pr < 0) {
             if (errno == EINTR) continue;
             return -1;
         }
-        if (pr == 0) {
-            waited += 100;
-            continue;
-        }
+        if (pr == 0) continue;
         ssize_t n = read(fd, data + got, len - got);
         if (n < 0) {
             if (errno == EINTR) continue;
@@ -198,17 +205,23 @@ static int mqtt_read_puback(int fd, uint16_t packet_id) {
     uint8_t ack[2];
     uint32_t remaining = 0;
     uint32_t multiplier = 1;
+    int64_t deadline = mqtt_now_ms();
+    if (deadline < 0) return -1;
+    deadline += CMQ_MQTT_IO_MS;
 
-    if (mqtt_read_all_timeout(fd, &header, 1) != 0 ||
+    if (mqtt_read_all_until(fd, &header, 1, deadline) != 0 ||
         (header & 0xF0) != 0x40 || (header & 0x0F) != 0) return -1;
     for (size_t i = 0; i < sizeof(encoded_len); i++) {
-        if (mqtt_read_all_timeout(fd, &encoded_len[i], 1) != 0) return -1;
-        remaining += (uint32_t)(encoded_len[i] & 0x7F) * multiplier;
+        if (mqtt_read_all_until(fd, &encoded_len[i], 1, deadline) != 0) return -1;
+        uint32_t digit = encoded_len[i] & 0x7F;
+        if (digit > (0x0FFFFFFFu - remaining) / multiplier) return -1;
+        remaining += digit * multiplier;
         if ((encoded_len[i] & 0x80) == 0) {
             if (remaining != 2) return -1;
-            if (mqtt_read_all_timeout(fd, ack, sizeof(ack)) != 0) return -1;
+            if (mqtt_read_all_until(fd, ack, sizeof(ack), deadline) != 0) return -1;
             return ((uint16_t)ack[0] << 8 | ack[1]) == packet_id ? 0 : -1;
         }
+        if (i == sizeof(encoded_len) - 1) return -1;
         multiplier *= 128;
     }
     return -1;

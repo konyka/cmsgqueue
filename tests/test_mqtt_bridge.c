@@ -52,8 +52,15 @@ static int bridge_read_exact(int fd, uint8_t *buf, size_t len) {
 
 struct bridge_broker {
     int broker_fd;
+    int puback_mode;
     atomic_int saw_qos1;
     atomic_int failed;
+};
+
+enum {
+    BRIDGE_PUBACK_MATCHING = 0,
+    BRIDGE_PUBACK_MISMATCHED,
+    BRIDGE_PUBACK_MALFORMED
 };
 
 static void *bridge_qos1_broker(void *arg) {
@@ -96,6 +103,11 @@ static void *bridge_qos1_broker(void *arg) {
     uint16_t packet_id = ((uint16_t)publish[pid_pos] << 8) | publish[pid_pos + 1];
     atomic_store(&broker->saw_qos1, 1);
     uint8_t puback[] = {0x40, 0x02, (uint8_t)(packet_id >> 8), (uint8_t)packet_id};
+    if (broker->puback_mode == BRIDGE_PUBACK_MISMATCHED) {
+        puback[3] = (uint8_t)(puback[3] == 0xFF ? 0 : puback[3] + 1);
+    } else if (broker->puback_mode == BRIDGE_PUBACK_MALFORMED) {
+        puback[1] = 0x01;
+    }
     if (send(fd, puback, sizeof(puback), 0) != (ssize_t)sizeof(puback))
         atomic_store(&broker->failed, 1);
     close(fd);
@@ -108,6 +120,7 @@ TEST(mqtt_bridge, qos1_waits_for_matching_puback) {
     ASSERT(broker_fd >= 0);
     struct bridge_broker broker;
     broker.broker_fd = broker_fd;
+    broker.puback_mode = BRIDGE_PUBACK_MATCHING;
     atomic_init(&broker.saw_qos1, 0);
     atomic_init(&broker.failed, 0);
     pthread_t thread;
@@ -119,6 +132,58 @@ TEST(mqtt_bridge, qos1_waits_for_matching_puback) {
     ASSERT_EQ(cmq_mqtt_add_mapping(bridge, "orders.created", "orders/created", 1), 0);
     ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "orders.created",
                                       (const uint8_t *)"ok", 2), 1);
+    ASSERT_EQ(atomic_load(&broker.saw_qos1), 1);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
+    pthread_join(thread, NULL);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, qos1_rejects_mismatched_puback) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct bridge_broker broker;
+    broker.broker_fd = broker_fd;
+    broker.puback_mode = BRIDGE_PUBACK_MISMATCHED;
+    atomic_init(&broker.saw_qos1, 0);
+    atomic_init(&broker.failed, 0);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_qos1_broker, &broker), 0);
+
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("qos1-mismatch");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_add_mapping(bridge, "orders.created", "orders/created", 1), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "orders.created",
+                                      (const uint8_t *)"bad", 3), -1);
+    ASSERT_EQ(cmq_mqtt_bridge_is_connected(bridge), 0);
+    ASSERT_EQ(atomic_load(&broker.saw_qos1), 1);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
+    pthread_join(thread, NULL);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, qos1_rejects_malformed_puback) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct bridge_broker broker;
+    broker.broker_fd = broker_fd;
+    broker.puback_mode = BRIDGE_PUBACK_MALFORMED;
+    atomic_init(&broker.saw_qos1, 0);
+    atomic_init(&broker.failed, 0);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_qos1_broker, &broker), 0);
+
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("qos1-malformed");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_add_mapping(bridge, "orders.created", "orders/created", 1), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "orders.created",
+                                      (const uint8_t *)"bad", 3), -1);
+    ASSERT_EQ(cmq_mqtt_bridge_is_connected(bridge), 0);
     ASSERT_EQ(atomic_load(&broker.saw_qos1), 1);
     ASSERT_EQ(atomic_load(&broker.failed), 0);
     cmq_mqtt_bridge_destroy(bridge);
