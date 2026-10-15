@@ -101,8 +101,8 @@ Threats NOT closed:
 - **Authentication** — username/password authentication is supported for
   initial connect and reload. Credentials are not logged and are cleared from
   bridge/config buffers when released.
-- **QoS mapping** — the current bridge uses QoS 0 (at most once).
-  QoS 1/2 mapping is a follow-up.
+- **QoS mapping** — QoS 0 and QoS 1 mappings are supported; QoS 2 remains
+deferred.
 
 ## Limitations
 
