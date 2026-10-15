@@ -1,6 +1,7 @@
 /* P1 v0.5.3: F19b MQTT→cmq_sublist bridge plumbing. */
 
 #include "cmq_test.h"
+#include "cmq_mqtt.h"
 #include "cmq_mqtt_server.h"
 #include "cmq_server.h"
 #include "cmq_sublist.h"
@@ -9,7 +10,121 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+static int bridge_listen_loopback(int *port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int one = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+        listen(fd, 1) != 0) {
+        close(fd);
+        return -1;
+    }
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(fd, (struct sockaddr *)&addr, &addr_len) != 0) {
+        close(fd);
+        return -1;
+    }
+    *port = (int)ntohs(addr.sin_port);
+    return fd;
+}
+
+static int bridge_read_exact(int fd, uint8_t *buf, size_t len) {
+    size_t got = 0;
+    while (got < len) {
+        ssize_t n = recv(fd, buf + got, len - got, 0);
+        if (n <= 0) return -1;
+        got += (size_t)n;
+    }
+    return 0;
+}
+
+struct bridge_broker {
+    int broker_fd;
+    atomic_int saw_qos1;
+    atomic_int failed;
+};
+
+static void *bridge_qos1_broker(void *arg) {
+    struct bridge_broker *broker = arg;
+    int fd = accept(broker->broker_fd, NULL, NULL);
+    if (fd < 0) {
+        atomic_store(&broker->failed, 1);
+        return NULL;
+    }
+    uint8_t connect[256];
+    if (bridge_read_exact(fd, connect, 2) != 0 || connect[0] != 0x10 ||
+        connect[1] > sizeof(connect) - 2 ||
+        bridge_read_exact(fd, connect + 2, connect[1]) != 0) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+    static const uint8_t connack[] = {0x20, 0x02, 0x00, 0x00};
+    if (send(fd, connack, sizeof(connack), 0) != (ssize_t)sizeof(connack)) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+
+    uint8_t publish[256];
+    if (bridge_read_exact(fd, publish, 2) != 0 || (publish[0] & 0xF0) != 0x30 ||
+        (publish[0] & 0x06) != 0x02 || publish[1] > sizeof(publish) - 2 ||
+        bridge_read_exact(fd, publish + 2, publish[1]) != 0) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+    size_t topic_len = ((size_t)publish[2] << 8) | publish[3];
+    size_t pid_pos = 4 + topic_len;
+    if (pid_pos + 2 > (size_t)publish[1] + 2) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+    uint16_t packet_id = ((uint16_t)publish[pid_pos] << 8) | publish[pid_pos + 1];
+    atomic_store(&broker->saw_qos1, 1);
+    uint8_t puback[] = {0x40, 0x02, (uint8_t)(packet_id >> 8), (uint8_t)packet_id};
+    if (send(fd, puback, sizeof(puback), 0) != (ssize_t)sizeof(puback))
+        atomic_store(&broker->failed, 1);
+    close(fd);
+    return NULL;
+}
+
+TEST(mqtt_bridge, qos1_waits_for_matching_puback) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct bridge_broker broker;
+    broker.broker_fd = broker_fd;
+    atomic_init(&broker.saw_qos1, 0);
+    atomic_init(&broker.failed, 0);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_qos1_broker, &broker), 0);
+
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("qos1-test");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_add_mapping(bridge, "orders.created", "orders/created", 1), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "orders.created",
+                                      (const uint8_t *)"ok", 2), 1);
+    ASSERT_EQ(atomic_load(&broker.saw_qos1), 1);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
+    pthread_join(thread, NULL);
+    close(broker_fd);
+}
 
 TEST(mqtt_bridge, set_bridge_server_keeps_pointer) {
     /* cmq_mqtt_set_bridge_server records the server pointer. The
