@@ -31,6 +31,8 @@ Subject mapping is `mqtt_bridge_map=subject,topic[,qos]`
 A matching CMQ PUBLISH is written as MQTT PUBLISH
 (`cmq_mqtt_bridge_publish`). Route ingress, WAL replay, and
 `mqtt_bridge*` accounts are not re-bridged.
+QoS 0 publishes complete after the write; QoS 1 publishes wait for a
+matching PUBACK before reporting success. QoS 2 remains deferred.
 SIGHUP replaces a non-empty map table on the live bridge
 (v0.5.126). Omitted maps keep the current table.
 v0.5.156: SIGHUP also copies that table onto the live
