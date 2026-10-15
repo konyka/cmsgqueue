@@ -166,6 +166,54 @@ static int mqtt_write_all(int fd, const uint8_t *data, size_t len) {
     return 0;
 }
 
+static int mqtt_read_all_timeout(int fd, uint8_t *data, size_t len) {
+    size_t got = 0;
+    int waited = 0;
+    while (got < len && waited < CMQ_MQTT_IO_MS) {
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        int pr = poll(&pfd, 1, 100);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (pr == 0) {
+            waited += 100;
+            continue;
+        }
+        ssize_t n = read(fd, data + got, len - got);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        got += (size_t)n;
+    }
+    return got == len ? 0 : -1;
+}
+
+static int mqtt_read_puback(int fd, uint16_t packet_id) {
+    uint8_t header;
+    uint8_t encoded_len[4];
+    uint8_t ack[2];
+    uint32_t remaining = 0;
+    uint32_t multiplier = 1;
+
+    if (mqtt_read_all_timeout(fd, &header, 1) != 0 ||
+        (header & 0xF0) != 0x40 || (header & 0x0F) != 0) return -1;
+    for (size_t i = 0; i < sizeof(encoded_len); i++) {
+        if (mqtt_read_all_timeout(fd, &encoded_len[i], 1) != 0) return -1;
+        remaining += (uint32_t)(encoded_len[i] & 0x7F) * multiplier;
+        if ((encoded_len[i] & 0x80) == 0) {
+            if (remaining != 2) return -1;
+            if (mqtt_read_all_timeout(fd, ack, sizeof(ack)) != 0) return -1;
+            return ((uint16_t)ack[0] << 8 | ack[1]) == packet_id ? 0 : -1;
+        }
+        multiplier *= 128;
+    }
+    return -1;
+}
+
 static int mqtt_read_connack(int fd) {
     uint8_t buf[4];
     size_t got = 0;
@@ -833,19 +881,20 @@ int cmq_mqtt_bridge_publish(cmq_mqtt_bridge_t *br, const char *subject,
         if (br->next_pid == 0) br->next_pid = 1;
         pid = br->next_pid;
     }
-    cmq_mutex_unlock(&br->lock);
 
     size_t cap = 16 + strlen(topic) + len;
     uint8_t *buf = malloc(cap);
     if (!buf) {
+        cmq_mutex_unlock(&br->lock);
         mqtt_end_op(br);
         return -1;
     }
     int n = cmq_mqtt_encode_publish(buf, cap, topic, payload, len, qos, pid);
     int wr = (n > 0) ? mqtt_write_all(fd, buf, (size_t)n) : -1;
+    if (wr == 0 && qos == 1)
+        wr = mqtt_read_puback(fd, pid);
     free(buf);
 
-    cmq_mutex_lock(&br->lock);
     if (wr != 0) {
         if (br->fd == fd)
             mqtt_disconnect_unlocked(br);
