@@ -23,10 +23,9 @@ The library can match IPv4 and IPv6 `sockaddr` values through
 `cmq_blocklist_check_sockaddr`; the existing `cmq_blocklist_check` IPv4 API is
 unchanged for ABI compatibility.
 
-The primary server listener supports IPv4 and IPv6 addresses and closes
-blocked peers immediately in both accept paths, before handshake or admission.
-Secondary listeners remain IPv4-only; IPv6 support for those listeners and for
-TLS-listener expansion is deferred.
+The primary and configured secondary server listeners support IPv4 and IPv6
+addresses and close blocked peers immediately in both accept paths, before
+handshake or admission. TLS-listener expansion remains deferred.
 
 The blocklist is reloadable at runtime via `cmq_blocklist_reload`. Updates are lock-protected.
 v0.5.149: SIGHUP attaches `blocklist_file` when create had none.
@@ -36,7 +35,8 @@ v0.5.154: an existing handle is swapped through
 In-flight readers keep the old list until the rch swap.
 
 The module is shipped as a library. Library IPv6 support is complete and
-tested; server integration is intentionally scoped to the primary listener.
+tested; server integration covers the primary and configured secondary
+listeners.
 
 ## Files touched
 
@@ -71,12 +71,12 @@ Threats closed:
 - **Blocklist hot-reload** — operators can update without restart.
 
 Threats NOT closed:
-- **Server IPv6 wiring** — listener and accept-path integration remain IPv4-only.
+- **TLS-listener expansion** — additional TLS listener integration remains deferred.
 
 ## Limitations
 
-- Server-side IPv6 wiring (listener + accept path) is a follow-up; the library
-  API supports both IPv4 and IPv6.
+- TLS-listener expansion is a follow-up; the blocklist API supports both IPv4
+  and IPv6.
 - 4096-entry hard cap.
 - No persistence: blocklist lives in memory; restart requires re-loading the file.
 
