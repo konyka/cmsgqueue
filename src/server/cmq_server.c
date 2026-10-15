@@ -9239,28 +9239,37 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         (srv->config.port < 28800 || srv->config.port > 28999) &&
         (srv->config.port < 18800 || srv->config.port > 18999)) {
         for (int li = 1; li < srv->config.listener_count && li < CMQ_MAX_LISTENERS; li++) {
-            int s = socket(AF_INET, SOCK_STREAM, 0);
+            const char *lh = srv->config.listeners[li].host;
+            if (!lh || !lh[0]) lh = "127.0.0.1";
+            int secondary_family = strchr(lh, ':') ? AF_INET6 : AF_INET;
+            int s = socket(secondary_family, SOCK_STREAM, 0);
             if (s < 0) continue;
             setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-            struct sockaddr_in laddr;
+            struct sockaddr_storage laddr;
+            socklen_t laddr_len;
             memset(&laddr, 0, sizeof(laddr));
-            laddr.sin_family = AF_INET;
-            {
-                int lp = srv->config.listeners[li].port;
-                if (lp <= 0)
-                    lp = srv->config.port + li;
-                laddr.sin_port = htons((uint16_t)lp);
-            }
-            {
-                const char *lh = srv->config.listeners[li].host;
-                if (!lh || !lh[0])
-                    lh = "127.0.0.1";
-                if (inet_pton(AF_INET, lh, &laddr.sin_addr) != 1) {
+            int lp = srv->config.listeners[li].port;
+            if (lp <= 0) lp = srv->config.port + li;
+            if (secondary_family == AF_INET6) {
+                struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)&laddr;
+                a6->sin6_family = AF_INET6;
+                a6->sin6_port = htons((uint16_t)lp);
+                if (inet_pton(AF_INET6, lh, &a6->sin6_addr) != 1) {
                     close(s);
                     continue;
                 }
+                laddr_len = sizeof(*a6);
+            } else {
+                struct sockaddr_in *a4 = (struct sockaddr_in *)&laddr;
+                a4->sin_family = AF_INET;
+                a4->sin_port = htons((uint16_t)lp);
+                if (inet_pton(AF_INET, lh, &a4->sin_addr) != 1) {
+                    close(s);
+                    continue;
+                }
+                laddr_len = sizeof(*a4);
             }
-            if (bind(s, (struct sockaddr *)&laddr, sizeof(laddr)) != 0 ||
+            if (bind(s, (struct sockaddr *)&laddr, laddr_len) != 0 ||
                 listen(s, 512) != 0) {
                 close(s);
                 continue;

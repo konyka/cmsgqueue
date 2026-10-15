@@ -716,7 +716,9 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
             return CMQ_ERR_INVALID_ARG;
         if (config->listeners[i].host) {
             struct in_addr ha;
-            if (inet_pton(AF_INET, config->listeners[i].host, &ha) != 1)
+            struct in6_addr ha6;
+            if (inet_pton(AF_INET, config->listeners[i].host, &ha) != 1 &&
+                inet_pton(AF_INET6, config->listeners[i].host, &ha6) != 1)
                 return CMQ_ERR_INVALID_ARG;
         }
     }
