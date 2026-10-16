@@ -191,6 +191,55 @@ TEST(mqtt_bridge, qos1_rejects_malformed_puback) {
     close(broker_fd);
 }
 
+static void server_publish_reports_bridge_failure(int puback_mode) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct bridge_broker broker;
+    broker.broker_fd = broker_fd;
+    broker.puback_mode = puback_mode;
+    atomic_init(&broker.saw_qos1, 0);
+    atomic_init(&broker.failed, 0);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_qos1_broker, &broker), 0);
+
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25042 + puback_mode;
+    cfg.log_to_stdout = 0;
+    cfg.mqtt_bridge_addr = "127.0.0.1";
+    cfg.mqtt_bridge_port = port;
+    cfg.mqtt_bridge_maps[0].cmq_subject = strdup("orders.created");
+    cfg.mqtt_bridge_maps[0].mqtt_topic = strdup("orders/created");
+    cfg.mqtt_bridge_maps[0].qos = 1;
+    cfg.mqtt_bridge_map_count = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* The local publish path still runs, but the upstream QoS1 failure is
+     * part of the non-client publish result. */
+    ASSERT_EQ(cmq_server_publish(srv, "orders.created",
+                                  (const uint8_t *)"server", 6,
+                                  "$default"), -1);
+    ASSERT_EQ(cmq_atomic_load_u64(&srv->stat_publishes_rejected,
+                                  CMQ_ATOMIC_RELAXED), 1);
+    ASSERT_EQ(atomic_load(&broker.saw_qos1), 1);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+
+    cmq_server_destroy(srv);
+    pthread_join(thread, NULL);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, server_publish_reports_mismatched_puback) {
+    server_publish_reports_bridge_failure(BRIDGE_PUBACK_MISMATCHED);
+}
+
+TEST(mqtt_bridge, server_publish_reports_malformed_puback) {
+    server_publish_reports_bridge_failure(BRIDGE_PUBACK_MALFORMED);
+}
+
 TEST(mqtt_bridge, set_bridge_server_keeps_pointer) {
     /* cmq_mqtt_set_bridge_server records the server pointer. The
      * actual sublist insertion happens in the relay thread, which
