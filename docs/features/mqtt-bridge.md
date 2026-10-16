@@ -32,7 +32,11 @@ A matching CMQ PUBLISH is written as MQTT PUBLISH
 (`cmq_mqtt_bridge_publish`). Route ingress, WAL replay, and
 `mqtt_bridge*` accounts are not re-bridged.
 QoS 0 publishes complete after the write; QoS 1 publishes wait for a
-matching PUBACK before reporting success. QoS 2 remains deferred.
+matching PUBACK before reporting success. A malformed or mismatched QoS 1
+PUBACK is a publish failure: the server increments its rejected-publish
+metric and reports an error to normal CMQ clients, while local fanout still
+continues. Non-client bridge relay publishes return failure to their caller
+under the same condition. QoS 2 remains deferred.
 SIGHUP replaces a non-empty map table on the live bridge
 (v0.5.126). Omitted maps keep the current table.
 v0.5.156: SIGHUP also copies that table onto the live
