@@ -3660,9 +3660,17 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         return;
     }
     if (srv->mqtt_bridge && !c->is_route && c->fd >= 0 &&
-        strncmp(c->account_name, "mqtt_bridge", 11) != 0)
-        (void)cmq_mqtt_bridge_publish(srv->mqtt_bridge, subject,
-                                      msg_payload, msg_len);
+        strncmp(c->account_name, "mqtt_bridge", 11) != 0) {
+        int bridge_rc = cmq_mqtt_bridge_publish(srv->mqtt_bridge, subject,
+                                                msg_payload, msg_len);
+        if (bridge_rc < 0) {
+            /* Keep local fanout running, but do not report this publish as
+             * wholly successful when the upstream QoS1 ACK failed. */
+            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_error(c, "mqtt bridge publish failed");
+        }
+    }
     /* v0.5.67–68 / 0.5.93: $KV / $OBJ / $JS. One '$' check. */
     if (subject[0] == '$') {
         if (srv->kvb) {
@@ -3890,10 +3898,14 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
     if (account_apply_rewrite(srv, account_name, mapped, sizeof(mapped)) != 0)
         return -1;
     subject = mapped;
+    int bridge_rc = 0;
     if (srv->mqtt_bridge &&
         strncmp(account_name, "mqtt_bridge", 11) != 0)
-        (void)cmq_mqtt_bridge_publish(srv->mqtt_bridge, subject,
-                                      payload, payload_len);
+        bridge_rc = cmq_mqtt_bridge_publish(srv->mqtt_bridge, subject,
+                                            payload, payload_len);
+    if (bridge_rc < 0)
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
     int live_held = 0;
     if (account_live_hold_name(srv, account_name, 0, (uint64_t)payload_len,
                                &live_held) != 0)
@@ -3908,7 +3920,7 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
         cmq_sublist_result_free(&result);
         account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
                                live_held);
-        return 0;
+        return bridge_rc < 0 ? -1 : 0;
     }
     size_t ntgt = 0;
     cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
@@ -3917,7 +3929,7 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
         free(tgts);
         account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
                                live_held);
-        return 0;
+        return bridge_rc < 0 ? -1 : 0;
     }
     /* Synchronous fanout: the bridge is a low-rate path (MQTT
      * clients connect, publish occasionally). Async coroutine
@@ -3932,7 +3944,7 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
     free(tgts);
     account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
                            live_held);
-    return 0;
+    return bridge_rc < 0 ? -1 : 0;
 }
 
 int cmq_server_h2_fd(const cmq_server_t *srv) {
