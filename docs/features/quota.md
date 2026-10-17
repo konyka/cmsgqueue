@@ -10,16 +10,15 @@ A new `cmq_quota` module implements per-account token-bucket caps. Configuration
 
 - `max_msgs_per_sec` — cap on messages/sec per account.
 - `max_bytes_per_sec` — cap on bytes/sec per account.
-- `max_connections` — **connects per second** per account (fixed
-  1s window). Concurrent connection / subscription / payload
-  ceilings are `account_max_*` on the account object (v0.5.48);
-  see `docs/features/accounts.md`.
+- `max_connections_per_account` — per-account CONNECT **rate** cap,
+  NOT a simultaneous-connection cap. The C struct field name is
+  retained for backwards compatibility with existing `cmq.conf` files
+  but the value is a 1-second fixed-window rate limit: at most
+  `max_connections_per_account` CONNECTs per account per second.
+  Counters reset on the 1 s window boundary. See the comment in
+  `src/include/cmq.h` next to the field for rationale.
 
-Publish checks run on the `handle_publish` / BATCH path. CONNECT
-consults `cmq_quota_check_connect` **before** concurrent credit
-(v0.5.50). A reject is CONNACK 1 plus `rate_limit_reject` /
-`connect quota` in the audit log. Cluster route-adopt is not
-counted. The window is fixed 1 second.
+The check is on the `credit_msgs_in` path (F5) and at CONNECT time. On exceed, the publish is rejected with `cmq_send_error("quota exceeded")` and CONNECT returns CONNACK 3 ("quota exceeded") and closes the client. The check uses a fixed-window (1 second) with reset on window expiry.
 
 Per-account state is in a small linked list (max 4096 accounts). On collision, a new account is admitted (same trade-off as the F10 rate limit). Production deployments with >4096 accounts should use a per-account hash or upgrade to the full implementation.
 

@@ -14,6 +14,16 @@ static int g_unsubs_seen = 0;
 static char g_last_subject[256] = {0};
 static char g_last_account[256] = {0};
 
+static int failing_cb(void *ctx, int is_sub, uint64_t sub_id,
+                      const char *subject, const char *account) {
+    (void)ctx;
+    (void)is_sub;
+    (void)sub_id;
+    (void)subject;
+    (void)account;
+    return -1;
+}
+
 static int persist_cb(void *ctx, int is_sub, uint64_t sub_id,
                        const char *subject, const char *account) {
     (void)ctx;
@@ -69,6 +79,15 @@ TEST(sublist_persist, load_empty_file) {
     ASSERT_NOT_NULL(p);
     int n = cmq_sublist_persist_load(p, persist_cb, NULL);
     ASSERT_EQ(n, 0);
+    cmq_sublist_persist_close(p);
+}
+
+TEST(sublist_persist, callback_failure_is_reported) {
+    system("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
+    cmq_sublist_persist_t *p = cmq_sublist_persist_open(SUB_PERSIST_DIR);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cmq_sublist_persist_record_sub(p, 1, "foo", "user1"), 0);
+    ASSERT_EQ(cmq_sublist_persist_load(p, failing_cb, NULL), -1);
     cmq_sublist_persist_close(p);
 }
 

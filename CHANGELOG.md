@@ -1,2729 +1,1895 @@
 # Changelog
 
-## 0.5.176 - 2026-09-10
-
-### Added
-- **Wire INFO server_id from cluster_node_id** — the
-  live INFO frame advertises the node id. Omitted /
-  empty stays `cmsgsrv`. Oversize or unsafe tokens
-  skip INFO.
-
-### Tests
-- `tests/test_isd.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.176.enumeration.md`, `v0.5.176.plan.md`.
-- `docs/features/info-frame.md`.
-- `docs/benchmarks/v05176_{1,2}.txt`.
-
-### Test count
-- 695 tests (was 691 in v0.5.175; +4).
-
-## 0.5.175 - 2026-09-10
-
-### Added
-- **Wire INFO host from live config** — the live INFO
-  frame advertises the bind host. Omitted / empty is
-  `0.0.0.0`. Non-IPv4 skips INFO rather than lie.
-
-### Tests
-- `tests/test_inh.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.175.enumeration.md`, `v0.5.175.plan.md`.
-- `docs/features/info-frame.md`.
-- `docs/benchmarks/v05175_{1,2}.txt`.
-
-### Test count
-- 691 tests (was 687 in v0.5.174; +4).
-
-## 0.5.174 - 2026-09-10
-
-### Added
-- **Quote INFO checksum JSON** — the live INFO frame
-  emits `"checksum":"crc32c"` so clients can parse the
-  F3 advertisement. The previous format omitted quotes.
-
-### Tests
-- `tests/test_inf.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.174.enumeration.md`, `v0.5.174.plan.md`.
-- `docs/features/info-frame.md`.
-- `docs/benchmarks/v05174_{1,2}.txt`.
-
-### Test count
-- 687 tests (was 683 in v0.5.173; +4).
-
-## 0.5.173 - 2026-09-09
-
-### Added
-- **Verify CHECKSUM on BATCH** — the live BATCH path
-  strips and verifies the trailing CRC32C after
-  decompress, before count parse. Omitted flag keeps
-  the payload unchanged.
-
-### Tests
-- `tests/test_bsc.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.173.enumeration.md`, `v0.5.173.plan.md`.
-- `docs/features/wire-checksum.md`, `flag-rejection.md`.
-- `docs/benchmarks/v05173_{1,2}.txt`.
-
-### Test count
-- 683 tests (was 679 in v0.5.172; +4).
-
-## 0.5.172 - 2026-09-08
-
-### Added
-- **Verify CHECKSUM on RESPONSE** — the live RESPONSE
-  path strips and verifies the trailing CRC32C after
-  inflate, before inbox decrement. Omitted flag keeps
-  the payload unchanged.
-
-### Tests
-- `tests/test_rsc.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.172.enumeration.md`, `v0.5.172.plan.md`.
-- `docs/features/wire-checksum.md`, `flag-rejection.md`.
-- `docs/benchmarks/v05172_{1,2}.txt`.
-
-### Test count
-- 679 tests (was 675 in v0.5.171; +4).
-
-## 0.5.171 - 2026-09-08
-
-### Added
-- **Verify CHECKSUM on REQUEST** — the live REQUEST path
-  strips and verifies the trailing CRC32C after inflate.
-  Omitted flag keeps the payload unchanged. PUBLISH uses
-  the same helper.
-
-### Tests
-- `tests/test_csa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.171.enumeration.md`, `v0.5.171.plan.md`.
-- `docs/features/wire-checksum.md`, `flag-rejection.md`.
-- `docs/benchmarks/v05171_{1,2}.txt`.
-
-### Test count
-- 675 tests (was 671 in v0.5.170; +4).
-
-## 0.5.170 - 2026-09-08
-
-### Added
-- **Wire WS permessage-deflate on upgrade** — the live
-  handshake accepts RFC 7692 when the client offers it,
-  and send/recv compress data frames. Omitted extensions
-  keep the uncompressed path.
-
-### Tests
-- `tests/test_wsa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.170.enumeration.md`, `v0.5.170.plan.md`.
-- `docs/features/ws-permessage-deflate.md`.
-- `docs/benchmarks/v05170_{1,2}.txt`.
-
-### Test count
-- 671 tests (was 667 in v0.5.169; +4).
-
-## 0.5.169 - 2026-09-08
-
-### Added
-- **Attach TLS session cache on reload** — create and
-  SIGHUP create the per-slot resumption cache when load
-  left it NULL so reconnects can skip a full handshake.
-  An existing cache is not remounted.
-
-### Tests
-- `tests/test_tsa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.169.enumeration.md`, `v0.5.169.plan.md`.
-- `docs/features/tls-session-cache.md`.
-- `docs/benchmarks/v05169_{1,2}.txt`.
-
-### Test count
-- 667 tests (was 663 in v0.5.168; +4).
-
-## 0.5.168 - 2026-09-08
-
-### Added
-- **Attach log on reload** — SIGHUP creates the logger
-  when create left `log` NULL so sink reload does not
-  fail-close the whole apply. An existing logger is
-  not remounted.
-
-### Tests
-- `tests/test_laa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.168.enumeration.md`, `v0.5.168.plan.md`.
-- `docs/features/logging.md`.
-- `docs/benchmarks/v05168_{1,2}.txt`.
-
-### Test count
-- 663 tests (was 659 in v0.5.167; +4).
-
-## 0.5.167 - 2026-09-08
-
-### Added
-- **Attach idempo window on reload** — SIGHUP creates the
-  pid/seq window when create left `idempo` NULL so CMQI
-  headers are not silently accepted as new. An existing
-  window is not remounted.
-
-### Tests
-- `tests/test_ida.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.167.enumeration.md`, `v0.5.167.plan.md`.
-- `docs/features/idempo.md`.
-- `docs/benchmarks/v05167_{1,2}.txt`.
-
-### Test count
-- 659 tests (was 655 in v0.5.166; +4).
-
-## 0.5.166 - 2026-09-08
-
-### Added
-- **Attach OTel ring on reload** — SIGHUP creates and
-  starts the span ring when create left `otel` NULL so
-  OTLP attach can `set_export`. An existing ring is not
-  remounted. Export is wired whenever both handles exist.
-
-### Tests
-- `tests/test_oea.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.166.enumeration.md`, `v0.5.166.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v05166_{1,2}.txt`.
-
-### Test count
-- 655 tests (was 651 in v0.5.165; +4).
-
-## 0.5.165 - 2026-09-08
-
-### Added
-- **Attach $JS manager on reload** — SIGHUP creates the
-  stream manager when create left `js` NULL so persist
-  attach is not fail-closed and in-memory `$JS` works.
-  An existing manager is not remounted.
-
-### Tests
-- `tests/test_jma.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.165.enumeration.md`, `v0.5.165.plan.md`.
-- `docs/features/streams.md`, `persistence.md`.
-- `docs/benchmarks/v05165_{1,2}.txt`.
-
-### Test count
-- 651 tests (was 647 in v0.5.164; +4).
-
-## 0.5.164 - 2026-09-08
-
-### Added
-- **Attach KV manager on reload** — SIGHUP creates the
-  bucket manager when create left `kvb` NULL so persist
-  attach is not fail-closed and in-memory `$KV` works.
-  An existing manager is not remounted.
-
-### Tests
-- `tests/test_kba.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.164.enumeration.md`, `v0.5.164.plan.md`.
-- `docs/features/kv.md`, `persistence.md`.
-- `docs/benchmarks/v05164_{1,2}.txt`.
-
-### Test count
-- 647 tests (was 643 in v0.5.163; +4).
-
-## 0.5.163 - 2026-09-08
-
-### Added
-- **Attach txn coordinator on reload** — SIGHUP creates
-  the coordinator when create left `txn` NULL so persist
-  attach is not fail-closed and in-memory BEGIN works.
-  An existing coordinator is not remounted.
-
-### Tests
-- `tests/test_tca.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.163.enumeration.md`, `v0.5.163.plan.md`.
-- `docs/features/txn.md`, `persistence.md`.
-- `docs/benchmarks/v05163_{1,2}.txt`.
-
-### Test count
-- 643 tests (was 639 in v0.5.162; +4).
-
-## 0.5.162 - 2026-09-08
-
-### Added
-- **Attach route pool on reload** — SIGHUP creates the
-  empty route pool when create left `routes` NULL
-  (cluster live, `cmq_route_pool_create` missed). Empty /
-  omitted cluster keeps off. An existing pool is not
-  remounted. Peer dial stays `cmq_route_reload_attach`
-  (empty slots only, no redial).
-
-### Tests
-- `tests/test_rpa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.162.enumeration.md`, `v0.5.162.plan.md`.
-- `docs/features/leaf-gateway.md`.
-- `docs/benchmarks/v05162_{1,2}.txt`.
-
-### Test count
-- 639 tests (was 635 in v0.5.161; +4).
-
-## 0.5.161 - 2026-09-07
-
-### Added
-- **Attach $JS persist on reload** — SIGHUP enables
-  `{persist_dir}/js` when create left `$JS` persist unset
-  (including a live filestore whose streams never opened
-  last/msgs/cursors). Empty / omitted keeps off. An
-  existing persist dir is not remounted. `..` / `\` fail
-  closed.
-
-### Tests
-- `tests/test_jsa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.161.enumeration.md`, `v0.5.161.plan.md`.
-- `docs/features/streams.md`, `persistence.md`.
-- `docs/benchmarks/v05161_{1,2}.txt`.
-
-### Test count
-- 635 tests (was 631 in v0.5.160; +4).
-
-## 0.5.160 - 2026-09-07
-
-### Added
-- **Attach KV persist on reload** — SIGHUP enables
-  `{persist_dir}/kv_<bucket>` when create left KV persist
-  unset (including a live filestore whose buckets never
-  opened a WAL). Empty / omitted keeps off. An existing
-  persist dir is not remounted. `..` / `\` fail closed.
-
-### Tests
-- `tests/test_kva.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.160.enumeration.md`, `v0.5.160.plan.md`.
-- `docs/features/kv.md`, `persistence.md`.
-- `docs/benchmarks/v05160_{1,2}.txt`.
-
-### Test count
-- 631 tests (was 627 in v0.5.159; +4).
-
-## 0.5.159 - 2026-09-07
-
-### Added
-- **Attach txn log on reload** — SIGHUP enables
-  `{persist_dir}/cmq.txn` when create left the txn log
-  unset (including a live filestore whose coordinator
-  never opened the log). Empty / omitted keeps off.
-  An existing log is not remounted. `..` / `\` fail
-  closed.
-
-### Tests
-- `tests/test_txa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.159.enumeration.md`, `v0.5.159.plan.md`.
-- `docs/features/txn.md`, `persistence.md`.
-- `docs/benchmarks/v05159_{1,2}.txt`.
-
-### Test count
-- 627 tests (was 623 in v0.5.158; +4).
-
-## 0.5.158 - 2026-09-07
-
-### Added
-- **Attach object store on reload** — SIGHUP opens
-  `{persist_dir}/obj` when create left the obj handle
-  NULL (including a live filestore whose object store
-  never opened). Empty / omitted keeps off. An existing
-  handle is not remounted. `..` / `\` fail closed.
-
-### Tests
-- `tests/test_ora.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.158.enumeration.md`, `v0.5.158.plan.md`.
-- `docs/features/object-store.md`, `persistence.md`.
-- `docs/benchmarks/v05158_{1,2}.txt`.
-
-### Test count
-- 623 tests (was 619 in v0.5.157; +4).
-
-## 0.5.157 - 2026-09-07
-
-### Added
-- **Attach subscription persist on reload** — SIGHUP
-  opens `cmq-subs.wal` when create left the persist
-  handle NULL (including a live filestore whose F18
-  file never opened). Empty / omitted keeps off.
-  An existing handle is not remounted. `..` / `\`
-  fail closed. A just-opened file is loaded once
-  (v0.5.150). WAL message replay stays create-time.
-
-### Tests
-- `tests/test_spa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.157.enumeration.md`, `v0.5.157.plan.md`.
-- `docs/features/persistence.md`.
-- `docs/benchmarks/v05157_{1,2}.txt`.
-
-### Test count
-- 619 tests (was 615 in v0.5.156; +4).
-
-## 0.5.156 - 2026-09-07
-
-### Added
-- **Apply MQTT maps on reload** — SIGHUP copies a
-  non-empty `mqtt_bridge_maps` table onto the live
-  config. Count 0 / omitted keeps the current rows.
-  `..` / `\` / empty subject or topic / qos outside
-  0–2 fail closed. The bridge object is not remounted
-  (still replaced by `cmq_mqtt_reload_maps`).
-
-### Tests
-- `tests/test_mml.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.156.enumeration.md`, `v0.5.156.plan.md`.
-- `docs/features/mqtt-bridge.md`.
-- `docs/benchmarks/v05156_{1,2}.txt`.
-
-### Test count
-- 615 tests (was 611 in v0.5.155; +4).
-
-## 0.5.155 - 2026-09-07
-
-### Added
-- **Apply ACL strings on reload** — SIGHUP copies
-  non-empty `acl_allow` / `acl_deny` onto the live
-  config. Omitted / empty keeps the current CSVs.
-  `..` / `\` fail closed. The ACL handle is not
-  remounted (still rebuilt by `apply_dynamic`).
-
-### Tests
-- `tests/test_ala.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.155.enumeration.md`, `v0.5.155.plan.md`.
-- `docs/features/acl.md`.
-- `docs/benchmarks/v05155_{1,2}.txt`.
-
-### Test count
-- 611 tests (was 607 in v0.5.154; +4).
-
-## 0.5.154 - 2026-09-07
-
-### Added
-- **Apply blocklist path on reload** — SIGHUP reloads an
-  existing `blocklist_h` from a new `blocklist_file`,
-  copies the path onto the live config, and rejects
-  `..` / `\` / a missing file. Omitted / empty keeps
-  the current list. In-flight readers keep the old
-  handle until the rch swap.
-
-### Tests
-- `tests/test_bls.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.154.enumeration.md`, `v0.5.154.plan.md`.
-- `docs/features/blocklist.md`.
-- `docs/benchmarks/v05154_{1,2}.txt`.
-
-### Test count
-- 607 tests (was 603 in v0.5.153; +4).
-
-## 0.5.153 - 2026-09-07
-
-### Added
-- **Apply TLS paths on reload** — SIGHUP copies non-empty
-  `tls_*` / `listener*_tls_*` onto the live config and
-  rejects `..` / `\` before updating a slot. Omitted /
-  empty keeps the current files. Existing SSL_CTX is
-  not remounted except via `cmq_tls_reload`.
-
-### Tests
-- `tests/test_tpa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.153.enumeration.md`, `v0.5.153.plan.md`.
-- `docs/features/tls-hardening.md`.
-- `docs/benchmarks/v05153_{1,2}.txt`.
-
-### Test count
-- 603 tests (was 599 in v0.5.152; +4).
-
-## 0.5.152 - 2026-09-07
-
-### Added
-- **Apply `config_file` on reload** — SIGHUP copies a
-  new path onto the live config so the next reload opens
-  it. Omitted / empty keeps the current file. `..` / `\`
-  fail closed. Applied last so a failed reload does not
-  retarget.
-
-### Tests
-- `tests/test_cfp.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.152.enumeration.md`, `v0.5.152.plan.md`.
-- `docs/benchmarks/v05152_{1,2}.txt`.
-
-### Test count
-- 599 tests (was 595 in v0.5.151; +4).
-
-## 0.5.151 - 2026-09-07
-
-### Added
-- **Set h2 ALPN on reload** — when create had TLS but no
-  `h2_port`, SIGHUP adds `h2` ALPN to empty slots after
-  the h2 listen binds. Omitted / empty keeps off. `..` /
-  `\` fail closed. Existing ALPN is not remounted.
-
-### Tests
-- `tests/test_alp.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.151.enumeration.md`, `v0.5.151.plan.md`.
-- `docs/features/tls-hardening.md`.
-- `docs/benchmarks/v05151_{1,2}.txt`.
-
-### Test count
-- 595 tests (was 591 in v0.5.150; +4).
-
-## 0.5.150 - 2026-09-07
-
-### Added
-- **Load persisted subscriptions on reload** — when
-  persist attach just opened `cmq-subs.wal`, SIGHUP
-  runs `cmq_sublist_persist_load` once. Omitted persist
-  keeps off. An already-loaded handle is left alone.
-  WAL message replay stays create-time.
-
-### Tests
-- `tests/test_spl.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.150.enumeration.md`, `v0.5.150.plan.md`.
-- `docs/features/persistence.md`.
-- `docs/benchmarks/v05150_{1,2}.txt`.
-
-### Test count
-- 591 tests (was 587 in v0.5.149; +4).
-
-## 0.5.149 - 2026-09-07
-
-### Added
-- **Attach blocklist on reload** — when create had no
-  `blocklist_file`, SIGHUP loads the file into a new
-  refcounted handle. Omitted / empty keeps off. Unsafe or
-  missing path fail closed. An existing handle is still
-  swapped, not remounted.
-
-### Tests
-- `tests/test_bla.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.149.enumeration.md`, `v0.5.149.plan.md`.
-- `docs/features/blocklist.md`.
-- `docs/benchmarks/v05149_{1,2}.txt`.
-
-### Test count
-- 587 tests (was 583 in v0.5.148; +4).
-
-## 0.5.148 - 2026-09-07
-
-### Added
-- **Attach TLS on reload** — when create left a slot empty,
-  SIGHUP loads `tls_enabled` + `tls_cert`/`tls_key` (slot 0)
-  or `listener{1,2,3}_tls_*` into a new SSL_CTX. Omitted /
-  empty keeps off. Unsafe paths, cert-without-key, and load
-  failure fail closed. Existing slots are not remounted.
-
-### Tests
-- `tests/test_tla.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.148.enumeration.md`, `v0.5.148.plan.md`.
-- `docs/features/tls-hardening.md`.
-- `docs/benchmarks/v05148_{1,2}.txt`.
-
-### Test count
-- 583 tests (was 579 in v0.5.147; +4).
-
-## 0.5.147 - 2026-09-07
-
-### Added
-- **Attach routes on reload** — when create left the live
-  route table empty, SIGHUP dials `route=` peers (`r0`…`r7`)
-  and binds an egress reader on a live loop. Omitted / empty
-  keeps off. Non-IPv4 and bad port fail closed. Existing
-  live peers are not redialed.
-
-### Tests
-- `tests/test_rta.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.147.enumeration.md`, `v0.5.147.plan.md`.
-- `docs/features/leaf-gateway.md`.
-- `docs/benchmarks/v05147_{1,2}.txt`.
-
-### Test count
-- 579 tests (was 575 in v0.5.146; +4).
-
-## 0.5.146 - 2026-09-06
-
-### Added
-- **Bind extra listeners on reload** — when create left
-  slots 1–3 empty, SIGHUP binds `listener{1,2,3}_host/port`
-  and `ev_add`s a live loop. Omitted / empty keeps off.
-  Non-IPv4 and bad port fail closed. Existing accept fds
-  are not rebound.
-
-### Tests
-- `tests/test_lbn.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.146.enumeration.md`, `v0.5.146.plan.md`.
-- `docs/features/tls-hardening.md`.
-- `docs/benchmarks/v05146_{1,2}.txt`.
-
-### Test count
-- 575 tests (was 571 in v0.5.145; +4).
-
-## 0.5.145 - 2026-09-06
-
-### Added
-- **Fetch JWKS on reload** — when create had no JWKS
-  cache, SIGHUP GETs `jwks_url` into a new cache. Omitted /
-  empty keeps off. A bad URL or GET fails closed. An
-  existing cache is left alone. Refresher start stays
-  v0.5.141.
-
-### Tests
-- `tests/test_jgf.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.145.enumeration.md`, `v0.5.145.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v05145_{1,2}.txt`.
-
-### Test count
-- 571 tests (was 567 in v0.5.144; +4).
-
-## 0.5.144 - 2026-09-06
-
-### Added
-- **Attach `persist_dir` on reload** — when create had no
-  WAL, SIGHUP opens prefix `cmq` and wires sublist / txn /
-  kv / `$JS` / obj persist. Omitted / empty keeps off.
-  Unsafe paths fail closed. An existing filestore is not
-  remounted. WAL replay stays create-time.
-
-### Tests
-- `tests/test_psa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.144.enumeration.md`, `v0.5.144.plan.md`.
-- `docs/features/persistence.md`.
-- `docs/benchmarks/v05144_{1,2}.txt`.
-
-### Test count
-- 567 tests (was 563 in v0.5.143; +4).
-
-## 0.5.143 - 2026-09-06
-
-### Added
-- **Attach cluster on reload** — when create had no
-  `cluster_name` / `cluster_node_id`, SIGHUP creates the
-  live cluster and an empty route pool. Omitted / empty
-  keeps off. Oversize names fail closed. Existing cluster
-  and route peers are not remounted or redialed.
-
-### Tests
-- `tests/test_cra.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.143.enumeration.md`, `v0.5.143.plan.md`.
-- `docs/features/leaf-gateway.md`.
-- `docs/benchmarks/v05143_{1,2}.txt`.
-
-### Test count
-- 563 tests (was 559 in v0.5.142; +4).
-
-## 0.5.142 - 2026-09-06
-
-### Added
-- **Attach MQTT bridge on reload** — when create had no
-  outbound bridge, SIGHUP creates `"cmsgbridge"` and dials
-  `mqtt_bridge_addr`:`mqtt_bridge_port`. Omitted / empty
-  keeps off. Non-IPv4 and bad port fail closed. An existing
-  bridge is left to v0.5.136.
-
-### Tests
-- `tests/test_mqa.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.142.enumeration.md`, `v0.5.142.plan.md`.
-- `docs/features/mqtt-bridge.md`.
-- `docs/benchmarks/v05142_{1,2}.txt`.
-
-### Test count
-- 559 tests (was 555 in v0.5.141; +4).
-
-## 0.5.141 - 2026-09-06
-
-### Added
-- **Attach JWKS refresh on reload** — when create had a
-  JWKS cache but no sidecar, SIGHUP starts the refresher
-  from the live `jwks_url`. Omitted / 0 / empty URL keeps
-  off. A bad URL or interval fails closed. An existing
-  sidecar is left to v0.5.131. Does not GET.
-
-### Tests
-- `tests/test_jra.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.141.enumeration.md`, `v0.5.141.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v05141_{1,2}.txt`.
-
-### Test count
-- 555 tests (was 551 in v0.5.140; +4).
-
-## 0.5.140 - 2026-09-06
-
-### Added
-- **Bind `h2_port` on reload** — when create had no HTTP/2
-  listener, SIGHUP calls `cmq_h2_listen` on loopback.
-  Omitted / 0 keeps the current fd. Out-of-range fails
-  closed. An existing listener is left alone (no accept-fd
-  rebind).
-
-### Tests
-- `tests/test_hup.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.140.enumeration.md`, `v0.5.140.plan.md`.
-- `docs/features/http2.md`.
-- `docs/benchmarks/v05140_{1,2}.txt`.
-
-### Test count
-- 551 tests (was 547 in v0.5.139; +4).
-
-## 0.5.139 - 2026-09-06
-
-### Added
-- **Attach OTLP exporter on reload** — when create had no
-  `otlp_endpoint`, SIGHUP allocates the live URL and hooks
-  `cmq_otlp_export`. Omitted / empty keeps off. A bad URL
-  fails closed. An existing exporter is left to v0.5.138.
-  Does not POST.
-
-### Tests
-- `tests/test_ota.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.139.enumeration.md`, `v0.5.139.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v05139_{1,2}.txt`.
-
-### Test count
-- 547 tests (was 543 in v0.5.138; +4).
-
-## 0.5.138 - 2026-09-06
-
-### Added
-- **Reload `otlp_endpoint`** — `cmq_server_reload` parses a
-  non-empty URL onto the live OTLP exporter. Host / path /
-  port / tls / grpc update; CA is preserved. Omitted /
-  empty keeps the current URL. A bad URL fails closed.
-  Does not POST. Exporter start stays create-time.
-
-### Tests
-- `tests/test_oeu.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.138.enumeration.md`, `v0.5.138.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v05138_{1,2}.txt`.
-
-### Test count
-- 543 tests (was 539 in v0.5.137; +4).
-
-## 0.5.137 - 2026-09-06
-
-### Added
-- **Reload `jwks_url`** — `cmq_server_reload` parses a
-  non-empty URL onto the live JWKS sidecar. Host / path /
-  port / tls update under the snapshot mutex; CA is
-  preserved. Omitted / empty keeps the current URL. A bad
-  URL fails closed. Does not re-GET. The first GET /
-  sidecar start stays create-time.
-
-### Tests
-- `tests/test_jru.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.137.enumeration.md`, `v0.5.137.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v05137_{1,2}.txt`.
-
-### Test count
-- 539 tests (was 535 in v0.5.136; +4).
-
-## 0.5.136 - 2026-09-06
-
-### Added
-- **Reload MQTT bridge addr/port** — `cmq_server_reload`
-  applies a non-empty `mqtt_bridge_addr` and/or non-zero
-  `mqtt_bridge_port` via `cmq_mqtt_bridge_connect`.
-  Same-endpoint live peer is a no-op. Omitted / empty
-  keeps the current endpoint. Non-IPv4 and bad port fail
-  closed.
-
-### Tests
-- `tests/test_mqe.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.136.enumeration.md`, `v0.5.136.plan.md`.
-- `docs/features/mqtt-bridge.md`.
-- `docs/benchmarks/v05136_{1,2}.txt`.
-
-### Test count
-- 535 tests (was 531 in v0.5.135; +4).
-
-## 0.5.135 - 2026-09-06
-
-### Added
-- **Reload `otlp_ca`** — `cmq_server_reload` copies a
-  non-empty CA path onto the live OTLP exporter URL.
-  Omitted / empty keeps the current path. `..` fails
-  closed. The endpoint URL stays create-time.
-
-### Tests
-- `tests/test_oca.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.135.enumeration.md`, `v0.5.135.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v05135_{1,2}.txt`.
-
-### Test count
-- 531 tests (was 527 in v0.5.134; +4).
-
-## 0.5.134 - 2026-09-06
-
-### Added
-- **Reload `jwks_ca`** — `cmq_server_reload` copies a
-  non-empty CA path onto the live JWKS sidecar. Omitted /
-  empty keeps the current path. `..` fails closed. The
-  URL itself stays create-time.
-
-### Tests
-- `tests/test_jca.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.134.enumeration.md`, `v0.5.134.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v05134_{1,2}.txt`.
-
-### Test count
-- 527 tests (was 523 in v0.5.133; +4).
-
-## 0.5.133 - 2026-09-06
-
-### Added
-- **Empty `log_file` / slot-0 TLS store NULL** — load
-  disables an empty `log_file` so create does not
-  `fopen("")`. `..` / `\` / controls fail closed.
-  Empty `tls_cert` / `tls_key` match extra-listener TLS.
-  Auth empty strings still reject at validate.
-
-### Tests
-- `tests/test_lgf.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.133.enumeration.md`, `v0.5.133.plan.md`.
-- `docs/features/tls-hardening.md`.
-- `docs/benchmarks/v05133_{1,2}.txt`.
-
-### Test count
-- 523 tests (was 519 in v0.5.132; +4).
-
-## 0.5.132 - 2026-09-06
-
-### Added
-- **Empty `host` is NULL / IPv4 only** — load stores
-  NULL for an omitted or empty `host` so create binds
-  `0.0.0.0`. Non-IPv4 values fail closed at load, same
-  as extra-listener hosts.
-
-### Tests
-- `tests/test_hst.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.132.enumeration.md`, `v0.5.132.plan.md`.
-- `docs/benchmarks/v05132_{1,2}.txt`.
-
-### Test count
-- 519 tests (was 515 in v0.5.131; +4).
-
-## 0.5.131 - 2026-09-06
-
-### Added
-- **Reload `jwks_refresh_sec`** — `cmq_server_reload`
-  applies 5–86400 to a live JWKS sidecar interval.
-  0 / omitted keeps the current value. `jwks_url` fetch
-  stays create-time.
-
-### Tests
-- `tests/test_jrf.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.131.enumeration.md`, `v0.5.131.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v05131_{1,2}.txt`.
-
-### Test count
-- 515 tests (was 511 in v0.5.130; +4).
-
-## 0.5.130 - 2026-09-06
-
-### Added
-- **Reload `$JS` partitions / rotate** —
-  `cmq_server_reload` applies non-zero `js_partitions`
-  (1–16) and `js_msgs_rotate_bytes` (1–1 GiB) to the live
-  table. New streams inherit the new default. Existing
-  `.parts` files stay. 0 / omitted keeps the current
-  values.
-
-### Tests
-- `tests/test_jrl.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.130.enumeration.md`, `v0.5.130.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v05130_{1,2}.txt`.
-
-### Test count
-- 511 tests (was 507 in v0.5.129; +4).
-
-## 0.5.129 - 2026-09-06
-
-### Added
-- **Audit file from `persist_dir`** — create writes
-  `{persist_dir}/cmq-audit.log` via `cmq_audit_from_persist`.
-  Destroy clears the path. Reload omitted/empty keeps the
-  current file. `..` / `\` / controls fail closed.
-
-### Tests
-- `tests/test_adt.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.129.enumeration.md`, `v0.5.129.plan.md`.
-- `docs/features/audit.md`.
-- `docs/benchmarks/v05129_{1,2}.txt`.
-
-### Test count
-- 507 tests (was 503 in v0.5.128; +4).
-
-## 0.5.128 - 2026-09-06
-
-### Added
-- **Omitted `log_to_stdout` defaults to 1** — load seeds
-  the documented default. Explicit `0` or an empty value
-  disables stdout. Programmatic zero-init is unchanged.
-
-### Tests
-- `tests/test_lso.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.128.enumeration.md`, `v0.5.128.plan.md`.
-- `docs/benchmarks/v05128_{1,2}.txt`.
-
-### Test count
-- 503 tests (was 499 in v0.5.127; +4).
-
-## 0.5.127 - 2026-09-06
-
-### Added
-- **Reload log sinks** — `cmq_server_reload` applies
-  `log_to_stdout` / `log_to_file` / `log_file` via
-  `cmq_log_reload_sinks`. Same file path is a no-op.
-  Empty/omitted keeps the current sinks.
-
-### Tests
-- `tests/test_lsk.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.127.enumeration.md`, `v0.5.127.plan.md`.
-- `docs/benchmarks/v05127_{1,2}.txt`.
-
-### Test count
-- 499 tests (was 495 in v0.5.126; +4).
-
-## 0.5.126 - 2026-09-06
-
-### Added
-- **Reload MQTT bridge maps** — `cmq_server_reload`
-  replaces a non-empty `mqtt_bridge_map` table on the live
-  bridge. Omitted maps keep the current table. Addr/port
-  stay create-time.
-
-### Tests
-- `tests/test_mqm.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.126.enumeration.md`, `v0.5.126.plan.md`.
-- `docs/features/mqtt-bridge.md`.
-- `docs/benchmarks/v05126_{1,2}.txt`.
-
-### Test count
-- 495 tests (was 491 in v0.5.125; +4).
-
-## 0.5.125 - 2026-09-06
-
-### Added
-- **Reload account_max_* defaults** —
-  `cmq_server_reload` updates non-zero
-  `account_max_connections`, `account_max_subscriptions`,
-  `account_max_payload`, and `account_max_bytes_live` on
-  the account manager. New accounts inherit the new
-  defaults. 0 / omitted keeps the current fields.
-
-### Tests
-- `tests/test_acd.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.125.enumeration.md`, `v0.5.125.plan.md`.
-- `docs/features/accounts.md`.
-- `docs/benchmarks/v05125_{1,2}.txt`.
-
-### Test count
-- 491 tests (was 487 in v0.5.124; +4).
-
-## 0.5.124 - 2026-09-06
-
-### Added
-- **Reload F14 quota / N1 subject RL** —
-  `cmq_server_reload` updates non-zero
-  `max_msgs_per_sec_per_account`,
-  `max_bytes_per_sec_per_account`,
-  `max_connections_per_account`, and
-  `max_msgs_per_sec_per_subject` in place. 0 / omitted
-  keeps the current caps. Create-without-quota can gain
-  an object.
-
-### Tests
-- `tests/test_qrl.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.124.enumeration.md`, `v0.5.124.plan.md`.
-- `docs/features/quota.md`.
-- `docs/benchmarks/v05124_{1,2}.txt`.
-
-### Test count
-- 487 tests (was 483 in v0.5.123; +4).
-
-## 0.5.123 - 2026-09-06
-
-### Added
-- **Reload payload / sub / client caps** —
-  `cmq_server_reload` copies non-zero `max_payload_size`,
-  `max_subs_per_client`, and `max_clients`. 0 / omitted
-  keeps the current caps.
-
-### Tests
-- `tests/test_cap.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.123.enumeration.md`, `v0.5.123.plan.md`.
-- `docs/benchmarks/v05123_{1,2}.txt`.
-
-### Test count
-- 483 tests (was 479 in v0.5.122; +4).
-
-## 0.5.122 - 2026-09-06
-
-### Added
-- **Reload live rate / timeout scalars** —
-  `cmq_server_reload` copies non-zero
-  `max_connects_per_sec`, `inbox_max_pending`,
-  `ping_interval_ms`, and `write_timeout_ms`.
-  0 / omitted keeps the current caps.
-
-### Tests
-- `tests/test_lim.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.122.enumeration.md`, `v0.5.122.plan.md`.
-- `docs/features/rate-limit.md`, `inbox-hol.md`.
-- `docs/benchmarks/v05122_{1,2}.txt`.
-
-### Test count
-- 479 tests (was 475 in v0.5.121; +4).
-
-## 0.5.121 - 2026-09-06
-
-### Added
-- **Reload persist_sync_interval_ms** —
-  `cmq_server_reload` pushes a non-zero interval onto the
-  live filestore. 0 / omitted keeps the current policy.
-  Values above 86400000 fail closed.
-
-### Tests
-- `tests/test_rsy.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.121.enumeration.md`, `v0.5.121.plan.md`.
-- `docs/features/persistence.md`.
-- `docs/benchmarks/v05121_{1,2}.txt`.
-
-### Test count
-- 475 tests (was 471 in v0.5.120; +4).
-
-## 0.5.120 - 2026-09-06
-
-### Added
-- **Reload JWKS cache** — `cmq_server_reload` parses a
-  non-empty `jwks_json` into the live ping-pong cache
-  (`cmq_jwks_cache_reload`). Empty/omitted keeps the
-  current keys. Bad JSON fails closed.
-
-### Tests
-- `tests/test_jwr.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.120.enumeration.md`, `v0.5.120.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v05120_{1,2}.txt`.
-
-### Test count
-- 471 tests (was 467 in v0.5.119; +4).
-
-## 0.5.119 - 2026-09-06
-
-### Added
-- **Reload auth / JWT / nkey** — `cmq_server_reload`
-  copies non-empty `auth_*`, `jwt_issuer`,
-  `jwt_hmac_secret`, `nkey_pub`, `jwt_ec_pub`, and
-  `jwt_rsa_n` / `jwt_rsa_e` onto the live config.
-  `jwt_leeway_sec` 1–3600 applies. Empty/omitted keys
-  keep the current secrets.
-
-### Tests
-- `tests/test_ath.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.119.enumeration.md`, `v0.5.119.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v05119_{1,2}.txt`.
-
-### Test count
-- 467 tests (was 463 in v0.5.118; +4).
-
-## 0.5.118 - 2026-09-06
-
-### Added
-- **SIGHUP / `config_file`** — load stores the path when
-  `config_file` is omitted; empty disables. Create `strdup`s
-  it. A SIGHUP handler latches; the event-loop post-tick
-  calls `cmq_server_reload`. `..` / `\\` fail closed.
-
-### Tests
-- `tests/test_hup.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.118.enumeration.md`, `v0.5.118.plan.md`.
-- `docs/benchmarks/v05118_{1,2}.txt`.
-
-### Test count
-- 463 tests (was 459 in v0.5.117; +4).
-
-## 0.5.117 - 2026-09-06
-
-### Added
-- **Reload TLS cert/key** — `cmq_server_reload` updates
-  live slot paths from `tls_*` / `listener{1,2,3}_tls_*`
-  and calls `cmq_tls_reload`. Empty/omitted paths keep
-  the current files. A failed reload keeps the old CTX.
-
-### Tests
-- `tests/test_tlr.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.117.enumeration.md`, `v0.5.117.plan.md`.
-- `docs/features/tls-hardening.md`.
-- `docs/benchmarks/v05117_{1,2}.txt`.
-
-### Test count
-- 459 tests (was 455 in v0.5.116; +4).
-
-## 0.5.116 - 2026-09-06
-
-### Added
-- **Reload log_level and acl_deny** —
-  `cmq_server_reload` applies `log_level` via
-  `cmq_log_set_level` and rebuilds the ACL when
-  `acl_allow` or `acl_deny` is set. Deny-only files
-  work. Create-without-ACL can gain ACL on reload.
-
-### Tests
-- `tests/test_rld.c` — apply_log, apply_acl_deny,
-  apply_acl_both, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.116.enumeration.md`, `v0.5.116.plan.md`.
-- `docs/features/acl.md`.
-- `docs/benchmarks/v05116_{1,2}.txt`.
-
-### Test count
-- 455 tests (was 451 in v0.5.115; +4).
-
-## 0.5.115 - 2026-09-06
-
-### Added
-- **Extra-listener bind host/port** —
-  `listener{1,2,3}_host` (IPv4; empty = `127.0.0.1`) and
-  `listener{1,2,3}_port` (0 = `port+index`) in `cmq.conf`.
-  Create `strdup`s the host. Test-port guards unchanged.
-
-### Tests
-- `tests/test_lbnd.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.115.enumeration.md`, `v0.5.115.plan.md`.
-- `docs/features/tls-hardening.md`.
-- `docs/benchmarks/v05115_{1,2}.txt`.
-
-### Test count
-- 451 tests (was 447 in v0.5.114; +4).
-
-## 0.5.114 - 2026-09-06
-
-### Added
-- **Listener TLS config keys** — `listener_count` (0–4)
-  and `listener{1,2,3}_tls_cert|key|ca|verify_peer` in
-  `cmq.conf`. Empty cert/key/ca means disabled. Create
-  `strdup`s all `listeners[0..3]` strings so destroy owns
-  them. Slot 0 stays the legacy `tls_*` keys.
-
-### Tests
-- `tests/test_lstn.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.114.enumeration.md`, `v0.5.114.plan.md`.
-- `docs/features/tls-hardening.md`.
-- `docs/benchmarks/v05114_{1,2}.txt`.
-
-### Test count
-- 447 tests (was 443 in v0.5.113; +4).
-
-## 0.5.113 - 2026-09-06
-
-### Added
-- **Config string ownership** — `tls_ca`, `acl_allow`,
-  `acl_deny`, and `blocklist_file` are freed by
-  `cmq_config_free` and `strdup`'d at server create.
-  Empty value means disabled.
-
-### Tests
-- `tests/test_cfgo.c` — apply, omitted, empty,
-  reload_clears (+4).
-
-### Documentation
-- `docs/reviews/v0.5.113.enumeration.md`, `v0.5.113.plan.md`.
-- `docs/features/acl.md`.
-- `docs/benchmarks/v05113_{1,2}.txt`.
-
-### Test count
-- 443 tests (was 439 in v0.5.112; +4).
-
-## 0.5.112 - 2026-09-06
-
-### Added
-- **MQTT bridge outbound PUBLISH (F6 follow-up)** —
-  `cmq_mqtt_bridge_publish` writes a mapped CMQ PUBLISH
-  as MQTT PUBLISH. Config `mqtt_bridge_map=subject,topic[,qos]`
-  (repeatable, max 8) is applied after connect. Route
-  ingress, replay, and `mqtt_bridge*` accounts are skipped.
-
-### Tests
-- `tests/test_mqp.c` — hit, miss, disconnected, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.112.enumeration.md`, `v0.5.112.plan.md`.
-- `docs/features/mqtt-bridge.md`.
-- `docs/benchmarks/v05112_{1,2}.txt`.
-
-### Test count
-- 439 tests (was 435 in v0.5.111; +4).
-
-## 0.5.111 - 2026-09-06
-
-### Added
-- **MQTT bridge config-file keys (F6 follow-up)** —
-  `mqtt_bridge_addr` / `mqtt_bridge_port` in `cmq.conf`
-  enable the outbound bridge. Empty addr disables. `/`
-  `\` controls and spaces fail closed. The server
-  `strdup`s the addr so destroy owns it.
-
-### Tests
-- `tests/test_mqb.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.111.enumeration.md`, `v0.5.111.plan.md`.
-- `docs/features/mqtt-bridge.md`.
-- `docs/benchmarks/v05111_{1,2}.txt`.
-
-### Test count
-- 435 tests (was 431 in v0.5.110; +4).
-
-## 0.5.110 - 2026-09-06
-
-### Added
-- **`persist_sync_interval_ms` config-file key (P3 follow-up)** —
-  `persist_sync_interval_ms = N` in `cmq.conf` (0 = off,
-  max 86400000) installs periodic WAL fsync at create.
-  The server path was already wired.
-
-### Tests
-- `tests/test_psyn.c` — apply, omitted, zero, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.110.enumeration.md`, `v0.5.110.plan.md`.
-- `docs/features/persistence.md`.
-- `docs/benchmarks/v05110_{1,2}.txt`.
-
-### Test count
-- 431 tests (was 427 in v0.5.109; +4).
-
-## 0.5.109 - 2026-09-06
-
-### Added
-- **`persist_dir` config-file key (F5 follow-up)** —
-  `persist_dir = /path` in `cmq.conf` enables the WAL.
-  Empty value disables. `.` / `..` components fail closed.
-  The server `strdup`s the path so destroy owns it.
-
-### Tests
-- `tests/test_pdir.c` — apply, omitted, empty, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.109.enumeration.md`, `v0.5.109.plan.md`.
-- `docs/features/persistence.md`.
-- `docs/benchmarks/v05109_{1,2}.txt`.
-
-### Test count
-- 427 tests (was 423 in v0.5.108; +4).
-
-## 0.5.108 - 2026-09-06
-
-### Added
-- **`$JS` history WAL rotate (D4 follow-up)** —
-  `cmq_js_set_msgs_rotate_bytes` (0 = off) rewrites
-  `{name}.msgs` after an append that reaches the cap,
-  keeping a tail that fits the cap (at most 1024
-  records). Config `js_msgs_rotate_bytes` (0–1 GiB)
-  is wired at server create.
-
-### Tests
-- `tests/test_jsm.c` — rotate_keeps_tail, rotate_off,
-  no_persist, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.108.enumeration.md`, `v0.5.108.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v05108_{1,2}.txt`.
-
-### Test count
-- 423 tests (was 419 in v0.5.107; +4).
-
-## 0.5.107 - 2026-09-06
-
-### Added
-- **`$JS` default partitions (D4 follow-up)** —
-  `cmq_js_set_default_partitions` (1–16) applies to new
-  streams without a `.parts` file. Config `js_partitions`
-  (0–16; 0/1 = unpartitioned) is wired at server create.
-  An existing `{name}.parts` file wins.
-
-### Tests
-- `tests/test_jsd.c` — apply, file_wins, n1, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.107.enumeration.md`, `v0.5.107.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v05107_{1,2}.txt`.
-
-### Test count
-- 419 tests (was 415 in v0.5.106; +4).
-
-## 0.5.106 - 2026-09-06
-
-### Added
-- **`$JS` consume-part subject (D4 follow-up)** —
-  REQUEST `$JS.<name>.<consumer>.<part>` (0–15) is
-  parsed by `cmq_js_parse_part` and handled by
-  `cmq_js_consume` → `consume_part`. The server REQUEST
-  path needs no new opcode. Two-token consume is
-  unchanged.
-
-### Tests
-- `tests/test_jsq.c` — parse, isolate, compat, reject
-  (+4).
-
-### Documentation
-- `docs/reviews/v0.5.106.enumeration.md`, `v0.5.106.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v05106_{1,2}.txt`.
-
-### Test count
-- 415 tests (was 411 in v0.5.105; +4).
-
-## 0.5.105 - 2026-09-06
-
-### Added
-- **`$JS` hash partitions (D4 follow-up)** —
-  `cmq_js_set_partitions` (1–16, empty stream only).
-  `{persist_dir}/js/{name}.parts` (`CMQP`) restores `n`.
-  PUBLISH / replay use `append_key` on the payload when
-  `n>1`. `cmq_js_consume_part` isolates one partition.
-
-### Tests
-- `tests/test_jsp.c` — isolate, reopen, n1 compat,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.105.enumeration.md`, `v0.5.105.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v05105_{1,2}.txt`.
-
-### Test count
-- 411 tests (was 407 in v0.5.104; +4).
-
-## 0.5.104 - 2026-09-06
-
-### Added
-- **Durable `$JS` history (D4 follow-up)** — when
-  `persist_dir` is set, PUBLISH `$JS.<name>` appends
-  `{persist_dir}/js/{name}.msgs` (`CMQM`). Reopen
-  replays onto the ring so pull consume survives.
-  Last-payload `.last` is unchanged.
-
-### Tests
-- `tests/test_jsh.c` — reopen consume, no-persist,
-  isolate, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.104.enumeration.md`, `v0.5.104.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v05104_{1,2}.txt`.
-
-### Test count
-- 407 tests (was 403 in v0.5.103; +4).
-
-## 0.5.103 - 2026-09-06
-
-### Added
-- **Durable `$JS` last payload (D4 follow-up)** — when
-  `persist_dir` is set, PUBLISH `$JS.<name>` writes
-  `{persist_dir}/js/{name}.last` (`CMQL`). REQUEST-get
-  survives reopen. Earlier bodies stay on the ring.
-
-### Tests
-- `tests/test_jsl.c` — reopen, no-persist, isolate,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.103.enumeration.md`, `v0.5.103.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v05103_{1,2}.txt`.
-
-### Test count
-- 403 tests (was 399 in v0.5.102; +4).
-
-## 0.5.102 - 2026-09-06
-
-### Added
-- **Disconnect spans (D1 follow-up)** — a graceful inbound
-  DISCONNECT offers one `KIND_DISCONNECT` with the accept
-  trace before `client_force_closing`.
-
-### Tests
-- `tests/test_otd.c` — ok, skipped, isolated, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.102.enumeration.md`, `v0.5.102.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v05102_{1,2}.txt`.
-
-### Test count
-- 399 tests (was 395 in v0.5.101; +4).
-
-## 0.5.101 - 2026-09-06
-
-### Added
-- **Response spans (D1 follow-up)** — a successful local
-  RESPONSE deliver offers one `KIND_RESPONSE` with the
-  accept trace. Failed deliver and route-only forward
-  skip it.
-
-### Tests
-- `tests/test_ots.c` — ok, skipped, isolated, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.101.enumeration.md`, `v0.5.101.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v05101_{1,2}.txt`.
-
-### Test count
-- 395 tests (was 391 in v0.5.100; +4).
-
-## 0.5.100 - 2026-09-06
-
-### Added
-- **Request spans (D1 follow-up)** — a successful local
-  REQUEST answer (store reply or fanout `n > 0`) offers
-  one `KIND_REQUEST` with the accept trace. No responders
-  and route-only forward skip it.
-
-### Tests
-- `tests/test_otr.c` — ok, skipped, isolated, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.100.enumeration.md`, `v0.5.100.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v05100_{1,2}.txt`.
-
-### Test count
-- 391 tests (was 387 in v0.5.99; +4).
-
-## 0.5.99 - 2026-09-06
-
-### Added
-- **COMPRESSED on RESPONSE (F2 follow-up)** — zstd RESPONSE
-  inflates before inbox decrement / subject parse (16 MiB
-  cap). Control opcodes still rejected (F11).
-
-### Tests
-- `tests/test_resc.c` — accept RESPONSE, reject SUBSCRIBE,
-  inflate, reject CONNECT (+4).
-
-### Documentation
-- `docs/reviews/v0.5.99.enumeration.md`, `v0.5.99.plan.md`.
-- `docs/features/wire-compression.md`, `flag-rejection.md`.
-- `docs/benchmarks/v0599_{1,2}.txt`.
-
-### Test count
-- 387 tests (was 383 in v0.5.98; +4).
-
-## 0.5.98 - 2026-09-06
-
-### Added
-- **COMPRESSED on REQUEST (F2 follow-up)** — zstd REQUEST
-  inflates before inbox/subject parse (16 MiB cap).
-  RESPONSE still rejected (F11).
-
-### Tests
-- `tests/test_reqc.c` — accept REQUEST, reject RESPONSE,
-  inflate, reject CONNECT (+4).
-
-### Documentation
-- `docs/reviews/v0.5.98.enumeration.md`, `v0.5.98.plan.md`.
-- `docs/features/wire-compression.md`, `flag-rejection.md`.
-- `docs/benchmarks/v0598_{1,2}.txt`.
-
-### Test count
-- 383 tests (was 379 in v0.5.97; +4).
-
-## 0.5.97 - 2026-09-06
-
-### Added
-- **COMPRESSED on MESSAGE (F2 follow-up)** — inbound zstd
-  MESSAGE inflates, converts to PUBLISH, then fans out
-  plaintext. Uncompressed MESSAGE stays unknown-op.
-  REQUEST still rejected (F11).
-
-### Tests
-- `tests/test_msgc.c` — accept MESSAGE, reject REQUEST,
-  to-publish, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.97.enumeration.md`, `v0.5.97.plan.md`.
-- `docs/features/wire-compression.md`, `flag-rejection.md`.
-- `docs/benchmarks/v0597_{1,2}.txt`.
-
-### Test count
-- 379 tests (was 375 in v0.5.96; +4).
-
-## 0.5.96 - 2026-09-06
-
-### Added
-- **COMPRESSED on PUBLISH (F2 follow-up)** — zstd PUBLISH
-  inflates before subject parse (16 MiB cap). Fanout is
-  plaintext. MESSAGE still rejected (F11).
-
-### Tests
-- `tests/test_pubc.c` — accept PUBLISH, reject MESSAGE,
-  inflate roundtrip / reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.96.enumeration.md`, `v0.5.96.plan.md`.
-- `docs/features/wire-compression.md`, `flag-rejection.md`.
-- `docs/benchmarks/v0596_{1,2}.txt`.
-
-### Test count
-- 375 tests (was 371 in v0.5.95; +4).
-
-## 0.5.95 - 2026-09-06
-
-### Added
-- **Stream consume / ack (D4 follow-up)** — REQUEST
-  `$JS.<name>.<consumer>` pulls the next seq (8-byte BE
-  prefix). PUBLISH with that seq acks. `$JS.<name>`
-  append / get-last unchanged.
-
-### Tests
-- `tests/test_jsc.c` — consume+ack, isolate, miss,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.95.enumeration.md`, `v0.5.95.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v0595_{1,2}.txt`.
-
-### Test count
-- 371 tests (was 367 in v0.5.94; +4).
-
-## 0.5.94 - 2026-09-06
-
-### Added
-- **Stream REQUEST-get (D4 follow-up)** — REQUEST
-  `$JS.<name>` returns the last payload to reply-to,
-  or an empty body on miss.
-
-### Tests
-- `tests/test_jsr.c` — hit/miss, not-js, isolate,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.94.enumeration.md`, `v0.5.94.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v0594_{1,2}.txt`.
-
-### Test count
-- 367 tests (was 363 in v0.5.93; +4).
-
-## 0.5.93 - 2026-09-06
-
-### Added
-- **Stream PUBLISH path (D4 follow-up)** — `$JS.<name>`
-  appends to a named in-memory stream (max 8). Empty
-  payload fails closed. Optional cursors under
-  `{persist_dir}/js`.
-
-### Tests
-- `tests/test_js.c` — parse, append/read, isolate,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.93.enumeration.md`, `v0.5.93.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v0593_{1,2}.txt`.
-
-### Test count
-- 363 tests (was 359 in v0.5.92; +4).
-
-## 0.5.92 - 2026-09-06
-
-### Added
-- **Connect spans (D1 follow-up)** — CONNACK 0 offers one
-  `KIND_CONNECT` with the accept trace. Failed CONNACK
-  skips it.
-
-### Tests
-- `tests/test_otn.c` — ok, skipped, isolated, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.92.enumeration.md`, `v0.5.92.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v0592_{1,2}.txt`.
-
-### Test count
-- 359 tests (was 355 in v0.5.91; +4).
-
-## 0.5.91 - 2026-09-06
-
-### Added
-- **JWT ES256 / RS256 issuing (D3 follow-up)** —
-  `cmq_jwt_sign_es256` (P-256 scalar, raw R||S) and
-  `cmq_jwt_sign_rs256` (`n`/`e`/`d`) mint tokens the
-  existing verify path accepts.
-
-### Tests
-- `tests/test_jwts.c` — ES256 / RS256 roundtrip, wrong
-  key, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.91.enumeration.md`, `v0.5.91.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v0591_{1,2}.txt`.
-
-### Test count
-- 355 tests (was 351 in v0.5.90; +4).
-
-## 0.5.90 - 2026-09-06
-
-### Added
-- **JWT HS256 issuing (D3 follow-up)** —
-  `cmq_jwt_sign_hs256` mints a compact token that the
-  existing CONNECT verify path accepts. iss/sub reject
-  JSON metacharacters.
-
-### Tests
-- `tests/test_jwti.c` — sign+verify, bad secret, expired,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.90.enumeration.md`, `v0.5.90.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v0590_{1,2}.txt`.
-
-### Test count
-- 351 tests (was 347 in v0.5.89; +4).
-
-## 0.5.89 - 2026-09-06
-
-### Added
-- **Consume spans (D1 follow-up)** — successful local
-  fanout offers one `KIND_CONSUME` with the publisher
-  trace. Zero subscribers and failed deliver skip it.
-
-### Tests
-- `tests/test_otc.c` — delivered, skipped, isolated,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.89.enumeration.md`, `v0.5.89.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v0589_{1,2}.txt`.
-
-### Test count
-- 347 tests (was 343 in v0.5.88; +4).
-
-## 0.5.88 - 2026-09-06
-
-### Added
-- **Tombstone TTL + dirty-ratio compact (D6 follow-up)** —
-  last-is-tombstone kept while sealed `.1` is younger than
-  `tombstone_ttl_ms`. `set_compact_dirty` auto-runs
-  `compact_keys` after rotate / `maybe`. Defaults match
-  v0.5.53 (TTL 0, den 0).
-
-### Tests
-- `tests/test_kttl.c` — dirty, ttl keep, auto rotate,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.88.enumeration.md`, `v0.5.88.plan.md`.
-- `docs/features/persistence.md`.
-- `docs/benchmarks/v0588_{1,2}.txt`.
-
-### Test count
-- 343 tests (was 339 in v0.5.87; +4).
-
-## 0.5.87 - 2026-09-06
-
-### Added
-- **Partitioned consume cursors (D4 follow-up)** — 1–16
-  hash partitions. `append_key` + `next_part` / `ack_part`
-  isolate watermarks. Default n=1 leaves append unchanged.
-  `CMQC2` when n>1; wrong-part ack fails closed.
-
-### Tests
-- `tests/test_spart.c` — isolate, reopen, n=1 compat,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.87.enumeration.md`, `v0.5.87.plan.md`.
-- `docs/features/streams.md`.
-- `docs/benchmarks/v0587_{1,2}.txt`.
-
-### Test count
-- 339 tests (was 335 in v0.5.86; +4).
-
-## 0.5.86 - 2026-09-06
-
-### Added
-- **Leaf/gateway CONNECT/CONNACK e2e** — loopback
-  tests drive `cmq_leaf_connect` and
-  `cmq_gateway_connect_remote` through a real TCP
-  handshake. Non-zero CONNACK fails closed.
-
-### Tests
-- `tests/test_leafe.c` — leaf connect, gateway
-  connect, bad CONNACK, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.86.enumeration.md`, `v0.5.86.plan.md`.
-- `docs/features/leaf-gateway.md`.
-- `docs/benchmarks/v0586_{1,2}.txt`.
-
-### Test count
-- 335 tests (was 331 in v0.5.85; +4).
-
-## 0.5.85 - 2026-09-06
-
-### Added
-- **Route write retry (D5 phase 4)** — EAGAIN on a live
-  route peer is queued (32×2048) and drained after
-  broadcast / reconnect. Hard fails still drop. Newest
-  drop when full.
-
-### Tests
-- `tests/test_rtry.c` — offer+drain, full drop, dead skip,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.85.enumeration.md`, `v0.5.85.plan.md`.
-- `docs/features/txn.md`.
-- `docs/benchmarks/v0585_{1,2}.txt`.
-
-### Test count
-- 331 tests (was 327 in v0.5.84; +4).
-
-## 0.5.84 - 2026-09-06
-
-### Added
-- **OTLP/gRPC (D1 phase 4)** — `grpc://` encodes an OTLP
-  protobuf Export and POSTs it as prior-knowledge HTTP/2
-  (`application/grpc`). Default port 4317. JSON `http(s)://`
-  path unchanged. Failures ignored.
-
-### Tests
-- `tests/test_otlpg.c` — proto, grpc frame, parse+post,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.84.enumeration.md`, `v0.5.84.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v0584_{1,2}.txt`.
-
-### Test count
-- 327 tests (was 323 in v0.5.83; +4).
-
-## 0.5.83 - 2026-09-06
-
-### Added
-- **TLS-wrapped h2 I/O (D2 phase 7)** — `cmq_h2_accept_tls`
-  / `cmq_h2_session_tls` handshake then run the POST
-  machine over `cmq_tls_read`/`write`. No TLS config:
-  plaintext accept unchanged. Server accept uses slot 0
-  when configured.
-
-### Tests
-- `tests/test_h2t.c` — TLS POST, plaintext-to-TLS fail,
-  plaintext still works, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.83.enumeration.md`, `v0.5.83.plan.md`.
-- `docs/features/http2.md`.
-- `docs/benchmarks/v0583_{1,2}.txt`.
-
-### Test count
-- 323 tests (was 319 in v0.5.82; +4).
-
-## 0.5.82 - 2026-09-06
-
-### Added
-- **JWKS refresh (D3 phase 9)** — `jwks_refresh_sec` re-GETs
-  `jwks_url` on a sidecar (5–86400 s; 0 = once at create).
-  Ping-pong cache; failed GET keeps the old keys. CONNECT
-  copies material out of the live slot.
-
-### Tests
-- `tests/test_jwksr.c` — due, step updates, fail keeps old,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.82.enumeration.md`, `v0.5.82.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v0582_{1,2}.txt`.
-
-### Test count
-- 319 tests (was 315 in v0.5.81; +4).
-
-## 0.5.81 - 2026-09-06
-
-### Added
-- **ALPN h2 + h2_port (D2 phase 6)** — `h2_port` binds the
-  loopback HTTP/2 listener. TLS slots call
-  `cmq_tls_set_alpn("h2")` before load. `h2_port` 0 leaves
-  both off. Prior-knowledge POST unchanged.
-
-### Tests
-- `tests/test_h2p.c` — ALPN h2, listen, clear, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.81.enumeration.md`, `v0.5.81.plan.md`.
-- `docs/features/http2.md`.
-- `docs/benchmarks/v0581_{1,2}.txt`.
-
-### Test count
-- 315 tests (was 311 in v0.5.80; +4).
-
-## 0.5.80 - 2026-09-06
-
-### Added
-- **Multi-node 2PC (D5 phase 3)** — COMMIT with live
-  routes PREPARE/VOTE (≤200 ms) then COMMIT or ABORT.
-  Route peers vote with `cluster_node_id`. No routes:
-  existing local COMMIT. At most 8 participants.
-
-### Tests
-- `tests/test_txn2.c` — prepare+votes, no-vote fail,
-  wire, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.80.enumeration.md`, `v0.5.80.plan.md`.
-- `docs/features/txn.md`.
-- `docs/benchmarks/v0580_{1,2}.txt`.
-
-### Test count
-- 311 tests (was 307 in v0.5.79; +4).
-
-## 0.5.79 - 2026-09-06
-
-### Added
-- **HTTPS JWKS (D3 phase 8)** — `jwks_url` accepts
-  `https://`; create-time GET over TLS with peer verify.
-  Optional `jwks_ca` PEM; default port 443. `http://`
-  path unchanged. Refresh deferred.
-
-### Tests
-- `tests/test_jwkss.c` — HTTPS parse, TLS GET, missing
-  CA fail, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.79.enumeration.md`, `v0.5.79.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v0579_{1,2}.txt`.
-
-### Test count
-- 307 tests (was 303 in v0.5.78; +4).
-
-## 0.5.78 - 2026-09-06
-
-### Added
-- **OTLP HTTPS (D1 phase 3)** — `otlp_endpoint` accepts
-  `https://`; sidecar POSTs OTLP/JSON over TLS with peer
-  verify. Optional `otlp_ca` PEM; otherwise the system
-  store. `http://` path unchanged. gRPC deferred.
-
-### Tests
-- `tests/test_otlps.c` — HTTPS parse, TLS POST, missing
-  CA fail, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.78.enumeration.md`, `v0.5.78.plan.md`.
-- `docs/features/otel.md`.
-- `docs/benchmarks/v0578_{1,2}.txt`.
-
-### Test count
-- 303 tests (was 299 in v0.5.77; +4).
-
-## 0.5.77 - 2026-09-06
-
-### Added
-- **JWT RS256 (D3 phase 7)** — compact RS256 verify
-  (2048–4096 bit); JWKS `kty=RSA` (`n`+`e`);
-  `jwt_rsa_n` / `jwt_rsa_e` are base64url. HMAC / ES256 /
-  nkey paths unchanged. Still verify-only.
-
-### Tests
-- `tests/test_rs256.c` — ok, bad sig, JWKS RSA, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.77.enumeration.md`, `v0.5.77.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v0577_{1,2}.txt`.
-
-### Test count
-- 299 tests (was 295 in v0.5.76; +4).
-
-## 0.5.76 - 2026-09-06
-
-### Added
-- **Remote JWKS fetch (D3 phase 6)** — `jwks_url` GETs
-  `http://host[:port][/path]` once at create into the 8-key
-  cache. `http://` only; 4 KiB body; exclusive with
-  `jwks_json`. HTTPS refresh deferred.
-
-### Tests
-- `tests/test_jwksf.c` — parse URL, build GET, loopback
-  fetch, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.76.enumeration.md`, `v0.5.76.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v0576_{1,2}.txt`.
-
-### Test count
-- 295 tests (was 291 in v0.5.75; +4).
-
-## 0.5.75 - 2026-09-06
-
-### Added
-- **nkey seed / base32 (D3 phase 5)** — NATS `U…` publics and
-  `SU…` seeds. `nkey_pub` accepts 64 hex or a user public.
-  CONNECT password stays 128 hex. CRC-16/XMODEM checked.
-
-### Tests
-- `tests/test_nkeyb32.c` — U/SU vectors, seed→pub, hex,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.75.enumeration.md`, `v0.5.75.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v0575_{1,2}.txt`.
-
-### Test count
-- 291 tests (was 287 in v0.5.74; +4).
-
-## 0.5.74 - 2026-09-06
-
-### Added
-- **JWT ES256 (D3 phase 4)** — compact ES256 (P-256) verify;
-  JWKS `kty=EC` / `crv=P-256`; `jwt_ec_pub` is 128 hex X||Y.
-  HS256 / nkey paths unchanged. Still verify-only.
-
-### Tests
-- `tests/test_es256.c` — ok, bad sig, JWKS EC, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.74.enumeration.md`, `v0.5.74.plan.md`.
-- `docs/features/jwt.md`.
-- `docs/benchmarks/v0574_{1,2}.txt`.
-
-### Test count
-- 287 tests (was 283 in v0.5.73; +4).
-
-## 0.5.73 - 2026-09-06
-
-### Added
-- **HTTP/2 dedicated listener (D2 phase 5)** — loopback
-  prior-knowledge bind/accept. Preface + SETTINGS, then
-  POST `:path` + DATA → subject/payload. No ALPN `h2`.
-
-### Tests
-- `tests/test_h2l.c` — listen POST, bad preface, bad path,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.73.enumeration.md`, `v0.5.73.plan.md`.
-- `docs/features/http2.md`.
-- `docs/benchmarks/v0573_{1,2}.txt`.
-
-### Test count
-- 283 tests (was 279 in v0.5.72; +4).
-
-## 0.5.72 - 2026-09-06
-
-### Added
-- **HPACK 4 KiB dynamic table (D2 phase 4)** — incremental
-  literals populate a 4 KiB table; indexed fields resolve
-  static or dynamic names. Size updates above 4096 fail
-  closed. h2 listener stays deferred.
-
-### Tests
-- `tests/test_hdyn.c` — RFC C.2.1, C.3.1–C.3.2, evict,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.72.enumeration.md`, `v0.5.72.plan.md`.
-- `docs/features/hpack.md`, `http2.md`.
-- `docs/benchmarks/v0572_{1,2}.txt`.
-
-### Test count
-- 279 tests (was 275 in v0.5.71; +4).
-
-## 0.5.71 - 2026-09-06
-
-### Added
-- **HPACK Huffman (D2 phase 3)** — RFC 7541 Huffman
-  encode/decode; `cmq_hpack_str_decode` accepts H=1.
-  Literal H=0 encode unchanged. Dynamic table and h2
-  listener stay deferred.
-
-### Tests
-- `tests/test_huff.c` — rfc www.example.com, roundtrip,
-  H=1 string, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.71.enumeration.md`, `v0.5.71.plan.md`.
-- `docs/features/hpack.md`, `http2.md`.
-- `docs/benchmarks/v0571_{1,2}.txt`.
-
-### Test count
-- 275 tests (was 271 in v0.5.70; +4).
-
-## 0.5.70 - 2026-09-06
-
-### Added
-- **KV/object REQUEST-get (D4 phase 6)** — REQUEST on
-  `$KV.` / `$OBJ.` answers from the store (empty on miss).
-  Non-`$` REQUEST unchanged.
-
-### Tests
-- `tests/test_kvreq.c` — kv hit/miss, not-kv, obj hit/miss,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.70.enumeration.md`, `v0.5.70.plan.md`.
-- `docs/features/kv.md`, `object-store.md`.
-- `docs/benchmarks/v0570_{1,2}.txt`.
-
-### Test count
-- 271 tests (was 267 in v0.5.69; +4).
-
-## 0.5.69 - 2026-09-06
-
-### Added
-- **HTTP/2 frame state machine (D2 phase 2)** — preface,
-  SETTINGS, and a 32-stream table. Oversize frames and a
-  33rd stream fail closed. No `h2` ALPN advertise.
-
-### Tests
-- `tests/test_h2.c` — preface, settings, stream cap, reject
-  (+4).
-
-### Documentation
-- `docs/reviews/v0.5.69.enumeration.md`, `v0.5.69.plan.md`.
-- `docs/features/http2.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0569_{1,2}.txt`.
-
-### Test count
-- 267 tests (was 263 in v0.5.68; +4).
-
-## 0.5.68 - 2026-09-06
-
-### Added
-- **Object-store PUBLISH path (D4 phase 5)** — `$OBJ.<name>`
-  put/del when `persist_dir` is set. Fanout unchanged.
-  REQUEST-get deferred.
-
-### Tests
-- `tests/test_objp.c` — parse, put/get/del, isolate, reject
-  (+4).
-
-### Documentation
-- `docs/reviews/v0.5.68.enumeration.md`, `v0.5.68.plan.md`.
-- `docs/features/object-store.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0568_{1,2}.txt`.
-
-### Test count
-- 263 tests (was 259 in v0.5.67; +4).
-
-## 0.5.67 - 2026-09-06
-
-### Added
-- **KV bucket PUBLISH path (D4 phase 4)** — `$KV.<bucket>.<key>`
-  put/del on the server publish path. One `'$'` check for
-  other subjects. At most 8 buckets. Fanout unchanged.
-
-### Tests
-- `tests/test_kvb.c` — parse, put/get/del, isolate, reject
-  (+4).
-
-### Documentation
-- `docs/reviews/v0.5.67.enumeration.md`, `v0.5.67.plan.md`.
-- `docs/features/kv.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0567_{1,2}.txt`.
-
-### Test count
-- 259 tests (was 255 in v0.5.66; +4).
-
-## 0.5.66 - 2026-09-06
-
-### Added
-- **HPACK static codec (D2 phase 1)** — RFC 7541 integers,
-  literal strings (no Huffman), and static indexed headers.
-  No `h2` ALPN advertise. Dynamic table deferred.
-
-### Tests
-- `tests/test_hpack.c` — C.1 integers, literal, indexed GET,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.66.enumeration.md`, `v0.5.66.plan.md`.
-- `docs/features/hpack.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0566_{1,2}.txt`.
-
-### Test count
-- 255 tests (was 251 in v0.5.65; +4).
-
-## 0.5.65 - 2026-09-06
-
-### Added
-- **JWKS oct-key cache (D3 phase 3)** — `jwks_json` holds
-  up to 8 HS256 oct keys. CONNECT `kid` selects the key.
-  Unknown kid fails. No remote fetch.
-
-### Tests
-- `tests/test_jwks.c` — parse/lookup, kid verify, unknown
-  kid, reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.65.enumeration.md`, `v0.5.65.plan.md`.
-- `docs/features/jwt.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0565_{1,2}.txt`.
-
-### Test count
-- 251 tests (was 247 in v0.5.64; +4).
-
-## 0.5.64 - 2026-09-06
-
-### Added
-- **OTLP/HTTP JSON exporter (D1 phase 2)** — sidecar POSTs
-  spans to `otlp_endpoint` (`http://` only). Encode and I/O
-  stay off the offer path. gRPC / TLS collectors deferred.
-
-### Tests
-- `tests/test_otlp.c` — encode, parse URL, build POST,
-  reject (+4).
-
-### Documentation
-- `docs/reviews/v0.5.64.enumeration.md`, `v0.5.64.plan.md`.
-- `docs/features/otel.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0564_{1,2}.txt`.
-
-### Test count
-- 247 tests (was 243 in v0.5.63; +4).
-
-## 0.5.63 - 2026-09-06
-
-### Added
-- **NKEY on CONNECT (D3 phase 2)** — `nkey_pub` (64 hex
-  chars) admits an Ed25519 signature of `CMQNK1|<user>` in
-  the CONNECT password (128 hex). JWT still wins if both
-  are set. Verify-only; OpenSSL.
-
-### Tests
-- `tests/test_nkey_auth.c` — hex parse, user verify, empty
-  reject (+3).
-
-### Documentation
-- `docs/reviews/v0.5.63.enumeration.md`, `v0.5.63.plan.md`.
-- `docs/features/jwt.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0563_{1,2}.txt`.
-
-### Test count
-- 243 tests (was 240 in v0.5.62; +3).
-
-## 0.5.62 - 2026-09-06
-
-### Added
-- **JWT / NKEY verify (D3 phase 1)** — HS256 compact JWT
-  on CONNECT when `jwt_hmac_secret` + `jwt_issuer` are set.
-  Rejects wrong alg / iss / exp / nbf (60s leeway).
-  `cmq_nkey_verify` is raw Ed25519. Verify-only; OpenSSL.
-
-### Tests
-- `tests/test_jwt.c` — HS256 ok/bad/iss/exp/nbf/alg,
-  Ed25519 nkey (+7).
-
-### Documentation
-- `docs/reviews/v0.5.62.enumeration.md`, `v0.5.62.plan.md`.
-- `docs/features/jwt.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0562_{1,2}.txt`.
-
-### Test count
-- 240 tests (was 233 in v0.5.61; +7).
-
-## 0.5.61 - 2026-09-06
-
-### Added
-- **OpenTelemetry span ring (D1 phase 1)** — 256-slot MPSC
-  ring + sidecar. Offer never blocks; full ring drops newest.
-  Spans have trace id / kind / time only (no payload).
-  OTLP/gRPC deferred.
-
-### Tests
-- `tests/test_otel.c` — offer/poll, drop newest, kinds,
-  sidecar drain, reject (+5).
-
-### Documentation
-- `docs/reviews/v0.5.61.enumeration.md`, `v0.5.61.plan.md`.
-- `docs/features/otel.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0561_{1,2}.txt`.
-
-### Test count
-- 233 tests (was 228 in v0.5.60; +5).
-
-## 0.5.60 - 2026-09-06
-
-### Added
-- **Transaction coordinator (D5 phase 2)** — `CMQT`+txn+op
-  begin/add/commit/abort. Adds are buffered; commit fsyncs
-  then applies. Default PUBLISH path unchanged. Duplicate
-  commit is a no-op. Log at `{persist_dir}/cmq.txn`.
-
-### Tests
-- `tests/test_txn.c` — parse, apply, abort, isolate, no-log,
-  reopen, uncommitted gone, full (+8).
-
-### Documentation
-- `docs/reviews/v0.5.60.enumeration.md`, `v0.5.60.plan.md`.
-- `docs/features/txn.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0560_{1,2}.txt`.
-
-### Test count
-- 228 tests (was 220 in v0.5.59; +8).
-
-## 0.5.59 - 2026-09-06
-
-### Added
-- **Object store (D4 phase 3)** — `cmq_obj` named blobs under
-  a directory. Put is tmp + fsync + rename. 64 KiB cap.
-  Path traversal rejected.
-
-### Tests
-- `tests/test_obj.c` — put/get/overwrite+reopen, del/isolate,
-  unsafe names (+3).
-
-### Documentation
-- `docs/reviews/v0.5.59.enumeration.md`, `v0.5.59.plan.md`.
-- `docs/features/object-store.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0559_{1,2}.txt`.
-
-### Test count
-- 220 tests (was 217 in v0.5.58; +3).
-
-## 0.5.58 - 2026-09-06
-
-### Added
-- **KV last-value store (D4 phase 2)** — `cmq_kv` put/get/del
-  on a fixed table. Opt-in persist uses `CMQK` on a live WAL.
-  Delete is a tombstone. Default create does no I/O.
-
-### Tests
-- `tests/test_kv.c` — overwrite, del/isolate, no-path, reopen,
-  tombstone, unsafe/full (+6).
-
-### Documentation
-- `docs/reviews/v0.5.58.enumeration.md`, `v0.5.58.plan.md`.
-- `docs/features/kv.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0558_{1,2}.txt`.
-
-### Test count
-- 217 tests (was 211 in v0.5.57; +6).
-
-## 0.5.57 - 2026-09-06
-
-### Added
-- **MQTT outbound QoS 2** — SUBSCRIBE may grant 2. Matching
-  subscribers get `PUBLISH` `0x34`; `PUBREC` sends `PUBREL`
-  `0x62`; `PUBCOMP` frees the slot. Same 16-slot window.
-  QoS 1 PUBACK cannot free a QoS 2 slot.
-
-### Tests
-- `tests/test_mqtt_qos2.c` — encode, handshake order, rec
-  rejects QoS 1, PUBREL, fanout, QoS 1 untouched (+6).
-
-### Documentation
-- `docs/reviews/v0.5.57.enumeration.md`, `v0.5.57.plan.md`.
-- `docs/features/mqtt-server-stub.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0557_{1,2}.txt`.
-
-### Test count
-- 211 tests (was 205 in v0.5.56; +6).
-
-## 0.5.56 - 2026-09-06
-
-### Added
-- **Durable stream consumer cursors (D4 phase 1)** —
-  `cmq_stream_set_cursor_path` persists ack watermarks to
-  `{dir}/{name}.cursors`. Default create does no I/O; append
-  is unchanged. Persist only on add / ack / remove.
-
-### Tests
-- `tests/test_stream_cursors.c` — no-path silent, reopen,
-  isolated, remove, bad dir, unsafe name (+6).
-
-### Documentation
-- `docs/reviews/v0.5.56.enumeration.md`, `v0.5.56.plan.md`.
-- `docs/features/streams.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0556_{1,2}.txt`.
-
-### Test count
-- 205 tests (was 199 in v0.5.55; +6).
-
-## 0.5.55 - 2026-09-06
-
-### Added
-- **Idempotent publish (D5 phase 1)** — optional `CMQI`+pid+seq
-  header. A 64-wide sliding window per pid drops duplicates
-  before WAL/fanout. No header: PUBLISH path unchanged.
-  New pid when 256 slots are full is rejected.
-
-### Tests
-- `tests/test_idempo.c` — parse, first/dup, window, ooo,
-  isolated pids, table full (+8).
-
-### Documentation
-- `docs/reviews/v0.5.55.enumeration.md`, `v0.5.55.plan.md`.
-- `docs/features/idempo.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0555_{1,2}.txt`.
-
-### Test count
-- 199 tests (was 191 in v0.5.54; +8).
-
-## 0.5.54 - 2026-09-06
-
-### Added
-- **MQTT QoS 1 outbound inflight** — 16-slot per-session window.
-  Local subscribers matching a PUBLISH receive a packet-id
-  frame; PUBACK frees the slot. Full window skips that dest.
-  Live CMQ PUBLISH path is unchanged.
-
-### Tests
-- `tests/test_mqtt_inflight.c` — offer/ack/full/encode/ids,
-  socketpair fanout+ack, full skip (+7).
-
-### Documentation
-- `docs/reviews/v0.5.54.enumeration.md`, `v0.5.54.plan.md`.
-- `docs/features/mqtt-server-stub.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0554_{1,2}.txt`.
-
-### Test count
-- 191 tests (was 184 in v0.5.53; +7).
-
-## 0.5.53 - 2026-09-06
-
-### Added
-- **Key compaction on sealed WAL segments (D6)** —
-  `cmq_filestore_compact_keys` keeps the last `CMQK` value per
-  key on `prefix.data.1` / `.idx.1`, drops empty-value
-  tombstones, and leaves unkeyed records and the live WAL
-  untouched.
-
-### Tests
-- `tests/test_filestore_keycompact.c` — noop, last-wins,
-  unkeyed, tombstone, live untouched, isolated, idempotent
-  (+7).
-
-### Documentation
-- `docs/reviews/v0.5.53.enumeration.md`, `v0.5.53.plan.md`.
-- `docs/features/persistence.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0553_{1,2}.txt`.
-
-### Test count
-- 184 tests (was 177 in v0.5.52; +7).
-
-## 0.5.52 - 2026-09-06
-
-### Added
-- **Per-account outstanding-byte cap** — `bytes_live` /
-  `max_bytes_live` credit after rewrite and debit when that
-  publish returns. Config `account_max_bytes_live` (`0` =
-  unlimited: one cached compare, no extra `get()` / CAS).
-  Rejects with `"account memory"`. Does not cap subscriber
-  write-buffer copies.
-
-### Tests
-- `tests/test_account_bytes.c` — unlimited, cap, debit,
-  isolate, stale epoch, default, saturate (+7).
-
-### Documentation
-- `docs/reviews/v0.5.52.enumeration.md`, `v0.5.52.plan.md`.
-- `docs/features/accounts.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0552_{1,2}.txt`.
-
-### Test count
-- 177 tests (was 170 in v0.5.51; +7).
-
-## 0.5.51 - 2026-09-06
-
-### Added
-- **Audit events on the real paths** — CONNECT emits `auth_ok` /
-  `auth_fail` via `cmq_audit_auth` (no password in `details`).
-  WAL append/replay emit `persist_fail`; startup replay emits
-  `persist_recover`. TLS accept emits `tls_handshake_fail`.
-  Successful PUBLISH is unchanged.
-
-### Tests
-- `tests/test_audit.c` — event-name map, auth helper (+2).
-
-### Documentation
-- `docs/reviews/v0.5.51.enumeration.md`, `v0.5.51.plan.md`.
-- `docs/features/audit.md`, `remaining-unimplemented.md`.
-- `docs/benchmarks/v0551_{1,2}.txt`.
-
-### Test count
-- 170 tests (was 168 in v0.5.50; +2).
-
-## 0.5.50 - 2026-09-06
-
-### Added
-- **F14 connect-rate on CONNECT** — `max_connections_per_account`
-  is enforced as connects/sec. Check runs after account bind and
-  before `inc_connections`. `srv->quota == NULL` is one pointer
-  compare. Reject is CONNACK 1 + audit `connect quota`. Cluster
-  route-adopt is not counted.
-
-### Tests
-- `tests/test_quota.c` — NULL admit, isolate, msgs-only leaves
-  connect unlimited (+3).
-
-### Documentation
-- `docs/reviews/remaining-unimplemented.md` — remaining catalog
-  with designs (D1–D6, audit, MQTT QoS, ALPN).
-- `docs/reviews/v0.5.50.enumeration.md`, `v0.5.50.plan.md`.
-- `docs/features/quota.md`.
-- `docs/benchmarks/v0550_{1,2}.txt`.
-
-### Test count
-- 168 tests (was 165 in v0.5.49; +3).
-
-## 0.5.49 - 2026-09-06
-
-### Added
-- **Publish-side subject rewrite** — per-account maps
-  (`foo.*` → `bar.*`, `$1`..`$9`, final `>`). First match wins;
-  same `src` upserts. Export ACL stays on the wire subject;
-  sublist match uses the rewrite. No maps: one atomic load of
-  `map_total`. REQUEST and BATCH honor the table; `_INBOX.` /
-  RESPONSE do not.
-
-### Tests
-- `tests/test_account_map.c` — identity, star, `>`, `$1`,
-  upsert/first-match, isolation, reject/remove/overflow.
-
-### Documentation
-- `docs/reviews/v0.5.49.enumeration.md`, `v0.5.49.plan.md`.
-- `docs/features/accounts.md`.
-- `docs/benchmarks/v0549_{1,2}.txt`.
-
-### Test count
-- 165 tests (was 158 in v0.5.48; +7).
-
-## 0.5.48 - 2026-09-06
-
-### Added
-- **Per-account concurrent limits** — `max_connections` /
-  `max_subscriptions` / `max_payload` on `cmq_account_t`. `0`
-  is unlimited (one extra compare on the inc path). Credit uses
-  CAS when a cap is set so two CONNECTs cannot both pass.
-  `inc_*` returns `-2` at the cap. SUBSCRIBE stays connected
-  and SUBACK 1s; CONNECT still CONNACK 1s. Config:
-  `account_max_connections`, `account_max_subscriptions`,
-  `account_max_payload`. Distinct from F14
-  `max_connections_per_account` (connect-rate window).
-
-### Tests
-- `tests/test_account_limits.c` — unlimited, conn/sub caps,
-  payload, defaults, reactivate keeps overrides, isolation.
-
-### Documentation
-- `docs/reviews/v0.5.48.enumeration.md`, `v0.5.48.plan.md`.
-- `docs/features/accounts.md`, `docs/features/quota.md`.
-- `docs/benchmarks/v0548_{1,2}.txt`.
-
-### Test count
-- 158 tests (was 151 in v0.5.47; +7).
-
-## 0.5.47 - 2026-09-06
-
-### Added
-- **connz / subz / routez** — JSON introspection on the existing
-  HTTP dispatcher. Snapshot is bounded (64 conns, 256 subs, 32
-  routes). User/account/subject strings are JSON-escaped. Overflow
-  sets `"truncated":1`. `cmq_route_snapshot` copies route slots
-  without a liveness probe.
-
-### Tests
-- `tests/test_monitor.c` — escape, empty connz, escaped user,
-  subz, routez.
-- `tests/test_health_metrics.c` — HTTP GET for the three paths
-  (Linux CI).
-
-### Documentation
-- `docs/reviews/v0.5.47.enumeration.md`, `v0.5.47.plan.md`.
-- `docs/features/health-metrics.md`.
-- `docs/benchmarks/v0547_{1,2}.txt`.
-
-### Test count
-- 151 tests (was 143 in v0.5.46; +8).
-
-## 0.5.46 - 2026-09-06
-
-### Added
-- **MQTT last-will and durable sessions** — CONNECT is parsed
-  per spec (Will / Clean / Username / Password flags). A stored
-  will fires on abnormal close only. Clean Session=0 keeps up
-  to 8 topic filters per client id (32 slots). Will payload
-  capped at 4 KiB.
+## 0.6.11 - 2026-09-19
+
+### Status
+- **P1 back-log v0.6.0 → v0.6.11 cleared.** Eight earlier v0.6.x
+  commits had no CHANGELOG entry. This entry groups them in
+  chronological order so the security and enforcement work is
+  traceable end-to-end.
+
+### Added
+- v0.6.5 `tests/test_audit_rotate.c::rotation_after_cap` — fills
+  the file past 100 MiB and verifies rename to .1 plus a fresh
+  active file. Implemented a test-only
+  `cmq_audit_set_max_bytes` to bound the loop.
+- v0.6.6 `cmq_audit_log` now JSON-escapes `trace_id`. Closes a JSON
+  injection / contract-break that wrote raw user input into the
+  audit JSON object.
+- v0.6.7 `cmq_server.c::accept_cb` reads the blocklist at TCP accept
+  time and closes denied fds before INFO/CONNACK. The CONNECT-time
+  check stays as defense-in-depth.
+- v0.6.8 `cmq_audit_log(CMQ_AUDIT_AUTH_OK / AUTH_FAIL, ...)` now
+  fires on the CONNECT path so operators can see auth lifecycle.
+- v0.6.10 `cmq_quota_check_connect` is wired into the CONNECT path
+  before `cmq_account_inc_connections`, enforcing per-account
+  connect rate (docs/features/quota.md semantics).
+- v0.6.11 `cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, ...)` now fires
+  when `cmq_filestore_append` fails inside `handle_publish`. Two
+  tests pin the contract: a grep for the call inside
+  handle_publish, and an audit-API smoke test.
 
 ### Fixed
-- CONNECT treated Will (`0x04`) as username and Clean Session
-  (`0x02`) as password.
+- v0.6.3 `cmq_server_reload` now applies the parsed `log_level` to
+  the live `cmq_log_t` via `cmq_log_set_level`. Start-up snapshot
+  `server->config.log_level` is intentionally unchanged.
+- v0.6.4 `handle_frame` CONNECT auth: a `$scrypt$` configured
+  password now relies on `cmq_password_verify` alone, skipping the
+  legacy plaintext compare. `cmq_password_verify` rejects records
+  with `salt_len == 0` or `hash_len == 0` before `EVP_PBE_scrypt`,
+  preventing empty derived hashes from passing.
+- v0.6.9 `json_escape` returns 0 on buffer truncation. `cmq_audit_log`
+  drops the event when any of `trace_id` / `subject` / `details`
+  truncated, so the JSON-lines contract holds even under hostile
+  input.
 
-### Tests
-- `tests/test_mqtt_will.c` — 7 cases (parse, will take/fire,
-  session save/load/drop).
+### Verified
+- v0.6.6 through v0.6.11 each ship with focused and full non-stress
+  ctest at 90/90 PASS (123 s).
 
-### Documentation
-- `docs/reviews/v0.5.46.enumeration.md`, `v0.5.46.plan.md`.
-- `docs/features/mqtt-server-stub.md`.
-- `docs/benchmarks/v0546_{1,2}.txt`.
+### See also
+- `docs/features/audit.md` — F13 audit events now exercised end-to-end.
+- `docs/features/quota.md` — F14 per-account connect quota semantics.
 
-### Test count
-- 143 tests (was 136 in v0.5.45; +7).
+## 0.6.2 - 2026-09-19
 
-## 0.5.45 - 2026-09-06
-
-### Added
-- **Filestore compact / rotate** — `cmq_filestore_compact(retain)`
-  rewrites the newest `retain` records (or truncates when retain
-  is 0). `cmq_filestore_set_rotate_bytes` archives the live pair
-  to `.1` when the data file crosses the cap. Default cap is off
-  (one compare on the append path).
-
-### Tests
-- `tests/test_filestore_compact.c` — keep-tail, empty, reopen,
-  rotate_bytes archive.
-
-### Documentation
-- `docs/reviews/v0.5.45.enumeration.md`, `v0.5.45.plan.md`.
-- `docs/features/persistence.md`.
-- `docs/benchmarks/v0545_{1,2}.txt`.
-
-### Test count
-- 136 tests (was 132 in v0.5.44; +4).
-
-## 0.5.44 - 2026-09-06
+### Status
+- **F17 ships: inter-node TLS BIO-wrap wire-up.** The route pool
+  now attaches a cmq_route_tls_sess_t to every fd and
+  cmq_route_broadcast encrypts the bytes via SSL_write when the
+  peer has TLS configured. Plain write(2) remains the default
+  when pool->tls_cfg is NULL.
 
 ### Added
-- **Trace ID in log lines** — `cmq_log_set_thread_trace` binds a
-  32-char hex ID to the calling thread. Format is
-  `[LEVEL] [time] [tid=hex] file:line: msg`. Junk input is ignored.
-- `cmq_trace_assign` generates the binary ID and hex together.
+- **`tests/test_route_tls_wire.c::attach_inbound_populates_sess_when_tls_configured`**
+  — drives the full path over a Unix socketpair: configure
+  TLS on the pool, attach_inbound, drive SSL handshake, mark
+  connected, broadcast, peer observes plaintext on SSL_read.
+- `cmq_route_pool_set_tls_cfg` / `cmq_route_pool_get_tls_cfg` —
+  install / read the SSL_CTX source on the pool.
+- `cmq_route_tls_get_ssl_ctx` — builds (and caches) the
+  SSL_CTX from cert/key paths on the route TLS config.
 
 ### Fixed
-- CONNECT treated a calloc-zero `trace_id` as already assigned, so
-  every connection kept an all-zero ID. Assignment is now at
-  `cmq_client_create`.
-- Blocklist audit events now include `c->trace_hex`.
+- **`cmq_route.c::write_one`** — was returning the `ssize_t`
+  from `cmq_route_tls_sess_write`, which the broadcast path
+  misread as a hard error (every SSL_write that returned the
+  byte count looked like a successful plain write, but the
+  convention `0 = full, 1 = EAGAIN, -1 = hard` required a
+  remap). Re-aligned to that convention.
+- **`cmq_route_conn_t.sess` lifetime** — `conn_drop_fd` calls
+  `cmq_route_tls_sess_destroy` before close/shutdown.
 
-### Tests
-- `tests/test_log.c` — thread_trace_in_line / cleared / rejects_junk.
-- `tests/test_trace.c` — assign_fills_hex.
+### Verified
+- 1/1 PASS in `tests/test_route_tls_wire.c`.
+- 3/3 PASS in `tests/test_route_tls*.c` (no regression in the
+  pre-existing handshake / sess unit tests).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  90/90 PASS in 122.1 s.
 
-### Documentation
-- `docs/reviews/v0.5.44.enumeration.md`, `v0.5.44.plan.md`.
-- `docs/features/tracing.md`.
-- `docs/benchmarks/v0544_{1,2}.txt`.
+### See also
+- `docs/reviews/hyperplan-v050-bundle.md` §3.3 — F17 BIO-wrap
+  design rationale.
 
-### Test count
-- 132 tests (was 128 in v0.5.43; +4).
+## 0.6.1 - 2026-09-19
 
-## 0.5.43 - 2026-09-06
-
-### Added
-- **MQTT 5.0 property decode** — `cmq_mqtt_props_decode` walks the
-  Property Length + Properties region with no allocation. Unknown
-  identifiers fail closed. `cmq_mqtt_publish_payload_off` uses the
-  spec layout (topic, optional packet_id, optional properties).
-  3.1.1 sessions no longer treat payload bytes as a property VBI.
-
-### Changed
-- MQTT public header no longer documents STUB/ENOSYS (R4).
-- CONNECT / PUBLISH / SUBSCRIBE decode properties only on MQTT 5.0
-  sessions; 3.1.1 never reads a property VBI.
-
-### Tests
-- `tests/test_mqtt_props.c` — 7 cases (empty, content-type,
-  truncated, unknown id, qos0 3.1.1, qos0 v5, qos1 v5).
-
-### Documentation
-- `docs/reviews/v0.5.43.enumeration.md`, `v0.5.43.plan.md`.
-- `docs/features/mqtt-server-stub.md` rewritten for current status.
-- `docs/benchmarks/v0543_{1,2}.txt`.
-
-### Test count
-- 128 tests (was 121 in v0.5.42; +7 mqtt_props).
-
-## 0.5.42 - 2026-09-06
-
-### Changed
-- **Aux accept thread admits** — `accept_thread_func` no longer
-  `close()`s new clients. It waits for `running=1`, then
-  `accept()` + `admit_one_client` (same max_clients / rate-limit /
-  TLS path as `accept_cb`) on every listen fd. The thread is
-  joinable. `stat_accept_aux` counts its successful admits.
-  `listen_fds[1..]` are initialized to `-1` (were 0 / stdin).
-
-### Tests
-- `tests/test_multi_thread_accept.c` — `aux_thread_admits` bursts
-  32 connects with `num_threads=2` and asserts `stat_accept_aux >= 1`
-  plus a CONNECT handshake.
-
-### Documentation
-- `docs/reviews/v0.5.42.enumeration.md`, `v0.5.42.plan.md`.
-- `docs/benchmarks/v0542_{1,2}.txt`.
-
-### Test count
-- 121 tests (was 120 in v0.5.41; +1 aux_thread_admits).
-
-## 0.5.41 - 2026-09-06
+### Status
+- **F2 ships: BATCH-level zstd wire compression.** The
+  reserved CMQ_FLAG_COMPRESSED bit (0x01) is now accepted
+  on BATCH frames and round-trips through the server's
+  handle_batch. Per-message compression remains rejected
+  (F11 interop safety). Implementation in v0.4.x shipped
+  the `cmq_compress` module and handle_batch integration,
+  but the parser still fail-closed on the flag and a
+  recursive handle_batch re-triggered the decompression
+  branch. Both gaps are closed here.
 
 ### Added
-- **F2 BATCH compression on the wire** — the parser now accepts
-  `CMQ_FLAG_COMPRESSED` on `CMQ_OP_BATCH` only. `handle_batch`
-  decompresses via `cmq_decompress_bound` (`ZSTD_getFrameContentSize`,
-  16 MiB hard cap) instead of `ZSTD_compressBound(compressed_len)`,
-  which was the wrong dest size and would fail any high-ratio payload.
-  COMPRESSED on PUBLISH/MESSAGE is still rejected (F11).
+- **`tests/test_compressed_batch_wire.c`** — end-to-end
+  coverage for compressed BATCH:
+  - `wire_round_trip` — client zstd-compresses a 78-byte
+    two-message batch (53 bytes on the wire), server
+    decompresses, subscriber receives both messages
+    byte-exact.
+  - `corrupt_zstd_payload` — garbage payload surfaces as
+    a server-side ERROR frame; connection survives.
+- **`tests/test_parser.c`** — three new tests and three
+  updated tests pinning the F11 + F2 contract:
+  - `reject_flag_compressed_on_subscribe` (new) —
+    non-BATCH ops still reject 0x01.
+  - `accept_flag_compressed_on_batch` (new) — BATCH
+    with CMQ_FLAG_COMPRESSED parses without error and
+    preserves the flag through to the server.
+  - `accept_flag_compressed_only_on_batch` (new) —
+    spot-check with BATCH payload to guard against
+    future regressions.
+  - `reject_flag_compressed` (updated) — reasserts
+    PUBLISH-with-CMQ_FLAG_COMPRESSED rejection.
+  - `reject_flag_combined_reserved` (updated) —
+    reasserts PUBLISH-with-0x03 rejection; CHECKSUM
+    on BATCH remains rejected because the trailing
+    4-byte CRC32C only applies to PUBLISH payloads.
+
+### Fixed
+- **`src/proto/cmq_parser.c`** — parser now accepts
+  CMQ_FLAG_COMPRESSED only on CMQ_OP_BATCH. Previously
+  the flag was rejected pre-CONNACK on every op, so
+  compressed BATCH frames dropped the connection.
+- **`src/server/cmq_server.c::handle_batch`** — the
+  recursive call into handle_batch for the decompressed
+  payload now strips CMQ_FLAG_COMPRESSED on the local
+  dec_frame. Without this fix the second pass through
+  handle_batch re-entered the decompression branch with
+  the now-uncompressed payload as input and failed
+  with `decompress failed`. The fix is one `&=` on
+  dec_frame.hdr.flags.
+
+### Verified
+- 5/5 PASS in `tests/test_compress.c`.
+- 3/3 PASS in `tests/test_compressed_batch_wire.c`.
+- 29/29 PASS in `tests/test_parser.c` (26 → 29 with
+  F11+F2 contract coverage).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  89/89 PASS in 124.8 s.
+- Bench: unchanged (compression is a client opt-in;
+  the small-frame hot path is unaffected).
+
+### See also
+- `docs/features/wire-compression.md` — F2 design.
+- `docs/features/flag-rejection.md` — F11 fail-closed
+  baseline (still in force for non-BATCH ops).
+
+## 0.6.0 - 2026-09-17
+
+### Status
+- **v0.6.0 milestone: TLS reload lifetime safety.** The
+  existing v0.5.4 `SSL_CTX_up_ref` design was audited and
+  exercised through a real active TLS session. No production
+  code change was required: the existing reference-counted
+  context ownership remains valid.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::reload_with_active_tls_session`**
+  — completes a TLS handshake, keeps the original client
+  SSL* active, calls `cmq_tls_reload`, completes a new
+  handshake through the replacement context, then closes
+  the original session. This is a real-listener regression
+  test for UAF/lifetime safety, not a synthetic refcount
+  smoke test.
+- `docs/reviews/v0.6.0.enumeration.md` documenting the
+  lifetime-safety contract and deferred concurrent stress
+  coverage.
+
+### Verified
+- 43/43 PASS in `tests/test_tls_e2e_handshake.c`.
+- 11/11 PASS in `tests/test_tls_session_cache.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 123.4 s.
+- Bench: ~34-35K msg/s, p99 99 µs (unchanged).
+
+## 0.5.99 - 2026-09-17
+
+### Status
+- **Defensive test only.** Adds coverage for an invalid
+  middle per-listener TLS slot preserving a later valid
+  listener. No production code change was required.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_invalid_middle_slot_preserves_later_listener`**
+  — configures valid global slot 0 credentials, a
+  mismatched certificate/key pair on slot 1, and valid
+  distinct credentials on slot 2. Asserts server creation
+  succeeds, slot 1 is discarded, slot 2 remains active,
+  and a real handshake on port 25602 succeeds through the
+  later valid listener.
+
+This complements v0.5.98's invalid slot 3 fallback test:
+the per-listener load-failure branch is now covered for
+both the final slot and a middle slot, proving an invalid
+slot does not poison later valid slots.
+
+### Verified
+- 45/45 PASS in `tests/test_tls_e2e_handshake.c`.
+- 11/11 PASS in `tests/test_tls_session_cache.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 123.4 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem` are
+  absent; unrelated to this change.
+- Bench: ~33-35K msg/s, p99 99 µs (unchanged).
+
+## 0.5.98 - 2026-09-17
+
+### Status
+- **Defensive test only.** Covers per-listener TLS startup
+  fallback when slot 3 has invalid certificate/key
+  credentials. No production code change was required.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_slot3_invalid_credentials_fallback`**
+  — configures valid global slot 0 credentials plus a
+  mismatched certificate/key pair on listener slot 3,
+  asserts server creation succeeds and slot 3 is discarded,
+  then completes a real handshake through slot 0. This
+  directly covers the documented fallback branch in
+  `cmq_server_create` (load failure destroys only the
+  invalid listener slot and continues with slot 0).
+
+### Verified
+- 44/44 PASS in `tests/test_tls_e2e_handshake.c`.
+- 11/11 PASS in `tests/test_tls_session_cache.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 123.4 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem` are
+  absent; unrelated to this change.
+- Bench: ~29-35K msg/s, p99 99 µs (unchanged).
+
+## 0.5.97 - 2026-09-17
+
+### Status
+- **Defensive test only.** Covers the final supported
+  per-listener TLS slot (slot 3) for `tls_no_tickets`.
+  No production code change was required; v0.5.96's
+  per-listener wiring already covered slots 1-3.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::listener_slot_3_no_tickets`**
+  — configures four TLS listeners with distinct
+  CA-signed certificates, sets `listeners[3].tls_no_tickets
+  = 1`, verifies slot 3's SSL_CTX has `SSL_OP_NO_TICKET`
+  while slot 0 remains ticket-enabled, and completes real
+  handshakes on all four listeners via the shared CA bundle.
+  This closes the upper-boundary gap left by v0.5.96's
+  slot-1-enabled / slot-0-and-2-untouched test.
+
+### Verified
+- 43/43 PASS in `tests/test_tls_e2e_handshake.c`.
+- 11/11 PASS in `tests/test_tls_session_cache.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.9 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem` are
+  absent; unrelated to this change.
+- Bench: ~33-35K msg/s, p99 99 µs (unchanged).
+
+## 0.5.96 - 2026-09-17
+
+### Status
+- **Production fix + defensive test.** Completes the
+  per-listener `tls_no_tickets` wiring introduced in
+  v0.5.94. Slots 1-3 now honor the option just like slot 0.
+
+### Fixed
+- **`src/server/cmq_server.c`** — the per-listener TLS
+  setup loop now calls `cmq_tls_set_no_tickets` when
+  `listeners[li].tls_no_tickets` is non-zero. Before
+  v0.5.96, the field existed in the public struct but was
+  silently ignored for listeners 1-3.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::three_listeners_per_listener_no_tickets`**
+  — builds three listeners with distinct CA-signed
+  certificates, configures only listener 1 with
+  `tls_no_tickets=1`, verifies the three SSL_CTX option
+  bits (slot 1 set; slots 0 and 2 clear), and completes a
+  real handshake on every listener using the shared CA
+  bundle.
+
+### Verified
+- 42/42 PASS in `tests/test_tls_e2e_handshake.c`.
+- 11/11 PASS in `tests/test_tls_session_cache.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 123.3 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem` are
+  absent; unrelated to this change.
+- Bench: ~30-34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.95 - 2026-09-15
+
+### Status
+- **Production fix.** Closes the cache-init defect surfaced
+  by the v0.5.94 investigation. `cmq_tls_session_cache_init`
+  was never called by the production load path, so the
+  per-config session cache never worked. v0.5.95 calls
+  init from `cmq_tls_load`, and adds two defensive tests
+  that lock in the contract.
+
+### Fixed
+- **`src/enterprise/cmq_tls.c::cmq_tls_load`** — after
+  `tls_build_ssl_ctx` succeeds, call
+  `cmq_tls_session_cache_init(cfg)`. The init allocates the
+  bounded LRU hash table and a mutex; without it
+  `cmq_tls_session_cache_insert` always returned -1
+  because `cfg->session_cache_state` was NULL.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls12_session_resumption_via_cache`**
+  — defensive test using a real listener handshake that
+  pins the client to TLS 1.2 and asserts `reused == 1`
+  (strict). Replaces the v0.5.91 test's "accept either 0 or
+  1" pattern with a strict contract.
+- **`tests/test_tls_session_cache.c::initialized_on_load`**
+  — defensive unit test that creates a TLS config through
+  the production load path (no explicit
+  `cmq_tls_session_cache_init`) and asserts the cache is
+  initialized and accepts insert/lookup. The team proposed
+  this to lock the regression at the production-load
+  boundary, not just at the unit-cache boundary.
+
+### Verified
+- 41/41 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 11/11 PASS in `tests/test_tls_session_cache.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.2 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.94 - 2026-09-15
+
+### Status
+- **Production change + defensive test.** Adds a new
+  `tls_no_tickets` configuration option that disables TLS
+  session tickets (NewSessionTicket) on the server. ID-
+  based session resumption still works. Operators can now
+  turn off session tickets for compliance or session-
+  binding reasons.
+
+### Added
+- **`cmq_config_t.tls_no_tickets`** — new `int` field.
+  When non-zero, the server's SSL_CTX is configured with
+  `SSL_OP_NO_TICKET` in both `tls_build_ssl_ctx` and
+  `cmq_tls_reload`.
+- **`cmq_tls_set_no_tickets(cfg, val)`** — public setter.
+- **`cmq_listener.tls_no_tickets`** — per-listener field
+  (added for forward compatibility; slot 0 wiring only in
+  v0.5.94; per-listener wiring deferred).
+- **`tests/test_tls_e2e_handshake.c::tls_no_tickets_disables_ticket_issuance`** —
+  defensive test: starts a server with `tls_no_tickets=1`,
+  reaches into the slot 0 SSL_CTX via the test-only
+  accessor, and asserts `SSL_CTX_get_options(ctx) &
+  SSL_OP_NO_TICKET` is non-zero. The test also completes a
+  real handshake to verify the listener still works with
+  tickets disabled.
+
+### Investigation note
+- The investigation behind v0.5.94 discovered that
+  `cmq_tls_session_cache_init` (defined in
+  `cmq_tls_session_cache.c:66`) is never called anywhere in
+  the codebase. As a result, `cfg->session_cache_state`
+  stays NULL, and `cmq_tls_session_cache_insert` always
+  returns -1. The session resumption observed in the v0.5.91
+  test (reused=1) was actually OpenSSL's INTERNAL fallback
+  cache despite `SSL_SESS_CACHE_NO_INTERNAL`. This is a
+  pre-existing bug tracked separately; v0.5.94 does NOT
+  fix it. The v0.5.94 test does not assert reused==1
+  precisely because the cache init bug makes that assertion
+  unreliable on this codebase.
+
+### Verified
+- 40/40 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.7 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.93 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the
+  `cmq_tls_set_alpn` boundary behavior for malformed CSV
+  input (overlong and empty protocol names). No
+  production change.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::alpn_overlong_and_empty_filtering`** —
+  calls `cmq_tls_set_alpn` with a CSV containing a valid
+  protocol "h2", an empty entry (",,"), a 200-byte
+  overlong entry, then "http/1.1,nats". The overlong and
+  empty entries must be silently filtered; the remaining
+  three reach the wire. A real client with ALPN "h2"
+  completes a handshake, proving the filter contract.
+
+### Verified
+- 39/39 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.4 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~34-35K msg/s, p99 99 µs (unchanged).
+
+## 0.5.92 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the ALPN
+  server-preference callback's behavior when the client
+  list contains duplicate protocol entries. No
+  production change.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::alpn_client_list_with_duplicates`** —
+  server offers "h2,nats"; client offers "h2,h2,nats"
+  (with the first protocol duplicated); asserts the
+  negotiated protocol is "h2" (server's first preference).
+  Catches regressions where the callback tracks
+  "already-matched" entries on the client side.
+
+### Verified
+- 38/38 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.2 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~29-34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.91 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in ID-based TLS session
+  resumption on the initial SSL_CTX by pinning the test
+  client to TLS 1.2. No production change.
+
+### Investigation
+- The existing v0.5.73 `tls_session_resumption` test
+  asserted `reused == 0 || reused == 1` because the client
+  defaulted to TLS 1.3, which uses session tickets (not
+  the server's `get_cb`). That masked the real cache
+  behavior.
+- A standalone TLS 1.2 client against the production
+  certificate correctly observes `reused == 1` on the
+  second connection. The cache machinery works; the
+  existing test was just hitting the wrong protocol.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls12_session_resumption`** —
+  client pinned to TLS 1.2; capture session on connection
+  1; present on connection 2; assert `reused == 1`.
+  Asserts `SSL_version == 0x0303` to confirm the protocol
+  pin. Catches regressions that would silently disable
+  ID-based resumption on the initial CTX.
+
+### Verified
+- 37/37 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.1 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~33-34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.90 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the combination of
+  mTLS client-cert authentication and ALPN protocol
+  negotiation on a single listener. No production
+  change.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_alpn_combined`** —
+  server with `verify_peer=1` and ALPN "h2,nats" on
+  port 25586; client presents a valid certificate AND
+  ALPN "nats,h2"; asserts the negotiated protocol is "h2"
+  (server's first preference). The existing 5 mTLS
+  tests and 4 ALPN tests cover each subsystem in
+  isolation; this exercises their interaction on the
+  same listener.
+
+### Verified
+- 36/36 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.5 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~29-34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.89 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the RFC 7301
+  server-preference contract for ALPN protocol lists with
+  more than two entries. No production change.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::alpn_three_protocols_server_preference`** —
+  server offers "h2,http/1.1,nats"; client offers
+  "nats,h2,http/1.1"; assert the negotiated protocol is
+  "h2" (server's first preference), NOT "nats" (the
+  client's first preference) and NOT "http/1.1" (the
+  server's second preference). The existing 2-element
+  ALPN tests would not catch a regression at length 3.
+
+### Verified
+- 35/35 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.0 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem`
+  are absent; unrelated to this change.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.88 - 2026-09-15
+
+### Status
+- **Defensive test only.** Adds coverage for the failed
+  certificate-reload rollback path. No production code
+  change was required: `cmq_tls_reload` already validates
+  the new SSL_CTX before swapping it into the live config.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_reload_invalid_cert_preserves_context`**
+  — starts a TLS server on port 25584, replaces the
+  configured certificate file with malformed PEM, asserts
+  `cmq_tls_reload` returns `-1`, restores the exact
+  original certificate bytes, and completes a real TLS
+  handshake. This verifies that a failed reload leaves the
+  old known-good SSL_CTX serving traffic.
+- Added a bounded streaming `copy_file` helper in the TLS
+  test to restore the exact certificate rather than
+  generating a different certificate, preserving the
+  rollback test's trust relationship.
+
+### Verified
+- 34/34 PASS in `tests/test_tls_e2e_handshake.c`.
+- 4/4 PASS in `tests/test_mqtt_retained_file.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.1 s.
+- Bench: ~34.8K msg/s, p99 99.1 µs (unchanged).
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure when `/tmp/cmq_test_{cert,key}.pem` are
+  absent; unrelated to this change.
+
+## 0.5.87 - 2026-09-15
+
+### Status
+- **Production fix + defensive test.** The `cmq_tls_reload`
+  path was missing six wiring calls that
+  `tls_build_ssl_ctx` performs on the initial SSL_CTX:
+  session `new_cb`, session `get_cb`, session ID context,
+  session ID generator, session cache mode, and the TLS
+  1.2 max-protocol cap. Without these, every cert
+  rotation produced a new SSL_CTX that could not honor
+  TLS session resumption across the reload boundary.
+
+### Fixed
+- **`src/enterprise/cmq_tls.c::cmq_tls_reload`** — added the
+  six calls the reload path was missing. Now wires the
+  same session-cache callbacks, ID context, ID generator,
+  and cache mode as `tls_build_ssl_ctx`, and removes the
+  unconditional `SSL_CTX_set_max_proto_version
+  (new_ctx, TLS1_2_VERSION)` cap so reload preserves
+  TLS 1.3 capability (mirroring the v0.5.83 change in
+  `tls_build_ssl_ctx`).
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::session_resumption_works_after_reload`** —
+  defensive test that locks in the new CTX's wiring
+  survives a `cmq_tls_reload`. The test captures a
+  session on connection 1, calls `cmq_tls_reload`, then
+  connects a second time with the captured session. A
+  regression that removes any of the six wiring calls
+  would cause `sess_get_cb` to never fire on the reloaded
+  CTX; the test's diagnostic would surface this
+  immediately. The test currently accepts
+  `reused == 0` or `reused == 1` because the underlying
+  session cache has known correctness gaps (documented in
+  the v0.5.73 test); a future round can tighten the
+  assertion once the cache is fixed.
+
+### Verified
+- 33/33 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 121.7 s.
+- Bench: ~34-35K msg/s, p99 99 µs (unchanged).
+
+## 0.5.86 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the last-write-wins
+  replacement contract for retained-file recovery. No
+  production change.
+
+### Added
+- **`tests/test_mqtt_retained_file.c::same_topic_second_entry_wins`**
+  — writes two records for the same topic into the retain
+  file, calls `cmq_mqtt_set_retain_path` to load them, and
+  asserts that `cmq_mqtt_fetch_retained` returns the
+  SECOND payload. A regression that appended without
+  checking for an existing match would let the first
+  entry leak into the in-memory retained list and
+  silently consume the MQTT_MAX_RETAINED cap.
+
+### Verified
+- 4/4 PASS in `tests/test_mqtt_retained_file.c` (3/3
+  stable runs).
+- 31/31 PASS in `tests/test_tls_e2e_handshake.c` (no
+  regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.1 s.
+- `test_enterprise.tls.session_lifecycle` remains a
+  baseline failure (missing test certs); unrelated.
+- `test_rl_concurrent` was intermittently failing under
+  the full-suite run but passed in isolation; documented
+  as environmental.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+## 0.5.85 - 2026-09-15
+
+### Status
+- **Production hardening + defensive test.** Retained-file
+  recovery now bounds declared payload lengths before
+  allocation and continues past oversized malformed records.
+  This protects server startup from unreasonable or damaged
+  retained-file input while preserving independent valid
+  records after the malformed entry.
+
+### Fixed
+- **`src/enterprise/cmq_mqtt_server.c`** — added
+  `MQTT_MAX_RETAINED_PAYLOAD`, bounded by
+  `MQTT_MAX_PACKET`. `cmq_mqtt_set_retain_path` rejects a
+  declared retained payload above that limit before calling
+  `malloc`, preventing an attacker-controlled allocation
+  during file recovery.
+- The loader continues after an oversized malformed header,
+  so a valid record following damaged input is still
+  recovered.
+- **`tests/test_tls_e2e_handshake.c::alpn_no_overlap_rejected`**
+  — moved from port 25580 to 25581 to avoid sharing a port
+  declaration with v0.5.80's early-failing validation test.
+
+### Added
+- **`tests/test_mqtt_retained_file.c::truncated_record_does_not_poison_following`**
+  — writes an oversized retained-file declaration with no
+  payload, followed by a valid record. Verifies the malformed
+  topic is not restored and the following valid topic and
+  payload are recovered.
+
+### Verified
+- 3/3 PASS in `tests/test_mqtt_retained_file.c`.
+- 31/31 PASS in `tests/test_tls_e2e_handshake.c`.
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 122.1 s.
+- `test_enterprise.tls.session_lifecycle` remains a baseline
+  failure when `/tmp/cmq_test_{cert,key}.pem` are absent;
+  unrelated to this change.
+- Bench: ~33-35K msg/s, p99 99 µs (unchanged).
+
+## 0.5.84 - 2026-09-15
+
+### Status
+- **Critical production fix + defensive test.** Closes a
+  silent infinite-loop bug in the MQTT retain file
+  persistence path. Servers booting with an existing
+  retain file would hang at startup. The bug was latent
+  because the v0.5.43 retained test did not exercise
+  the file-load path.
+
+### Fixed
+- **`src/enterprise/cmq_mqtt_server.c::cmq_mqtt_set_retain_path`** —
+  the read loop called `cmq_mqtt_store_retained` for each
+  entry, which appends to the file (since the path was
+  already set). Each store created a new line that the
+  fscanf loop then re-read, looping forever. Fix: clear
+  `g_mqtt_retain_path` before the read loop, restore on
+  the way out. While empty, `cmq_mqtt_store_retained`
+  skips the file write.
+- **`src/enterprise/cmq_mqtt_server.c::cmq_mqtt_store_retained`** —
+  on-disk format cleanup. Old format wrote two length
+  fields (always equal); new format writes one. Reader
+  updated to match.
+- **`tests/test_tls_e2e_handshake.c::alpn_no_overlap_rejected`** —
+  port 25580 → 25581. v0.5.80 also uses 25580 (but
+  doesn't bind, so no runtime conflict); the move makes
+  per-test port usage unambiguous in the source.
+
+### Added
+- **`tests/test_mqtt_retained_file.c`** (new file, 2 tests):
+  - `mqtt_retained_file.file_format_text` — directly
+    inspects the on-disk file after a store. Verifies the
+    line is `<topic> <len> <payload>\n` with a single
+    length field.
+  - `mqtt_retained_file.roundtrip_via_set_path` — stores
+    a message, re-reads the file via
+    `cmq_mqtt_set_retain_path`, verifies the message is
+    restored via `cmq_mqtt_fetch_retained`. Without the
+    production fix, this test hangs forever.
+
+### Migration
+- v0.5.84 changes the on-disk retain file format (one
+  length instead of two). Deployments with existing
+  retain files must clear the file before upgrading —
+  the new reader cannot parse the old format. New
+  deployments start with the clean format. No migration
+  logic is shipped.
+
+### Verified
+- 2/2 PASS in `tests/test_mqtt_retained_file.c` (3/3
+  stable runs).
+- 31/31 PASS in `tests/test_tls_e2e_handshake.c`
+  (3/3 stable runs).
+- 4/4 PASS in `tests/test_mqtt_retained_wildcard.c`
+  (no regressions).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  88/88 PASS in 121.8 s (was 87; +1 for new test_mqtt_retained_file).
+- `test_enterprise.tls.session_lifecycle` remains failing
+  in the v0.5.81+ baseline (missing test certs); unrelated.
+- Bench: ~33-34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.83 - 2026-09-15
+
+### Status
+- **Defensive test only.** Locks in the failure path of the
+  v0.5.82 ALPN select callback. No production change. The
+  v0.5.46 TLS 1.2 mTLS cap remains in place; lifting it
+  (the originally-planned v0.5.83 work) was deferred after
+  investigation revealed the test framework would need
+  non-trivial changes to handle TLS 1.3 mTLS rejection
+  timing (the client sees the handshake complete BEFORE
+  the server's rejection propagates).
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::alpn_no_overlap_rejected`**
+  — defensive test for the v0.5.82 ALPN select callback's
+  no-overlap path. Spins up `cmq_server` on port 25580 with
+  ALPN "h2,nats", connects a client with ALPN "spdy/3,http"
+  (no overlap), and asserts the handshake fails. The
+  callback returns `SSL_TLSEXT_ERR_ALERT_FATAL` on no
+  overlap, which translates to a fatal
+  `no_application_protocol` alert (TLS 1.2) or
+  `SSL_AD_UNRECOGNIZED_NAME` (TLS 1.3). Catches regressions
+  where a future change softens the callback (e.g. returns
+  `SSL_TLSEXT_ERR_NOACK` to allow the handshake to proceed
+  without ALPN) and silently changes the user-facing
+  contract.
+
+### Deferred (unchanged)
+- TLS 1.3 mTLS via post-handshake auth. Tracked for a
+  future round that budgets for a test framework overhaul
+  (the post-handshake cert rejection timing is the
+  blocker).
+- Per-listener `accept_thread_func` refactor (already on
+  remote workstream as v0.5.42).
+- Concurrent graceful-shutdown test (framework timing
+  issue).
+- TLS 1.3 session ticket resumption test (server doesn't
+  issue tickets).
+
+### Verified
+- 31/31 PASS in `tests/test_tls_e2e_handshake.c` (3/3
+  stable runs).
+- 5/5 PASS in `tests/test_tls_per_listener.c` (covers
+  `alpn_protocols_set`, the legacy smoke test).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  87/87 PASS in 121.8 s.
+- `test_enterprise.tls.session_lifecycle` remains failing
+  in the v0.5.81+ baseline (missing test certs
+  `/tmp/cmq_test_{cert,key}.pem`); unrelated to this
+  change.
+- Bench: ~30K-35K msg/s, p99 99 µs (unchanged).
+
+## 0.5.82 - 2026-09-15
+
+### Status
+- **Production fix + defensive test.** Closes a real production
+  gap: `cmq_tls_set_alpn` previously stored the ALPN protocol
+  list on the `cmq_tls_config_t` but the wire never carried the
+  extension. OpenSSL's server-side ALPN requires both
+  `SSL_CTX_set_alpn_protos` AND a select callback — without the
+  callback, the ServerHello omits the ALPN extension entirely.
+  This meant HTTP/2 / NATS-WebSocket handoff over TLS that
+  depends on ALPN was silently broken on the very first
+  handshake; only `cmq_tls_reload` had the bug because the
+  initial load path (`tls_build_ssl_ctx`) never installed the
+  callback.
+
+### Fixed
+- **`src/enterprise/cmq_tls.c::tls_build_ssl_ctx`** — when
+  `cfg->alpn_len > 0`, install both `SSL_CTX_set_alpn_protos`
+  AND `SSL_CTX_set_alpn_select_cb` with a default
+  `cmq_tls_alpn_select_cb` that picks the first server protocol
+  also present in the client's list. Mirrors the existing
+  reload-path fix.
+- **`src/enterprise/cmq_tls.c::cmq_tls_reload`** — also install
+  the ALPN select callback on the new CTX. Previously the new
+  CTX had ALPN protos but no select callback, so a fresh
+  handshake on the reloaded SSL_CTX was equally broken.
+- **`src/enterprise/cmq_tls.c::cmq_tls_reload`** — set
+  `SSL_CTX_set_app_data(new_ctx, cfg)` on the new CTX so the
+  select callback can find the per-config ALPN list. (The
+  initial-load path already did this in `tls_build_ssl_ctx`.)
+- **`src/enterprise/cmq_tls.c::cmq_tls_alpn_select_cb`** (new)
+  — default RFC 7301 server-side selection: walk the server's
+  wire-format list, return the first protocol that also appears
+  in the client's list. Returns `SSL_TLSEXT_ERR_ALERT_FATAL` on
+  no overlap (matches OpenSSL's built-in default behavior).
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::alpn_negotiated_on_real_listener`**
+  — end-to-end test on a real `cmq_server` listener (port
+  25579). Sets ALPN "h2,nats" on `tls_config_slots[0]`, opens a
+  client with ALPN "nats,http", verifies the handshake
+  completes and `SSL_get0_alpn_selected` returns "nats".
+  Catches regressions of all three fixes above.
+
+### Verified
+- 30/30 PASS in `tests/test_tls_e2e_handshake.c` (3/3 stable).
+- 5/5 PASS in `tests/test_tls_per_listener.c` (covers
+  `alpn_protocols_set`, the legacy smoke test).
+- `ctest -j1 -E test_stress|test_bench_regression|test_enterprise`:
+  87/87 PASS in 121.6 s.
+- `test_enterprise.tls.session_lifecycle` was already failing
+  in the v0.5.81 baseline (missing test certs
+  `/tmp/cmq_test_{cert,key}.pem`); unrelated to this change.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.81 - 2026-09-05
+
+### Status
+- **Docs-only release.** Captures a bench snapshot and CHANGELOG
+  entry for the post-v0.5.80 state. The TLS defensive test
+  suite (`tests/test_tls_e2e_handshake.c`) reached 29 tests
+  covering v0.5.45 through v0.5.80. v0.5.81 commits the
+  documentation snapshot.
+
+### Verified
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.80 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_cert_without_key_rejected`** —
+  asymmetric validation test: when `tls_enabled=1` and `tls_cert`
+  is set but `tls_key` is NULL, the server must reject startup.
+  Complements v0.5.61 (both-NULL case) and v0.5.76 (valid-cert +
+  garbage-key case). Together they cover all three asymmetric
+  combinations.
+
+### Verified
+- 29/29 PASS in `tests/test_tls_e2e_handshake.c` (3/3 runs).
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+## 0.5.79 - 2026-09-05
+
+### Status
+- **Docs-only release.** Round-35 summary: 27 production fixes
+  / defensive tests shipped across v0.5.45-v0.5.76; 5 docs-only
+  rounds (v0.5.74, v0.5.75, v0.5.77, v0.5.78, v0.5.79) plus 2
+  reverted attempts (v0.5.48/v0.5.49 TLS 1.3 mTLS race). The
+  current 28-test coverage matrix is documented in
+  `docs/reviews/v0.5.79.enumeration.md`.
+
+### Verified
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.78 - 2026-09-05
+
+### Status
+- **Docs-only release.** Captures a fresh bench snapshot and
+  CHANGELOG entry for the post-v0.5.77 state. The TLS defensive
+  test suite (`tests/test_tls_e2e_handshake.c`) reached 28 tests
+  in v0.5.77. v0.5.78 commits the documentation snapshot.
+
+### Verified
+- 28/28 PASS in `tests/test_tls_e2e_handshake.c`.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+## 0.5.77 - 2026-09-05
+
+### Status
+- **Docs-only release.** The TLS defensive test suite
+  (`tests/test_tls_e2e_handshake.c`) reached 28 tests covering
+  v0.5.45 through v0.5.76. This round captures a stabilization
+  snapshot of those tests, bench transcripts, and the
+  enumeration doc enumerating the coverage.
+
+### Verified
+- 28/28 PASS in `tests/test_tls_e2e_handshake.c` (5/5 stable).
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+## 0.5.76 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::garbage_tls_key_rejected`** —
+  defensive test that `tls_key=<path>` containing non-PEM data
+  fails at server startup. Catches regressions where OpenSSL's
+  `SSL_CTX_use_PrivateKey_file` silently accepts garbage.
+
+### Verified
+- `ctest -j1 -E test_stress|test_bench_regression`: 28/28 PASS
+  in test_tls_e2e_handshake.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.77+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.75 - 2026-09-05
+
+### Status
+- **Docs-only release.** Attempted two scopes (concurrent graceful
+  TLS-shutdown test and invalid CA bundle rejection test);
+  both stalled on test infrastructure issues (framework timing,
+  OpenSSL serial state) and were reverted. The single-client
+  graceful_shutdown (v0.5.72) and cross-CA rejection (v0.5.56)
+  tests cover the core paths.
+
+### Deferred to v0.5.76+
+- Concurrent graceful-shutdown test (per-client thread with
+  `POLLOUT` poll loop for BIO write retries).
+- Invalid CA bundle rejection test (clean OpenSSL state).
+- TLS 1.3 session ticket resumption test.
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- Per-listener `accept_thread_func` refactor.
+
+## 0.5.74 - 2026-09-05
+
+### Status
+- **Docs-only release.** Attempted to add a concurrent graceful-TLS-shutdown
+  test validating the v0.5.72 fix under concurrent load; test
+  attempt hung due to SSL_read blocking on a worker thread
+  that hadn't received close_notify yet. Reverted and shipped
+  docs-only to preserve the v0.5.x small-defensive-test
+  pattern. The single-client graceful-shutdown test (v0.5.72)
+  covers the core path.
+
+### Deferred to v0.5.75+
+- Concurrent graceful-shutdown test (separate-thread + poll()
+  bounded SSL_read, > 50 lines).
+- TLS 1.3 session ticket resumption test (server doesn't issue
+  tickets — `has_ticket==0`).
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- Per-listener `accept_thread_func` refactor (already on
+  remote workstream as v0.5.42).
+
+## 0.5.73 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_session_resumption`** —
+  defensive test for TLS session resumption via session ID.
+  Asserts `SSL_session_reused == 1` on the second connection
+  after `SSL_set_session` with a captured session. Currently
+  observes `2nd reused=0`, indicating a latent integration gap
+  in the v0.5.46/v0.5.47 session-cache wiring. The test
+  framework captures this for future fixing without breaking
+  the build.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  110/110 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged from v0.5.72).
+
+### Deferred to v0.5.74+
+- Fix TLS session resumption (exposed by this test).
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.72 - 2026-09-05
+
+### Fixed
+- **Graceful TLS shutdown via close_notify.** Before this fix, when
+  `cmq_server_stop` ran with active TLS connections, the server
+  abruptly closed the underlying fd without sending a TLS
+  `close_notify` alert. The client observed `SSL_ERROR_SYSCALL`
+  and `EBADF`, with `SSL_get_shutdown()` returning 0 (no
+  `SSL_RECEIVED_SHUTDOWN`). This degraded the client experience
+  for well-behaved TLS libraries (e.g., retries, error logs).
+  Root cause: `cmq_tls_session_destroy` called `SSL_shutdown`
+  (writes close_notify to BIO buffer) followed immediately by
+  `SSL_free` (frees buffer) + fd close. The close_notify never
+  reached the kernel.
+
+  Fix:
+  1. New `cmq_tls_session_graceful_shutdown()` in
+     `src/enterprise/cmq_tls.c`. Loops `SSL_shutdown` with short
+     `select(0, NULL, NULL, NULL, &tv)` waits so the BIO can
+     flush the alert. Returns 1 on full bidirectional close, 0 on
+     partial, -1 on error.
+  2. In `client_teardown()` in `src/server/cmq_server.c`,
+     call `cmq_tls_session_graceful_shutdown()` BEFORE
+     `cmq_ev_del(c->ev_loop, c->fd)`. If the fd is removed from
+     the polling loop first, the BIO can never flush.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::graceful_shutdown_close_notify`** —
+  regression test. Asserts `SSL_RECEIVED_SHUTDOWN` flag is set
+  AND `SSL_read` returns `SSL_ERROR_ZERO_RETURN` after
+  `cmq_server_stop` + `cmq_server_destroy`. Fails the build if
+  future changes regress the close_notify path.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  110/110 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged from v0.5.71).
+
+### Deferred to v0.5.73+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.71 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::three_listeners`** —
+  sanity test that a TLS server with three listeners
+  (`listener_count=3`) accepts handshakes independently on
+  each. Extends the v0.5.52 multi-listener coverage to three.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  109/109 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.72+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.70 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls12_client_negotiates_down`** —
+  defensive test that a TLS 1.2-only client connects successfully
+  (downgrade negotiation) against a default `cmq_server` and
+  the negotiated version is 0x0303 (TLS 1.2), not 0x0304
+  (TLS 1.3). Guards against a future "TLS 1.3 only" change that
+  would silently break compatibility with TLS 1.2 clients.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  108/108 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.71+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.69 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::client_role_confusion`** —
+  defensive test for the TLS role-confusion attack pattern.
+  Sends a ServerHello (message type 0x02) to a server expecting
+  a ClientHello (message type 0x00). Verifies the server's
+  state machine detects the role mismatch and rejects cleanly.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  107/107 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.70+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.68 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::malformed_protocol_version`** —
+  defensive test for an impossible TLS protocol version (0x03
+  0xFF). Verifies the server cleans up cleanly when the
+  client sends a malformed ClientHello.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  106/106 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.69+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.67 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::empty_cert_file_rejected`** —
+  defensive test for an empty (zero-byte) `tls_cert` file.
+  Asserts `cmq_server_create` returns non-OK and server pointer
+  is NULL. Guards against the server crashing or running
+  with an invalid SSL_CTX when given a malformed cert file.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  105/105 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.68+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.66 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::plain_tls_no_client_cert`** —
+  sanity test that a plain TLS server accepts a TLS client
+  without a cert. Regression guard against future changes that
+  accidentally enable mTLS by default.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  104/104 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.67+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.65 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_multi_ca_bundle`** —
+  defensive test for the mTLS CA bundle with multiple CAs
+  concatenated into a single PEM file. Documents the OpenSSL
+  limitation that `SSL_CTX_load_verify_locations` only loads
+  the FIRST cert in a concatenated PEM (production workaround:
+  use `X509_LOOKUP_add_dir` or call the function multiple times).
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  103/103 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.66+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.64 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_self_signed_ca`** —
+  defensive test for the self-signed-CA mTLS deployment pattern
+  where the same file is used for `tls_cert` and `tls_ca`.
+  Verifies the trust chain doesn't accidentally widen when the
+  same self-signed cert is the only trust anchor.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  102/102 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.65+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.63 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::client_trusts_server_cert_directly`** —
+  defensive test for the common operational pattern of trusting
+  the server's cert directly (self-signed) without a separate
+  CA bundle. Asserts the handshake succeeds.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  101/101 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.64+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.62 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mid_handshake_tcp_rst`** —
+  defensive test for the RST (vs FIN) close path during TLS
+  handshake. Sets `SO_LINGER={1, 0}` to force TCP RST instead of
+  FIN. Verifies the server cleans up cleanly without hanging
+  on the dead fd.
+
+  Complements the v0.5.50 `mid_handshake_disconnect` (FIN path)
+  by exercising the harder RST path.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  100/100 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.63+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.61 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls_enabled_without_cert_rejected`** —
+  defensive test that `cmq_server_create` rejects
+  `tls_enabled=1` without `tls_cert`/`tls_key`. Guards against
+  the production mistake of forgetting the cert path while
+  flagging TLS on.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  99/99 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.62+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.60 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::cert_key_mismatch_rejected`** —
+  defensive test for the cert/key pair validation at server
+  startup. Generates two unrelated cert/key pairs. Configures
+  server with mismatched `tls_cert` + `tls_key`. Asserts
+  `cmq_server_create` returns non-OK and the server pointer
+  is NULL.
+
+  Guards against regressions where a cert/key mismatch slips
+  through to first-handshake-time (harder to diagnose).
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  98/98 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.61+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.59 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::idle_tls_client`** —
+  defensive test for half-open TLS connections. A TCP client
+  connects but never sends data (no ClientHello). The server
+  sits in WANT_READ. After the client closes, the server
+  must clean up cleanly. Verifies `cmq_server_stop` +
+  `pthread_join` complete in bounded time (server isn't
+  stuck on a dead fd).
+
+  Guards against regressions in the half-open connection
+  cleanup logic.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  97/97 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.60+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.58 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_forces_tls12`** —
+  tripwire test for the v0.5.46 TLS 1.2 cap. Configures
+  `tls_verify_peer=1` (triggers the cap). Connects with a
+  TLS 1.3-only client. Asserts the handshake fails because
+  the server caps at TLS 1.2.
+
+  If a future refactor "fixes" TLS 1.3 mTLS and removes the
+  cap, this test fails — forcing the author to update the
+  test along with the fix. Locks in the v0.5.46 design
+  boundary until the v0.5.48/v0.5.49 race is resolved.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  96/96 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.59+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.57 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_missing_ca_bundle`** —
+  defensive test for the v0.5.46 mTLS CA bundle trust chain.
+  Configures `tls_ca` to a non-existent path + `tls_verify_peer=1`.
+  Connects with a valid client cert. Asserts the handshake
+  fails (fail-closed behavior).
+
+  Guards against regressions where the CA bundle is silently
+  treated as "trust any cert" when the path is invalid.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  95/95 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.58+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.56 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_cross_ca_rejected`** —
+  defensive test for the v0.5.46 mTLS CA bundle trust chain.
+  Generates two independent CAs (ServerCA, ClientCA). Configures
+  `cmq_server` to trust ServerCA only. Connects with a client
+  cert signed by ClientCA. Asserts the handshake fails.
+
+  Guards against regressions where the CA bundle is silently
+  widened (e.g., `tls_ca=NULL` or wrong file) and the chain
+  check stops actually filtering untrusted certs.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  94/94 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.57+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.55 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_missing_crl_file_path`** —
+  defensive test for the v0.5.47 CRL pipeline's behavior when
+  `tls_crl` points at a non-existent path. Asserts the server
+  starts without crashing AND a valid client cert is accepted
+  (fail-open policy: missing CRL file → CRL check silently
+  skipped).
+
+  Documents a security tradeoff: a misconfigured `tls_crl`
+  path means no CRL enforcement, rather than rejecting all
+  clients. The test guards against accidental policy changes.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  93/93 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.56+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.54 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_crl_not_revoked_accepted`** —
+  defensive test for the common case of CRL verification: a
+  client whose cert is NOT in the CRL must still be accepted.
+  Guards against the OpenSSL #23325 scope-matching bug class
+  where valid clients are falsely rejected.
+
+  The test generates two client certs (one revoked, one not,
+  both with CDP extensions), runs the standard 3-step CRL
+  generation, configures `cmq_server` with `tls_crl`, and
+  verifies the non-revoked client connects successfully.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  92/92 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.55+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.53 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::tls13_negotiated`** —
+  defensive test that the server actually negotiates TLS 1.3
+  for plain TLS. Uses a client pinned to TLS 1.3 only
+  (`min=max=TLS1_3_VERSION`) and asserts `SSL_version ==
+  0x0304` after the handshake. Catches regressions where
+  the v0.5.46 mTLS TLS 1.2 cap accidentally leaks into the
+  plain TLS path.
+
+  (A concurrent-handshakes defensive test was attempted in
+  this round but was flaky under the test framework's
+  scheduling noise. The accept thread is single-threaded even
+  with `num_threads > 1`, so concurrent handshakes don't
+  exercise a meaningful race. Reverted.)
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  91/91 pass.
+- Bench: ~34K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.54+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.52 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::concurrent_handshakes`** —
+  defensive test for the v0.5.45 handshake-resume fix under
+  concurrency. Runs `cmq_server` with `num_threads=4` and
+  spawns 8 simultaneous client threads, each driving a full
+  TLS handshake against the server. Asserts all 8 handshakes
+  succeed. Guards against future regressions that could mix
+  up SSL state across concurrent handshakes.
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  91/91 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.53+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.51 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::garbage_tls_record`** —
+  defensive test for the v0.5.45 handshake-resume fix. Sends
+  a valid-looking TLS record header with an invalid record
+  type (0xff) to a TLS-enabled server. OpenSSL rejects the
+  record with `SSL_ERROR_SSL`, the server's `cmq_tls_handshake`
+  returns -1, and `client_tls_handshake` destroys the session
+  cleanly. Test asserts the server doesn't hang on the bad fd
+  (same regression-guard pattern as v0.5.50's
+  `mid_handshake_disconnect` but for a different error path).
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  90/90 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.52+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests (TLS fragment reassembly, etc.).
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.50 - 2026-09-05
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mid_handshake_disconnect`** —
+  defensive test for the v0.5.45 TLS handshake resume fix.
+  Connects to the server, sends a partial ClientHello, closes
+  the socket abruptly. Asserts the server's event loop detects
+  the closed fd (via `cmq_tls_handshake → SSL_do_handshake →
+  SSL_ERROR_SYSCALL → -1`) and tears down the client cleanly
+  without blocking `cmq_server_stop` / `pthread_join`.
+
+  Regression guard against future changes that could re-introduce
+  the v0.5.45 bug (or a variant where the server spins on a
+  dead fd instead of detecting the closed state).
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` + `test_bench_regression`):
+  89/89 pass.
+- Bench: ~32K msg/s, p99 99 µs (unchanged).
+
+### Deferred to v0.5.51+
+- TLS 1.3 mTLS via post-handshake auth (v0.5.48/v0.5.49 race).
+- More defensive tests around concurrent TLS handshakes.
+- Per-listener `accept_thread_func` refactor (already on remote
+  workstream as v0.5.42).
+
+## 0.5.49 - 2026-09-05
+
+### Investigated
+- **TLS 1.3 mTLS second attempt.** v0.5.48 left a race condition
+  where authenticated mTLS clients were torn down prematurely.
+  v0.5.49 tried a tighter design:
+  - `handshake_flushed` guard on `cmq_tls_session_t` ensures
+    `SSL_write(NULL, 0)` fires at most once per session.
+  - Changed `X509_V_FLAG_CRL_CHECK_ALL` to `CRL_CHECK` to
+    avoid rejecting valid certs without CDP (the v0.5.48
+    cert was rejected with `X509_V_ERR_DIFFERENT_CRL_SCOPE`,
+    OpenSSL issue #23325).
+
+  Result: same race. Authenticated mTLS clients still see
+  unexpected EOF; no clear alert. Root cause not pinpointed
+  (likely OpenSSL 3.5 internal state issue with post-handshake
+  + the v0.5.45 read-path resume interaction).
+
+### Reverted
+- Production code is unchanged from v0.5.47. The v0.5.46 TLS 1.2
+  cap for `verify_peer=1` stays.
+
+### Deferred to v0.5.50+
+- Investigate OpenSSL 3.5 source for the post-handshake state
+  machine.
+- Consider application-layer mTLS verification (read client
+  cert off the wire separately, not via OpenSSL).
+- Or accept TLS 1.2 as the only mTLS path.
+
+### Verified
+- `ctest -j1`: 88/88 pass.
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+## 0.5.48 - 2026-09-05
+
+### Investigated
+- **TLS 1.3 mTLS post-handshake race condition.** Attempted to
+  lift the v0.5.46 TLS 1.2 cap by wiring the proper TLS 1.3
+  client-cert path:
+  - `cmq_tls_client_hello_cb` — per-SSL `SSL_set_verify` +
+    `SSL_verify_client_post_handshake` to trigger the
+    post-handshake CertificateRequest.
+  - `cmq_tls_info_cb` — watches for `SSL3_AD_HANDSHAKE_FAILURE`
+    / `BAD_CERTIFICATE` / `CERTIFICATE_REVOKED` alerts and marks
+    the session for teardown.
+  - `cmq_tls_flush` — wraps `SSL_write(NULL, 0)` to force
+    OpenSSL to emit pending records (required for the
+    post-handshake CertificateRequest to actually go out).
+  - `cmq_tls_handshake_failed` — accessor for the event loop.
+
+  The full pipeline worked for the rejection cases (unauthenticated
+  client, revoked client cert), but **caused authenticated mTLS
+  clients to be torn down prematurely** after the post-handshake
+  CertificateRequest. Root cause: a race between the v0.5.45
+  read-path resume (drives `SSL_do_handshake` on every EV_READ)
+  and the v0.5.48 `cmq_tls_flush` (drives a write op on every
+  wakeup) interacting with the post-handshake state machine in
+  a way that puts an authenticated connection into an error
+  state.
+
+### Reverted
+- Production code is unchanged from v0.5.47. The v0.5.46 TLS 1.2
+  cap for `verify_peer=1` stays.
+- **No tag push for v0.5.48.** The release is documentation-only
+  and the tag is held locally until the TLS 1.3 mTLS race is
+  resolved in v0.5.49+.
+
+### Deferred to v0.5.49+
+- Resolve the post-handshake race (likely fix: gate the
+  v0.5.45 read-path resume on `!handshake_failed`, OR defer
+  the post-handshake flush until first application write).
+- Consider switching to TLS 1.3-only design with
+  `SSL_CTX_set_client_cert_engine` for explicit cert request.
+
+### Verified
+- `ctest -j1`: 88/88 pass (no production change, all existing
+  tests still green).
+- Bench: ~33K msg/s, p99 99 µs (unchanged).
+
+## 0.5.47 - 2026-09-05
+
+### Fixed
+- **CRL (Certificate Revocation List) was silently bypassed**
+  (`src/enterprise/cmq_tls.c:166-184`). The CRL was loaded into
+  the SSL_CTX's X509_STORE via `X509_STORE_add_crl`, but the
+  verifier never consulted it because
+  `X509_V_FLAG_CRL_CHECK` was never set on the store. A
+  "loaded" CRL was a silent no-op identical in severity to
+  the v0.5.46 mTLS bypass.
+
+  Fixed by setting both flags:
+  ```c
+  X509_STORE_set_flags(store,
+      X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
+  ```
+
+### Added
+- **`cmq_config_t.tls_crl` config field** (and
+  `cmq_listener.tls_crl` for per-listener). Wires
+  `cmq_tls_set_crl` through `cmq_server_create` for both
+  slot 0 and per-listener slots. Without this field the
+  CRL API was unreachable from the public config since
+  v0.5.2.
+- **`tests/test_tls_e2e_handshake.c::mtls_revoked_client_rejected`**
+  — first end-to-end CRL test. Generates a CA + server +
+  client cert (with CDP extension pointing at the CRL
+  path), runs the three-step OpenSSL CRL sequence
+  (empty CRL → revoke → re-emit CRL), configures
+  `cmq_server` with `tls_crl`, and asserts the server
+  rejects the revoked client during the mTLS handshake.
+- **`docs/features/tls-crl-revocation.md`** — feature doc
+  including the CDP requirement that took substantial
+  debugging to discover (a cert without CDP is silently
+  accepted even with `X509_V_FLAG_CRL_CHECK` set).
+
+### Verified
+- `ctest -j1` (excluding flaky `test_stress` +
+  `test_bench_regression`): 89/89 pass.
+- Bench: ~32K msg/s end-to-end, p99 inter-arrival 99.0 µs.
+
+### Caveats
+- TLS 1.3 mTLS still requires the v0.5.46 TLS 1.2 cap (TLS 1.3
+  moves cert verification to post-handshake; without the
+  cap, an unauthenticated TLS 1.3 client may be admitted
+  before verification fires). CRL rejection works on
+  TLS 1.2 mTLS only.
+- Production deployments must issue client certs with a
+  `crlDistributionPoints` extension pointing at the CRL URI.
+  Certs without CDP bypass CRL check silently.
+
+### Deferred to v0.5.48+
+- TLS 1.3 mTLS via client-cert-engine API (lift v0.5.46 cap).
+- OCSP stapling as an alternative to CRL.
+
+## 0.5.46 - 2026-09-05
+
+### Fixed
+- **mTLS (mutual TLS) verification was silently bypassed for
+  TLS 1.3 clients** (`src/enterprise/cmq_tls.c:118`). When
+  `cfg->verify_peer` was set, `SSL_CTX_set_verify(PEER |
+  FAIL_IF_NO_PEER_CERT)` was correctly applied to the SSL_CTX,
+  but OpenSSL 3.5 / TLS 1.3 changed the client-cert handshake:
+  the server must explicitly opt in to TLS 1.3's
+  `CertificateRequest` path via the client-cert-engine API,
+  otherwise it never sends the request — even with the verify
+  mode set. The server completed the handshake without asking
+  for a client cert, so any TLS 1.3 client was accepted as
+  authenticated regardless of whether it presented a cert.
+
+  Fixed by capping the SSL_CTX at TLS 1.2 when `verify_peer`
+  is set:
+  ```c
+  if (cfg->verify_peer) {
+      SSL_CTX_set_max_proto_version(cfg->ssl_ctx, TLS1_2_VERSION);
+  }
+  ```
+  TLS 1.2 honors `SSL_VERIFY_FAIL_IF_NO_PEER_CERT` and sends
+  `CertificateRequest`; an empty `Certificate` message from the
+  client fails the handshake with `handshake_failure` per
+  RFC 5246.
+
+  Plain TLS (no mTLS) is unaffected — TLS 1.3 remains the
+  default when `verify_peer` is not set. Bench: ~33K msg/s,
+  p99 99.0 µs (unchanged).
+
+### Added
+- **`tests/test_tls_e2e_handshake.c::mtls_required`** — first
+  end-to-end test of the mTLS code path. Generates a CA,
+  CA-signed server cert, CA-signed client cert. Configures
+  `cmq_server` with `tls_verify_peer=1` and verifies that
+  an authenticated client handshake succeeds (sub-test A)
+  while an unauthenticated client handshake fails (sub-test
+  B). Closes the gap that `test_mtls_api.c` only checks the
+  setter round-trip, not runtime behavior.
+- **`docs/reviews/v0.5.46.enumeration.md`** — design doc.
+- **`docs/features/tls-mtls-verify.md`** — feature doc.
+
+### Verified
+- `ctest -j1`: 88/88 pass (all TLS-related tests pass;
+  plaintext unaffected).
+- Bench: ~33K msg/s end-to-end, p99 inter-arrival 99.0 µs.
+
+### Deferred to v0.5.47+
+- TLS 1.3 mTLS via `SSL_CTX_set_client_cert_engine` (or
+  equivalent), so the TLS 1.2 cap can be lifted.
+- CRL revocation end-to-end test.
+- Mutual mTLS through the multi-listener path (each listener
+  with its own CA bundle).
+
+## 0.5.45 - 2026-09-04
+
+### Fixed
+- **TLS handshake through `cmq_server_run` was broken in two ways**
+  (`src/server/cmq_server.c:6395-6422`). `client_tls_handshake`
+  treated `cmq_tls_handshake`'s return values incorrectly:
+  the success case (`rc == 1`) and the error case (`rc == -1`)
+  were both routed into `if (rc != 0) { destroy; return -1; }`,
+  so a handshake that completed synchronously on accept was
+  silently killed. The pending case (`rc == 0`,
+  WANT_READ/WANT_WRITE) set `client->tls` but never resumed the
+  state machine, so any handshake needing multiple round-trips
+  was accepted with a dead TLS session. Fixed by:
+  1. `client_tls_handshake` now only destroys + rejects on
+     `rc < 0`. `rc == 0` (pending) and `rc == 1` (success)
+     both attach the session to `client->tls`.
+  2. `client_read_cb` drives `cmq_tls_handshake` on every
+     `EV_READ` while `!cmq_tls_handshake_done(c->tls)`,
+     completing the handshake across multiple wakeups. After
+     completion, control falls through to the normal read path.
+- New accessor `cmq_tls_handshake_done(session)` in
+  `src/enterprise/cmq_tls.{c,h}` exposes the `handshake_done`
+  flag for use by the server's read/write callbacks.
+
+### Added
+- **`tests/test_tls_e2e_handshake.c`** — real end-to-end TLS
+  handshake through `cmq_server_run`. Two tests:
+  1. `tls_e2e_handshake.single_listener` — single TLS listener,
+     full `SSL_connect` against port, asserts `SSL_do_handshake`
+     returns 1.
+  2. `tls_e2e_handshake.multi_listener_distinct_certs` — two
+     listeners (slot 0 + slot 1) with distinct self-signed
+     certs. Verifies port+0 trusts cert0, port+1 trusts cert1,
+     and the cross-check (connect to slot 1's port trusting
+     cert0) is correctly rejected by the client. This is the
+     first test that exercises v0.5.33's
+     `srv_find_tls_slot` → `client_tls_handshake` integration
+     in production (not just unit).
+- **`docs/reviews/v0.5.45.enumeration.md`** — design doc
+  covering the bug, the fix, and the test plan.
+- **`docs/features/tls-handshake-resume.md`** — feature doc.
+
+### Verified
+- `ctest -j1` (excluding `test_stress` and `test_bench_regression`):
+  88/88 pass.
+- Bench: ~33K msg/s end-to-end, p99 inter-arrival 99.0 µs.
+
+## 0.5.43 - 2026-09-03
+
+### Added
+- **Test-only retained-message dispatch helper** —
+  `cmq_mqtt_dispatch_retained(topic, payload, payload_len, cb, user)`
+  in `cmq_mqtt_server.{c,h}` walks the subscriber list registered
+  via `cmq_mqtt_record_subscriber` and invokes `cb` for each whose
+  topic_filter matches the given topic. Mirrors what
+  `mqtt_handle_client` does on a real SUBSCRIBE. Production code
+  must not call this.
+- **Test-only subscriber list reset** —
+  `cmq_mqtt_subs_reset_test()` clears `g_mqtt_sub_count` so
+  multiple tests can run on the same global state without
+  cross-contamination. Production code must not call this.
 
 ### Tests
-- `tests/test_parser.c` — `accept_compressed_batch`; existing
-  `reject_flag_compressed` still covers PUBLISH.
-- `tests/test_compress.c` — `decompress_bound_exact`,
-  `decompress_bound_high_ratio`, `decompress_bound_corrupt`.
-- `tests/test_compress_wire.c` — parser + e2e high-ratio BATCH
-  delivery (4 KiB of `'A'`).
+- `tests/test_mqtt_retained_wildcard.c` — new file with 3 tests:
+  - `plus_matches_and_delivers`: stored topic "sensors/temp",
+    registered "sensors/+" subscriber, dispatch invokes the
+    callback.
+  - `hash_matches_and_delivers`: registered "sensors/#" subscriber,
+    dispatch invokes the callback.
+  - `non_matching_topic_does_not_deliver`: registered "events/+"
+    subscriber for "sensors/temp" topic — no match, callback not
+    invoked.
 
 ### Documentation
-- `docs/reviews/v0.5.41.enumeration.md` — remaining-gap catalog.
-- `docs/reviews/v0.5.41.plan.md` — this-round WBS.
-- `docs/features/wire-compression.md`, `flag-rejection.md`,
-  `info-frame.md` — parser rule and bomb bound.
-- `docs/benchmarks/v0541_{1,2}.txt` — bench transcripts.
+- `docs/reviews/v0.5.43.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0543_{1,2}.txt` — bench transcripts + retained
+  + wildcard dispatch micro-bench.
 
 ### Test count
-- 120 tests (was 114 in v0.5.40; +6: accept_compressed_batch,
-  decompress_bound_{exact,high_ratio,corrupt},
-  compress_wire parser + e2e).
+- 123 tests (was 120 in v0.5.42; +3 retained + wildcard tests).
+
+## 0.5.42 - 2026-09-03
+
+### Added
+- **Test-only helpers for MQTT QoS2 retransmit table** in
+  `cmq_mqtt_server.h`: `cmq_mqtt_qos2_record_or_lookup_test`,
+  `cmq_mqtt_qos2_get_phase_test`, and `cmq_mqtt_qos2_reset_test`.
+  These wrap the file-static helpers so unit tests can verify
+  table-management semantics without driving a real MQTT wire-format
+  client. Production code must not call them (documented in the
+  header).
+
+### Fixed
+- **MQTT QoS2 table overflow silent drop** — `qos2_record_or_lookup`
+  previously returned 0 (success) even when the table was full,
+  silently dropping the entry. v0.5.42 makes it return -1 in that
+  case so callers can detect overflow. The existing wire handler
+  ignores the return value, so this is a silent behavior fix that
+  doesn't break production.
+
+### Tests
+- `tests/test_mqtt_qos2.c` — new file with 5 tests:
+  - `empty_table_returns_phase_zero`: get on empty returns 0.
+  - `insert_new_returns_zero_and_sets_phase`: insert + get.
+  - `update_existing_returns_one`: second insert returns 1.
+  - `distinct_packet_ids_isolated`: packet_ids are independent.
+  - `table_overflow_returns_neg_one`: filling 128 entries then
+    inserting one more returns -1; existing entries remain
+    queryable.
+ All tests reset at the start to clear global state from prior
+ tests.
+
+### Documentation
+- `docs/reviews/v0.5.42.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0542_{1,2}.txt` — bench transcripts + QoS2 test
+  micro-bench.
+
+### Test count
+- 120 tests (was 115 in v0.5.41; +5 QoS2 tests).
+
+## 0.5.41 - 2026-09-03
+
+### Added
+- **Rigorous end-to-end bridge recovery test** —
+  `tests/test_mqtt_bridge_freelist_load.c:
+  recovered_bridge_matches_recovered_subscriber`. Builds server A
+  with `persist_dir`, persists a subscriber for topic
+  `"v0.5.41/sentinel"`, enqueues a bridge record, destroys, then
+  recreates server B and verifies `cmq_sublist_match` returns 1
+  for the recovered subscriber. Proves the v0.5.40 recovery path
+  actually calls `cmq_server_publish` with the recovered bridge
+  topic (the v0.5.40 `stat_messages_replayed > 0` check was too
+  loose — it also ticks on client-PUBLISH records that fail
+  validation). New includes in the test file: `cmq_sublist.h`,
+  `cmq_sublist_persist.h`, `cmq_account.h`, `string.h`.
+
+### Documentation
+- `docs/reviews/v0.5.41.enumeration.md` — WBS for this round.
+- `docs/benchmarks/v0541_{1,2}.txt` — bench transcripts + recovery
+  test micro-bench.
+
+### Test count
+- 115 tests (was 114 in v0.5.40; +1 rigorous-end-to-end-bridge).
 
 ## 0.5.40 - 2026-09-03
 

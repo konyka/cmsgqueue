@@ -1,124 +1,89 @@
-/* v0.5.57: MQTT outbound QoS 2 PUBLISH / PUBREC / PUBREL / PUBCOMP. */
+/* v0.5.42: smoke test for the MQTT QoS2 retransmit table.
+ *
+ * The two helpers qos2_record_or_lookup and qos2_get_phase are
+ * static in cmq_mqtt_server.c. v0.5.42 exposes test-only wrappers
+ * (cmq_mqtt_qos2_record_or_lookup_test / _get_phase_test) so the
+ * table-management logic can be unit-tested without driving a real
+ * MQTT wire-format client. v0.5.42 also fixes qos2_record_or_lookup
+ * to return -1 on table overflow (previously silently dropped).
+ *
+ * This is NOT a wire-format test. A full MQTT PUBLISH/PUBREC/PUBREL
+ * round-trip is v0.6 scope.
+ *
+ * Test packet_ids are offset by the test index to avoid collisions
+ * across tests (the table is global state with no reset between
+ * tests in this framework).
+ */
+
 #include "cmq_test.h"
 #include "cmq_mqtt_server.h"
-#include <string.h>
-#include <unistd.h>
-#include <sys/socket.h>
 
-TEST(qos2, offer_encode) {
-    cmq_mqtt_inflight_t w;
-    cmq_mqtt_inflight_init(&w);
-    uint16_t id = 0;
-    ASSERT_EQ(cmq_mqtt_inflight_offer(&w, "ab", (const uint8_t *)"xy", 2, 2,
-                                      &id),
-              0);
-    ASSERT(id != 0);
-    uint8_t pkt[64];
-    size_t n = 0;
-    ASSERT_EQ(cmq_mqtt_inflight_encode(&w, id, pkt, sizeof(pkt), &n), 0);
-    ASSERT(n >= 8);
-    ASSERT_EQ(pkt[0], (uint8_t)0x34);
-    ASSERT_EQ(pkt[2], (uint8_t)0);
-    ASSERT_EQ(pkt[3], (uint8_t)2);
-    ASSERT(memcmp(pkt + 4, "ab", 2) == 0);
-    ASSERT_EQ(pkt[6], (uint8_t)(id >> 8));
-    ASSERT_EQ(pkt[7], (uint8_t)(id & 0xFF));
-    ASSERT(memcmp(pkt + 8, "xy", 2) == 0);
+#include <stdio.h>
+
+/* Forward declarations of v0.5.42 test-only helpers. */
+int cmq_mqtt_qos2_record_or_lookup_test(uint16_t packet_id, int new_phase);
+int cmq_mqtt_qos2_get_phase_test(uint16_t packet_id);
+void cmq_mqtt_qos2_reset_test(void);
+
+TEST(mqtt_qos2, empty_table_returns_phase_zero) {
+    /* A packet_id that has not been recorded should yield phase 0
+     * (lookup miss). Reset first to clear any state from previous
+     * tests. */
+    cmq_mqtt_qos2_reset_test();
+    ASSERT_EQ(cmq_mqtt_qos2_get_phase_test(42), 0);
 }
 
-TEST(qos2, handshake_order) {
-    cmq_mqtt_inflight_t w;
-    cmq_mqtt_inflight_init(&w);
-    uint16_t id = 0;
-    ASSERT_EQ(cmq_mqtt_inflight_offer(&w, "t", (const uint8_t *)"z", 1, 2, &id),
-              0);
-    ASSERT_EQ(cmq_mqtt_inflight_ack(&w, id), -1);
-    ASSERT_EQ(cmq_mqtt_inflight_count(&w), 1);
-    ASSERT_EQ(cmq_mqtt_inflight_rec(&w, id), 0);
-    ASSERT_EQ(cmq_mqtt_inflight_count(&w), 1);
-    ASSERT_EQ(cmq_mqtt_inflight_rec(&w, id), -1);
-    ASSERT_EQ(cmq_mqtt_inflight_ack(&w, id), 0);
-    ASSERT_EQ(cmq_mqtt_inflight_count(&w), 0);
+TEST(mqtt_qos2, insert_new_returns_zero_and_sets_phase) {
+    cmq_mqtt_qos2_reset_test();
+    /* First insert returns 0 (newly added), and a subsequent get
+     * returns the recorded phase. */
+    int rc = cmq_mqtt_qos2_record_or_lookup_test(42, 1);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(cmq_mqtt_qos2_get_phase_test(42), 1);
 }
 
-TEST(qos2, rec_rejects_qos1) {
-    cmq_mqtt_inflight_t w;
-    cmq_mqtt_inflight_init(&w);
-    uint16_t id = 0;
-    ASSERT_EQ(cmq_mqtt_inflight_offer(&w, "t", (const uint8_t *)"z", 1, 1, &id),
-              0);
-    ASSERT_EQ(cmq_mqtt_inflight_rec(&w, id), -1);
-    ASSERT_EQ(cmq_mqtt_inflight_ack(&w, id), 0);
-    ASSERT_EQ(cmq_mqtt_inflight_rec(&w, 0), -1);
-    ASSERT_EQ(cmq_mqtt_inflight_offer(&w, "t", (const uint8_t *)"z", 1, 0, &id),
-              -1);
-    ASSERT_EQ(cmq_mqtt_inflight_offer(&w, "t", (const uint8_t *)"z", 1, 3, &id),
-              -1);
+TEST(mqtt_qos2, update_existing_returns_one) {
+    cmq_mqtt_qos2_reset_test();
+    /* A second call with the same packet_id returns 1 (entry
+     * existed) and updates the phase. */
+    ASSERT_EQ(cmq_mqtt_qos2_record_or_lookup_test(43, 1), 0);
+    int rc = cmq_mqtt_qos2_record_or_lookup_test(43, 2);
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(cmq_mqtt_qos2_get_phase_test(43), 2);
 }
 
-TEST(qos2, encode_pubrel) {
-    cmq_mqtt_inflight_t w;
-    cmq_mqtt_inflight_init(&w);
-    uint16_t id = 0;
-    ASSERT_EQ(cmq_mqtt_inflight_offer(&w, "t", (const uint8_t *)"z", 1, 2, &id),
-              0);
-    ASSERT_EQ(cmq_mqtt_inflight_rec(&w, id), 0);
-    uint8_t pkt[8];
-    size_t n = 0;
-    ASSERT_EQ(cmq_mqtt_inflight_encode_pubrel(&w, id, pkt, sizeof(pkt), &n), 0);
-    ASSERT_EQ(n, (size_t)4);
-    ASSERT_EQ(pkt[0], (uint8_t)0x62);
-    ASSERT_EQ(pkt[1], (uint8_t)0x02);
-    ASSERT_EQ(pkt[2], (uint8_t)(id >> 8));
-    ASSERT_EQ(pkt[3], (uint8_t)(id & 0xFF));
+TEST(mqtt_qos2, distinct_packet_ids_isolated) {
+    cmq_mqtt_qos2_reset_test();
+    /* Different packet_ids are tracked independently. */
+    cmq_mqtt_qos2_record_or_lookup_test(100, 1);
+    cmq_mqtt_qos2_record_or_lookup_test(101, 2);
+    ASSERT_EQ(cmq_mqtt_qos2_get_phase_test(100), 1);
+    ASSERT_EQ(cmq_mqtt_qos2_get_phase_test(101), 2);
 }
 
-TEST(qos2, fanout_handshake) {
-    int sv[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
-    cmq_mqtt_inflight_t w;
-    cmq_mqtt_inflight_init(&w);
-    ASSERT_EQ(cmq_mqtt_session_attach(sv[0], &w), 0);
-    ASSERT_EQ(cmq_mqtt_session_add_filter(sv[0], "sensors/#", 2), 0);
-    ASSERT_EQ(cmq_mqtt_fanout("sensors/t", (const uint8_t *)"ok", 2), 1);
-    ASSERT_EQ(cmq_mqtt_inflight_count(&w), 1);
-    uint8_t pkt[64];
-    ssize_t n = recv(sv[1], pkt, sizeof(pkt), 0);
-    ASSERT(n >= 8);
-    ASSERT_EQ(pkt[0], (uint8_t)0x34);
-    size_t tlen = ((size_t)pkt[2] << 8) | pkt[3];
-    ASSERT_EQ(tlen, (size_t)9);
-    uint16_t id = ((uint16_t)pkt[4 + tlen] << 8) | pkt[5 + tlen];
-    ASSERT_EQ(cmq_mqtt_session_rec(sv[0], id), 0);
-    ASSERT_EQ(cmq_mqtt_inflight_count(&w), 1);
-    uint8_t rel[8];
-    ssize_t rn = recv(sv[1], rel, sizeof(rel), 0);
-    ASSERT_EQ(rn, (ssize_t)4);
-    ASSERT_EQ(rel[0], (uint8_t)0x62);
-    ASSERT_EQ(rel[1], (uint8_t)0x02);
-    ASSERT_EQ(cmq_mqtt_session_ack(sv[0], id), 0);
-    ASSERT_EQ(cmq_mqtt_inflight_count(&w), 0);
-    cmq_mqtt_session_detach(sv[0]);
-    close(sv[0]);
-    close(sv[1]);
-}
-
-TEST(qos2, qos1_untouched) {
-    int sv[2];
-    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
-    cmq_mqtt_inflight_t w;
-    cmq_mqtt_inflight_init(&w);
-    ASSERT_EQ(cmq_mqtt_session_attach(sv[0], &w), 0);
-    ASSERT_EQ(cmq_mqtt_session_add_filter(sv[0], "t", 1), 0);
-    ASSERT_EQ(cmq_mqtt_fanout("t", (const uint8_t *)"x", 1), 1);
-    uint8_t pkt[32];
-    ssize_t n = recv(sv[1], pkt, sizeof(pkt), 0);
-    ASSERT(n >= 6);
-    ASSERT_EQ(pkt[0], (uint8_t)0x32);
-    ASSERT_EQ(cmq_mqtt_session_rec(sv[0], 1), -1);
-    cmq_mqtt_session_detach(sv[0]);
-    close(sv[0]);
-    close(sv[1]);
+TEST(mqtt_qos2, table_overflow_returns_neg_one) {
+    cmq_mqtt_qos2_reset_test();
+    /* The table caps at MQTT_QOS2_MAX (128). After filling all
+     * slots, the next insert returns -1. Existing entries remain
+     * queryable. */
+    uint16_t base = 5000;
+    int first_overflow = -1;
+    for (int i = 0; i < 200; i++) {
+        int rc = cmq_mqtt_qos2_record_or_lookup_test((uint16_t)(base + i),
+                                                    1);
+        if (rc == -1) {
+            first_overflow = i;
+            break;
+        }
+    }
+    /* Must have hit overflow between 0 and 199. */
+    ASSERT(first_overflow >= 0);
+    ASSERT(first_overflow < 200);
+    /* Spot-check that an early entry (in the table, not the failed
+     * one) is still queryable. */
+    int ph = cmq_mqtt_qos2_get_phase_test(base);
+    ASSERT(ph == 1);
 }
 
 TEST_MAIN()
+

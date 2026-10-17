@@ -118,6 +118,15 @@ typedef struct cmq_client {
     struct cmq_client *next;
 } cmq_client_t;
 
+typedef struct cmq_auth_rate_slot {
+    uint8_t addr_key[sizeof(struct sockaddr_storage)];
+    socklen_t addr_key_len;
+    int addr_key_family;
+    uint64_t window_start_ms;
+    uint32_t count;
+    uint32_t inflight;
+} cmq_auth_rate_slot_t;
+
 typedef struct cmq_worker_msg {
     uint32_t target_id;             /* client id */
     uint32_t target_gen;            /* must match client->conn_gen */
@@ -190,14 +199,18 @@ struct cmq_server {
     int clients_count;
     int clients_cap;
     struct {
-        uint32_t ip;
+        uint8_t addr_key[sizeof(struct sockaddr_storage)];
+        socklen_t addr_key_len;
+        int addr_key_family;
         uint64_t window_start_ms;
         uint32_t count;
     } rate_slots[CMQ_RATE_LIMIT_SLOTS];
+    cmq_auth_rate_slot_t auth_rate_slots[CMQ_RATE_LIMIT_SLOTS];
     struct cmq_idmap *idmap;        /* acceptor-thread clients */
     cmq_atomic_u32 next_client_id;
     cmq_atomic_u32 next_conn_gen;   /* per-connection generation (id wrap safe) */
     cmq_mutex_t clients_lock;
+    cmq_mutex_t auth_rate_lock;
 
     cmq_sublist_t *sublist;
     /* cmq_sublist is internally self-locking (cmq_rwlock inside cmq_sublist_t);
@@ -273,7 +286,8 @@ int srv_find_tls_slot(cmq_server_t *srv, int lfd);
  * MQTT bridge relay). subject: validated against cmq_sublist rules.
  * payload/payload_len: raw message bytes (NOT owned by the helper
  * — caller must free after return). account_name: synthetic owner
- * for delivery ACL. Returns 0 on success, -1 on sublist-match OOM. */
+ * for delivery ACL. Returns 0 on success, or -1 on local fanout failure
+ * or an upstream bridge publish failure. */
 int cmq_server_publish(cmq_server_t *srv, const char *subject,
                        const uint8_t *payload, size_t payload_len,
                        const char *account_name);

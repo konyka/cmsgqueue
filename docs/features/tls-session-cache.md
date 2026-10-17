@@ -16,8 +16,12 @@ backing store for OpenSSL's
 
 ### Data structure
 
-- **64 open-addressing buckets** with linear probing (FNV-1a hash).
-- **Capacity 1024 sessions**; LRU eviction when full.
+- **64 hash start buckets** with linear probing across 1024 slots
+  (FNV-1a hash).
+- **Capacity 1024 sessions**; LRU eviction only when all slots are full.
+- **Deterministic LRU metadata**: each insert or lookup advances a per-cache
+  monotonic access sequence, so accesses in the same clock tick still have a
+  strict order.
 - **`pthread_mutex_t`** guards all operations. Lock-free lookup would
   shave ~50 ns off the hot path, but handshake rates are far lower than
   data-plane read rates — the contention profile is acceptable.
@@ -40,7 +44,7 @@ backing store for OpenSSL's
 | Memory leak on shutdown | Destroy frees every occupied slot. |
 | Stale reference after eviction | `SSL_SESSION_up_ref` would be safer; we accept borrow-only semantics matching OpenSSL's `SSL_get1_session` (caller can up_ref if needed). |
 | Lock contention | Single mutex; in practice handshakes are an order of magnitude rarer than reads. |
-| Bucket overflow | Open addressing with linear probe. After 64 probes we trigger LRU eviction. |
+| Bucket collisions | Open addressing probes the bounded 1024-slot table before triggering LRU eviction. |
 | Corrupted slot state | `occupied` flag gates every read/write; `id_len` bounds memcpy. |
 
 ### Reliability
@@ -82,7 +86,9 @@ size_t cmq_tls_session_cache_size(cmq_tls_config_t *cfg);
 - `src/enterprise/cmq_tls_session_cache.{c,h}` — new module (~200 lines).
 - `src/enterprise/cmq_tls.{c,h}` — opaque accessor functions for the
   cache state pointer.
-- `tests/test_tls_session_cache.c` — 6 cache tests (was 1 placeholder).
+- `tests/test_tls_session_cache.c` — cache ownership and callback setup tests.
+- `tests/test_tls_e2e_handshake.c` — TLS 1.2 reconnect test asserts
+  `SSL_session_reused()` after `SSL_set_session()`.
 - `tests/test_tsa.c` — attach on reload (v0.5.169).
 - `CMakeLists.txt` — registers the new source.
 

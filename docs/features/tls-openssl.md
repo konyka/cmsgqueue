@@ -82,6 +82,23 @@ unit tests; production deployments need proper CA-signed certs.
 - `find_package(OpenSSL REQUIRED)` hard-fails the build if OpenSSL
   is missing — no more silent plaintext.
 
+## Dynamic TLS reload contract
+
+`cmq_reload_apply_tls()` validates every supplied certificate, key, and CA
+path before changing any slot. A valid certificate/key pair is loaded and
+reloaded successfully. If a listener omits a path, or supplies an empty path,
+its existing path is retained and its existing TLS context is still reloaded;
+this preserves certificate rotation when the path is unchanged. Invalid or
+missing files fail closed and leave the existing slot unchanged.
+
+Focused verification:
+
+```sh
+cmake --build build --target test_tlr test_tls_reload_safe -j2
+build/tests/test_tlr
+build/tests/test_tls_reload_safe
+```
+
 ## Performance
 
 The TLS path is OFF by default. The benchmark (no TLS) shows:

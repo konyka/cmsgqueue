@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/select.h>
 #include <stdatomic.h>
 #include <time.h>
 
@@ -39,6 +40,10 @@ struct cmq_tls_config {
     char crl[CMQ_TLS_PATH_MAX];
     char server_name[CMQ_TLS_NAME_MAX];
     int verify_peer;
+    /* v0.5.94: 1 = disable TLS session tickets. The server's
+     * SSL_CTX is configured with SSL_OP_NO_TICKET when this is
+     * set. ID-based session resumption (get_cb) still works. */
+    int no_tickets;
     uint64_t last_crl_log_ms;  /* P3 v0.5.6: log throttle */
     int has_cert;
     int has_key;
@@ -107,6 +112,16 @@ static SSL_SESSION *cmq_tls_sess_get_cb(SSL *ssl, const unsigned char *id,
                                           int id_len, int *copy);
 static int cmq_tls_gen_session_id(SSL *ssl, unsigned char *id,
                                     unsigned int *id_len);
+/* v0.5.82: default ALPN select callback. Picks the first server
+ * protocol that's also present in the client's list. Without a
+ * select callback installed, the server's SSL_CTX_set_alpn_protos
+ * is a no-op on the wire — the ServerHello omits the ALPN
+ * extension. The server's alpn_data is read from the cmq_tls_config
+ * stored on the SSL_CTX via SSL_CTX_set_app_data. */
+static int cmq_tls_alpn_select_cb(SSL *ssl, const unsigned char **out,
+                                    unsigned char *outlen,
+                                    const unsigned char *in, unsigned int inlen,
+                                    void *arg);
 #endif
 
 static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
@@ -117,6 +132,20 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     if (!cfg->ssl_ctx) return -1;
     /* TLS 1.2 floor; TLS 1.3 preferred. */
     SSL_CTX_set_min_proto_version(cfg->ssl_ctx, TLS1_2_VERSION);
+    /* v0.5.46: cap at TLS 1.2 when verify_peer is set. TLS 1.3
+     * changed the client-cert handshake: the server must
+     * explicitly send a CertificateRequest via the
+     * SSL_CTX_set_client_cert_engine path, otherwise
+     * SSL_VERIFY_FAIL_IF_NO_PEER_CERT is silently a no-op. Forcing
+     * TLS 1.2 keeps the verify flag's effect. Once we wire the
+     * TLS 1.3 client-cert path (v0.5.47+), this cap can lift. */
+    if (cfg->verify_peer) {
+        SSL_CTX_set_max_proto_version(cfg->ssl_ctx, TLS1_2_VERSION);
+    }
+    /* v0.5.94: optionally disable TLS session tickets. */
+    if (cfg->no_tickets) {
+        SSL_CTX_set_options(cfg->ssl_ctx, SSL_OP_NO_TICKET);
+    }
     /* AEAD-only cipher list: TLS 1.3 ciphers are fixed by the protocol
      * (AEAD-only). For TLS 1.2, restrict to AEAD suites. */
     const char *ciphers =
@@ -140,6 +169,20 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     /* Best-effort defaults. */
     SSL_CTX_set_mode(cfg->ssl_ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER |
                                     SSL_MODE_ENABLE_PARTIAL_WRITE);
+    /* v0.5.82: ALPN. SSL_CTX_set_alpn_protos alone is a no-op on
+     * the wire (the ServerHello omits the ALPN extension); we
+     * must also install a select callback that picks a protocol
+     * from the intersection of the server's and client's lists. */
+    if (cfg->alpn_len > 0) {
+        if (SSL_CTX_set_alpn_protos(cfg->ssl_ctx, cfg->alpn_data,
+                                     cfg->alpn_len) != 0) {
+            SSL_CTX_free(cfg->ssl_ctx);
+            cfg->ssl_ctx = NULL;
+            return -1;
+        }
+        SSL_CTX_set_alpn_select_cb(cfg->ssl_ctx, cmq_tls_alpn_select_cb,
+                                    cfg->ssl_ctx);
+    }
     /* Load cert chain. */
     if (SSL_CTX_use_certificate_chain_file(cfg->ssl_ctx, cfg->cert) != 1) {
         SSL_CTX_free(cfg->ssl_ctx);
@@ -165,7 +208,10 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
     /* P1 (v0.5.3): load the CRL into the SSL_CTX's X509_STORE. OpenSSL
      * consults the store automatically when SSL_VERIFY_PEER is on.
      * Failure to load is logged + CRL check is skipped (we don't want
-     * a bad CRL file to refuse all handshakes). */
+     * a bad CRL file to refuse all handshakes). v0.5.47: also set
+     * X509_V_FLAG_CRL_CHECK on the store — without this flag, the
+     * verifier loads the CRL but never consults it (a silent
+     * no-op). */
     if (cfg->crl[0] != '\0') {
         BIO *crl_bio = BIO_new_file(cfg->crl, "r");
         if (crl_bio) {
@@ -175,6 +221,15 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
                 X509_STORE *store = SSL_CTX_get_cert_store(cfg->ssl_ctx);
                 if (store) {
                     X509_STORE_add_crl(store, crl_obj);
+                    /* v0.5.47: also flag the store to consult the
+                     * CRL during cert verification. Without the
+                     * flags, the verifier loads the CRL but never
+                     * checks against it. CRL_CHECK covers the leaf;
+                     * CRL_CHECK_ALL extends to the chain (the CA
+                     * itself may also be revoked). */
+                    X509_STORE_set_flags(store,
+                        X509_V_FLAG_CRL_CHECK |
+                        X509_V_FLAG_CRL_CHECK_ALL);
                     /* Lookups consult the CRL when verify_peer is on. */
                 } else {
                     X509_CRL_free(crl_obj);
@@ -278,6 +333,15 @@ int cmq_tls_load(cmq_tls_config_t *cfg) {
 #ifdef CMQ_TLS_OPENSSL
     if (tls_begin_op(cfg) != 0) return -1;
     int rc = tls_build_ssl_ctx(cfg);
+    if (rc == 0) {
+        /* v0.5.95: initialize the per-config session cache so the
+         * new_cb / get_cb callbacks can store and look up sessions.
+         * Without this call the cache state stayed NULL and
+         * cmq_tls_session_cache_insert always returned -1; ID-based
+         * resumption silently fell back to OpenSSL's internal
+         * cache. */
+        cmq_tls_session_cache_init(cfg);
+    }
     tls_end_op(cfg);
     if (rc == 0)
         (void)cmq_tls_session_cache_reload_attach(cfg);
@@ -301,6 +365,15 @@ int cmq_tls_set_verify(cmq_tls_config_t *cfg, int verify_peer) {
     if (!cfg) return -1;
     if (tls_begin_op(cfg) != 0) return -1;
     cfg->verify_peer = verify_peer;
+    tls_end_op(cfg);
+    return 0;
+}
+
+/* v0.5.94: 1 = disable TLS session tickets on this config. */
+int cmq_tls_set_no_tickets(cmq_tls_config_t *cfg, int no_tickets) {
+    if (!cfg) return -1;
+    if (tls_begin_op(cfg) != 0) return -1;
+    cfg->no_tickets = no_tickets ? 1 : 0;
     tls_end_op(cfg);
     return 0;
 }
@@ -515,8 +588,12 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
     if (!m) { tls_end_op(cfg); return -1; }
     SSL_CTX *new_ctx = SSL_CTX_new(m);
     if (!new_ctx) { tls_end_op(cfg); return -1; }
+    /* v0.5.87: TLS 1.2 floor, no upper cap. Mirrors the
+     * tls_build_ssl_ctx behavior introduced in v0.5.83 —
+     * capping at TLS 1.2 here would prevent a TLS 1.3
+     * client from resuming a TLS 1.3 session after the
+     * reload. */
     SSL_CTX_set_min_proto_version(new_ctx, TLS1_2_VERSION);
-    SSL_CTX_set_max_proto_version(new_ctx, TLS1_2_VERSION);
     const char *ciphers =
         "ECDHE-ECDSA-AES256-GCM-SHA384:"
         "ECDHE-RSA-AES256-GCM-SHA384:"
@@ -530,6 +607,10 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
         return -1;
     }
     SSL_CTX_set_options(new_ctx, SSL_OP_NO_COMPRESSION);
+    /* v0.5.94: optionally disable TLS session tickets. */
+    if (cfg->no_tickets) {
+        SSL_CTX_set_options(new_ctx, SSL_OP_NO_TICKET);
+    }
     if (cfg->alpn_len > 0) {
         if (SSL_CTX_set_alpn_protos(new_ctx, cfg->alpn_data,
                                      cfg->alpn_len) != 0) {
@@ -537,6 +618,10 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
             tls_end_op(cfg);
             return -1;
         }
+        /* v0.5.82: also install the ALPN select callback. Without
+         * this, the ServerHello omits the ALPN extension. */
+        SSL_CTX_set_alpn_select_cb(new_ctx, cmq_tls_alpn_select_cb,
+                                    new_ctx);
     }
     if (SSL_CTX_use_certificate_chain_file(new_ctx, cfg->cert) != 1) {
         SSL_CTX_free(new_ctx);
@@ -564,6 +649,32 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
         SSL_CTX_set_verify(new_ctx, SSL_VERIFY_PEER |
                                  SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
     }
+    /* v0.5.82: the ALPN select callback reads cmq_tls_config from
+     * the SSL_CTX's app_data. tls_build_ssl_ctx sets this on the
+     * initial CTX; we must do the same on the new CTX built here
+     * so the callback can find the ALPN list. */
+    SSL_CTX_set_app_data(new_ctx, cfg);
+    /* v0.5.87: wire the session resumption callbacks on the
+     * new CTX. Without this, an incoming connection that
+     * presents a session ID captured before the reload will
+     * see no get_cb installed and fall back to a full
+     * handshake. The cache itself (cmq_tls_session_cache_t
+     * in cfg) is unaffected — only the new CTX needed
+     * the callbacks. Mirrors the wiring in tls_build_ssl_ctx. */
+    SSL_CTX_sess_set_new_cb(new_ctx, cmq_tls_sess_new_cb);
+    SSL_CTX_sess_set_get_cb(new_ctx, cmq_tls_sess_get_cb);
+    /* v0.5.87: the session ID context and the cache mode
+     * must be set on the new CTX for OpenSSL to honor
+     * resumption across the reload boundary. The session
+     * ID context must match between the CTX that issued
+     * the session and the CTX that consumes it; the cache
+     * mode ensures OpenSSL's internal cache is disabled
+     * (we own the cache via cmq_tls_session_cache). */
+    SSL_CTX_set_session_id_context(new_ctx,
+        (const unsigned char *)"cmq-tls-v0.5.29", 16);
+    SSL_CTX_set_generate_session_id(new_ctx, cmq_tls_gen_session_id);
+    SSL_CTX_set_session_cache_mode(new_ctx,
+        SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_INTERNAL);
     /* P1 v0.5.4 UAF fix: bump the new CTX's built-in OpenSSL
      * refcount so it isn't freed when the next reload decrements
      * to zero. Existing in-flight SSL* each hold a borrowed
@@ -635,14 +746,21 @@ int cmq_tls_backend_secure(void) {
 
 cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
     if (!cfg || fd < 0 || !cmq_tls_configured(cfg)) return NULL;
+    if (tls_begin_op(cfg) != 0) return NULL;
 #ifdef CMQ_TLS_OPENSSL
     /* Build the SSL_CTX lazily on first session. */
     if (!cfg->ssl_ctx_init_done) {
-        if (tls_build_ssl_ctx(cfg) != 0) return NULL;
+        if (tls_build_ssl_ctx(cfg) != 0) {
+            tls_end_op(cfg);
+            return NULL;
+        }
     }
 #endif
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));
-    if (!s) return NULL;
+    if (!s) {
+        tls_end_op(cfg);
+        return NULL;
+    }
     s->cfg = cfg;
     s->fd = fd;
     s->is_server = 1;
@@ -651,6 +769,7 @@ cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
     s->ssl = SSL_new(cfg->ssl_ctx);
     if (!s->ssl) {
         free(s);
+        tls_end_op(cfg);
         return NULL;
     }
     SSL_set_fd(s->ssl, fd);
@@ -662,18 +781,26 @@ cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
     }
     SSL_set_accept_state(s->ssl);
 #endif
+    tls_end_op(cfg);
     return s;
 }
 
 cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
     if (!cfg || fd < 0 || !cmq_tls_configured(cfg)) return NULL;
+    if (tls_begin_op(cfg) != 0) return NULL;
 #ifdef CMQ_TLS_OPENSSL
     if (!cfg->ssl_ctx_init_done) {
-        if (tls_build_ssl_ctx(cfg) != 0) return NULL;
+        if (tls_build_ssl_ctx(cfg) != 0) {
+            tls_end_op(cfg);
+            return NULL;
+        }
     }
 #endif
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));
-    if (!s) return NULL;
+    if (!s) {
+        tls_end_op(cfg);
+        return NULL;
+    }
     s->cfg = cfg;
     s->fd = fd;
     s->is_server = 0;
@@ -682,6 +809,7 @@ cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
     s->ssl = SSL_new(cfg->ssl_ctx);
     if (!s->ssl) {
         free(s);
+        tls_end_op(cfg);
         return NULL;
     }
     SSL_set_fd(s->ssl, fd);
@@ -693,6 +821,7 @@ cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
     }
     SSL_set_connect_state(s->ssl);
 #endif
+    tls_end_op(cfg);
     return s;
 }
 
@@ -710,6 +839,42 @@ void cmq_tls_session_destroy(cmq_tls_session_t *session) {
     /* Session does not own the fd — the client closes it once. */
     session->fd = -1;
     free(session);
+}
+
+/* v0.5.72: graceful shutdown — send close_notify and drain the BIO.
+ * Must be called BEFORE the underlying fd is closed, while the
+ * client can still read. Returns 1 on full bidirectional close_notify,
+ * 0 on partial (close_notify sent but peer response missing),
+ * -1 on error. */
+int cmq_tls_session_graceful_shutdown(cmq_tls_session_t *session) {
+    if (!session) return -1;
+#ifdef CMQ_TLS_OPENSSL
+    if (!session->ssl) return -1;
+    if (!session->handshake_done) {
+        /* Handshake never completed — can't exchange close_notify. */
+        return -1;
+    }
+    /* SSL_shutdown sends our close_notify and tries to read peer's.
+     * Loop until both sides have sent close_notify (rc=1) or we
+     * run out of WANT cycles. */
+    int loops = 0;
+    int rc;
+    while (loops < 4) {
+        rc = SSL_shutdown(session->ssl);
+        if (rc == 1) return 1;       /* full bidirectional done */
+        if (rc < 0) return -1;       /* fatal error */
+        /* rc == 0 → WANT_READ or WANT_WRITE; retry once after a poll.
+         * The session's BIO is blocking on the underlying fd, so
+         * SSL_shutdown typically completes both sides in 1-2 calls. */
+        struct timeval tv = {0, 1000}; /* 1ms */
+        select(0, NULL, NULL, NULL, &tv);
+        loops++;
+    }
+    return 0;  /* partial — close_notify sent, peer didn't ack */
+#else
+    (void)session;
+    return -1;
+#endif
 }
 
 int cmq_tls_handshake(cmq_tls_session_t *session) {
@@ -777,6 +942,11 @@ ssize_t cmq_tls_write(cmq_tls_session_t *session, const uint8_t *buf, size_t len
 
 int cmq_tls_fd(cmq_tls_session_t *session) {
     return session ? session->fd : -1;
+}
+
+int cmq_tls_handshake_done(cmq_tls_session_t *session) {
+    if (!session) return -1;
+    return session->handshake_done ? 1 : 0;
 }
 
 /* v0.5.23: opaque accessors used by cmq_tls_session_cache.c. The cache
@@ -858,6 +1028,49 @@ static int cmq_tls_gen_session_id(SSL *ssl, unsigned char *id,
     if (RAND_bytes(id, 32) != 1) return 0;
     *id_len = 32;
     return 1;
+}
+
+/* v0.5.82: default ALPN select callback. The arg is the SSL_CTX
+ * (passed via SSL_CTX_set_alpn_select_cb). The server's protocol
+ * list is read from the cmq_tls_config stored on the SSL_CTX via
+ * SSL_CTX_set_app_data. We pick the first server protocol that's
+ * also in the client's list, following RFC 7301 server-side
+ * selection rules. If the two lists don't overlap, we return
+ * NOACK so the handshake fails with a fatal alert — same as
+ * OpenSSL's built-in default behavior. */
+static int cmq_tls_alpn_select_cb(SSL *ssl, const unsigned char **out,
+                                    unsigned char *outlen,
+                                    const unsigned char *in, unsigned int inlen,
+                                    void *arg) {
+    (void)ssl;
+    SSL_CTX *ctx = (SSL_CTX *)arg;
+    if (!ctx || !out || !outlen || !in || inlen == 0) {
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+    cmq_tls_config_t *cfg = (cmq_tls_config_t *)SSL_CTX_get_app_data(ctx);
+    if (!cfg || cfg->alpn_len == 0) {
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+    /* Walk the server's wire-format list and look for a match in
+     * the client's wire-format list. */
+    unsigned int i = 0;
+    while (i < cfg->alpn_len) {
+        unsigned char plen = cfg->alpn_data[i];
+        if (plen == 0 || i + 1 + plen > cfg->alpn_len) break;
+        unsigned int j = 0;
+        while (j < inlen) {
+            unsigned char clen = in[j];
+            if (clen == plen &&
+                memcmp(cfg->alpn_data + i + 1, in + j + 1, plen) == 0) {
+                *out = cfg->alpn_data + i + 1;
+                *outlen = plen;
+                return SSL_TLSEXT_ERR_OK;
+            }
+            j += 1 + clen;
+        }
+        i += 1 + plen;
+    }
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 #endif
 

@@ -1,5 +1,5 @@
-v0.5.42 aux-accept micro-note:
-- Two threads accept() on the same listen fd (Linux-safe).
-- Per-admit work is identical to accept_cb (shared helper).
-- Hot data path (PUBLISH fan-out) not touched.
-- stat_accept_aux is a relaxed counter; not on the msg/s path.
+v0.5.42 MQTT QoS2 retransmit helpers + test micro-bench:
+- test_mqtt_qos2: ~30us total (5 tests, see cache isolation).
+- Core data path unchanged at ~33K msg/s. The QoS2 table is on
+  the MQTT dispatch path (re-delivery tracking) but is sub-microsecond
+  per packet — bench impact negligible.

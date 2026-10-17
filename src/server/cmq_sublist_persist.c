@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_sublist_persist.h"
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
@@ -38,6 +39,17 @@ static int write_record(FILE *fp, int is_sub, uint64_t sub_id,
     }
     int n = fprintf(fp, "U %llu\n", (unsigned long long)sub_id);
     return n > 0 ? 0 : -1;
+}
+
+static int parse_sub_id(const char *text, uint64_t *out, char **end_out) {
+    if (!text || text[0] < '0' || text[0] > '9') return -1;
+    errno = 0;
+    char *end = NULL;
+    uint64_t value = strtoull(text, &end, 10);
+    if (errno == ERANGE || end == text) return -1;
+    *out = value;
+    *end_out = end;
+    return 0;
 }
 
 cmq_sublist_persist_t *cmq_sublist_persist_open(const char *dir) {
@@ -155,25 +167,65 @@ int cmq_sublist_persist_load(cmq_sublist_persist_t *p,
     int count = 0;
     while (fgets(line, sizeof(line), fp)) {
         size_t len = strlen(line);
+        if (len == sizeof(line) - 1 && line[len - 1] != '\n' &&
+            line[len - 1] != '\r') {
+            fclose(fp);
+            return -1;
+        }
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
             line[--len] = '\0';
         if (len == 0) continue;
         if (line[0] == 'S') {
             char *p1 = line + 1;
             while (*p1 == ' ') p1++;
-            uint64_t sub_id = strtoull(p1, &p1, 10);
+            char *end = NULL;
+            uint64_t sub_id = 0;
+            if (parse_sub_id(p1, &sub_id, &end) != 0) {
+                fclose(fp);
+                return -1;
+            }
+            if (*end != ' ') {
+                fclose(fp);
+                return -1;
+            }
+            p1 = end;
             while (*p1 == ' ') p1++;
+            if (*p1 == '\0') {
+                fclose(fp);
+                return -1;
+            }
             char *subject = p1;
             while (*p1 && *p1 != ' ') p1++;
             if (*p1) { *p1 = '\0'; p1++; }
             while (*p1 == ' ') p1++;
             char *account = p1;
-            cb(ctx, 1, sub_id, subject, account);
+            if (*account == '\0') {
+                fclose(fp);
+                return -1;
+            }
+            if (cb(ctx, 1, sub_id, subject, account) != 0) {
+                fclose(fp);
+                return -1;
+            }
             count++;
         } else if (line[0] == 'U') {
-            uint64_t sub_id = strtoull(line + 1, NULL, 10);
-            cb(ctx, 0, sub_id, NULL, NULL);
+            char *p1 = line + 1;
+            while (*p1 == ' ') p1++;
+            char *end = NULL;
+            uint64_t sub_id = 0;
+            if (parse_sub_id(p1, &sub_id, &end) != 0) {
+                fclose(fp);
+                return -1;
+            }
+            while (*end == ' ') end++;
+            if (*end != '\0' || cb(ctx, 0, sub_id, NULL, NULL) != 0) {
+                fclose(fp);
+                return -1;
+            }
             count++;
+        } else {
+            fclose(fp);
+            return -1;
         }
     }
     fclose(fp);

@@ -11,15 +11,23 @@ extern "C" {
 
 /* F19: Server-side MQTT 3.1.1 / 5.0 listener.
  *
- * CONNECT/CONNACK, PUBLISH (QoS 0/1/2 handshake), SUBSCRIBE/SUBACK,
- * PINGREQ/PINGRESP, DISCONNECT, retain, topic match, optional
- * bridge into cmq_sublist. MQTT 5.0 property lists are decoded
- * (v0.5.43). Last-will and Clean Session durable filters ship
- * in v0.5.46.
+ * Implemented. The listener accepts CONNECT/CONNACK, SUBSCRIBE/
+ * SUBACK, PUBLISH/PUBACK, PINGREQ/PINGRESP, and DISCONNECT for
+ * MQTT 3.1.1 / 5.0. Topic wildcards (+, #) reuse cmq_sublist.
+ * Optional static credentials (cmq_mqtt_set_credentials) and a
+ * per-IP PUBLISH rate limit (cmq_mqtt_set_rate_limit) are available.
+ * A persistent retain file (cmq_mqtt_set_retain_path) survives
+ * restart.
  *
- * cmq_mqtt_server_listen probes 127.0.0.1:1883 bind; the real
- * accept loop starts via cmq_mqtt_server_start_listener after
- * cmq_mqtt_set_listener_enabled(1).
+ * Off by default: cmq_mqtt_set_listener_enabled(1) turns the
+ * listener on; cmq_mqtt_set_bridge_server(srv) wires PUBLISH into
+ * the cmq_sublist of an existing cmq_server_t.
+ *
+ * Tests: tests/test_mqtt_5_wildcard.c,
+ *        tests/test_mqtt_listen.c,
+ *        tests/test_mqtt_qos2.c,
+ *        tests/test_mqtt_retained_file.c,
+ *        tests/test_mqtt_retained_wildcard.c.
  */
 
 #define CMQ_MQTT_USER_PROPS_MAX 4
@@ -88,6 +96,10 @@ int cmq_mqtt_session_save(const char *client_id,
 int cmq_mqtt_session_load(const char *client_id, char out[][128], int max);
 void cmq_mqtt_session_drop(const char *client_id);
 
+/* Probe whether an IPv4 address/port can be bound and listened on.
+ * Returns 1 on success and 0 on invalid input or socket failure. The
+ * temporary socket is closed before returning; this does not start the
+ * long-lived listener. Port 0 only probes ephemeral-port allocation. */
 int cmq_mqtt_server_listen(const char *bind_addr, int port);
 
 /* F19: launch the MQTT listener thread on the server. Idempotent
@@ -203,6 +215,39 @@ int cmq_mqtt_fanout(const char *topic, const uint8_t *payload, size_t len);
 /* Record a SUBSCRIBE topic filter. The listener calls this on every
  * accepted SUBSCRIBE. The live bridge uses cmq_mqtt_set_bridge_server. */
 int cmq_mqtt_record_subscriber(const char *topic_filter);
+
+/* v0.5.42: test-only wrappers around the static QoS2 retransmit
+ * helpers (qos2_record_or_lookup / qos2_get_phase). Production code
+ * must not call these. */
+int cmq_mqtt_qos2_record_or_lookup_test(uint16_t packet_id,
+                                          int new_phase);
+int cmq_mqtt_qos2_get_phase_test(uint16_t packet_id);
+
+/* v0.5.42: test-only reset. Clears the QoS2 retransmit table.
+ * Production code must not call this. */
+void cmq_mqtt_qos2_reset_test(void);
+
+/* v0.5.43: test-only retained-message dispatch helper. Walks the
+ * subscriber list registered via cmq_mqtt_record_subscriber and
+ * invokes cb for each whose topic_filter matches the given topic.
+ * Mirrors what mqtt_handle_client does on a real SUBSCRIBE.
+ * Production code must not call this. */
+typedef void (*cmq_mqtt_test_dispatch_cb)(int subscriber_idx,
+                                          const char *topic,
+                                          const uint8_t *payload,
+                                          size_t payload_len,
+                                          void *user);
+void cmq_mqtt_dispatch_retained(const char *topic,
+                                  const uint8_t *payload,
+                                  size_t payload_len,
+                                  cmq_mqtt_test_dispatch_cb cb,
+                                  void *user);
+
+/* v0.5.43: test-only. Clears the subscriber list (g_mqtt_sub_count)
+ * so tests start with a clean slate. Production code must not
+ * call this. */
+void cmq_mqtt_subs_reset_test(void);
+
 int cmq_mqtt_subscriber_count(void);
 int cmq_mqtt_get_subscribed_topic(int index, char *out, size_t out_len);
 

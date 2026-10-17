@@ -2,9 +2,12 @@
 #include "cmq_server.h"
 #include "cmq_parser.h"
 #include "cmq_proto.h"
+#include "cmq_password.h"
+#include "cmq_audit.h"
 #include "cmq_test.h"
 
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -12,6 +15,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <errno.h>
+#include <poll.h>
 
 static int connect_to(int port) {
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
@@ -22,6 +26,23 @@ static int connect_to(int port) {
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
     int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
     if (rc < 0 && errno != EINPROGRESS) { close(fd); return -1; }
+    if (rc < 0) {
+        struct pollfd pfd = {.fd = fd, .events = POLLOUT};
+        do {
+            rc = poll(&pfd, 1, 1000);
+        } while (rc < 0 && errno == EINTR);
+        if (rc <= 0 || (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            close(fd);
+            return -1;
+        }
+        int so_error = 0;
+        socklen_t so_len = sizeof(so_error);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) != 0 ||
+            so_error != 0) {
+            close(fd);
+            return -1;
+        }
+    }
     return fd;
 }
 
@@ -29,7 +50,18 @@ static ssize_t send_frame(int fd, cmq_op_t op, const uint8_t *payload, size_t pl
     uint8_t buf[4096];
     size_t len = cmq_frame_encode(buf, sizeof(buf), op, 0, payload, plen);
     if (len == 0) return -1;
-    return write(fd, buf, len);
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n > 0) { off += (size_t)n; continue; }
+        if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct timespec ts = {0, 1000000L};
+            nanosleep(&ts, NULL);
+            continue;
+        }
+        return -1;
+    }
+    return (ssize_t)off;
 }
 
 static ssize_t send_frame_flags(int fd, cmq_op_t op, uint8_t flags,
@@ -37,7 +69,18 @@ static ssize_t send_frame_flags(int fd, cmq_op_t op, uint8_t flags,
     uint8_t buf[8192];
     size_t len = cmq_frame_encode(buf, sizeof(buf), op, flags, payload, plen);
     if (len == 0) return -1;
-    return write(fd, buf, len);
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n > 0) { off += (size_t)n; continue; }
+        if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct timespec ts = {0, 1000000L};
+            nanosleep(&ts, NULL);
+            continue;
+        }
+        return -1;
+    }
+    return (ssize_t)off;
 }
 
 static int recv_frame(int fd, cmq_frame_t *frame, cmq_parser_t *parser) {
@@ -91,6 +134,22 @@ static void wait_ms(int ms) {
     nanosleep(&ts, NULL);
 }
 
+/* Encode a SUBSCRIBE frame into `out`. Returns the total length. */
+static size_t build_sub_frame(uint32_t sub_id, const char *subj,
+                                uint8_t *out) {
+    size_t off = 0;
+    out[off++] = (sub_id >> 24) & 0xFF;
+    out[off++] = (sub_id >> 16) & 0xFF;
+    out[off++] = (sub_id >> 8) & 0xFF;
+    out[off++] = sub_id & 0xFF;
+    uint16_t slen = (uint16_t)strlen(subj);
+    out[off++] = (slen >> 8) & 0xFF;
+    out[off++] = slen & 0xFF;
+    memcpy(out + off, subj, slen);
+    off += slen;
+    return off;
+}
+
 static void do_connect(int fd, cmq_parser_t *parser) {
     send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
     wait_ms(50);
@@ -138,7 +197,7 @@ TEST(phase2, auth_success) {
     memcpy(connect_pl + 4, user, ulen);
     memcpy(connect_pl + 4 + ulen, pass, plen);
 
-    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    ASSERT(send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen) > 0);
     wait_ms(50);
 
     cmq_frame_t frame;
@@ -191,7 +250,7 @@ TEST(phase2, auth_failure) {
     memcpy(connect_pl + 4, user, ulen);
     memcpy(connect_pl + 4 + ulen, pass, plen);
 
-    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    ASSERT(send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen) > 0);
     wait_ms(50);
 
     cmq_frame_t frame;
@@ -209,6 +268,274 @@ TEST(phase2, auth_failure) {
     cmq_server_stop(srv);
     pthread_join(tid, NULL);
     cmq_server_destroy(srv);
+}
+
+TEST(phase2, hashed_auth_success) {
+    char stored[256];
+    ASSERT_EQ(cmq_password_hash("secret", stored, sizeof(stored)), 0);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18904;
+    config.log_to_stdout = 0;
+    config.auth_username = "admin";
+    config.auth_password = stored;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18904);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    const char *user = "admin";
+    const char *pass = "secret";
+    uint8_t connect_pl[256];
+    uint16_t ulen = (uint16_t)strlen(user);
+    uint16_t plen = (uint16_t)strlen(pass);
+    connect_pl[0] = (ulen >> 8) & 0xFF;
+    connect_pl[1] = ulen & 0xFF;
+    connect_pl[2] = (plen >> 8) & 0xFF;
+    connect_pl[3] = plen & 0xFF;
+    memcpy(connect_pl + 4, user, ulen);
+    memcpy(connect_pl + 4 + ulen, pass, plen);
+    ASSERT(send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen) > 0);
+    wait_ms(50);
+
+    cmq_frame_t frame;
+    ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        ASSERT_EQ(recv_frame(fd, &frame, parser), 0);
+    }
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_CONNACK);
+    ASSERT_EQ(frame.payload[0], 0);
+    free_frame_payload(&frame);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+/* RED v0.6.10: cmq_quota_check_connect must reject CONNECTs once
+ * max_connections_per_account is exceeded. The quota object is built
+ * by cmq_server_create and the check function exists in cmq_quota.h,
+ * but cmq_server.c never calls it on the CONNECT path. The second
+ * CONNECT in the same account must receive a non-zero CONNACK. */
+TEST(phase2, quota_rejects_connect_above_per_account_cap) {
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18908;
+    config.log_to_stdout = 0;
+    config.max_connections_per_account = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    /* First CONNECT should succeed; second should be rejected. */
+    int fd1 = connect_to(18908);
+    ASSERT(fd1 >= 0);
+    wait_server();
+    cmq_parser_t *p1 = cmq_parser_create();
+    send_frame(fd1, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t f1;
+    ASSERT_EQ(recv_frame(fd1, &f1, p1), 0);
+    if (f1.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&f1);
+        ASSERT_EQ(recv_frame(fd1, &f1, p1), 0);
+    }
+    ASSERT_EQ(f1.hdr.op, CMQ_OP_CONNACK);
+    ASSERT_EQ(f1.payload[0], 0);
+    free_frame_payload(&f1);
+    cmq_parser_destroy(p1);
+
+    int fd2 = connect_to(18908);
+    ASSERT(fd2 >= 0);
+    wait_server();
+    cmq_parser_t *p2 = cmq_parser_create();
+    send_frame(fd2, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t f2;
+    ASSERT_EQ(recv_frame(fd2, &f2, p2), 0);
+    if (f2.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&f2);
+        ASSERT_EQ(recv_frame(fd2, &f2, p2), 0);
+    }
+    ASSERT_EQ(f2.hdr.op, CMQ_OP_CONNACK);
+    ASSERT(f2.payload[0] != 0);
+    free_frame_payload(&f2);
+    cmq_parser_destroy(p2);
+
+    close(fd1);
+    close(fd2);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+}
+
+/* RED: a successful CONNECT must emit CMQ_AUDIT_AUTH_OK and a failed
+ * CONNECT must emit CMQ_AUDIT_AUTH_FAIL into the configured audit
+ * file. Currently neither event is logged because the server never
+ * calls cmq_audit_log for these enum values. */
+static int audit_file_contains(const char *path, const char *needle) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+    return strstr(buf, needle) != NULL;
+}
+
+/* Locate "trace":"<hex>" inside an event line. Returns the hex length
+ * (32 when propagation is correct) or -1 when the field is missing
+ * / not a 32-char lowercase-hex string. */
+static int audit_event_trace_hex_len(const char *path, const char *event_name) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"event\":\"%s\"", event_name);
+    const char *p = strstr(buf, needle);
+    if (!p) return -1;
+    const char *trace = strstr(p, "\"trace\":\"");
+    if (!trace) return -1;
+    trace += strlen("\"trace\":\"");
+    int len = 0;
+    while (len < 33 &&
+           ((trace[len] >= '0' && trace[len] <= '9') ||
+            (trace[len] >= 'a' && trace[len] <= 'f'))) {
+        len++;
+    }
+    if (len == 32 && trace[len] == '"') return 32;
+    return len > 0 ? -len : -1;
+}
+
+TEST(phase2, audit_emits_auth_ok_on_success) {
+    const char *audit_path = "/tmp/cmq-test-phase2-audit-ok.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18906;
+    config.log_to_stdout = 0;
+    config.auth_username = "admin";
+    config.auth_password = "secret";
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18906);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    const char *user = "admin";
+    const char *pass = "secret";
+    uint8_t connect_pl[256];
+    uint16_t ulen = (uint16_t)strlen(user);
+    uint16_t plen = (uint16_t)strlen(pass);
+    connect_pl[0] = (ulen >> 8) & 0xFF;
+    connect_pl[1] = ulen & 0xFF;
+    connect_pl[2] = (plen >> 8) & 0xFF;
+    connect_pl[3] = plen & 0xFF;
+    memcpy(connect_pl + 4, user, ulen);
+    memcpy(connect_pl + 4 + ulen, pass, plen);
+    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    wait_ms(100);
+
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    ASSERT(audit_file_contains(audit_path, "\"event\":\"auth_ok\""));
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+TEST(phase2, audit_emits_auth_fail_on_bad_password) {
+    const char *audit_path = "/tmp/cmq-test-phase2-audit-fail.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18907;
+    config.log_to_stdout = 0;
+    config.auth_username = "admin";
+    config.auth_password = "secret";
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18907);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    const char *user = "admin";
+    const char *pass = "wrong";
+    uint8_t connect_pl[256];
+    uint16_t ulen = (uint16_t)strlen(user);
+    uint16_t plen = (uint16_t)strlen(pass);
+    connect_pl[0] = (ulen >> 8) & 0xFF;
+    connect_pl[1] = ulen & 0xFF;
+    connect_pl[2] = (plen >> 8) & 0xFF;
+    connect_pl[3] = plen & 0xFF;
+    memcpy(connect_pl + 4, user, ulen);
+    memcpy(connect_pl + 4 + ulen, pass, plen);
+    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    wait_ms(100);
+
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    free_frame_payload(&frame);
+
+    ASSERT(audit_file_contains(audit_path, "\"event\":\"auth_fail\""));
+    /* The audit line must also carry the F11 connection trace id. */
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "auth_fail"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
 }
 
 TEST(phase2, queue_group_delivery) {
@@ -434,6 +761,1076 @@ TEST(phase2, info_has_stats) {
     cmq_server_stop(srv);
     pthread_join(tid, NULL);
     cmq_server_destroy(srv);
+}
+
+/* RED v0.6.16: when a PUBLISH is rejected by the per-account
+ * publish quota, the server must emit CMQ_AUDIT_RATE_LIMIT_REJECT
+ * with the offending subject so operators can see quota pressure in
+ * the audit log. Today handle_publish only updates the
+ * stat_publishes_rejected counter and emits no audit event. */
+TEST(phase2, audit_emits_rate_limit_on_publish_quota) {
+    const char *audit_path = "/tmp/cmq-test-v0616-audit.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18910;
+    config.log_to_stdout = 0;
+    /* Cap at 1 message/sec so the second publish is rejected. */
+    config.max_msgs_per_sec_per_account = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18910);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    /* First CONNECT + PUBLISH succeeds. */
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    const char *subject = "quota.audit";
+    uint16_t slen = (uint16_t)strlen(subject);
+    uint8_t pub_pl[128];
+    pub_pl[0] = (slen >> 8) & 0xFF;
+    pub_pl[1] = slen & 0xFF;
+    memcpy(pub_pl + 2, subject, slen);
+    pub_pl[2 + slen] = 0; pub_pl[3 + slen] = 0;
+    const char *body1 = "first";
+    uint16_t blen1 = (uint16_t)strlen(body1);
+    pub_pl[4 + slen] = (blen1 >> 24) & 0xFF;
+    pub_pl[5 + slen] = (blen1 >> 16) & 0xFF;
+    pub_pl[6 + slen] = (blen1 >> 8) & 0xFF;
+    pub_pl[7 + slen] = blen1 & 0xFF;
+    memcpy(pub_pl + 8 + slen, body1, blen1);
+    send_frame(fd, CMQ_OP_PUBLISH, pub_pl, 8 + slen + blen1);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    free_frame_payload(&frame);
+
+    /* Second PUBLISH exceeds the per-account 1 msg/sec cap → ERROR +
+     * rate_limit_reject audit. */
+    const char *body2 = "second";
+    uint16_t blen2 = (uint16_t)strlen(body2);
+    pub_pl[4 + slen] = (blen2 >> 24) & 0xFF;
+    pub_pl[5 + slen] = (blen2 >> 16) & 0xFF;
+    pub_pl[6 + slen] = (blen2 >> 8) & 0xFF;
+    pub_pl[7 + slen] = blen2 & 0xFF;
+    memcpy(pub_pl + 8 + slen, body2, blen2);
+    send_frame(fd, CMQ_OP_PUBLISH, pub_pl, 8 + slen + blen2);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    /* Poll the audit file for the rate_limit_reject event. */
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "\"subject\":\"publish\"") != NULL);
+    ASSERT(strstr(buf, "quota exceeded") != NULL);
+}
+
+/* RED v0.6.17: handle_frame's CONNECT branch assigns a 16-byte trace
+ * id at cmq_server.c:4626-4630, but the loop logic is inverted:
+ * "assigned = 1" runs when ANY byte is zero, which is true for
+ * zero-initialized new clients. cmq_trace_id is therefore never
+ * called and every audit event for a new client passes a NULL
+ * trace_id. After the fix, the audit_ok event for a successful
+ * CONNECT must carry a 32-char lowercase-hex trace string. */
+TEST(phase2, connect_assigns_trace_id_in_audit) {
+    const char *audit_path = "/tmp/cmq-test-v0617-trace-audit.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18911;
+    config.log_to_stdout = 0;
+    config.auth_username = "admin";
+    config.auth_password = "secret";
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18911);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    const char *user = "admin";
+    const char *pass = "secret";
+    uint8_t connect_pl[256];
+    uint16_t ulen = (uint16_t)strlen(user);
+    uint16_t plen = (uint16_t)strlen(pass);
+    connect_pl[0] = (ulen >> 8) & 0xFF;
+    connect_pl[1] = ulen & 0xFF;
+    connect_pl[2] = (plen >> 8) & 0xFF;
+    connect_pl[3] = plen & 0xFF;
+    memcpy(connect_pl + 4, user, ulen);
+    memcpy(connect_pl + 4 + ulen, pass, plen);
+    send_frame(fd, CMQ_OP_CONNECT, connect_pl, 4 + ulen + plen);
+    wait_ms(50);
+
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Poll the audit file for the auth_ok event and assert that the
+     * "trace" field is a non-empty 32-char lowercase-hex string. */
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    const char *event = strstr(buf, "\"event\":\"auth_ok\"");
+    ASSERT_NOT_NULL(event);
+    const char *trace_field = strstr(event, "\"trace\":\"");
+    ASSERT_NOT_NULL(trace_field);
+    trace_field += strlen("\"trace\":\"");
+    /* Trace id hex should be 32 lowercase hex chars followed by '"'. */
+    int hex_len = 0;
+    while (hex_len < 33 &&
+           ((trace_field[hex_len] >= '0' && trace_field[hex_len] <= '9') ||
+            (trace_field[hex_len] >= 'a' && trace_field[hex_len] <= 'f'))) {
+        hex_len++;
+    }
+    ASSERT_EQ(hex_len, 32);
+    ASSERT_EQ(trace_field[hex_len], '"');
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.19: when a PUBLISH is rejected by the per-subject
+ * rate limit (N1), the server must emit CMQ_AUDIT_RATE_LIMIT_REJECT
+ * with the offending subject so operators can spot noisy subjects
+ * in the audit log. Today handle_publish only updates the
+ * stat_publishes_rejected[_ratelimit] counters and emits no audit
+ * event. */
+TEST(phase2, audit_emits_rate_limit_on_subject_ratelimit) {
+    const char *audit_path = "/tmp/cmq-test-v0619-audit-rl.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18912;
+    config.log_to_stdout = 0;
+    /* Cap at 1 message/sec per subject so the second publish is
+     * rejected. Per-subject rate limit is independent of the global
+     * per-account quota (v0.6.16), so we set the latter to 0 to
+     * isolate this test. */
+    config.max_msgs_per_sec_per_subject = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18912);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    /* CONNECT + first publish accepted (within the per-subject cap). */
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    free_frame_payload(&frame);
+
+    const char *subject = "noisy.subject";
+    uint16_t slen = (uint16_t)strlen(subject);
+    uint8_t pub_pl[128];
+    pub_pl[0] = (slen >> 8) & 0xFF;
+    pub_pl[1] = slen & 0xFF;
+    memcpy(pub_pl + 2, subject, slen);
+    pub_pl[2 + slen] = 0; pub_pl[3 + slen] = 0;
+    const char *body1 = "first";
+    uint16_t blen1 = (uint16_t)strlen(body1);
+    pub_pl[4 + slen] = (blen1 >> 24) & 0xFF;
+    pub_pl[5 + slen] = (blen1 >> 16) & 0xFF;
+    pub_pl[6 + slen] = (blen1 >> 8) & 0xFF;
+    pub_pl[7 + slen] = blen1 & 0xFF;
+    memcpy(pub_pl + 8 + slen, body1, blen1);
+    send_frame(fd, CMQ_OP_PUBLISH, pub_pl, 8 + slen + blen1);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    free_frame_payload(&frame);
+
+    /* Second publish to the same subject exceeds the cap → ERROR +
+     * rate_limit_reject audit. */
+    const char *body2 = "second";
+    uint16_t blen2 = (uint16_t)strlen(body2);
+    pub_pl[4 + slen] = (blen2 >> 24) & 0xFF;
+    pub_pl[5 + slen] = (blen2 >> 16) & 0xFF;
+    pub_pl[6 + slen] = (blen2 >> 8) & 0xFF;
+    pub_pl[7 + slen] = blen2 & 0xFF;
+    memcpy(pub_pl + 8 + slen, body2, blen2);
+    send_frame(fd, CMQ_OP_PUBLISH, pub_pl, 8 + slen + blen2);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "noisy.subject") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.20: when the F15 per-conn inbox budget rejects a REQUEST
+ * (pending >= inbox_max_pending), the server must emit a
+ * rate_limit_reject audit so operators can spot slow responders
+ * holding the head-of-line lock. Today handle_request only updates
+ * stat_publishes_rejected and emits no audit event. */
+TEST(phase2, audit_emits_rate_limit_on_inbox_full) {
+    const char *audit_path = "/tmp/cmq-test-v0620-audit-inbox.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18913;
+    config.log_to_stdout = 0;
+    /* Cap pending REQUESTs at 1. A subscriber (second connection)
+     * holds the inbox slot open until RESPONSE arrives, so two
+     * back-to-back REQUESTs from the first connection trip the cap. */
+    config.inbox_max_pending = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    /* Subscriber connection. */
+    int sub_fd = connect_to(18913);
+    ASSERT(sub_fd >= 0);
+    wait_server();
+    cmq_parser_t *sub_parser = cmq_parser_create();
+    send_frame(sub_fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(sub_fd, &frame, sub_parser);
+    free_frame_payload(&frame);
+    /* Subscribe to the request subject so it consumes the inbox. */
+    uint16_t sslen = 9; /* "slow.rsdr" */
+    uint8_t sub_pl[64];
+    sub_pl[0] = 0; sub_pl[1] = 0; sub_pl[2] = 0; sub_pl[3] = 1;
+    sub_pl[4] = (sslen >> 8) & 0xFF; sub_pl[5] = sslen & 0xFF;
+    memcpy(sub_pl + 6, "slow.rsdr", sslen);
+    send_frame(sub_fd, CMQ_OP_SUBSCRIBE, sub_pl, 6 + sslen);
+    wait_ms(50);
+    recv_frame(sub_fd, &frame, sub_parser);
+    free_frame_payload(&frame);
+
+    /* Publisher connection. */
+    int pub_fd = connect_to(18913);
+    ASSERT(pub_fd >= 0);
+    wait_server();
+    cmq_parser_t *pub_parser = cmq_parser_create();
+    send_frame(pub_fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    recv_frame(pub_fd, &frame, pub_parser);
+    free_frame_payload(&frame);
+
+    /* Two REQUESTs — second should be rejected as inbox full. */
+    uint16_t slen = 9; /* "slow.rsdr" */
+    uint16_t rlen = 5; /* empty reply "_INBOX" */
+    uint8_t req_pl[64];
+    size_t off = 0;
+    req_pl[off++] = (slen >> 8) & 0xFF;
+    req_pl[off++] = slen & 0xFF;
+    memcpy(req_pl + off, "slow.rsdr", slen);
+    off += slen;
+    req_pl[off++] = (rlen >> 8) & 0xFF;
+    req_pl[off++] = rlen & 0xFF;
+    memcpy(req_pl + off, "reply", rlen);
+    off += rlen;
+    send_frame(pub_fd, CMQ_OP_REQUEST, req_pl, off);
+    wait_ms(50);
+    recv_frame(pub_fd, &frame, pub_parser);
+    free_frame_payload(&frame);
+
+    send_frame(pub_fd, CMQ_OP_REQUEST, req_pl, off);
+    wait_ms(50);
+    recv_frame(pub_fd, &frame, pub_parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "inbox full") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(pub_parser);
+    cmq_parser_destroy(sub_parser);
+    close(pub_fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    close(sub_fd);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.21: when a PUBLISH exceeds max_payload_size, the server
+ * must emit a rate_limit_reject audit so operators can spot payloads
+ * that the publisher never intended to ship that big. Today
+ * handle_publish only updates stat_publishes_rejected_size and emits
+ * no audit event. */
+TEST(phase2, audit_emits_rate_limit_on_publish_too_large) {
+    const char *audit_path = "/tmp/cmq-test-v0621-audit-large.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18914;
+    config.log_to_stdout = 0;
+    /* Frame overhead: subject (2B len + 2B reply_len) + body. */
+    config.max_payload_size = 16;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18914);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Body 64 B > max_payload_size 16 → rejected. */
+    const char *subject = "big.payload";
+    uint16_t slen = (uint16_t)strlen(subject);
+    char body[64];
+    memset(body, 'x', sizeof(body));
+    uint32_t blen = (uint32_t)sizeof(body);
+    uint8_t pub_pl[128];
+    size_t off = 0;
+    pub_pl[off++] = (slen >> 8) & 0xFF;
+    pub_pl[off++] = slen & 0xFF;
+    memcpy(pub_pl + off, subject, slen);
+    off += slen;
+    pub_pl[off++] = 0; pub_pl[off++] = 0;
+    pub_pl[off++] = (blen >> 24) & 0xFF;
+    pub_pl[off++] = (blen >> 16) & 0xFF;
+    pub_pl[off++] = (blen >> 8) & 0xFF;
+    pub_pl[off++] = blen & 0xFF;
+    memcpy(pub_pl + off, body, blen);
+    off += blen;
+    send_frame(fd, CMQ_OP_PUBLISH, pub_pl, off);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "payload too large") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.22: when handle_publish rejects with
+ * cmq_account_can_export, the server must emit an audit event so
+ * operators can spot accounts blocked by the export allow-list.
+ * Today only stat_publishes_rejected / stat_publishes_rejected_acl
+ * are updated. */
+TEST(phase2, audit_emits_rate_limit_on_account_export_acl) {
+    const char *audit_path = "/tmp/cmq-test-v0622-audit-acl.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18915;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    /* Restrict the default account ("$default") to a subject that the
+     * test publish will not match, triggering can_export denial. The
+     * destination must be a non-empty peer ("*" is the catch-all). */
+    ASSERT_EQ(cmq_account_add_export(srv->accounts, "$default",
+                                     "allowed.subject", "*"), 0);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18915);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Publish to "denied.subject" — the allow-list restricts to
+     * "allowed.subject", so can_export returns 0 and the server
+     * emits "permission denied". */
+    const char *subject = "denied.subject";
+    uint16_t slen = (uint16_t)strlen(subject);
+    const char *body = "x";
+    uint16_t blen = (uint16_t)strlen(body);
+    uint8_t pub_pl[128];
+    size_t off = 0;
+    pub_pl[off++] = (slen >> 8) & 0xFF;
+    pub_pl[off++] = slen & 0xFF;
+    memcpy(pub_pl + off, subject, slen);
+    off += slen;
+    pub_pl[off++] = 0; pub_pl[off++] = 0;
+    pub_pl[off++] = (blen >> 24) & 0xFF;
+    pub_pl[off++] = (blen >> 16) & 0xFF;
+    pub_pl[off++] = (blen >> 8) & 0xFF;
+    pub_pl[off++] = blen & 0xFF;
+    memcpy(pub_pl + off, body, blen);
+    off += blen;
+    send_frame(fd, CMQ_OP_PUBLISH, pub_pl, off);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "denied.subject") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.23: when handle_subscribe rejects a connection that has
+ * already hit max_subs_per_client, the server must emit an audit
+ * event so operators can spot clients exhausting their subscription
+ * budget. Today only stat_subscribes_rejected is updated. */
+TEST(phase2, audit_emits_rate_limit_on_subscribe_cap) {
+    const char *audit_path = "/tmp/cmq-test-v0623-audit-subcap.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18916;
+    config.log_to_stdout = 0;
+    config.max_subs_per_client = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18916);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Build SUBSCRIBE frame: 4-byte sub_id, 2-byte subject len,
+     * subject, no reply_to (0). */
+    uint8_t sub_pl1[128];
+    size_t sub_off1 = build_sub_frame(1, "alpha", sub_pl1);
+    send_frame(fd, CMQ_OP_SUBSCRIBE, sub_pl1, sub_off1);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    free_frame_payload(&frame);
+
+    /* Second distinct SUBSCRIBE exceeds the cap. */
+    uint8_t sub_pl2[128];
+    size_t sub_off2 = build_sub_frame(2, "beta", sub_pl2);
+    send_frame(fd, CMQ_OP_SUBSCRIBE, sub_pl2, sub_off2);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_SUBACK);
+    /* SUBACK code 1 = rejected. Payload[0] is the response code. */
+    ASSERT(frame.payload_len >= 5);
+    ASSERT_EQ(frame.payload[0], 1);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "beta") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.24: when handle_subscribe rejects (malformed frame,
+ * empty subject, or any other validation branch) the server must
+ * emit an audit event so operators can spot clients sending bad
+ * SUBSCRIBE frames. Today the rejection branches only update
+ * stat_subscribes_rejected and emit no audit event. */
+TEST(phase2, audit_emits_rate_limit_on_malformed_subscribe) {
+    const char *audit_path = "/tmp/cmq-test-v0624-audit-subacl.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18917;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18917);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Malformed SUBSCRIBE: payload length < 6 bytes triggers the
+     * early reject at handle_subscribe's "frame->payload_len < 6"
+     * guard. */
+    uint8_t bad_sub[3] = {0, 0, 0};
+    send_frame(fd, CMQ_OP_SUBSCRIBE, bad_sub, sizeof(bad_sub));
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_SUBACK);
+    ASSERT(frame.payload_len >= 5);
+    ASSERT_EQ(frame.payload[0], 1);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "malformed subscribe") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.25: handle_response increments stat_publishes_rejected
+ * when the response body exceeds max_payload_size, but emits no
+ * audit event. Today only stat counters are updated; operators have
+ * no F13 trace of misbehaving response senders. */
+TEST(phase2, audit_emits_rate_limit_on_response_acl) {
+    const char *audit_path = "/tmp/cmq-test-v0625-audit-resp.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18918;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    /* Restrict the default account's export allow-list so a
+     * response to a non-INBOX subject triggers the ACL rejection. The
+     * destination must be a non-empty peer ("*" is the catch-all). */
+    ASSERT_EQ(cmq_account_add_export(srv->accounts, "$default",
+                                     "allowed.subject", "*"), 0);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    /* Subscriber holds a subscription on a non-INBOX subject so
+     * the auto-generated RESPONSE does not bypass the ACL check via
+     * the _INBOX short-circuit. The RESPONSE's subject field will
+     * be set to this subscriber's subject, then handle_response will
+     * run cmq_account_can_export on it. */
+    int sub_fd = connect_to(18918);
+    ASSERT(sub_fd >= 0);
+    wait_server();
+    cmq_parser_t *sub_parser = cmq_parser_create();
+    send_frame(sub_fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(sub_fd, &frame, sub_parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(sub_fd, &frame, sub_parser);
+    }
+    free_frame_payload(&frame);
+    uint8_t sub_pl[128];
+    size_t sub_off = build_sub_frame(1, "worker.1", sub_pl);
+    send_frame(sub_fd, CMQ_OP_SUBSCRIBE, sub_pl, sub_off);
+    wait_ms(50);
+    recv_frame(sub_fd, &frame, sub_parser);
+    free_frame_payload(&frame);
+
+    /* Publisher connection that fires a REQUEST matching the
+     * subscriber's subscription, so a RESPONSE is generated. */
+    int pub_fd = connect_to(18918);
+    ASSERT(pub_fd >= 0);
+    wait_server();
+    cmq_parser_t *pub_parser = cmq_parser_create();
+    send_frame(pub_fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    recv_frame(pub_fd, &frame, pub_parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(pub_fd, &frame, pub_parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Build REQUEST frame: subject (worker.1) + reply-to
+     * (_INBOX.publisher) + small body. The subscriber's RESPONSE will
+     * have subject=worker.1 which is blocked by our export ACL. */
+    const char *req_subj = "worker.1";
+    const char *reply_to = "_INBOX.publisher";
+    uint16_t slen = (uint16_t)strlen(req_subj);
+    uint16_t rlen = (uint16_t)strlen(reply_to);
+    const char *body = "ping";
+    uint32_t blen = (uint32_t)strlen(body);
+    uint8_t req_pl[128];
+    size_t off = 0;
+    req_pl[off++] = (slen >> 8) & 0xFF;
+    req_pl[off++] = slen & 0xFF;
+    memcpy(req_pl + off, req_subj, slen);
+    off += slen;
+    req_pl[off++] = (rlen >> 8) & 0xFF;
+    req_pl[off++] = rlen & 0xFF;
+    memcpy(req_pl + off, reply_to, rlen);
+    off += rlen;
+    req_pl[off++] = (blen >> 24) & 0xFF;
+    req_pl[off++] = (blen >> 16) & 0xFF;
+    req_pl[off++] = (blen >> 8) & 0xFF;
+    req_pl[off++] = blen & 0xFF;
+    memcpy(req_pl + off, body, blen);
+    off += blen;
+    send_frame(pub_fd, CMQ_OP_REQUEST, req_pl, off);
+    wait_ms(100);
+    /* Drain the response (which never arrives because the ACL
+     * rejects the responder). */
+    recv_frame(pub_fd, &frame, pub_parser);
+    free_frame_payload(&frame);
+
+    /* The RESPONSE ACL rejection runs on the subscriber's worker
+     * thread inside handle_response; the audit event lands in the
+     * configured audit file. Poll for it. */
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "permission denied") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(pub_parser);
+    cmq_parser_destroy(sub_parser);
+    close(pub_fd);
+    close(sub_fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.26: handle_unsubscribe rejects malformed payload
+ * (< 4 bytes) but emits no audit event. Operators have no F13
+ * trace of clients sending bad UNSUBSCRIBE frames. */
+TEST(phase2, audit_emits_rate_limit_on_unsubscribe_malformed) {
+    const char *audit_path = "/tmp/cmq-test-v0626-audit-unsub.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18919;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18919);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Malformed UNSUBSCRIBE: payload length < 4 bytes triggers the
+     * early reject at handle_unsubscribe's first guard. */
+    uint8_t bad_unsub[2] = {0, 0};
+    send_frame(fd, CMQ_OP_UNSUBSCRIBE, bad_unsub, sizeof(bad_unsub));
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "malformed unsubscribe") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
+}
+
+/* RED v0.6.27: handle_batch's per-entry reject branches (ACL,
+ * payload-too-large, quota) increment stat_publishes_rejected
+ * without emitting an audit event. Operators have no F13 trace of
+ * batch-PUBLISH rejections. */
+TEST(phase2, audit_emits_rate_limit_on_batch_publish_acl) {
+    const char *audit_path = "/tmp/cmq-test-v0627-audit-batch.log";
+    unlink(audit_path);
+    cmq_audit_set_path(audit_path);
+
+    cmq_config_t config = {0};
+    config.num_threads = 1;
+    config.host = "127.0.0.1";
+    config.port = 18920;
+    config.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &config), CMQ_OK);
+
+    /* Restrict the default account's export allow-list so a
+     * batch-PUBLISH entry is rejected by the ACL. The dest must be a
+     * non-empty peer ("*" is the catch-all). */
+    ASSERT_EQ(cmq_account_add_export(srv->accounts, "$default",
+                                     "allowed.subject", "*"), 0);
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, server_thread, srv);
+    wait_server();
+
+    int fd = connect_to(18920);
+    ASSERT(fd >= 0);
+    wait_server();
+    cmq_parser_t *parser = cmq_parser_create();
+    send_frame(fd, CMQ_OP_CONNECT, NULL, 0);
+    wait_ms(50);
+    cmq_frame_t frame;
+    recv_frame(fd, &frame, parser);
+    if (frame.hdr.op == CMQ_OP_INFO) {
+        free_frame_payload(&frame);
+        recv_frame(fd, &frame, parser);
+    }
+    free_frame_payload(&frame);
+
+    /* Build a 2-entry BATCH with subject denied.subject; the second
+     * entry's subject is outside the export allow-list. */
+    const char *sub1 = "allowed.subject";
+    const char *sub2 = "denied.subject";
+    uint16_t slen1 = (uint16_t)strlen(sub1);
+    uint16_t slen2 = (uint16_t)strlen(sub2);
+    const char *body1 = "ok";
+    const char *body2 = "no";
+    uint32_t blen1 = (uint32_t)strlen(body1);
+    uint32_t blen2 = (uint32_t)strlen(body2);
+    uint8_t batch[256];
+    size_t off = 0;
+    batch[off++] = 0;
+    batch[off++] = 2;
+    batch[off++] = (slen1 >> 8) & 0xFF;
+    batch[off++] = slen1 & 0xFF;
+    memcpy(batch + off, sub1, slen1);
+    off += slen1;
+    batch[off++] = 0; batch[off++] = 0;
+    batch[off++] = (blen1 >> 24) & 0xFF;
+    batch[off++] = (blen1 >> 16) & 0xFF;
+    batch[off++] = (blen1 >> 8) & 0xFF;
+    batch[off++] = blen1 & 0xFF;
+    memcpy(batch + off, body1, blen1);
+    off += blen1;
+    batch[off++] = (slen2 >> 8) & 0xFF;
+    batch[off++] = slen2 & 0xFF;
+    memcpy(batch + off, sub2, slen2);
+    off += slen2;
+    batch[off++] = 0; batch[off++] = 0;
+    batch[off++] = (blen2 >> 24) & 0xFF;
+    batch[off++] = (blen2 >> 16) & 0xFF;
+    batch[off++] = (blen2 >> 8) & 0xFF;
+    batch[off++] = blen2 & 0xFF;
+    memcpy(batch + off, body2, blen2);
+    off += blen2;
+    send_frame(fd, CMQ_OP_BATCH, batch, off);
+    wait_ms(50);
+    recv_frame(fd, &frame, parser);
+    /* Batch validation rejects with ERROR. */
+    ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
+    free_frame_payload(&frame);
+
+    struct stat st;
+    int rc = -1;
+    for (int i = 0; i < 50; i++) {
+        rc = stat(audit_path, &st);
+        if (rc == 0) break;
+        struct timespec ts = {0, 100000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(rc, 0);
+    FILE *audit = fopen(audit_path, "r");
+    ASSERT_NOT_NULL(audit);
+    char buf[8192];
+    size_t alen = fread(buf, 1, sizeof(buf) - 1, audit);
+    buf[alen] = '\0';
+    fclose(audit);
+    ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
+    ASSERT(strstr(buf, "denied.subject") != NULL);
+    ASSERT_EQ(audit_event_trace_hex_len(audit_path, "rate_limit_reject"), 32);
+
+    cmq_parser_destroy(parser);
+    close(fd);
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
+    cmq_audit_set_path(NULL);
+    unlink(audit_path);
 }
 
 TEST_MAIN()

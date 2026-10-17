@@ -1,0 +1,6 @@
+if(UNIX)
+    add_executable(cmq-password cmq-password.c)
+    target_link_libraries(cmq-password PRIVATE cmsgqueue)
+    target_compile_options(cmq-password PRIVATE ${CMQ_WARNING_FLAGS})
+    cmq_harden_executable(cmq-password)
+endif()

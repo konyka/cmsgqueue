@@ -411,6 +411,9 @@ int cmq_reload_apply_config_file(const char **live, const char *fresh) {
 
 int cmq_reload_apply_limits(cmq_config_t *live, const cmq_config_t *fresh) {
     if (!live || !fresh) return -1;
+    if (fresh->auth_failed_connects_per_sec < 0 ||
+        fresh->auth_failed_connects_per_sec > 100000)
+        return -1;
     if (fresh->max_connects_per_sec < 0 ||
         fresh->max_connects_per_sec > 100000)
         return -1;
@@ -425,6 +428,7 @@ int cmq_reload_apply_limits(cmq_config_t *live, const cmq_config_t *fresh) {
         return -1;
     if (fresh->max_connects_per_sec > 0)
         live->max_connects_per_sec = fresh->max_connects_per_sec;
+    live->auth_failed_connects_per_sec = fresh->auth_failed_connects_per_sec;
     if (fresh->inbox_max_pending > 0)
         live->inbox_max_pending = fresh->inbox_max_pending;
     if (fresh->ping_interval_ms > 0)

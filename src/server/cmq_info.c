@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "cmq_info.h"
 #include "cmq_cluster.h"
 #include <arpa/inet.h>

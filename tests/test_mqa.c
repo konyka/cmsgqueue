@@ -57,7 +57,8 @@ TEST(mqa, apply) {
     char *live = NULL;
     int live_port = 0;
     ASSERT_EQ(cmq_mqtt_reload_attach(&br, (const char **)&live, &live_port,
-                                     "127.0.0.1", port), 0);
+                                     NULL, NULL, "127.0.0.1", port,
+                                     NULL, NULL), 0);
     ASSERT(br != NULL);
     ASSERT_STR_EQ(live, "127.0.0.1");
     ASSERT_EQ(live_port, port);
@@ -66,7 +67,8 @@ TEST(mqa, apply) {
     ASSERT_EQ(info.connected, 1);
     cmq_mqtt_bridge_t *same = br;
     ASSERT_EQ(cmq_mqtt_reload_attach(&br, (const char **)&live, &live_port,
-                                     "10.0.0.1", port + 1), 0);
+                                     NULL, NULL, "10.0.0.1", port + 1,
+                                     NULL, NULL), 0);
     ASSERT(br == same);
     cmq_mqtt_bridge_disconnect(br);
     pthread_join(th, NULL);
@@ -80,7 +82,7 @@ TEST(mqa, omitted) {
     char *live = NULL;
     int port = 0;
     ASSERT_EQ(cmq_mqtt_reload_attach(&br, (const char **)&live, &port,
-                                     NULL, 0), 0);
+                                     NULL, NULL, NULL, 0, NULL, NULL), 0);
     ASSERT(br == NULL);
     ASSERT(live == NULL);
 }
@@ -90,7 +92,7 @@ TEST(mqa, empty) {
     char *live = NULL;
     int port = 1883;
     ASSERT_EQ(cmq_mqtt_reload_attach(&br, (const char **)&live, &port,
-                                     "", 0), 0);
+                                     NULL, NULL, "", 0, NULL, NULL), 0);
     ASSERT(br == NULL);
 }
 
@@ -99,12 +101,14 @@ TEST(mqa, reject) {
     char *live = strdup("10.0.0.3");
     int port = 1885;
     ASSERT(cmq_mqtt_reload_attach(&br, (const char **)&live, &port,
-                                  "localhost", 1883) != 0);
+                                  NULL, NULL, "localhost", 1883,
+                                  NULL, NULL) != 0);
     ASSERT(br == NULL);
     ASSERT_STR_EQ(live, "10.0.0.3");
     ASSERT_EQ(port, 1885);
     ASSERT(cmq_mqtt_reload_attach(NULL, (const char **)&live, &port,
-                                  "10.0.0.9", 1883) != 0);
+                                  NULL, NULL, "10.0.0.9", 1883,
+                                  NULL, NULL) != 0);
     free(live);
 }
 

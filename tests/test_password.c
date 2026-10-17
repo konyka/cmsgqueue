@@ -51,6 +51,19 @@ TEST(password, malformed_hash_rejected) {
     ASSERT_EQ(cmq_password_verify("", "x"), -1);
 }
 
+TEST(password, empty_scrypt_hash_rejected) {
+    char hash[256];
+    ASSERT_EQ(cmq_password_hash("secret", hash, sizeof(hash)), 0);
+    char *hash_len = strstr(hash, "hash_len=");
+    ASSERT_NOT_NULL(hash_len);
+    hash_len += strlen("hash_len=");
+    char *hash_sep = strchr(hash_len, '$');
+    ASSERT_NOT_NULL(hash_sep);
+    memmove(hash_len + 1, hash_sep, strlen(hash_sep) + 1);
+    hash_len[0] = '0';
+    ASSERT_EQ(cmq_password_verify(hash, "secret"), -1);
+}
+
 TEST(password, buffer_too_small) {
     char small[16];
     int rc = cmq_password_hash("test", small, sizeof(small));

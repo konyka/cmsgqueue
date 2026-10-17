@@ -155,6 +155,7 @@ int cmq_password_verify(const char *stored, const char *password) {
     if (strncmp(end, ",hash_len=", 10) != 0) return -1;
     hash_len = (size_t)strtoull(end + 10, &end, 10);
     if (*end != '$') return -1;
+    if (salt_len == 0 || hash_len == 0) return -1;
     const char *salt_b64 = end + 1;
     const char *dollar = strchr(salt_b64, '$');
     if (!dollar) return -1;
