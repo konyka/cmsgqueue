@@ -36,7 +36,7 @@ matching PUBACK before reporting success. A malformed or mismatched QoS 1
 PUBACK is a publish failure: the server increments its rejected-publish
 metric and reports an error to normal CMQ clients, while local fanout still
 continues. Non-client bridge relay publishes return failure to their caller
-under the same condition. QoS 2 remains deferred.
+under the same condition. QoS 2 completes the PUBREC/PUBREL/PUBCOMP handshake.
 SIGHUP replaces a non-empty map table on the live bridge
 (v0.5.126). Omitted maps keep the current table.
 v0.5.156: SIGHUP also copies that table onto the live
@@ -105,8 +105,7 @@ Threats NOT closed:
 - **Authentication** — username/password authentication is supported for
   initial connect and reload. Credentials are not logged and are cleared from
   bridge/config buffers when released.
-- **QoS mapping** — QoS 0 and QoS 1 mappings are supported; QoS 2 remains
-deferred.
+- **QoS mapping** — QoS 0, QoS 1, and QoS 2 mappings are supported.
 
 ## Limitations
 
