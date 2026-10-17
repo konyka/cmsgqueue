@@ -227,6 +227,38 @@ static int mqtt_read_puback(int fd, uint16_t packet_id) {
     return -1;
 }
 
+static int mqtt_read_ack_type(int fd, uint8_t expected_type, uint16_t packet_id) {
+    uint8_t header, encoded_len[4], ack[2];
+    uint32_t remaining = 0, multiplier = 1;
+    int64_t deadline = mqtt_now_ms();
+    if (deadline < 0) return -1;
+    deadline += CMQ_MQTT_IO_MS;
+    if (mqtt_read_all_until(fd, &header, 1, deadline) != 0 ||
+        (header & 0xF0) != expected_type || (header & 0x0F) != 0) return -1;
+    for (size_t i = 0; i < sizeof(encoded_len); i++) {
+        if (mqtt_read_all_until(fd, &encoded_len[i], 1, deadline) != 0) return -1;
+        uint32_t digit = encoded_len[i] & 0x7F;
+        if (digit > (0x0FFFFFFFu - remaining) / multiplier) return -1;
+        remaining += digit * multiplier;
+        if ((encoded_len[i] & 0x80) == 0) {
+            if (remaining != 2 || mqtt_read_all_until(fd, ack, sizeof(ack), deadline) != 0)
+                return -1;
+            return ((uint16_t)ack[0] << 8 | ack[1]) == packet_id ? 0 : -1;
+        }
+        if (i == sizeof(encoded_len) - 1) return -1;
+        multiplier *= 128;
+    }
+    return -1;
+}
+
+static int mqtt_read_pubrec(int fd, uint16_t packet_id) {
+    return mqtt_read_ack_type(fd, 0x50, packet_id);
+}
+
+static int mqtt_read_pubcomp(int fd, uint16_t packet_id) {
+    return mqtt_read_ack_type(fd, 0x70, packet_id);
+}
+
 static int mqtt_read_connack(int fd) {
     uint8_t buf[4];
     size_t got = 0;
@@ -904,8 +936,17 @@ int cmq_mqtt_bridge_publish(cmq_mqtt_bridge_t *br, const char *subject,
     }
     int n = cmq_mqtt_encode_publish(buf, cap, topic, payload, len, qos, pid);
     int wr = (n > 0) ? mqtt_write_all(fd, buf, (size_t)n) : -1;
-    if (wr == 0 && qos == 1)
+    if (wr == 0 && qos == 1) {
         wr = mqtt_read_puback(fd, pid);
+    } else if (wr == 0 && qos == 2) {
+        wr = mqtt_read_pubrec(fd, pid);
+        if (wr == 0) {
+            uint8_t pubrel[] = {0x62, 0x02, (uint8_t)(pid >> 8), (uint8_t)pid};
+            wr = mqtt_write_all(fd, pubrel, sizeof(pubrel));
+        }
+        if (wr == 0)
+            wr = mqtt_read_pubcomp(fd, pid);
+    }
     free(buf);
 
     if (wr != 0) {
