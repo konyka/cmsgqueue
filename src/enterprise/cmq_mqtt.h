@@ -36,6 +36,8 @@ int cmq_mqtt_bridge_connect_auth(cmq_mqtt_bridge_t *br, const char *addr, int po
                                  const char *username, const char *password);
 int cmq_mqtt_bridge_disconnect(cmq_mqtt_bridge_t *br);
 int cmq_mqtt_bridge_is_connected(cmq_mqtt_bridge_t *br);
+/* Enable/disable forwarding of unmapped subjects.  Disabled by default. */
+int cmq_mqtt_bridge_set_forward_all(cmq_mqtt_bridge_t *br, int enabled);
 
 /* Copy client_id under begin_op (no interior pointer). 0 = ok, -1 = fail. */
 int cmq_mqtt_client_id(cmq_mqtt_bridge_t *br, char *out, size_t out_len);

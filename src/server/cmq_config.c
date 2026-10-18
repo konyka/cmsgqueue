@@ -349,6 +349,12 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_secret_empty(&config->mqtt_bridge_password, value);
     } else if (strcmp(key, "mqtt_bridge_map") == 0) {
         return parse_mqtt_bridge_map(value, config);
+    } else if (strcmp(key, "mqtt_bridge_forward_all") == 0) {
+        int enabled = 0;
+        if (parse_int_range(value, 0, 1, &enabled) != 0) return -1;
+        config->mqtt_bridge_forward_all = enabled;
+        config->mqtt_bridge_forward_all_set = 1;
+        return 0;
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
         return parse_int_range(value, 0, 64, &config->num_threads);
     } else if (strcmp(key, "max_clients") == 0) {

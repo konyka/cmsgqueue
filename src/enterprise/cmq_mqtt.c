@@ -40,6 +40,7 @@ struct cmq_mqtt_bridge {
     uint64_t messages_out;
     cmq_mqtt_mapping_t mappings[CMQ_MQTT_MAX_MAPPINGS];
     size_t mapping_count;
+    int forward_all;
     uint16_t next_pid;
     cmq_mutex_t lock;
     uint32_t cancel_gen; /* bumped on disconnect — aborts in-flight install */
@@ -664,6 +665,16 @@ int cmq_mqtt_bridge_disconnect(cmq_mqtt_bridge_t *br) {
     return rc;
 }
 
+int cmq_mqtt_bridge_set_forward_all(cmq_mqtt_bridge_t *br, int enabled) {
+    if (!br || (enabled != 0 && enabled != 1)) return -1;
+    if (mqtt_begin_op(br) != 0) return -1;
+    cmq_mutex_lock(&br->lock);
+    br->forward_all = enabled;
+    cmq_mutex_unlock(&br->lock);
+    mqtt_end_op(br);
+    return 0;
+}
+
 cmq_mqtt_bridge_info_t cmq_mqtt_bridge_info(cmq_mqtt_bridge_t *br) {
     cmq_mqtt_bridge_info_t info = {0};
     if (!br) return info;
@@ -911,14 +922,20 @@ int cmq_mqtt_bridge_publish(cmq_mqtt_bridge_t *br, const char *subject,
             break;
         }
     }
-    if (!m) {
-        cmq_mutex_unlock(&br->lock);
-        mqtt_end_op(br);
-        return 0;
-    }
     char topic[CMQ_MQTT_TOPIC_MAX];
-    snprintf(topic, sizeof(topic), "%s", m->mqtt_topic);
-    int qos = m->qos;
+    int qos = 0;
+    if (m) {
+        snprintf(topic, sizeof(topic), "%s", m->mqtt_topic);
+        qos = m->qos;
+    } else {
+        if (!br->forward_all || strchr(subject, '*') || strchr(subject, '>') ||
+            strchr(subject, '+') || strchr(subject, '#') ||
+            !cmq_mqtt_subject_to_topic(subject, topic, sizeof(topic))) {
+            cmq_mutex_unlock(&br->lock);
+            mqtt_end_op(br);
+            return 0;
+        }
+    }
     int fd = br->fd;
     uint16_t pid = 0;
     if (qos > 0) {

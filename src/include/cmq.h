@@ -167,6 +167,9 @@ typedef struct cmq_config {
     int auth_failed_connects_per_sec;
     const char *audit_path;    /* F13: explicit audit JSONL path */
     const char *info_go;       /* INFO max idle timeout; NULL = 20m */
+    /* MQTT bridge: forward unmapped subjects using . -> / conversion. */
+    int mqtt_bridge_forward_all;
+    int mqtt_bridge_forward_all_set; /* config parser presence marker */
 } cmq_config_t;
 
 /**

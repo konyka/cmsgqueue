@@ -9108,6 +9108,8 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     if (srv->config.mqtt_bridge_addr && srv->config.mqtt_bridge_port > 0) {
         srv->mqtt_bridge = cmq_mqtt_bridge_create("cmsgbridge");
         if (srv->mqtt_bridge) {
+            (void)cmq_mqtt_bridge_set_forward_all(srv->mqtt_bridge,
+                                                  srv->config.mqtt_bridge_forward_all);
             if (cmq_mqtt_bridge_connect_auth(srv->mqtt_bridge,
                                           srv->config.mqtt_bridge_addr,
                                           srv->config.mqtt_bridge_port,
@@ -9801,8 +9803,16 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
             cmq_config_free(&fresh);
             return -1;
         }
+        if (server->mqtt_bridge)
+            (void)cmq_mqtt_bridge_set_forward_all(
+                server->mqtt_bridge, fresh.mqtt_bridge_forward_all);
     }
+    if (fresh.mqtt_bridge_forward_all_set)
+        server->config.mqtt_bridge_forward_all =
+            fresh.mqtt_bridge_forward_all;
     if (server->mqtt_bridge) {
+        (void)cmq_mqtt_bridge_set_forward_all(
+            server->mqtt_bridge, server->config.mqtt_bridge_forward_all);
         cmq_mqtt_mapping_t maps[8];
         memset(maps, 0, sizeof(maps));
         int mn = fresh.mqtt_bridge_map_count;
