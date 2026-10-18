@@ -31,6 +31,14 @@ Subject mapping is `mqtt_bridge_map=subject,topic[,qos]`
 A matching CMQ PUBLISH is written as MQTT PUBLISH
 (`cmq_mqtt_bridge_publish`). Route ingress, WAL replay, and
 `mqtt_bridge*` accounts are not re-bridged.
+Unmapped subjects are not forwarded by default. Set
+`mqtt_bridge_forward_all = 1` to forward unmapped subjects after the
+standard `cmq_mqtt_subject_to_topic` conversion (`.` to `/`). This option
+is default-off and is applied on SIGHUP using the same reload rules as the
+other bridge settings. Subjects containing CMQ or MQTT wildcard characters
+(`*`, `>`, `+`, `#`) and conversions that cannot fit the MQTT topic buffer
+are rejected without forwarding. Mapped subjects always use their explicit
+topic and QoS.
 QoS 0 publishes complete after the write; QoS 1 publishes wait for a
 matching PUBACK before reporting success. A malformed or mismatched QoS 1
 PUBACK is a publish failure: the server increments its rejected-publish
@@ -109,11 +117,10 @@ Threats NOT closed:
 
 ## Limitations
 
-- Forwarding is NOT automatic. Operators must call
-  `cmq_mqtt_add_mapping` per subject pattern. A "forward all
-  by default" mode is a follow-up.
-- The bridge is single-instance. Multi-broker fan-out is a
-  follow-up.
+- Forwarding remains mapping-driven by default; set
+  `mqtt_bridge_forward_all = 1` for unmapped subjects. Wildcards and invalid
+  conversions are rejected. The bridge is single-instance. Multi-broker
+  fan-out is a follow-up.
 - Failure to connect to the upstream does not block server
   startup. Operators must monitor logs.
 
