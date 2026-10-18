@@ -63,6 +63,23 @@ TEST(mqb, empty) {
     cmq_config_free(&cfg);
 }
 
+TEST(mqb, forward_all_presence_distinguishes_omitted) {
+    const char *path = write_conf("mqtt_bridge_addr = 127.0.0.1\n");
+    cmq_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    ASSERT_EQ(cmq_config_load(path, &cfg), CMQ_OK);
+    ASSERT_EQ(cfg.mqtt_bridge_forward_all, 0);
+    ASSERT_EQ(cfg.mqtt_bridge_forward_all_set, 0);
+    cmq_config_free(&cfg);
+
+    path = write_conf("mqtt_bridge_forward_all = 1\n");
+    memset(&cfg, 0, sizeof(cfg));
+    ASSERT_EQ(cmq_config_load(path, &cfg), CMQ_OK);
+    ASSERT_EQ(cfg.mqtt_bridge_forward_all, 1);
+    ASSERT_EQ(cfg.mqtt_bridge_forward_all_set, 1);
+    cmq_config_free(&cfg);
+}
+
 TEST(mqb, reject) {
     const char *path = write_conf("mqtt_bridge_port = 65536\n");
     cmq_config_t cfg;

@@ -9805,7 +9805,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         }
         if (server->mqtt_bridge)
             (void)cmq_mqtt_bridge_set_forward_all(
-                server->mqtt_bridge, fresh.mqtt_bridge_forward_all);
+                server->mqtt_bridge,
+                fresh.mqtt_bridge_forward_all_set
+                    ? fresh.mqtt_bridge_forward_all
+                    : server->config.mqtt_bridge_forward_all);
     }
     if (fresh.mqtt_bridge_forward_all_set)
         server->config.mqtt_bridge_forward_all =
