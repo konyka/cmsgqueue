@@ -34,8 +34,8 @@ A matching CMQ PUBLISH is written as MQTT PUBLISH
 Unmapped subjects are not forwarded by default. Set
 `mqtt_bridge_forward_all = 1` to forward unmapped subjects after the
 standard `cmq_mqtt_subject_to_topic` conversion (`.` to `/`). This option
-is default-off and is applied on SIGHUP using the same reload rules as the
-other bridge settings. Subjects containing CMQ or MQTT wildcard characters
+is default-off and is applied on SIGHUP when the key is present; an omitted
+key preserves the live value. Subjects containing CMQ or MQTT wildcard characters
 (`*`, `>`, `+`, `#`) and conversions that cannot fit the MQTT topic buffer
 are rejected without forwarding. Mapped subjects always use their explicit
 topic and QoS.
