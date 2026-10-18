@@ -19,6 +19,7 @@ TEST(mqb, apply) {
         "mqtt_bridge_port = 1883\n"
         "mqtt_bridge_username = bridge-user\n"
         "mqtt_bridge_password = bridge-secret\n"
+        "mqtt_bridge_forward_all = 1\n"
     );
     cmq_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
@@ -27,6 +28,8 @@ TEST(mqb, apply) {
     ASSERT_EQ(cfg.mqtt_bridge_port, 1883);
     ASSERT_STR_EQ(cfg.mqtt_bridge_username, "bridge-user");
     ASSERT_STR_EQ(cfg.mqtt_bridge_password, "bridge-secret");
+    ASSERT_EQ(cfg.mqtt_bridge_forward_all, 1);
+    ASSERT_EQ(cfg.mqtt_bridge_forward_all_set, 1);
     cmq_config_free(&cfg);
 }
 
@@ -39,6 +42,8 @@ TEST(mqb, omitted) {
     ASSERT_EQ(cfg.mqtt_bridge_port, 0);
     ASSERT(cfg.mqtt_bridge_username == NULL);
     ASSERT(cfg.mqtt_bridge_password == NULL);
+    ASSERT_EQ(cfg.mqtt_bridge_forward_all, 0);
+    ASSERT_EQ(cfg.mqtt_bridge_forward_all_set, 0);
     cmq_config_free(&cfg);
 }
 
@@ -54,6 +59,7 @@ TEST(mqb, empty) {
     ASSERT_EQ(cfg.mqtt_bridge_port, 0);
     ASSERT(cfg.mqtt_bridge_username == NULL);
     ASSERT(cfg.mqtt_bridge_password == NULL);
+    ASSERT_EQ(cfg.mqtt_bridge_forward_all, 0);
     cmq_config_free(&cfg);
 }
 
@@ -64,6 +70,10 @@ TEST(mqb, reject) {
     ASSERT(cmq_config_load(path, &cfg) != CMQ_OK);
     cmq_config_free(&cfg);
     path = write_conf("mqtt_bridge_addr = 127.0.0.1/evil\n");
+    memset(&cfg, 0, sizeof(cfg));
+    ASSERT(cmq_config_load(path, &cfg) != CMQ_OK);
+    cmq_config_free(&cfg);
+    path = write_conf("mqtt_bridge_forward_all = 2\n");
     memset(&cfg, 0, sizeof(cfg));
     ASSERT(cmq_config_load(path, &cfg) != CMQ_OK);
     cmq_config_free(&cfg);

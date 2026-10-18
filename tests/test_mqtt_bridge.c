@@ -12,6 +12,7 @@
 #include <time.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <sys/socket.h>
@@ -56,6 +57,63 @@ struct bridge_broker {
     atomic_int saw_qos1;
     atomic_int failed;
 };
+
+struct forward_broker {
+    int broker_fd;
+    const char *expected_topic;
+    atomic_int saw_publish;
+    atomic_int failed;
+};
+
+static void *bridge_forward_broker(void *arg) {
+    struct forward_broker *broker = arg;
+    int fd = accept(broker->broker_fd, NULL, NULL);
+    if (fd < 0) {
+        atomic_store(&broker->failed, 1);
+        return NULL;
+    }
+    uint8_t frame[256];
+    if (bridge_read_exact(fd, frame, 2) != 0 || frame[0] != 0x10 ||
+        frame[1] > sizeof(frame) - 2 ||
+        bridge_read_exact(fd, frame + 2, frame[1]) != 0) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+    static const uint8_t connack[] = {0x20, 0x02, 0x00, 0x00};
+    if (send(fd, connack, sizeof(connack), 0) != (ssize_t)sizeof(connack)) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+    struct pollfd pfd = { .fd = fd, .events = POLLIN };
+    if (poll(&pfd, 1, 250) > 0 && (pfd.revents & POLLIN)) {
+        if (bridge_read_exact(fd, frame, 2) != 0 ||
+            (frame[0] & 0xF0) != 0x30 || frame[1] > sizeof(frame) - 2 ||
+            bridge_read_exact(fd, frame + 2, frame[1]) != 0) {
+            atomic_store(&broker->failed, 1);
+        } else {
+            size_t topic_len = ((size_t)frame[2] << 8) | frame[3];
+            if (topic_len >= sizeof(frame) - 4 ||
+                !broker->expected_topic ||
+                strlen(broker->expected_topic) != topic_len ||
+                memcmp(frame + 4, broker->expected_topic, topic_len) != 0)
+                atomic_store(&broker->failed, 1);
+            else
+                atomic_store(&broker->saw_publish, 1);
+        }
+    }
+    close(fd);
+    return NULL;
+}
+
+static void forward_broker_init(struct forward_broker *broker, int fd,
+                                const char *expected_topic) {
+    broker->broker_fd = fd;
+    broker->expected_topic = expected_topic;
+    atomic_init(&broker->saw_publish, 0);
+    atomic_init(&broker->failed, 0);
+}
 
 enum {
     BRIDGE_PUBACK_MATCHING = 0,
@@ -182,6 +240,47 @@ TEST(mqtt_bridge, qos1_waits_for_matching_puback) {
     ASSERT_EQ(atomic_load(&broker.failed), 0);
     cmq_mqtt_bridge_destroy(bridge);
     pthread_join(thread, NULL);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, unmapped_subject_is_off_by_default) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct forward_broker broker;
+    forward_broker_init(&broker, broker_fd, NULL);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_forward_broker, &broker), 0);
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("forward-off");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "unmapped.subject",
+                                      (const uint8_t *)"x", 1), 0);
+    pthread_join(thread, NULL);
+    ASSERT_EQ(atomic_load(&broker.saw_publish), 0);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, forward_all_converts_unmapped_subject) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct forward_broker broker;
+    forward_broker_init(&broker, broker_fd, "unmapped/subject");
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_forward_broker, &broker), 0);
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("forward-on");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_bridge_set_forward_all(bridge, 1), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "unmapped.subject",
+                                      (const uint8_t *)"x", 1), 1);
+    pthread_join(thread, NULL);
+    ASSERT_EQ(atomic_load(&broker.saw_publish), 1);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
     close(broker_fd);
 }
 
