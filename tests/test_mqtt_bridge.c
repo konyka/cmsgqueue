@@ -455,6 +455,30 @@ extern int cmq_mqtt_test_enqueue_bridge(const char *topic,
                                           const uint8_t *payload,
                                           size_t len);
 
+TEST(mqtt_bridge, queue_overflow_is_counted) {
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25060;
+    cfg.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    cmq_mqtt_set_bridge_server(srv);
+    uint8_t payload[1] = {0};
+    size_t before = (size_t)cmq_atomic_load_u64(&srv->stat_messages_dropped,
+                                                CMQ_ATOMIC_RELAXED);
+    int failures = 0;
+    for (int i = 0; i < 320; i++)
+        if (cmq_mqtt_test_enqueue_bridge("overflow", payload, sizeof(payload)) != 0)
+            failures++;
+    ASSERT(failures > 0);
+    size_t after = (size_t)cmq_atomic_load_u64(&srv->stat_messages_dropped,
+                                               CMQ_ATOMIC_RELAXED);
+    ASSERT(after >= before + 1);
+    cmq_mqtt_bridge_shutdown();
+    cmq_server_destroy(srv);
+}
+
 TEST(mqtt_bridge, end_to_end_fanout_to_subscriber) {
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
