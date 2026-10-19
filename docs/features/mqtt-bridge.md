@@ -123,6 +123,9 @@ Threats NOT closed:
   fan-out is a follow-up.
 - Failure to connect to the upstream does not block server
   startup. Operators must monitor logs.
+- The inbound MQTT bridge queue is bounded at 256 entries. Messages arriving
+  while it is full are dropped and increment the server's
+  `stat_messages_dropped` metric.
 
 ## See also
 
