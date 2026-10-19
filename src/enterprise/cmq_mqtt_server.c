@@ -142,6 +142,7 @@ typedef struct cmq_server cmq_server_t;
 int cmq_server_publish(cmq_server_t *srv, const char *subject,
                        const uint8_t *payload, size_t payload_len,
                        const char *account_name);
+void cmq_server_record_bridge_drop(cmq_server_t *srv);
 /* v0.5.39: bridge WAL persist. Declared here to avoid pulling in
  * cmq_server.h (circular dep). Implementation lives in cmq_server.c. */
 int cmq_server_persist_bridge(cmq_server_t *srv, const char *topic,
@@ -318,6 +319,8 @@ static int mqtt_bridge_push(const char *topic, const uint8_t *payload,
         g_mqtt_bridge_count++;
         pthread_cond_signal(&g_mqtt_bridge_not_empty);
         rc = 0;
+    } else {
+        cmq_server_record_bridge_drop(g_mqtt_bridge_srv);
     }
     pthread_mutex_unlock(&g_mqtt_bridge_lock);
     return rc;
@@ -1591,6 +1594,7 @@ size_t got = (size_t)n;
                         g_mqtt_bridge_count++;
                         pthread_cond_signal(&g_mqtt_bridge_not_empty);
                     } else {
+                        cmq_server_record_bridge_drop(g_mqtt_bridge_srv);
                         free(payload_copy);
                     }
                     pthread_mutex_unlock(&g_mqtt_bridge_lock);

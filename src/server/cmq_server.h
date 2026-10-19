@@ -291,6 +291,7 @@ int srv_find_tls_slot(cmq_server_t *srv, int lfd);
 int cmq_server_publish(cmq_server_t *srv, const char *subject,
                        const uint8_t *payload, size_t payload_len,
                        const char *account_name);
+void cmq_server_record_bridge_drop(cmq_server_t *srv);
 int cmq_server_h2_fd(const cmq_server_t *srv);
 int cmq_server_h2_port(const cmq_server_t *srv);
 int cmq_server_h2_accept(cmq_server_t *srv, const char *account);

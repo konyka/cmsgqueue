@@ -3947,6 +3947,12 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
     return bridge_rc < 0 ? -1 : 0;
 }
 
+void cmq_server_record_bridge_drop(cmq_server_t *srv) {
+    if (!srv) return;
+    cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                             CMQ_ATOMIC_RELAXED);
+}
+
 int cmq_server_h2_fd(const cmq_server_t *srv) {
     if (!srv) return -1;
     return srv->h2_lfd;
