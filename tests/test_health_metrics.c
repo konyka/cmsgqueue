@@ -54,6 +54,8 @@ TEST(http, metrics_returns_prometheus) {
     cfg.max_clients = 16;
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 7,
+                             CMQ_ATOMIC_RELAXED);
     pthread_t tid;
     pthread_create(&tid, NULL, server_thread, srv);
     struct timespec ts = {0, 200000000};
@@ -85,6 +87,7 @@ TEST(http, metrics_returns_prometheus) {
     ASSERT(strstr(buf, "# HELP cmq_messages_out_total") != NULL);
     ASSERT(strstr(buf, "# HELP cmq_messages_dropped_total") != NULL);
     ASSERT(strstr(buf, "# HELP cmq_publishes_rejected_total") != NULL);
+    ASSERT(strstr(buf, "cmq_publishes_rejected_total 7\n") != NULL);
     cmq_server_destroy(srv);
     pthread_join(tid, NULL);
 }
