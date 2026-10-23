@@ -27,8 +27,9 @@ HTTP request. Three paths are recognized:
 The dispatcher uses `client_sock_write` (synchronous write) so the
 response is in the kernel TCP buffer before the connection transitions
 to CLOSING. The Prometheus exposition advertises
-`cmq_connections`, `cmq_subscriptions`, `cmq_messages_in_total`, and
-`cmq_messages_out_total` — the existing atomic stat counters.
+`cmq_connections`, `cmq_subscriptions`, `cmq_messages_in_total`,
+`cmq_messages_out_total`, `cmq_messages_dropped_total`, and
+`cmq_publishes_rejected_total` — the existing atomic stat counters.
 
 ## Files touched
 
