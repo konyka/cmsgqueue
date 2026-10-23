@@ -3586,26 +3586,11 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     if (srv->otel)
         (void)cmq_otel_offer(srv->otel, c->trace_id, CMQ_OTEL_KIND_PUBLISH);
 
-    /* F5: persist to WAL BEFORE sublist match. We persist validated
+    /* F5: persist to WAL after all publish authorization and quota checks.
+     * We persist validated
      * publishes regardless of subscriber count. During replay (fd==-1),
      * the record is already on disk, so we MUST NOT re-append or the
      * WAL grows unbounded and the record is delivered twice. */
-    if (srv->filestore && frame && frame->payload && c->fd != -1) {
-        uint64_t seq = 0;
-        if (cmq_filestore_append(srv->filestore, frame->payload,
-                                  frame->payload_len, &seq) != 0) {
-            cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
-                                      CMQ_ATOMIC_RELAXED);
-            /* F13 audit: surface durable-write failures so operators
-             * notice when the WAL falls behind. Best-effort append
-             * continues, so the audit event is a signal, not a gate. */
-            char trace_hex[33];
-            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
-            cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, trace_hex, "publish",
-                          "filestore_append failed");
-        }
-    }
-
     size_t route_sent = 0;
     int route_rc = 0;
 
@@ -3658,6 +3643,20 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_send_error(c, "subject map failed");
         return;
+    }
+    /* F5: append only after subject/ACL/quota/rate authorization has
+     * succeeded. Rejected publishes must not become replayable WAL records. */
+    if (srv->filestore && frame && frame->payload && c->fd != -1) {
+        uint64_t seq = 0;
+        if (cmq_filestore_append(srv->filestore, frame->payload,
+                                 frame->payload_len, &seq) != 0) {
+            cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, trace_hex, "publish",
+                          "filestore_append failed");
+        }
     }
     if (srv->mqtt_bridge && !c->is_route && c->fd >= 0 &&
         strncmp(c->account_name, "mqtt_bridge", 11) != 0) {
