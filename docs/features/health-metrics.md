@@ -53,7 +53,8 @@ to CLOSING. The Prometheus exposition advertises
 
 ## Verification gates
 
-- 31/31 tests pass (was 30, +1 test_health_metrics with 2 tests).
+- The health metrics target covers health/readiness, metrics, unknown paths,
+  and introspection snapshot responses, including the rejected-publish value.
 - The health/readiness test reads until the complete `Content-Length` body
   arrives, rather than assuming one TCP read contains the response.
 - Server creates successfully even when TLS is not requested.
