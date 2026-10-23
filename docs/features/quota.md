@@ -6,7 +6,7 @@ A single noisy account can starve others. cmq_account has counters but no enforc
 
 ## Design
 
-A new `cmq_quota` module implements per-account token-bucket caps. Configuration (per server):
+A new `cmq_quota` module implements per-account fixed-window caps. Configuration (per server):
 
 - `max_msgs_per_sec` — cap on messages/sec per account.
 - `max_bytes_per_sec` — cap on bytes/sec per account.
@@ -53,7 +53,8 @@ The check is a linear scan over a small per-account list (typically <100 account
 
 Threats closed:
 - **Account-level DoS** — a single misbehaving account cannot starve others.
-- **Burst protection** — token-bucket smooths traffic.
+- **Burst protection** — fixed one-second windows bound sustained traffic;
+  boundary bursts may briefly exceed the nominal per-second rate.
 
 Threats NOT closed:
 - **Cross-account quota aggregation** — the limits are per-account, not global. Operators can set global limits via existing F10.
