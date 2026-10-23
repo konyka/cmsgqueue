@@ -83,6 +83,7 @@ TEST(http, metrics_returns_prometheus) {
     ASSERT(strstr(buf, "# HELP cmq_subscriptions") != NULL);
     ASSERT(strstr(buf, "# HELP cmq_messages_in_total") != NULL);
     ASSERT(strstr(buf, "# HELP cmq_messages_out_total") != NULL);
+    ASSERT(strstr(buf, "# HELP cmq_messages_dropped_total") != NULL);
     cmq_server_destroy(srv);
     pthread_join(tid, NULL);
 }
