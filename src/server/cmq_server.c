@@ -6583,7 +6583,10 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                      "cmq_messages_out_total %llu\n"
                      "# HELP cmq_messages_dropped_total Messages dropped\n"
                      "# TYPE cmq_messages_dropped_total counter\n"
-                     "cmq_messages_dropped_total %llu\n",
+                     "cmq_messages_dropped_total %llu\n"
+                     "# HELP cmq_publishes_rejected_total Publishes rejected\n"
+                     "# TYPE cmq_publishes_rejected_total counter\n"
+                     "cmq_publishes_rejected_total %llu\n",
                     c && c->server ?
                         (unsigned long long)cmq_atomic_load_u64(
                             &c->server->stat_connections, CMQ_ATOMIC_RELAXED) : 0ULL,
@@ -6598,7 +6601,10 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                             &c->server->stat_messages_out, CMQ_ATOMIC_RELAXED) : 0ULL,
                     c && c->server ?
                         (unsigned long long)cmq_atomic_load_u64(
-                            &c->server->stat_messages_dropped, CMQ_ATOMIC_RELAXED) : 0ULL);
+                            &c->server->stat_messages_dropped, CMQ_ATOMIC_RELAXED) : 0ULL,
+                    c && c->server ?
+                        (unsigned long long)cmq_atomic_load_u64(
+                            &c->server->stat_publishes_rejected, CMQ_ATOMIC_RELAXED) : 0ULL);
                 if (bl < 0) bl = 0;
                 if ((size_t)bl > sizeof(body) - 1) bl = sizeof(body) - 1;
                 char resp[4600];
