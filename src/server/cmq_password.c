@@ -47,6 +47,11 @@ static int b64url_encode(const uint8_t *in, size_t in_len, char *out, size_t out
     return (int)o;
 }
 
+static int b64url_val(const int8_t *tab, char c) {
+    unsigned char u = (unsigned char)c;
+    return u < 128 ? tab[u] : -1;
+}
+
 static int b64url_decode(const char *in, uint8_t *out, size_t out_cap, size_t *out_len) {
     static const int8_t tab[128] = {
         -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
@@ -75,11 +80,14 @@ static int b64url_decode(const char *in, uint8_t *out, size_t out_cap, size_t *o
     if (decoded > out_cap) return -1;
     size_t o = 0;
     for (size_t i = 0; i < in_len; i += 4) {
-        if (in[i] >= 128 || tab[(int)in[i]] < 0) return -1;
-        int v0 = tab[(int)in[i]];
-        int v1 = (in[i+1] >= 128 || tab[(int)in[i+1]] < 0) ? 0 : tab[(int)in[i+1]];
-        int v2 = (in[i+2] >= 128 || tab[(int)in[i+2]] < 0) ? 0 : tab[(int)in[i+2]];
-        int v3 = (in[i+3] >= 128 || tab[(int)in[i+3]] < 0) ? 0 : tab[(int)in[i+3]];
+        int v0 = b64url_val(tab, in[i]);
+        if (v0 < 0) return -1;
+        int v1 = b64url_val(tab, in[i+1]);
+        int v2 = b64url_val(tab, in[i+2]);
+        int v3 = b64url_val(tab, in[i+3]);
+        if (v1 < 0) v1 = 0;
+        if (v2 < 0) v2 = 0;
+        if (v3 < 0) v3 = 0;
         uint32_t v = ((uint32_t)v0 << 18) | ((uint32_t)v1 << 12) | ((uint32_t)v2 << 6) | (uint32_t)v3;
         if (o < decoded) out[o++] = (uint8_t)(v >> 16);
         if (o < decoded) out[o++] = (uint8_t)(v >> 8);
@@ -136,7 +144,7 @@ int cmq_password_verify(const char *stored, const char *password) {
     const char *pos = stored + strlen(prefix);
 
     /* Parse parameters: N=NNN,r=NN,p=NN,salt_len=NN,hash_len=NN$salt$hash */
-    uint64_t N = 0, r = 0, p = 0;
+    uint64_t N = 0, r = 0;
     size_t salt_len = 0, hash_len = 0;
     char *end;
     if (strncmp(pos, "N=", 2) != 0) return -1;

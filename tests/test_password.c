@@ -64,6 +64,41 @@ TEST(password, empty_scrypt_hash_rejected) {
     ASSERT_EQ(cmq_password_verify(hash, "secret"), -1);
 }
 
+TEST(password, high_bit_base64_bytes_do_not_index_before_table) {
+    char hash[256];
+    ASSERT_EQ(cmq_password_hash("secret", hash, sizeof(hash)), 0);
+    char *params_end = strstr(hash, "hash_len=");
+    ASSERT_NOT_NULL(params_end);
+    params_end = strchr(params_end, '$');
+    ASSERT_NOT_NULL(params_end);
+    char *salt = params_end + 1;
+    char *dollar = strchr(salt, '$');
+    ASSERT_NOT_NULL(dollar);
+    char *digest = dollar + 1;
+
+    char saved = salt[0];
+    salt[0] = (char)0xFF;
+    ASSERT_EQ(cmq_password_verify(hash, "secret"), -1);
+    salt[0] = saved;
+
+    saved = salt[1];
+    salt[1] = (char)0xFF;
+    ASSERT(cmq_password_verify(hash, "secret") != 1);
+    salt[1] = saved;
+
+    saved = digest[0];
+    digest[0] = (char)0xFF;
+    ASSERT_EQ(cmq_password_verify(hash, "secret"), -1);
+    digest[0] = saved;
+
+    saved = digest[2];
+    digest[2] = (char)0x80;
+    ASSERT(cmq_password_verify(hash, "secret") != 1);
+    digest[2] = saved;
+
+    ASSERT_EQ(cmq_password_verify(hash, "secret"), 1);
+}
+
 TEST(password, buffer_too_small) {
     char small[16];
     int rc = cmq_password_hash("test", small, sizeof(small));
