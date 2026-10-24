@@ -38,6 +38,57 @@
   empty table 3000 times and require exactly one admission per round
   (0 failures in 300 consecutive Release runs; the old code failed about 1
   run in 40).
+- **Server process killed by SIGPIPE** (`src/server/cmq_server.c` and the
+  route, gateway, leaf, WebSocket, HTTP/2 and MQTT writers). Socket writes
+  used `write(2)`, so a client that had already gone away raised SIGPIPE
+  and terminated the whole process (caught with gdb in
+  `client_finish_closing`; `test_server_ops` died with exit 141 on a CI
+  runner and in about 1 of 30 isolated runs here). All socket writes now go
+  through `cmq_sock_write` (`src/net/cmq_io.h`: `send(..., MSG_NOSIGNAL)`,
+  falling back to `write` for non-sockets and platforms without the flag).
+  The library does not change the host's signal disposition.
+- **`cmq_mpool_alloc` was not thread safe** (`src/core/cmq_mpool.c`). Worker
+  threads share one payload pool; the unlocked bump pointer let two threads
+  hand out overlapping regions (TSAN data race in `test_stress`). The pool
+  now has a mutex; `tests/test_mpool_concurrent.c` checks that concurrent
+  allocations never overlap.
+- **`cmq_queue_push` data race** (`src/core/cmq_queue.c`): the tail exchange
+  was `RELEASE` only, so linking through the previous producer's node had no
+  acquire edge. It is `ACQ_REL`.
+- **MQTT bridge double free** (`src/enterprise/cmq_mqtt_server.c`). The relay
+  put the payload on its freelist after the insert callback returned
+  failure, but the bridge adapter has already freed it on every path, so
+  the same buffer was recycled and later freed again. ASAN reports it as a
+  double free in `cmq_mqtt_bridge_shutdown` (first hit on run 126 of 150 of
+  `test_mqtt_bridge`; no rate measured), and Release runs aborted with
+  "corrupted size vs. prev_size" in the 20 of 300 serial runs I saw after
+  the shutdown drain was added. The insert callback now owns the payload on
+  every call. The freelist also records each buffer's capacity so a recycled
+  buffer is never reused for a larger payload, and the MQTT handler and the
+  test enqueue helper share one allocation path. The regression test
+  `mqtt_bridge.failed_insert_does_not_recycle_freed_payload` failed 5 of 5
+  runs with the old relay logic and passed 60 of 60 ASAN runs with the fix.
+- **`mqtt_bridge.queue_overflow_is_counted` was timing dependent.** It
+  needed the relay thread to fall behind a 320-message producer, so it
+  failed on the original code too (13 of 300 serial Release runs, on the
+  `failures > 0` assertion) and failed 200 of 300 once the relay got faster
+  after the fixes above. It now parks the relay in a blocking insert
+  callback, so the queue can only fill: 0 of 100 failures.
+- **Window expiry could wrap** (`cmq_quota.c`, `cmq_server.c` rate and
+  auth-rate tables): `now - window_start` is unsigned, so a timestamp older
+  than a concurrent claimer's start wrapped and reset the counter. All
+  window tests now require `now > window_start`.
+- **Tests that depended on state left by earlier tests**:
+  `jsh.reject` and `jsl.reject` failed on a machine without
+  `/tmp/cmq_js_hist` / `/tmp/cmq_js_last` (they failed on every CI runner);
+  they now create the directory. `test_sublist_recover_wire` polled a field
+  the server thread writes (TSAN race); it now probes by connecting.
+- **macOS (Apple Silicon) build**: `cmq_crc32c.c` used `__crc32cb` /
+  `__crc32cd` without including `<arm_acle.h>`.
+- **AArch64 cross build**: the toolchain file now points pkg-config at the
+  arm64 multiarch `.pc` files, and the `build-arm64` CI job installs
+  `libssl-dev:arm64`, `libzstd-dev:arm64` and `zlib1g-dev:arm64`. It was
+  picking up the host's x86_64 OpenSSL headers.
 - **Reload vs. session creation race** (`src/enterprise/cmq_tls.c`):
   `ssl_ctx` is now guarded by `ctx_lock` for the lazy build, the reload
   swap, and `SSL_new`, instead of relying on the extra up-ref.
@@ -66,6 +117,17 @@
 - `docs/adr/0014-reload-object-lifetime.md`, `docs/features/tls-session-cache.md`,
   `tls-hardening.md`, `tls-openssl.md`, `tls-crl-revocation.md`,
   `mqtt-bridge.md`, `password-hash.md` updated to match.
+
+### Still failing in CI (not fixed here)
+- **Windows**: the project requires `pkg-config` and POSIX APIs (epoll,
+  eventfd, pthreads). Supporting MSVC/Windows is a porting task, not a
+  build-script fix, and was out of scope.
+- The CI history on this branch shows the `build-arm64`, `tsan`,
+  `build-linux-gcc`, `build-macos` and `build-windows` jobs failing before
+  these changes. The Linux, TSAN and arm64 causes above were reproduced
+  locally (ubuntu:24.04 container for arm64). For macOS, clang targeting
+  aarch64 reproduces the two CI errors in `cmq_crc32c.c` on the old file and
+  compiles the new one; nothing was run on macOS itself.
 
 ### Known drift (not changed here)
 - `CMakeLists.txt` and `src/include/cmq.h` still report `0.1.0` (and

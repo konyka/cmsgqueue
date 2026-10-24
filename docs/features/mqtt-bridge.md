@@ -126,6 +126,11 @@ Threats NOT closed:
   fan-out is a follow-up.
 - Failure to connect to the upstream does not block server
   startup. Operators must monitor logs.
+- Insert callbacks registered with `cmq_mqtt_register_sublist_insert` own the
+  payload from the moment they are called and must free it whatever they
+  return; the relay never touches it afterwards. With no callback (the
+  default no-op) the relay keeps ownership and recycles the buffer into a
+  64-entry freelist that remembers each buffer's capacity.
 - The inbound MQTT bridge queue is bounded at 256 entries. Messages arriving
   while it is full are dropped and increment the server's
   `stat_messages_dropped` metric.

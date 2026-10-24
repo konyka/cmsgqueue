@@ -56,6 +56,29 @@ cd build
 ctest --output-on-failure -j$(nproc)
 ```
 
+Many server tests bind fixed loopback ports. The ones listed in
+`CMQ_TCP_TESTS` in `tests/CMakeLists.txt` share a `RESOURCE_LOCK`, so
+`ctest -j` runs them one at a time; add a new port-binding test to that list.
+Not every port-binding test is in it yet (for example `test_auth_ratelimit`,
+`test_rate_limit` and `test_tls_e2e_handshake`), so a port clash is still
+possible if you run those in parallel with others.
+
+Sanitizer builds (the CI jobs use the same flags):
+
+```bash
+cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DCMQ_ENABLE_ASAN=ON -DCMQ_ENABLE_UBSAN=ON
+cmake -B build-tsan -DCMAKE_BUILD_TYPE=Debug -DCMQ_ENABLE_TSAN=ON
+ctest --test-dir build-tsan -j1 -R "queue|parser|sublist|slab|stress|server_ops"
+```
+
+AArch64 cross build (needs `gcc-aarch64-linux-gnu` and the arm64 multiarch
+packages `libssl-dev:arm64 libzstd-dev:arm64 zlib1g-dev:arm64`):
+
+```bash
+cmake -B build-arm64 -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.cmake \
+      -DCMAKE_BUILD_TYPE=Release -DCMQ_BUILD_EXAMPLES=OFF
+```
+
 ### Run Server
 
 ```bash
