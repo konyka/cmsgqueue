@@ -83,12 +83,42 @@
   `/tmp/cmq_js_hist` / `/tmp/cmq_js_last` (they failed on every CI runner);
   they now create the directory. `test_sublist_recover_wire` polled a field
   the server thread writes (TSAN race); it now probes by connecting.
+  `test_route_tls_wire` read once from a non-blocking socket and then closed
+  it, so the client's write failed with EPIPE when the server thread ran
+  first (5 of 40 single-CPU runs, 0 of 60 now). `test_multi_thread_accept`
+  assumed one 32-connection burst would reach the aux accept thread, which a
+  single-CPU runner can starve; it now keeps offering connections until the
+  aux thread admits one.
 - **macOS (Apple Silicon) build**: `cmq_crc32c.c` used `__crc32cb` /
-  `__crc32cd` without including `<arm_acle.h>`.
+  `__crc32cd` without including `<arm_acle.h>`, and
+  `src/coro/arch/cmq_coro_ctx_aarch64.S` used ELF-only directives
+  (`.type`, `.size`, `.align N` bytes) and an undecorated symbol, which
+  Mach-O rejects. The assembly now emits `_cmq_coro_ctx_switch` with
+  `.p2align` on macOS; the Linux object code is byte-identical.
+- **Coverage job**: gcov emits negative branch counts for multithreaded code
+  (GCC bug 68080) and gcovr aborts on them; the job now passes
+  `--gcov-ignore-parse-errors negative_hits.warn_once_per_file`. This could
+  not be run locally (no gcovr), so it is unverified until CI runs it.
 - **AArch64 cross build**: the toolchain file now points pkg-config at the
   arm64 multiarch `.pc` files, and the `build-arm64` CI job installs
   `libssl-dev:arm64`, `libzstd-dev:arm64` and `zlib1g-dev:arm64`. It was
   picking up the host's x86_64 OpenSSL headers.
+- **`cmq_server_stop` vs `cmq_server_run` startup race**
+  (`src/server/cmq_server.c`). A stop() that arrived while run() was still
+  creating its listener and event loop was lost, so run() blocked in
+  `cmq_ev_run` forever (the new `test_server_stop_race` hung for 60 s on the
+  original code and takes 0.03 s now), and stop() and run() wrote and closed
+  `listen_fds[]` without synchronisation (TSAN data race in `test_server_ops`
+  on CI). stop() now leaves a sticky `stop_requested` flag that run() checks
+  before entering its loop, only touches listeners and workers once run() has
+  published `run_active`, and every close of a listener goes through an
+  atomic exchange so run(), stop() and drain() close each fd once.
+- **Double free of a just-accepted client** (`src/server/cmq_server.c`, four
+  accept paths). When arming the client's fd failed because a worker had
+  already torn the connection down, `accept` also destroyed the client,
+  freeing it twice (ASAN heap-use-after-free; 57 of 80 single-CPU runs of
+  `test_multi_thread_accept` on the original code, 0 of 200 now). It now
+  leaves a client that has already been claimed by teardown alone.
 - **Reload vs. session creation race** (`src/enterprise/cmq_tls.c`):
   `ssl_ctx` is now guarded by `ctx_lock` for the lazy build, the reload
   swap, and `SSL_new`, instead of relying on the extra up-ref.
