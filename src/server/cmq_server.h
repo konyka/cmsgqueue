@@ -274,6 +274,7 @@ struct cmq_server {
     int accept_thr_started;                 /* 1 if joinable */
     int workers_joinable;                   /* n worker threads still to join */
     cmq_atomic_int run_active;              /* 1 while cmq_server_run owns lifecycle */
+    cmq_atomic_int stop_requested;          /* sticky: set by stop(), checked by run() before its loop */
 };
 
 /* v0.5.32: per-listener TLS slot lookup. Returns the slot index

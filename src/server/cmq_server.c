@@ -59,7 +59,7 @@ int srv_find_tls_slot(cmq_server_t *srv, int lfd) {
     if (!srv) return 0;
     if (lfd < 0) return 0;
     for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
-        if (srv->listen_fds[i] == lfd) return i;
+        if (__atomic_load_n(&srv->listen_fds[i], __ATOMIC_RELAXED) == lfd) return i;
     }
     return 0;
 }
@@ -8509,11 +8509,12 @@ static void *accept_thread_func(void *arg) {
     int efd = epoll_create1(0);
     if (efd < 0) return NULL;
     for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
-        if (srv->listen_fds[i] >= 0) {
+        int lfd = __atomic_load_n(&srv->listen_fds[i], __ATOMIC_ACQUIRE);
+        if (lfd >= 0) {
             struct epoll_event ev = {0};
             ev.events = EPOLLIN;
-            ev.data.fd = srv->listen_fds[i];
-            (void)epoll_ctl(efd, EPOLL_CTL_ADD, srv->listen_fds[i], &ev);
+            ev.data.fd = lfd;
+            (void)epoll_ctl(efd, EPOLL_CTL_ADD, lfd, &ev);
         }
     }
     while (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) &&
@@ -8737,6 +8738,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         srv->listen_fds[i] = -1;
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
     cmq_atomic_store_int(&srv->run_active, 0, CMQ_ATOMIC_SEQ_CST);
+    cmq_atomic_store_int(&srv->stop_requested, 0, CMQ_ATOMIC_SEQ_CST);
 
     cmq_mutex_init(&srv->clients_lock);
     cmq_mutex_init(&srv->rate_lock);
@@ -9302,7 +9304,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
 
     cmq_ev_loop_t *new_loop = cmq_ev_loop_create(1024);
     /* cmq_server_stop / cmq_server_destroy read ev_loop from other threads. */
-    __atomic_store_n(&srv->ev_loop, new_loop, __ATOMIC_RELEASE);
+    __atomic_store_n(&srv->ev_loop, new_loop, __ATOMIC_SEQ_CST);
     if (!new_loop) {
         close(srv->listen_fds[0]);
         srv->listen_fds[0] = -1;
@@ -9574,6 +9576,12 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             cmq_log_warn(srv->log, "Route reconnect thread failed to start");
     }
 
+    /* A stop() that ran before the loop existed or before run_active was set
+       could not reach us. It left stop_requested behind; both sides use
+       seq_cst, so either stop() saw the loop/run_active or we see its flag. */
+    if (cmq_atomic_load_int(&srv->stop_requested, CMQ_ATOMIC_SEQ_CST))
+        cmq_ev_stop(srv->ev_loop);
+
     cmq_ev_run(srv->ev_loop, -1);
 
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
@@ -9595,10 +9603,11 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         }
     }
 
-    /* Free the bind port; ev_loop/workers stay until destroy (clients still use them). */
-    if (srv->listen_fds[0] >= 0) {
-        close(srv->listen_fds[0]);
-        srv->listen_fds[0] = -1;
+    /* Free the bind ports; ev_loop/workers stay until destroy (clients still
+       use them). Exchange so a concurrent stop()/drain() closes each fd once. */
+    for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
+        int lfd = __atomic_exchange_n(&srv->listen_fds[i], -1, __ATOMIC_ACQ_REL);
+        if (lfd >= 0) close(lfd);
     }
 
     cmq_atomic_store_int(&srv->run_active, 0, CMQ_ATOMIC_RELEASE);
@@ -10140,10 +10149,10 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
     if (srv->ev_loop)
         cmq_ev_wakeup(srv->ev_loop);
 
-    if (srv->listen_fds[0] >= 0) {
-        cmq_ev_del(srv->ev_loop, srv->listen_fds[0]);
-        close(srv->listen_fds[0]);
-        srv->listen_fds[0] = -1;
+    int drain_lfd = __atomic_exchange_n(&srv->listen_fds[0], -1, __ATOMIC_ACQ_REL);
+    if (drain_lfd >= 0) {
+        cmq_ev_del(srv->ev_loop, drain_lfd);
+        close(drain_lfd);
     }
 
     uint8_t disc[16];
@@ -10251,19 +10260,27 @@ void cmq_server_stop(cmq_server_t *srv) {
     /* Align drain: reject late accepts still in TLS/handshake before register. */
     cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
-    /* P1 v0.5.7: close all listen_fds to avoid fd leak on shutdown. */
-    for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
-        if (srv->listen_fds[i] >= 0) {
-            close(srv->listen_fds[i]);
-            srv->listen_fds[i] = -1;
+    /* Sticky: run() looks at this before entering its loop, so a stop that
+       arrives while run() is still starting up is not lost. */
+    cmq_atomic_store_int(&srv->stop_requested, 1, CMQ_ATOMIC_SEQ_CST);
+    /* Listeners and workers belong to run() until it publishes run_active.
+       Before that, run() sees stop_requested and tears down through its own
+       tail; touching them here would race with its setup. */
+    int active = cmq_atomic_load_int(&srv->run_active, CMQ_ATOMIC_SEQ_CST);
+    if (active) {
+        /* P1 v0.5.7: close all listen_fds to avoid fd leak on shutdown.
+           Exchange so run()'s tail and drain() cannot close the same fd. */
+        for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
+            int lfd = __atomic_exchange_n(&srv->listen_fds[i], -1, __ATOMIC_ACQ_REL);
+            if (lfd >= 0) close(lfd);
         }
     }
-    cmq_ev_loop_t *stop_loop = __atomic_load_n(&srv->ev_loop, __ATOMIC_ACQUIRE);
+    cmq_ev_loop_t *stop_loop = __atomic_load_n(&srv->ev_loop, __ATOMIC_SEQ_CST);
     if (stop_loop) {
         cmq_ev_stop(stop_loop);
         cmq_ev_wakeup(stop_loop);
     }
-    if (srv->workers) {
+    if (active && srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
             cmq_ev_stop(srv->workers[i].ev_loop);
             /* Belt-and-suspenders: workers also sleep on mailbox wakeup fd. */
