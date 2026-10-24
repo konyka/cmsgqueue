@@ -27,7 +27,7 @@
 #include <stdio.h>
 #include <signal.h>
 
-#ifdef CMQ_OS_LINUX
+#if CMQ_OS_LINUX
 #include <sys/eventfd.h>
 #endif
 

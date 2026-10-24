@@ -82,6 +82,10 @@ TEST(multi_thread_accept, single_thread_default) {
 }
 
 TEST(multi_thread_accept, aux_thread_admits) {
+#if !CMQ_OS_LINUX
+    /* The aux accept thread is epoll based and Linux only. */
+    return;
+#endif
     cmq_config_t cfg = {0};
     cfg.num_threads = 2;
     cfg.host = "127.0.0.1";

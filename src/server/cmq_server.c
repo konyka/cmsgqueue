@@ -36,7 +36,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <poll.h>
-#ifdef CMQ_OS_LINUX
+#if CMQ_OS_LINUX
 #include <sys/eventfd.h>
 #include <sys/epoll.h>
 #endif
@@ -415,7 +415,7 @@ static int set_nonblocking(int fd) {
 }
 
 static int wakeup_fd_pair(int *rfd, int *wfd) {
-#ifdef CMQ_OS_LINUX
+#if CMQ_OS_LINUX
     int fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (fd < 0) return -1;
     *rfd = fd;
@@ -448,7 +448,7 @@ static int clients_array_grow(cmq_client_t ***arr, int *cap) {
 }
 
 static int wakeup_fd_signal(int wfd) {
-#ifdef CMQ_OS_LINUX
+#if CMQ_OS_LINUX
     uint64_t val = 1;
     for (;;) {
         ssize_t n = write(wfd, &val, sizeof(val));
@@ -472,7 +472,7 @@ static int wakeup_fd_signal(int wfd) {
 }
 
 static void wakeup_fd_drain(int rfd) {
-#ifdef CMQ_OS_LINUX
+#if CMQ_OS_LINUX
     uint64_t val;
     while (read(rfd, &val, sizeof(val)) > 0) {}
 #else
@@ -8503,7 +8503,9 @@ typedef struct {
 
 /* v0.5.42: aux accept thread. Parallel accept() on every listen
  * fd; admit via the same helper as accept_cb. Waits for running=1
- * so workers exist, then loops until stop/drain. */
+ * so workers exist, then loops until stop/drain. Built on epoll, so it
+ * exists on Linux only; elsewhere the event-loop thread accepts alone. */
+#if CMQ_OS_LINUX
 static void *accept_thread_func(void *arg) {
     cmq_server_t *srv = (cmq_server_t *)arg;
     int efd = epoll_create1(0);
@@ -8559,6 +8561,7 @@ static void *accept_thread_func(void *arg) {
     close(efd);
     return NULL;
 }
+#endif
 
 static void *replay_worker(void *arg) {
     replay_worker_ctx_t *ctx = (replay_worker_ctx_t *)arg;
@@ -9539,10 +9542,12 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         }
         srv->workers_joinable = nthreads;
         cmq_log_info(srv->log, "CMQ server started with %d worker threads", nthreads);
+#if CMQ_OS_LINUX
         if (cmq_thread_create(&srv->accept_thr, accept_thread_func, srv) == 0) {
             srv->accept_thr_started = 1;
             cmq_log_info(srv->log, "v0.5.42: aux accept thread started");
         }
+#endif
     }
 
     cmq_atomic_store_int(&srv->running, 1, CMQ_ATOMIC_SEQ_CST);
