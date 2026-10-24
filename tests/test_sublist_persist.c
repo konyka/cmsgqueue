@@ -91,4 +91,15 @@ TEST(sublist_persist, callback_failure_is_reported) {
     cmq_sublist_persist_close(p);
 }
 
+TEST(sublist_persist, record_sub_rejects_invalid_fields) {
+    system("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
+    cmq_sublist_persist_t *p = cmq_sublist_persist_open(SUB_PERSIST_DIR);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cmq_sublist_persist_record_sub(p, 1, "bad subject", "user"), -1);
+    ASSERT_EQ(cmq_sublist_persist_record_sub(p, 1, "good.subject", "bad\tuser"), -1);
+    ASSERT_EQ(cmq_sublist_persist_record_sub(p, 1, "good.subject", "user"), 0);
+    cmq_sublist_persist_close(p);
+    system("rm -rf " SUB_PERSIST_DIR);
+}
+
 TEST_MAIN()
