@@ -37,7 +37,8 @@ cmq_sublist_persist_t *cmq_sublist_persist_open(const char *dir);
 void cmq_sublist_persist_close(cmq_sublist_persist_t *p);
 
 /* Write a SUBSCRIBE. Returns 0 on success, -1 on failure.
- * `subject` and `account` are NUL-terminated. */
+ * `subject` must be a valid subscription subject and both fields must be
+ * non-empty single tokens accepted by the strict WAL parser. */
 int cmq_sublist_persist_record_sub(cmq_sublist_persist_t *p,
                                     uint64_t sub_id, const char *subject,
                                     const char *account);

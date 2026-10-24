@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_sublist_persist.h"
+#include "cmq_sublist.h"
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -85,7 +86,16 @@ void cmq_sublist_persist_close(cmq_sublist_persist_t *p) {
 int cmq_sublist_persist_record_sub(cmq_sublist_persist_t *p,
                                     uint64_t sub_id, const char *subject,
                                     const char *account) {
-    if (!p || !p->fp) return -1;
+    if (!p || !p->fp || !subject || !account || !subject[0] ||
+        !account[0] || cmq_sublist_subject_valid(subject) != 0 ||
+        strnlen(subject, 256) >= 256 || strnlen(account, 256) >= 256)
+        return -1;
+    for (const char *s = subject; *s; s++)
+        if (isspace((unsigned char)*s) || (unsigned char)*s < 0x20)
+            return -1;
+    for (const char *s = account; *s; s++)
+        if (isspace((unsigned char)*s) || (unsigned char)*s < 0x20)
+            return -1;
     pthread_mutex_lock(&p->lock);
     int rc = write_record(p->fp, 1, sub_id, subject, account);
     pthread_mutex_unlock(&p->lock);
