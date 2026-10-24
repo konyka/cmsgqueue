@@ -132,7 +132,10 @@ jobs:
         run: ctest --output-on-failure -j1
       - name: Report coverage
         working-directory: build
-        run: gcovr --root .. --filter '.*/src/.*' --print-summary --xml coverage.xml
+        # gcov can emit negative branch counts for multithreaded code
+        # (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=68080); gcovr aborts on them
+        # unless told to warn instead.
+        run: gcovr --root .. --filter '.*/src/.*' --print-summary --xml coverage.xml --gcov-ignore-parse-errors negative_hits.warn_once_per_file
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:
