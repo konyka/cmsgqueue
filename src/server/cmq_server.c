@@ -157,7 +157,8 @@ static int auth_rate_reserve(cmq_server_t *srv, int fd,
                                     srv->auth_rate_slots[i].addr_key_len,
                                     srv->auth_rate_slots[i].addr_key_family,
                                     addr_key, addr_key_len, addr_key_family)) {
-            if (now_ms - srv->auth_rate_slots[i].window_start_ms >= 1000 &&
+            if (now_ms > srv->auth_rate_slots[i].window_start_ms &&
+                now_ms - srv->auth_rate_slots[i].window_start_ms >= 1000 &&
                 srv->auth_rate_slots[i].inflight == 0) {
                 srv->auth_rate_slots[i].window_start_ms = now_ms;
                 srv->auth_rate_slots[i].count = 0;
@@ -177,7 +178,8 @@ static int auth_rate_reserve(cmq_server_t *srv, int fd,
             break;
         }
         if (srv->auth_rate_slots[i].addr_key_len == 0 ||
-            (now_ms - srv->auth_rate_slots[i].window_start_ms >= 1000 &&
+            (now_ms > srv->auth_rate_slots[i].window_start_ms &&
+             now_ms - srv->auth_rate_slots[i].window_start_ms >= 1000 &&
              srv->auth_rate_slots[i].inflight == 0)) {
             memcpy(srv->auth_rate_slots[i].addr_key, addr_key, addr_key_len);
             srv->auth_rate_slots[i].addr_key_len = addr_key_len;
@@ -7816,7 +7818,8 @@ static int admit_one_client(cmq_server_t *srv, int listener_fd,
                                             srv->rate_slots[i].addr_key_family,
                                             addr_key, addr_key_len,
                                             addr_key_family)) {
-                    if (now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
+                    if (now_ms > srv->rate_slots[i].window_start_ms &&
+                        now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
                         srv->rate_slots[i].window_start_ms = now_ms;
                         srv->rate_slots[i].count = 0;
                     }
@@ -8077,7 +8080,8 @@ static void accept_cb(int fd, int events, void *data) {
                                             srv->rate_slots[i].addr_key_family,
                                             addr_key, addr_key_len,
                                             addr_key_family)) {
-                    if (now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
+                    if (now_ms > srv->rate_slots[i].window_start_ms &&
+                        now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
                         srv->rate_slots[i].window_start_ms = now_ms;
                         srv->rate_slots[i].count = 0;
                     }

@@ -143,7 +143,7 @@ int cmq_quota_check_publish(cmq_quota_t *q, const char *account,
     uint64_t now = now_ms();
     uint64_t wstart = cmq_atomic_load_u64(&s->window_start_ms,
                                            CMQ_ATOMIC_RELAXED);
-    if (now - wstart >= 1000) {
+    if (now > wstart && now - wstart >= 1000) {
         cmq_atomic_store_u64(&s->window_start_ms, now,
                               CMQ_ATOMIC_RELAXED);
         cmq_atomic_store_u32(&s->msgs, 0, CMQ_ATOMIC_RELAXED);
@@ -187,7 +187,7 @@ int cmq_quota_check_connect(cmq_quota_t *q, const char *account) {
     uint64_t now = now_ms();
     uint64_t wstart = cmq_atomic_load_u64(&s->window_start_ms,
                                            CMQ_ATOMIC_RELAXED);
-    if (now - wstart >= 1000) {
+    if (now > wstart && now - wstart >= 1000) {
         cmq_atomic_store_u64(&s->window_start_ms, now,
                               CMQ_ATOMIC_RELAXED);
         cmq_atomic_store_u32(&s->connects, 0, CMQ_ATOMIC_RELAXED);
