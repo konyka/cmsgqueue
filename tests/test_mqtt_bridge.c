@@ -455,6 +455,34 @@ extern int cmq_mqtt_test_enqueue_bridge(const char *topic,
                                           const uint8_t *payload,
                                           size_t len);
 
+static pthread_mutex_t g_block_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_block_cv = PTHREAD_COND_INITIALIZER;
+static int g_block_release;
+
+/* Insert callback that holds the relay thread until released, so the
+ * bridge queue can only fill. It owns (and frees) the payload. The wait is
+ * bounded so a failed assertion cannot leave the relay blocked forever. */
+static int blocking_insert_fn(void *sublist, const char *topic,
+                              const uint8_t *payload, size_t payload_len) {
+    (void)sublist; (void)topic; (void)payload_len;
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 10;
+    pthread_mutex_lock(&g_block_mu);
+    while (!g_block_release) {
+        if (pthread_cond_timedwait(&g_block_cv, &g_block_mu, &deadline) != 0)
+            break;
+    }
+    pthread_mutex_unlock(&g_block_mu);
+    free((void *)(uintptr_t)payload);
+    return 0;
+}
+
+/* The queue holds 256 entries. With the relay parked in the insert callback
+ * it can take at most one entry off the queue, so at most 257 of the 320
+ * enqueues are accepted whatever the scheduling, and every rejected one must
+ * be counted as a drop. (The previous version raced a free-running relay
+ * against the producer and only overflowed when the relay happened to lag.) */
 TEST(mqtt_bridge, queue_overflow_is_counted) {
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
@@ -463,7 +491,13 @@ TEST(mqtt_bridge, queue_overflow_is_counted) {
     cfg.log_to_stdout = 0;
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_mutex_lock(&g_block_mu);
+    g_block_release = 0;
+    pthread_mutex_unlock(&g_block_mu);
     cmq_mqtt_set_bridge_server(srv);
+    cmq_mqtt_register_sublist_insert(blocking_insert_fn, NULL);
+
     uint8_t payload[1] = {0};
     size_t before = (size_t)cmq_atomic_load_u64(&srv->stat_messages_dropped,
                                                 CMQ_ATOMIC_RELAXED);
@@ -471,12 +505,19 @@ TEST(mqtt_bridge, queue_overflow_is_counted) {
     for (int i = 0; i < 320; i++)
         if (cmq_mqtt_test_enqueue_bridge("overflow", payload, sizeof(payload)) != 0)
             failures++;
-    ASSERT(failures > 0);
     size_t after = (size_t)cmq_atomic_load_u64(&srv->stat_messages_dropped,
                                                CMQ_ATOMIC_RELAXED);
-    ASSERT(after >= before + 1);
+
+    pthread_mutex_lock(&g_block_mu);
+    g_block_release = 1;
+    pthread_cond_broadcast(&g_block_cv);
+    pthread_mutex_unlock(&g_block_mu);
     cmq_mqtt_bridge_shutdown();
+    cmq_mqtt_register_sublist_insert(NULL, NULL);
     cmq_server_destroy(srv);
+
+    ASSERT(failures >= 320 - 257);
+    ASSERT(after >= before + (size_t)failures);
 }
 
 TEST(mqtt_bridge, end_to_end_fanout_to_subscriber) {
@@ -502,6 +543,51 @@ TEST(mqtt_bridge, end_to_end_fanout_to_subscriber) {
     ASSERT_EQ(dropped, 0);
 
     cmq_mqtt_bridge_shutdown();
+    cmq_server_destroy(srv);
+}
+
+extern int cmq_mqtt_test_freelist_count(void);
+
+static atomic_int g_failing_insert_calls;
+static int failing_insert_fn(void *sublist, const char *topic,
+                             const uint8_t *payload, size_t payload_len) {
+    (void)sublist; (void)topic; (void)payload_len;
+    atomic_fetch_add(&g_failing_insert_calls, 1);
+    free((void *)(uintptr_t)payload);
+    return -1;
+}
+
+/* A registered insert callback owns the payload on every call, including
+ * when it reports failure. The relay used to push the already-freed buffer
+ * into its freelist and free it again at shutdown. Under ASAN this aborts
+ * with a double free; without it the freelist would hold a dangling pointer,
+ * which is what the count assertion catches. */
+TEST(mqtt_bridge, failed_insert_does_not_recycle_freed_payload) {
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25061;
+    cfg.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    atomic_store(&g_failing_insert_calls, 0);
+    cmq_mqtt_set_bridge_server(srv);
+    cmq_mqtt_register_sublist_insert(failing_insert_fn, NULL);
+
+    uint8_t payload[32] = {0xAB};
+    for (int i = 0; i < 20; i++)
+        ASSERT_EQ(cmq_mqtt_test_enqueue_bridge("fail.insert", payload,
+                                               sizeof(payload)), 0);
+    for (int i = 0; i < 200 && atomic_load(&g_failing_insert_calls) < 20; i++) {
+        struct timespec ts = {0, 5000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(atomic_load(&g_failing_insert_calls), 20);
+    ASSERT_EQ(cmq_mqtt_test_freelist_count(), 0);
+
+    cmq_mqtt_bridge_shutdown();
+    cmq_mqtt_register_sublist_insert(NULL, NULL);
     cmq_server_destroy(srv);
 }
 

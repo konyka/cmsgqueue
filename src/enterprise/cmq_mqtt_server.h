@@ -135,7 +135,12 @@ void cmq_mqtt_set_rate_limit(uint32_t capacity, uint32_t refill_per_sec);
 
 /* P1 v0.5.4: register the cmq_sublist_insert function + sublist
  * pointer so the relay thread can call into cmq_sublist_insert
- * without circular include deps. Called once during cmq_server_create. */
+ * without circular include deps. Called once during cmq_server_create.
+ *
+ * Ownership: the callback owns `payload` from the moment it is called,
+ * whatever it returns, and must release it (the relay never touches the
+ * buffer afterwards). Registering NULL restores the no-op default, for
+ * which the relay keeps ownership and recycles the buffer. */
 typedef int (*cmq_sublist_insert_fn)(void *sublist, const char *subject,
                                      const uint8_t *payload,
                                      size_t payload_len);

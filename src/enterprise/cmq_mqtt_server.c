@@ -121,9 +121,29 @@ static int g_mqtt_bridge_head;
 static int g_mqtt_bridge_tail;
 static int g_mqtt_bridge_count;
 /* P1 v0.5.8: freelist for payload buffers. Capped at 64 entries
- * to prevent unbounded growth. */
-static uint8_t *g_mqtt_bridge_freelist[64];
+ * to prevent unbounded growth. Each entry records the number of bytes
+ * the buffer was allocated with, so a reused buffer is never asked to
+ * hold a larger payload than it can. */
+static struct {
+    uint8_t *ptr;
+    size_t cap;
+} g_mqtt_bridge_freelist[64];
 static int g_mqtt_bridge_freelist_count;
+
+/* Returns a buffer of at least `len` bytes (len > 0): a recycled one when
+ * the most recently freed entry is big enough, otherwise a fresh malloc. */
+static uint8_t *bridge_take_buffer(size_t len) {
+    pthread_mutex_lock(&g_mqtt_bridge_lock);
+    if (g_mqtt_bridge_freelist_count > 0 &&
+        g_mqtt_bridge_freelist[g_mqtt_bridge_freelist_count - 1].cap >= len) {
+        uint8_t *buf =
+            g_mqtt_bridge_freelist[--g_mqtt_bridge_freelist_count].ptr;
+        pthread_mutex_unlock(&g_mqtt_bridge_lock);
+        return buf;
+    }
+    pthread_mutex_unlock(&g_mqtt_bridge_lock);
+    return malloc(len);
+}
 static pthread_t g_mqtt_bridge_thread;
 static int g_mqtt_bridge_thread_started;
 static atomic_int g_mqtt_bridge_dying;
@@ -216,23 +236,25 @@ static void *cmq_mqtt_bridge_relay(void *arg) {
          * v0.5.36 bridge adapter doesn't use the sublist arg (it
          * derives the cmq_server_t from g_mqtt_bridge_srv instead),
          * so we drop the sublist check. */
-        int inserted = 0;
         if (g_relay_insert_fn != relay_insert_cb) {
-            inserted = (g_relay_insert_fn(NULL, topic, payload, plen) == 0);
+            /* A registered insert callback takes ownership of `payload`
+             * on every call, whatever it returns (the bridge adapter
+             * frees it even when the publish fails). The relay must not
+             * touch the buffer afterwards: recycling or freeing it here
+             * is a use-after-free / double free. */
+            (void)g_relay_insert_fn(NULL, topic, payload, plen);
+            continue;
         }
-        /* v0.5.34: only the no-op insert path lets the relay own the
-         * payload. When the sublist insert ran (took ownership), the
-         * relay MUST NOT touch `payload` — pushing to the freelist or
-         * freeing here causes a double-free at server destroy time
-         * (the sublist frees on cleanup). */
-        if (inserted) continue;
 
-        /* P1 v0.5.8: return to freelist (capped) instead of free.
-         * Only reached on the no-op insert path. */
+        /* No-op insert path: the relay still owns the payload. */
+        if (!payload) continue;
+
+        /* P1 v0.5.8: return to freelist (capped) instead of free. */
         pthread_mutex_lock(&g_mqtt_bridge_lock);
         if (g_mqtt_bridge_freelist_count < 64) {
-            g_mqtt_bridge_freelist[g_mqtt_bridge_freelist_count++] =
-                payload;
+            g_mqtt_bridge_freelist[g_mqtt_bridge_freelist_count].ptr = payload;
+            g_mqtt_bridge_freelist[g_mqtt_bridge_freelist_count].cap = plen;
+            g_mqtt_bridge_freelist_count++;
             pthread_mutex_unlock(&g_mqtt_bridge_lock);
         } else {
             pthread_mutex_unlock(&g_mqtt_bridge_lock);
@@ -293,7 +315,7 @@ void cmq_mqtt_bridge_shutdown(void) {
         g_mqtt_bridge_count--;
     }
     while (g_mqtt_bridge_freelist_count > 0)
-        free(g_mqtt_bridge_freelist[--g_mqtt_bridge_freelist_count]);
+        free(g_mqtt_bridge_freelist[--g_mqtt_bridge_freelist_count].ptr);
     g_mqtt_bridge_head = g_mqtt_bridge_tail = g_mqtt_bridge_count = 0;
     pthread_mutex_unlock(&g_mqtt_bridge_lock);
 }
@@ -310,32 +332,28 @@ static int mqtt_bridge_push(const char *topic, const uint8_t *payload,
                              size_t len) {
     if (!topic) return -1;
     if (!payload && len > 0) return -1;
-    pthread_mutex_lock(&g_mqtt_bridge_lock);
-    int rc = -1;
-    if (g_mqtt_bridge_count < 256) {
-        snprintf(g_mqtt_bridge_topics[g_mqtt_bridge_head],
-                  sizeof(g_mqtt_bridge_topics[0]), "%s", topic);
-        if (len > 0) {
-            uint8_t *copy = malloc(len);
-            if (!copy) {
-                pthread_mutex_unlock(&g_mqtt_bridge_lock);
-                return -1;
-            }
-            memcpy(copy, payload, len);
-            g_mqtt_bridge_payloads[g_mqtt_bridge_head] = copy;
-        } else {
-            g_mqtt_bridge_payloads[g_mqtt_bridge_head] = NULL;
-        }
-        g_mqtt_bridge_lens[g_mqtt_bridge_head] = len;
-        g_mqtt_bridge_head = (g_mqtt_bridge_head + 1) % 256;
-        g_mqtt_bridge_count++;
-        pthread_cond_signal(&g_mqtt_bridge_not_empty);
-        rc = 0;
-    } else {
-        cmq_server_record_bridge_drop(g_mqtt_bridge_srv);
+    uint8_t *copy = NULL;
+    if (len > 0) {
+        copy = bridge_take_buffer(len);
+        if (!copy) return -1;
+        memcpy(copy, payload, len);
     }
+    pthread_mutex_lock(&g_mqtt_bridge_lock);
+    if (g_mqtt_bridge_count >= 256) {
+        cmq_server_record_bridge_drop(g_mqtt_bridge_srv);
+        pthread_mutex_unlock(&g_mqtt_bridge_lock);
+        free(copy);
+        return -1;
+    }
+    snprintf(g_mqtt_bridge_topics[g_mqtt_bridge_head],
+              sizeof(g_mqtt_bridge_topics[0]), "%s", topic);
+    g_mqtt_bridge_payloads[g_mqtt_bridge_head] = copy;
+    g_mqtt_bridge_lens[g_mqtt_bridge_head] = len;
+    g_mqtt_bridge_head = (g_mqtt_bridge_head + 1) % 256;
+    g_mqtt_bridge_count++;
+    pthread_cond_signal(&g_mqtt_bridge_not_empty);
     pthread_mutex_unlock(&g_mqtt_bridge_lock);
-    return rc;
+    return 0;
 }
 
 int cmq_mqtt_test_enqueue_bridge(const char *topic, const uint8_t *payload,
@@ -1582,15 +1600,7 @@ size_t got = (size_t)n;
                  * cap; reduces malloc churn under high PUBLISH rate. */
                 uint8_t *payload_copy = NULL;
                 if (payload_len > 0) {
-                    pthread_mutex_lock(&g_mqtt_bridge_lock);
-                    if (g_mqtt_bridge_freelist_count > 0) {
-                        payload_copy = g_mqtt_bridge_freelist
-                            [--g_mqtt_bridge_freelist_count];
-                        pthread_mutex_unlock(&g_mqtt_bridge_lock);
-                    } else {
-                        pthread_mutex_unlock(&g_mqtt_bridge_lock);
-                        payload_copy = malloc(payload_len);
-                    }
+                    payload_copy = bridge_take_buffer(payload_len);
                     if (payload_copy)
                         memcpy(payload_copy, p + payload_off, payload_len);
                 }
