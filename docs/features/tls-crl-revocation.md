@@ -26,6 +26,10 @@ Distribution Point (CDP) extension pointing at the CRL URI.
 A cert without CDP is silently accepted even with the
 `CRL_CHECK` flag set.
 
+Note: `X509_STORE_add_crl` takes its own reference, so `tls_build_ssl_ctx`
+frees its parsed `X509_CRL` after the call (it used to leak one CRL per
+listener build).
+
 ## What v0.5.47 shipped
 
 ### Config plumbing

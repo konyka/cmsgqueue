@@ -34,7 +34,17 @@ backing store for OpenSSL's
   insert.
 - `cmq_tls_session_cache_lookup(...)` — returns a **borrowed reference**
   (matches OpenSSL's `SSL_get_session` semantics). Caller must NOT
-  `SSL_SESSION_free` the result.
+  `SSL_SESSION_free` the result. Only safe while no other thread can
+  evict the entry; used by tests.
+- `cmq_tls_session_cache_lookup_ref(...)` — returns the session with one
+  **extra reference taken under the cache lock**. The caller owns that
+  reference. The OpenSSL `get_cb` uses this with `*copy = 0`, so OpenSSL
+  releases it; a concurrent eviction can no longer free the session
+  between the lookup and OpenSSL's use of it.
+- `new_cb` — OpenSSL already took a reference for the application before
+  invoking the callback. Returning 1 hands that reference to the cache;
+  the callback must not `SSL_SESSION_up_ref` again (the extra reference
+  was never released and leaked every session).
 - `cmq_tls_session_cache_destroy(cfg)` — frees every owned session.
 
 ### Safety
@@ -42,7 +52,7 @@ backing store for OpenSSL's
 | Risk | Mitigation |
 |---|---|
 | Memory leak on shutdown | Destroy frees every occupied slot. |
-| Stale reference after eviction | `SSL_SESSION_up_ref` would be safer; we accept borrow-only semantics matching OpenSSL's `SSL_get1_session` (caller can up_ref if needed). |
+| Stale reference after eviction | `get_cb` takes its reference inside the cache lock (`lookup_ref`) and returns it to OpenSSL with `copy = 0`. |
 | Lock contention | Single mutex; in practice handshakes are an order of magnitude rarer than reads. |
 | Bucket collisions | Open addressing probes the bounded 1024-slot table before triggering LRU eviction. |
 | Corrupted slot state | `occupied` flag gates every read/write; `id_len` bounds memcpy. |
@@ -78,6 +88,9 @@ int   cmq_tls_session_cache_insert(cmq_tls_config_t *cfg,
 void *cmq_tls_session_cache_lookup(cmq_tls_config_t *cfg,
                                     const unsigned char *id,
                                     unsigned int id_len);
+void *cmq_tls_session_cache_lookup_ref(cmq_tls_config_t *cfg,
+                                        const unsigned char *id,
+                                        unsigned int id_len);
 size_t cmq_tls_session_cache_size(cmq_tls_config_t *cfg);
 ```
 

@@ -124,8 +124,8 @@ Threats closed:
 Threats NOT closed (out of scope for F1):
 - **mTLS / client cert verification** — `verify_peer` is plumbed but
   per-listener CA loading requires additional config.
-- **Hot cert reload** — `SSL_CTX_up_ref` / new CTX swap is not yet
-  wired.
+- **Hot cert reload** — shipped later as `cmq_tls_reload` (see
+  `tls-hardening.md`); this list reflects the original F1 scope.
 - **OCSP stapling** — not implemented.
 
 ## Limitations

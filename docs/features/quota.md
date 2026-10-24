@@ -63,6 +63,18 @@ Threats NOT closed:
 ## Limitations
 
 - Fixed-window (1 second) is not as smooth as token-bucket; bursts at second boundaries can briefly exceed the cap. For tighter smoothing, future work.
+- The per-account slot table (and the per-subject table in
+  `cmq_subject_rl`) is lock-free. A slot goes EMPTY -> CLAIMING -> READY:
+  the thread that wins the CAS writes the key, then publishes READY with a
+  release store; other threads that probe a CLAIMING slot spin until it is
+  READY before comparing the key. Previously the claim CAS also counted the
+  first message, so racing first calls on a new key could each be admitted
+  past the limit (`tests/test_rl_concurrent.c`
+  `first_claim_race_does_not_double_admit`). `cmq_subject_rl_check` also
+  only expires a window when `now_ms > window_start_ms`: its timestamp is
+  taken before the probe, so it can be older than a concurrent claimer's
+  start time, and the unsigned difference would otherwise wrap and reset
+  the counter.
 - SIGHUP / `cmq_server_reload` updates non-zero
   `max_msgs_per_sec_per_account`,
   `max_bytes_per_sec_per_account`,

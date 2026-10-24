@@ -25,6 +25,9 @@ are rejected. When set, `cmq_server_create`:
 4. On success, logs the connection.
 
 On shutdown, `cmq_mqtt_bridge_disconnect` + destroy.
+`cmq_mqtt_bridge_shutdown` stops the relay thread, then frees any payloads
+still queued and drains the payload freelist, so a stop with messages in
+flight does not leak.
 
 Subject mapping is `mqtt_bridge_map=subject,topic[,qos]`
 (repeatable, max 8, v0.5.112) or `cmq_mqtt_add_mapping`.

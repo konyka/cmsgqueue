@@ -27,9 +27,15 @@ Reload API:
 
 ```c
 cmq_rch_t *nh = cmq_rch_new(new_obj, free_fn);
-cmq_rch_t *old = cmq_rch_swap(&srv->acl_h, nh);
-if (old) cmq_rch_release(old, NULL);  // drops old refcount; frees if last
+cmq_rch_t *old = cmq_rch_swap(&srv->acl_h, nh);   // atomic exchange
+if (old) cmq_rch_release_owner(old);  // drops the owner ref; frees if last
 ```
+
+`cmq_rch_swap` is an unconditional atomic exchange: it stores `nh` in the
+slot and returns the previous handle. `cmq_rch_release_owner` drops the
+slot's own reference and runs `free_fn` on the object when the last
+in-flight reader lets go. (`cmq_rch_release(h, NULL)` is for readers only
+and never runs `free_fn`, so it must not be used to retire the old handle.)
 
 `cmq_server_t` now exposes `acl_h` and `blocklist_h` instead of raw
 `acl` / `blocklist` pointers. `handle == NULL` means the feature is
@@ -38,7 +44,7 @@ disabled (same NULL semantics as before).
 ## Rationale
 
 Refcounting has well-understood semantics and one-atomic-op hot-path
-cost (CAS on increment; the swap is a CAS, not a te lock).
+cost (CAS on increment; the swap is a single atomic exchange, not a lock).
 
 The alternative — RCU quiescent-state — would require a per-client
 quiescent flag or read-side critical section tracking, neither of which
@@ -58,6 +64,16 @@ unit-testable scenario, so the simpler fix lands first.
   the handle owns the lifetime.
 - All reader sites (`handle_publish` ACL check, `accept_cb`
   blocklist check) updated to acquire/release.
+
+## Fix history
+
+- `cmq_rch_swap` was introduced (v0.5.1) as a compare-exchange whose
+  expected value was the new handle, so it never matched, never stored
+  the new handle, and returned the *current* handle. The reload callers
+  then released the owner reference of the handle still installed in the
+  slot and leaked the freshly built one. It is now `atomic_exchange`, and
+  `tests/test_rch.c` / `tests/test_rch_overflow.c` assert that the slot
+  holds the new handle and the old one is returned.
 
 ## Alternatives Considered
 

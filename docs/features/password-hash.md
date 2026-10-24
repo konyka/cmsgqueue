@@ -46,6 +46,9 @@ transition, but new deployments should use the generated scrypt format.
 ## Verification
 
 The password unit tests cover hash round trips, random salts, malformed hashes,
-buffer limits, and empty-password rejection. `tests/test_password_cli.c`
+buffer limits, empty-password rejection, and bytes with the high bit set in the
+salt/digest fields (the base64url decoder must reject or ignore them without
+indexing outside its 128-entry lookup table; the test fails under ASAN on the
+old signed-`char` comparison). `tests/test_password_cli.c`
 covers the CLI input contract, boundary lengths, newline handling, argument
 rejection, and help output.

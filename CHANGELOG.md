@@ -1,5 +1,77 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **`cmq_rch_swap` never swapped** (`src/util/cmq_rch.h`). It was a
+  compare-exchange whose expected value was the *new* handle, so the
+  exchange never matched, the slot was never updated, and the function
+  returned the handle that was still installed. The reload callers
+  (`cmq_reload_apply_acl`, `cmq_server_reload`) then dropped the owner
+  reference of that still-installed handle and never installed or freed
+  the new one: the new handle leaked and the slot kept pointing at a
+  handle whose owner reference had just been released. Introduced with
+  `cmq_rch_t` in v0.5.1. It is now an atomic exchange; `tests/test_rch.c` and `tests/test_rch_overflow.c`
+  assert the slot contents and the returned previous handle.
+- **`b64url_decode` read before its lookup table** (`src/server/cmq_password.c`).
+  `in[i] >= 128` is never true for a signed `char`, so a byte >= 0x80 in a
+  stored `$scrypt$` record indexed `tab[]` with a negative value. Found with
+  ASAN via the new `password.high_bit_base64_bytes_do_not_index_before_table`
+  test. Also dropped an unused local in `cmq_password_verify`.
+- **TLS context and session leaks** (`src/enterprise/cmq_tls.c`):
+  `cmq_tls_reload` took an extra `SSL_CTX_up_ref` on every new context, so
+  each reload leaked one `SSL_CTX`; `cmq_tls_sess_new_cb` up-ref'd a session
+  OpenSSL had already referenced for it, leaking every cached session; the
+  parsed CRL was never freed after `X509_STORE_add_crl`.
+- **Quota and per-subject rate limit over-admitted on first use**
+  (`src/enterprise/cmq_quota.c`, `src/server/cmq_subject_rl.c`). A slot was
+  claimed by a CAS on its counter and the key was written afterwards, so
+  concurrent first calls for a new key raced with the key write and could
+  each be admitted beyond the limit (flaky `test_rl_concurrent`, roughly 1
+  in 80 runs under a parallel Release `ctest`). Slots now use an explicit
+  EMPTY/CLAIMING/READY state machine. A second, independent cause remained
+  in `cmq_subject_rl_check`: it sampled the clock before probing the table,
+  so a thread whose timestamp was older than the claimer's
+  `window_start_ms` computed `now_ms - wstart` as an unsigned underflow,
+  treated the window as expired and reset the counter. The window test now
+  requires `now_ms > wstart`. New regression tests start N threads on an
+  empty table 3000 times and require exactly one admission per round
+  (0 failures in 300 consecutive Release runs; the old code failed about 1
+  run in 40).
+- **Reload vs. session creation race** (`src/enterprise/cmq_tls.c`):
+  `ssl_ctx` is now guarded by `ctx_lock` for the lazy build, the reload
+  swap, and `SSL_new`, instead of relying on the extra up-ref.
+- **Session-cache lookup lifetime**: the OpenSSL `get_cb` now uses the new
+  `cmq_tls_session_cache_lookup_ref`, which takes a reference under the
+  cache lock and returns it with `copy = 0`, so a concurrent eviction cannot
+  free the session in use.
+- **Persistent-publish replay leak** (`replay_one_record`): the stack
+  `cmq_client_t` used for replay kept the write buffer allocated by an
+  error reply from `handle_publish`; it is now freed.
+- **MQTT bridge shutdown leak** (`cmq_mqtt_bridge_shutdown`): queued payloads
+  and the payload freelist were dropped by resetting indices only.
+
+### Changed
+- Build is warning-free on GCC 16 with `-Wall -Wextra -Wpedantic -Wshadow
+  -Wcast-qual ...`: const-qualified owned strings are freed through
+  `(void *)(uintptr_t)`, zlib is built with `ZLIB_CONST`, shadowed locals
+  were renamed, and dead code (`route_slot_attach_sess`,
+  `inflight_find`, two unused test helpers, an orphan comment block that
+  opened a nested `/*`) was removed.
+- Tests that did not release what they allocated now do
+  (`cmq_sublist_result_free`, `cmq_config_free`, `cmq_parser_destroy`), so
+  the suite can run clean under ASAN + UBSAN with LeakSanitizer.
+
+### Docs
+- `docs/adr/0014-reload-object-lifetime.md`, `docs/features/tls-session-cache.md`,
+  `tls-hardening.md`, `tls-openssl.md`, `tls-crl-revocation.md`,
+  `mqtt-bridge.md`, `password-hash.md` updated to match.
+
+### Known drift (not changed here)
+- `CMakeLists.txt` and `src/include/cmq.h` still report `0.1.0` (and
+  `cmq_version()` returns it) while this changelog tracks 0.6.x. Picking
+  the release number is left to the maintainers.
+
 ## 0.6.11 - 2026-09-19
 
 ### Status
