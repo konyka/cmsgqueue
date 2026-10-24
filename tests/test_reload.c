@@ -5,6 +5,8 @@
 #include "cmq_config.h"
 #include "cmq_log.h"
 #include "cmq_audit.h"
+#include "cmq_sublist.h"
+#include "cmq_sublist_persist.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -196,6 +198,72 @@ TEST(reload, omitted_log_level_uses_info_default) {
 
     cmq_server_destroy(server);
     unlink(RELOAD_CFG);
+}
+
+TEST(reload, attaches_and_loads_subscription_wal_once) {
+    char persist_dir[] = "/tmp/cmq-test-reload-subs-XXXXXX";
+    ASSERT_NOT_NULL(mkdtemp(persist_dir));
+
+    char config_path[512];
+    ASSERT(snprintf(config_path, sizeof(config_path), "%s/reload.cfg",
+                    persist_dir) > 0);
+
+    FILE *f = fopen(config_path, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "host = 127.0.0.1\nport = 0\n");
+    fclose(f);
+
+    cmq_config_t cfg = {0};
+    cfg.host = "127.0.0.1";
+    cfg.port = 0;
+    cfg.num_threads = 1;
+    cfg.log_to_stdout = 0;
+    cmq_server_t *server = NULL;
+    ASSERT_EQ(cmq_server_create(&server, &cfg), CMQ_OK);
+
+    /* An omitted persist_dir must not attach a subscription WAL. */
+    ASSERT_EQ(cmq_server_reload(server, config_path), 0);
+
+    f = fopen(config_path, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "host = 127.0.0.1\nport = 0\npersist_dir =\n");
+    fclose(f);
+    /* An empty persist_dir must also leave persistence disabled. */
+    ASSERT_EQ(cmq_server_reload(server, config_path), 0);
+
+    cmq_sublist_persist_t *persist = cmq_sublist_persist_open(persist_dir);
+    ASSERT_NOT_NULL(persist);
+    ASSERT_EQ(cmq_sublist_persist_record_sub(persist, 77,
+                                               "reload.ghost",
+                                               "$default"), 0);
+    cmq_sublist_persist_close(persist);
+
+    f = fopen(config_path, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "host = 127.0.0.1\nport = 0\npersist_dir = %s\n",
+            persist_dir);
+    fclose(f);
+
+    ASSERT_EQ(cmq_server_reload(server, config_path), 0);
+    cmq_sublist_result_t result = {0};
+    ASSERT_EQ(cmq_sublist_match(server->sublist, "reload.ghost", &result), 0);
+    ASSERT_EQ(result.count, 1);
+    cmq_sublist_result_free(&result);
+
+    /* A second reload must not replay the same WAL into another ghost ref. */
+    ASSERT_EQ(cmq_server_reload(server, config_path), 0);
+    result = (cmq_sublist_result_t){0};
+    ASSERT_EQ(cmq_sublist_match(server->sublist, "reload.ghost", &result), 0);
+    ASSERT_EQ(result.count, 1);
+    cmq_sublist_result_free(&result);
+
+    cmq_server_destroy(server);
+    unlink(config_path);
+    char wal_path[512];
+    ASSERT(snprintf(wal_path, sizeof(wal_path), "%s/cmq-subs.wal",
+                    persist_dir) > 0);
+    unlink(wal_path);
+    rmdir(persist_dir);
 }
 
 TEST_MAIN()
