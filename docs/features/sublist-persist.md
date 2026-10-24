@@ -44,15 +44,21 @@ during recovery.
 
 ## Tests
 
-- Startup recovery tests cover restored subscriptions and final-state
-  unsubscribe replay.
+- Library tests cover WAL append/load behavior and parser validation.
+- Direct-WAL recovery tests cover restored subscriptions and final-state
+  unsubscribe replay without a live client.
+- Live server wire coverage in `tests/test_sublist_recover_wire.c` starts a
+  real TCP server, performs `CONNECT`, `SUBSCRIBE`, and `UNSUBSCRIBE`, asserts
+  `SUBACK`/`UNSUBACK`, verifies both WAL records, and confirms the final replay
+  state after restart.
 - WAL parser tests cover malformed IDs and subjects, and callback failure
   propagation.
 
 ## Verification gates
 
-The shipped implementation is covered by the repository's startup recovery,
-unsubscribe replay, malformed WAL, and callback failure tests.
+The shipped implementation is covered by the repository's library/recovery,
+live TCP handler, unsubscribe replay, malformed WAL, and callback failure
+tests.
 
 ## Performance
 
