@@ -95,10 +95,23 @@
   (`.type`, `.size`, `.align N` bytes) and an undecorated symbol, which
   Mach-O rejects. The assembly now emits `_cmq_coro_ctx_switch` with
   `.p2align` on macOS; the Linux object code is byte-identical.
-- **Coverage job**: gcov emits negative branch counts for multithreaded code
-  (GCC bug 68080) and gcovr aborts on them; the job now passes
-  `--gcov-ignore-parse-errors negative_hits.warn_once_per_file`. This could
-  not be run locally (no gcovr), so it is unverified until CI runs it.
+- **macOS build, platform selection**: `CMQ_OS_LINUX` is defined as `0` on
+  macOS, so the five `#ifdef CMQ_OS_LINUX` guards in `cmq_server.c` and
+  `cmq_server.h` still picked the Linux branch and failed on
+  `<sys/eventfd.h>`. They are `#if` now. The aux accept thread is built on
+  epoll, so it exists on Linux only; elsewhere the event-loop thread
+  accepts alone, and `aux_thread_admits` skips itself. Checked with the
+  real preprocessor for `arm64-apple-macos` and `x86_64-linux-gnu`; the
+  rest of the macOS build could not be compiled here (no macOS SDK).
+- **Coverage job**: after every test passed, `gcovr` aborted on gcov output
+  it could not parse: negative branch counts from multithreaded code (GCC
+  bug 68080) and the `-block` records gcov writes for `cmq_server.c`, the
+  only source file over 9999 lines. Reproduced in an ubuntu:24.04 container
+  (gcc 13.3, gcovr 7.0, the same versions as `ubuntu-latest`): with
+  `--gcov-ignore-parse-errors negative_hits.warn_once_per_file` gcovr still
+  exits 64; only `--gcov-ignore-parse-errors all` exits 0 (69.5% line
+  coverage). The job now uses `all`. Lines gcovr skips are listed on stderr,
+  so the coverage figure for `cmq_server.c` is understated.
 - **AArch64 cross build**: the toolchain file now points pkg-config at the
   arm64 multiarch `.pc` files, and the `build-arm64` CI job installs
   `libssl-dev:arm64`, `libzstd-dev:arm64` and `zlib1g-dev:arm64`. It was
@@ -149,6 +162,11 @@
   `mqtt-bridge.md`, `password-hash.md` updated to match.
 
 ### Still failing in CI (not fixed here)
+- **macOS SIGPIPE**: macOS has no `MSG_NOSIGNAL`, so `cmq_sock_write` falls
+  back to `write()` there and a dead peer can still raise SIGPIPE. The
+  per-socket fix is `SO_NOSIGPIPE`, set when a socket is created or
+  accepted; I did not add it because it cannot be tested or measured
+  without a macOS machine.
 - **Windows**: the project requires `pkg-config` and POSIX APIs (epoll,
   eventfd, pthreads). Supporting MSVC/Windows is a porting task, not a
   build-script fix, and was out of scope.
