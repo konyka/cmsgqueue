@@ -9255,8 +9255,10 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         return CMQ_ERR_IO;
     }
 
-    srv->ev_loop = cmq_ev_loop_create(1024);
-    if (!srv->ev_loop) {
+    cmq_ev_loop_t *new_loop = cmq_ev_loop_create(1024);
+    /* cmq_server_stop / cmq_server_destroy read ev_loop from other threads. */
+    __atomic_store_n(&srv->ev_loop, new_loop, __ATOMIC_RELEASE);
+    if (!new_loop) {
         close(srv->listen_fds[0]);
         srv->listen_fds[0] = -1;
         return CMQ_ERR_NO_MEMORY;
@@ -10211,9 +10213,10 @@ void cmq_server_stop(cmq_server_t *srv) {
             srv->listen_fds[i] = -1;
         }
     }
-    if (srv->ev_loop) {
-        cmq_ev_stop(srv->ev_loop);
-        cmq_ev_wakeup(srv->ev_loop);
+    cmq_ev_loop_t *stop_loop = __atomic_load_n(&srv->ev_loop, __ATOMIC_ACQUIRE);
+    if (stop_loop) {
+        cmq_ev_stop(stop_loop);
+        cmq_ev_wakeup(stop_loop);
     }
     if (srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {

@@ -247,10 +247,11 @@ TEST(sublist_persist_wire, live_wire_handlers_append_wal_and_recover_final_state
 
     pthread_t tid;
     ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
-    for (int i = 0; i < 200 && srv->listen_fds[0] < 0; i++) wait_ms(5);
-    ASSERT(srv->listen_fds[0] >= 0);
-
-    int fd = connect_tcp(P3_WIRE_PORT);
+    int fd = -1;
+    for (int i = 0; i < 400 && fd < 0; i++) {
+        fd = connect_tcp(P3_WIRE_PORT);
+        if (fd < 0) wait_ms(5);
+    }
     ASSERT(fd >= 0);
     cmq_parser_t *parser = cmq_parser_create();
     ASSERT_NOT_NULL(parser);
