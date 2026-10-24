@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <pthread.h>
 #include <unistd.h>
 
@@ -199,9 +200,15 @@ int cmq_sublist_persist_load(cmq_sublist_persist_t *p,
             if (*p1) { *p1 = '\0'; p1++; }
             while (*p1 == ' ') p1++;
             char *account = p1;
-            if (*account == '\0' || strchr(account, ' ') != NULL) {
+            if (*account == '\0') {
                 fclose(fp);
                 return -1;
+            }
+            for (const char *field = account; *field; field++) {
+                if (isspace((unsigned char)*field)) {
+                    fclose(fp);
+                    return -1;
+                }
             }
             if (cb(ctx, 1, sub_id, subject, account) != 0) {
                 fclose(fp);
