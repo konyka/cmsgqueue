@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_log.h"
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -236,7 +237,7 @@ void cmq_log_add_stdout(cmq_log_t *log) {
 
 int cmq_log_has_stdout(const cmq_log_t *log) {
     if (!log) return 0;
-    pthread_mutex_lock((pthread_mutex_t *)&log->lock);
+    pthread_mutex_lock((pthread_mutex_t *)(uintptr_t)&log->lock);
     int has = 0;
     for (size_t i = 0; i < log->appender_count; i++) {
         if (log->appenders[i].fn == cmq_log_stdout_appender) {
@@ -244,27 +245,27 @@ int cmq_log_has_stdout(const cmq_log_t *log) {
             break;
         }
     }
-    pthread_mutex_unlock((pthread_mutex_t *)&log->lock);
+    pthread_mutex_unlock((pthread_mutex_t *)(uintptr_t)&log->lock);
     return has;
 }
 
 int cmq_log_file_path(const cmq_log_t *log, char *out, size_t cap) {
     if (!log || !out || cap == 0) return -1;
-    pthread_mutex_lock((pthread_mutex_t *)&log->lock);
+    pthread_mutex_lock((pthread_mutex_t *)(uintptr_t)&log->lock);
     int rc = -1;
     if (log->file_path[0]) {
         snprintf(out, cap, "%s", log->file_path);
         rc = 0;
     }
-    pthread_mutex_unlock((pthread_mutex_t *)&log->lock);
+    pthread_mutex_unlock((pthread_mutex_t *)(uintptr_t)&log->lock);
     return rc;
 }
 
 size_t cmq_log_appender_count(const cmq_log_t *log) {
     if (!log) return 0;
-    pthread_mutex_lock((pthread_mutex_t *)&log->lock);
+    pthread_mutex_lock((pthread_mutex_t *)(uintptr_t)&log->lock);
     size_t n = log->appender_count;
-    pthread_mutex_unlock((pthread_mutex_t *)&log->lock);
+    pthread_mutex_unlock((pthread_mutex_t *)(uintptr_t)&log->lock);
     return n;
 }
 

@@ -1515,7 +1515,7 @@ int cmq_filestore_reload_attach(cmq_filestore_t **fs, const char **live_dir,
             cmq_filestore_destroy(n);
             return -1;
         }
-        free((void *)*live_dir);
+        free((void *)(uintptr_t)*live_dir);
         *live_dir = owned;
     }
     *fs = n;

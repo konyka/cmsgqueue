@@ -105,12 +105,6 @@ TEST(reload, audit_path_switches_after_reload) {
     unlink(RELOAD_AUDIT_NEW);
 }
 
-static void *server_thread(void *arg) {
-    cmq_server_t *srv = (cmq_server_t *)arg;
-    cmq_server_run(srv);
-    return NULL;
-}
-
 TEST(reload, sighup_triggers_reload) {
     /* Write initial config. */
     write_cfg(RELOAD_CFG, RELOAD_PORT, 2);

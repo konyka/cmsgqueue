@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_blocklist.h"
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
@@ -134,7 +135,7 @@ int cmq_blocklist_reload_attach(cmq_blocklist_t **bl,
             cmq_blocklist_free(n);
             return -1;
         }
-        free((void *)*live_path);
+        free((void *)(uintptr_t)*live_path);
         *live_path = owned;
     }
     *bl = n;
@@ -163,7 +164,7 @@ int cmq_blocklist_reload_swap(cmq_blocklist_t **out,
             cmq_blocklist_free(n);
             return -1;
         }
-        free((void *)*live_path);
+        free((void *)(uintptr_t)*live_path);
         *live_path = owned;
     }
     *out = n;
@@ -193,7 +194,7 @@ static int check_address(const cmq_blocklist_t *bl, sa_family_t family,
                          const unsigned char *address, size_t address_len) {
     if (!bl) return 0;
     int blocked = 0;
-    pthread_mutex_lock((pthread_mutex_t *)&bl->lock);
+    pthread_mutex_lock((pthread_mutex_t *)(uintptr_t)&bl->lock);
     for (int i = 0; i < bl->n; i++) {
         const struct cmq_entry *entry = &bl->entries[i];
         if (entry->family != family) continue;
@@ -207,7 +208,7 @@ static int check_address(const cmq_blocklist_t *bl, sa_family_t family,
         }
         if (blocked) break;
     }
-    pthread_mutex_unlock((pthread_mutex_t *)&bl->lock);
+    pthread_mutex_unlock((pthread_mutex_t *)(uintptr_t)&bl->lock);
     return blocked;
 }
 

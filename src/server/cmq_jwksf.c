@@ -382,7 +382,7 @@ int cmq_jwks_cache_reload(cmq_jwks_cache_t **cache, const char **live_json,
     }
     if (created) *cache = c;
     if (live_json) {
-        free((void *)*live_json);
+        free((void *)(uintptr_t)*live_json);
         *live_json = owned;
     } else {
         free(owned);
@@ -518,7 +518,7 @@ int cmq_jwks_refresh_reload_ca(cmq_jwks_refresher_t *r, const char **live_ca,
         char *owned = strdup(fresh_ca);
         if (!owned)
             return -1;
-        free((void *)*live_ca);
+        free((void *)(uintptr_t)*live_ca);
         *live_ca = owned;
     }
     return 0;
@@ -552,7 +552,7 @@ int cmq_jwks_refresh_reload_url(cmq_jwks_refresher_t *r, const char **live_url,
         cmq_mutex_unlock(&r->lock);
     }
     if (live_url) {
-        free((void *)*live_url);
+        free((void *)(uintptr_t)*live_url);
         *live_url = owned;
     }
     return 0;

@@ -267,7 +267,7 @@ int cmq_listener_reload_bind(int *lfd, const char **live_host, int *live_port,
             close(s);
             return -1;
         }
-        free((void *)*live_host);
+        free((void *)(uintptr_t)*live_host);
         *live_host = owned;
     }
     *lfd = s;

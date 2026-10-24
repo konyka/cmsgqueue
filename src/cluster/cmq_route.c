@@ -3,6 +3,7 @@
 #include "cmq_parser.h"
 #include "cmq_proto.h"
 #include "cmq_route_tls.h"
+#include <stdint.h>
 #include "cmq_route_tls_sess.h"
 #include "cmq_thread.h"
 #include "cmq_types.h"
@@ -366,11 +367,8 @@ static void route_slot_snap(cmq_route_pool_t *pool, size_t idx,
     cmq_mutex_unlock(&pool->io_locks[idx]);
 }
 
-/* Forward declaration for route_slot_attach_sess so route_slot_install
- * (defined further down) can call it. The full definition sits just
- * above route_slot_install to keep the file readable. */
-static cmq_route_tls_sess_t *route_slot_attach_sess(cmq_route_pool_t *pool,
-                                                      size_t idx);
+/* Forward declaration so route_slot_install (defined further down) can
+ * call it. The full definition sits just above route_slot_install. */
 static cmq_route_tls_sess_t *route_slot_attach_sess_locked(
         cmq_route_pool_t *pool, size_t idx);
 
@@ -564,51 +562,10 @@ static void route_target_dial_end(cmq_route_pool_t *pool, const char *node_id) {
 /* Publish a peer into a slot. Caller holds pool->lock.
    connected=0 stages inbound until handshake is drained.
    addr may be NULL for inbound/placeholder (no endpoint sticky). */
-/* Build a cmq_route_tls_sess_t for the slot if pool->tls_cfg is set
- * and the slot has a live fd. Returns the new sess (also stored on
- * conn->sess) or NULL. Caller must NOT hold pool->lock — this reads
- * tls_cfg under pool->lock itself; nested lock would self-deadlock.
- * If the caller has pool->lock already, use
- * route_slot_attach_sess_locked. */
-static cmq_route_tls_sess_t *route_slot_attach_sess(cmq_route_pool_t *pool,
-                                                       size_t idx) {
-#ifdef CMQ_TLS_OPENSSL
-    if (!pool || idx >= CMQ_ROUTE_MAX_CONNS) return NULL;
-    cmq_mutex_lock(&pool->lock);
-    cmq_route_tls_config_t *cfg = pool->tls_cfg;
-    cmq_mutex_unlock(&pool->lock);
-    if (!cfg) return NULL;
-    cmq_mutex_lock(&pool->io_locks[idx]);
-    int fd = pool->conns[idx].fd;
-    cmq_route_tls_sess_t *existing = pool->conns[idx].sess;
-    cmq_mutex_unlock(&pool->io_locks[idx]);
-    if (fd < 0) return NULL;
-    if (existing) return existing;
-    SSL_CTX *ssl_ctx = cmq_route_tls_get_ssl_ctx(cfg);
-    if (!ssl_ctx) return NULL;
-    cmq_route_tls_sess_t *sess = cmq_route_tls_sess_create(fd, ssl_ctx);
-    if (!sess) return NULL;
-    cmq_mutex_lock(&pool->io_locks[idx]);
-    /* Re-check under io_lock: a concurrent set_tls_cfg / drop could
-     * have changed fd or installed another sess. */
-    if (pool->conns[idx].fd == fd && !pool->conns[idx].sess) {
-        pool->conns[idx].sess = sess;
-    } else {
-        cmq_mutex_unlock(&pool->io_locks[idx]);
-        cmq_route_tls_sess_destroy(sess);
-        return pool->conns[idx].sess;
-    }
-    cmq_mutex_unlock(&pool->io_locks[idx]);
-    return sess;
-#else
-    (void)pool; (void)idx;
-    return NULL;
-#endif
-}
-
-/* Same as route_slot_attach_sess but assumes the caller already holds
- * pool->lock. Avoids re-locking pool->lock and sidesteps the self-
- * deadlock that bit route_slot_install when it tried to do both. */
+/* Build a cmq_route_tls_sess_t for the slot if pool->tls_cfg is set and
+ * the slot has a live fd. Returns the new sess (also stored on
+ * conn->sess) or NULL. The caller must already hold pool->lock; this
+ * only takes the per-slot io_lock (order: pool->lock -> io_lock). */
 static cmq_route_tls_sess_t *route_slot_attach_sess_locked(
         cmq_route_pool_t *pool, size_t idx) {
 #ifdef CMQ_TLS_OPENSSL
@@ -2143,7 +2100,7 @@ int cmq_route_reload_attach(cmq_route_pool_t *pool, const char *nid,
         return -1;
     }
     if (owned) {
-        free((void *)*live_addr);
+        free((void *)(uintptr_t)*live_addr);
         *live_addr = owned;
     }
     if (fresh_port > 0)
