@@ -377,4 +377,20 @@ TEST(sublist_persist_wire, rejects_truncated_and_unknown_records) {
     system("rm -rf " P3_DIR);
 }
 
+TEST(sublist_persist_wire, rejects_extra_fields_in_sub_record) {
+    system("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
+    ASSERT_EQ(write_wal_line("S 9 valid.subject account unexpected_extra\n"), 0);
+
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 19989;
+    cfg.log_to_stdout = 0;
+    cfg.persist_dir = P3_DIR;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_ERR_INVALID_ARG);
+    ASSERT(srv == NULL);
+    system("rm -rf " P3_DIR);
+}
+
 TEST_MAIN()
