@@ -43,6 +43,14 @@ static const char *cmq_current_name  = NULL;
 static jmp_buf cmq_jmp_buf;
 static int cmq_color_enabled __attribute__((unused)) = 0;
 
+// Run a shell command for test setup/cleanup (mkdir, rm -rf, openssl req ...).
+// The exit status is intentionally ignored: callers that depend on the result
+// check the produced files instead, and this keeps -Wunused-result quiet.
+static inline void cmq_test_sh(const char *cmd) {
+    int rc = system(cmd);
+    (void)rc;
+}
+
 // Failure reporter: reports file/line and expression, then long-jumps back to test harness
 static inline void cmq_test_fail(const char *file, int line, const char *expr) {
     if (cmq_current_suite && cmq_current_name) {

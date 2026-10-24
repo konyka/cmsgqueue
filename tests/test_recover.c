@@ -19,7 +19,7 @@
 #define RECOVER_DIR  "/tmp/cmq-test-recover"
 
 TEST(recover, write_and_read_back) {
-    system("rm -rf " RECOVER_DIR);
+    cmq_test_sh("rm -rf " RECOVER_DIR);
 
     /* Phase 1: write. */
     cmq_filestore_t *fs = cmq_filestore_create(RECOVER_DIR, "cmq");
@@ -67,17 +67,17 @@ TEST(recover, write_and_read_back) {
     ASSERT(rc != 0);
 
     cmq_filestore_destroy(fs2);
-    system("rm -rf " RECOVER_DIR);
+    cmq_test_sh("rm -rf " RECOVER_DIR);
 }
 
 TEST(recover, empty_filestore) {
-    system("rm -rf /tmp/cmq-test-empty-recover");
+    cmq_test_sh("rm -rf /tmp/cmq-test-empty-recover");
     cmq_filestore_t *fs = cmq_filestore_create("/tmp/cmq-test-empty-recover", "cmq");
     ASSERT_NOT_NULL(fs);
     uint64_t last = cmq_filestore_last_seq(fs);
     ASSERT_EQ(last, 0);
     cmq_filestore_destroy(fs);
-    system("rm -rf /tmp/cmq-test-empty-recover");
+    cmq_test_sh("rm -rf /tmp/cmq-test-empty-recover");
 }
 
 TEST_MAIN()

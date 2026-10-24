@@ -52,6 +52,30 @@ TEST(rld, apply_acl_both) {
     cmq_rch_release_owner(h);
 }
 
+TEST(rld, apply_acl_swaps_live_handle) {
+    int stored = 2;
+    cmq_config_t fresh;
+    memset(&fresh, 0, sizeof(fresh));
+    fresh.log_level = 2;
+    fresh.acl_deny = "secret.>";
+    cmq_rch_t *h = NULL;
+    ASSERT_EQ(cmq_reload_apply_dynamic(NULL, &stored, &h, &fresh), 0);
+    ASSERT(h != NULL);
+    cmq_rch_t *first = h;
+    ASSERT_EQ(acl_admits(h, "secret.foo"), 0);
+    ASSERT_EQ(acl_admits(h, "other.bar"), 1);
+
+    /* Second reload with a different deny-list while a handle is
+     * already installed: this goes through cmq_rch_swap. */
+    fresh.acl_deny = "other.>";
+    ASSERT_EQ(cmq_reload_apply_dynamic(NULL, &stored, &h, &fresh), 0);
+    ASSERT(h != NULL);
+    ASSERT(h != first);
+    ASSERT_EQ(acl_admits(h, "secret.foo"), 1);
+    ASSERT_EQ(acl_admits(h, "other.bar"), 0);
+    cmq_rch_release_owner(h);
+}
+
 TEST(rld, reject) {
     int stored = 2;
     cmq_config_t fresh;

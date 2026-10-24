@@ -64,7 +64,7 @@ int cmq_otlp_reload_ca(cmq_otlp_url_t *url, const char **live_ca,
         char *owned = strdup(fresh_ca);
         if (!owned)
             return -1;
-        free((void *)*live_ca);
+        free((void *)(uintptr_t)*live_ca);
         *live_ca = owned;
     }
     return 0;
@@ -88,7 +88,7 @@ int cmq_otlp_reload_url(cmq_otlp_url_t *url, const char **live_ep,
         *url = tmp;
     }
     if (live_ep) {
-        free((void *)*live_ep);
+        free((void *)(uintptr_t)*live_ep);
         *live_ep = owned;
     }
     return 0;

@@ -47,8 +47,10 @@ TEST(rch, swap_transfers_ownership) {
     int a = 1, b = 2;
     cmq_rch_t *ha = cmq_rch_new(&a, test_free_fn);
     cmq_rch_t *hb = cmq_rch_new(&b, test_free_fn);
+    cmq_rch_t *orig_a = ha;
     cmq_rch_t *old = cmq_rch_swap(&ha, hb);
-    ASSERT_NOT_NULL(old);
+    ASSERT(old == orig_a);
+    ASSERT(ha == hb);
     /* Drop the old slot's owner reference. */
     cmq_rch_release_owner(old);
     /* Old's free_fn should have run for object a. */

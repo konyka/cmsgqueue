@@ -18,8 +18,8 @@ static int txa_apply(void *ctx, const char *subject, const uint8_t *data,
 }
 
 TEST(txa, apply) {
-    (void)system("rm -rf " TXA_DIR " && mkdir -p " TXA_DIR);
-    (void)system("rm -rf build-tdd/txa_other");
+    cmq_test_sh("rm -rf " TXA_DIR " && mkdir -p " TXA_DIR);
+    cmq_test_sh("rm -rf build-tdd/txa_other");
     cmq_txn_t *t = cmq_txn_create();
     ASSERT_NOT_NULL(t);
     ASSERT_EQ(cmq_txn_reload_attach_log(t, TXA_DIR), 0);

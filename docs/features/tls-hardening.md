@@ -21,7 +21,7 @@ The TLS backend in v0.3.0 (`src/enterprise/cmq_tls.c`) had a single SSL_CTX per 
 `src/enterprise/cmq_tls.c`:
 - New `alpn_data[256]` field on `cmq_tls_config_t`.
 - `cmq_tls_set_alpn` builds the wire-format length-prefixed list.
-- `cmq_tls_reload` builds a new SSL_CTX off-line, atomically swaps, frees the old one.
+- `cmq_tls_reload` builds a new SSL_CTX off-line, swaps it in under `ctx_lock`, then drops the config's reference on the old one. Live `SSL*` objects hold their own reference (`SSL_new` up-refs the CTX), so the old CTX is freed when the last session using it ends. `ctx_lock` also guards the lazy build in `cmq_tls_load` / `cmq_tls_server_session` / `cmq_tls_client_session`, so `SSL_new(cfg->ssl_ctx)` can never observe a half-swapped pointer. The reload path must not take an extra `SSL_CTX_up_ref` on the new CTX: the config owns exactly one reference, and `cmq_tls_config_destroy` releases it.
 - `tls_build_ssl_ctx` (called by `cmq_tls_load`) applies ALPN via `SSL_CTX_set_alpn_protos` if set.
 - `SSL_VERIFY_PEER` + `SSL_VERIFY_FAIL_IF_NO_PEER_CERT` set when `verify_peer` is true.
 

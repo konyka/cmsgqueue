@@ -9,8 +9,8 @@
 #define JSA_DIR "build-tdd/jsa"
 
 TEST(jsa, apply) {
-    (void)system("rm -rf " JSA_DIR " && mkdir -p " JSA_DIR);
-    (void)system("rm -rf build-tdd/jsa_other");
+    cmq_test_sh("rm -rf " JSA_DIR " && mkdir -p " JSA_DIR);
+    cmq_test_sh("rm -rf build-tdd/jsa_other");
     cmq_js_t *j = cmq_js_create();
     ASSERT_NOT_NULL(j);
     ASSERT_EQ(cmq_js_reload_attach_persist(j, JSA_DIR), 0);

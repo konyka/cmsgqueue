@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_h2.h"
+#include "cmq_io.h"
 #include "cmq_hpack.h"
 #include "cmq_tls.h"
 
@@ -230,19 +231,33 @@ int cmq_listener_reload_bind(int *lfd, const char **live_host, int *live_port,
                                   : (*live_port > 0 ? *live_port : default_port);
     if (use_port <= 0)
         return 0;
+    int family = strchr(use_host, ':') ? AF_INET6 : AF_INET;
     struct in_addr ha;
-    if (inet_pton(AF_INET, use_host, &ha) != 1)
+    struct in6_addr ha6;
+    if ((family == AF_INET && inet_pton(AF_INET, use_host, &ha) != 1) ||
+        (family == AF_INET6 && inet_pton(AF_INET6, use_host, &ha6) != 1))
         return -1;
-    int s = socket(AF_INET, SOCK_STREAM, 0);
+    int s = socket(family, SOCK_STREAM, 0);
     if (s < 0) return -1;
     int one = 1;
     (void)setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    struct sockaddr_in addr;
+    struct sockaddr_storage addr;
+    socklen_t addrlen;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)use_port);
-    addr.sin_addr = ha;
-    if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+    if (family == AF_INET6) {
+        struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)&addr;
+        a6->sin6_family = AF_INET6;
+        a6->sin6_port = htons((uint16_t)use_port);
+        a6->sin6_addr = ha6;
+        addrlen = sizeof(*a6);
+    } else {
+        struct sockaddr_in *a4 = (struct sockaddr_in *)&addr;
+        a4->sin_family = AF_INET;
+        a4->sin_port = htons((uint16_t)use_port);
+        a4->sin_addr = ha;
+        addrlen = sizeof(*a4);
+    }
+    if (bind(s, (struct sockaddr *)&addr, addrlen) != 0 ||
         listen(s, 512) != 0) {
         close(s);
         return -1;
@@ -253,7 +268,7 @@ int cmq_listener_reload_bind(int *lfd, const char **live_host, int *live_port,
             close(s);
             return -1;
         }
-        free((void *)*live_host);
+        free((void *)(uintptr_t)*live_host);
         *live_host = owned;
     }
     *lfd = s;
@@ -476,7 +491,7 @@ static ssize_t h2_fd_rd(void *ctx, uint8_t *buf, size_t n) {
 }
 
 static ssize_t h2_fd_wr(void *ctx, const uint8_t *buf, size_t n) {
-    return send(*(int *)ctx, buf, n, 0);
+    return cmq_sock_write(*(int *)ctx, buf, n);
 }
 
 static int h2_fd_wait(void *ctx, int want_write) {

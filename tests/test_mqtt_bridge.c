@@ -1,6 +1,7 @@
 /* P1 v0.5.3: F19b MQTT→cmq_sublist bridge plumbing. */
 
 #include "cmq_test.h"
+#include "cmq_mqtt.h"
 #include "cmq_mqtt_server.h"
 #include "cmq_server.h"
 #include "cmq_sublist.h"
@@ -9,7 +10,380 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+static int bridge_listen_loopback(int *port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int one = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+        listen(fd, 1) != 0) {
+        close(fd);
+        return -1;
+    }
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(fd, (struct sockaddr *)&addr, &addr_len) != 0) {
+        close(fd);
+        return -1;
+    }
+    *port = (int)ntohs(addr.sin_port);
+    return fd;
+}
+
+static int bridge_read_exact(int fd, uint8_t *buf, size_t len) {
+    size_t got = 0;
+    while (got < len) {
+        ssize_t n = recv(fd, buf + got, len - got, 0);
+        if (n <= 0) return -1;
+        got += (size_t)n;
+    }
+    return 0;
+}
+
+struct bridge_broker {
+    int broker_fd;
+    int puback_mode;
+    atomic_int saw_qos1;
+    atomic_int failed;
+};
+
+struct forward_broker {
+    int broker_fd;
+    const char *expected_topic;
+    atomic_int saw_publish;
+    atomic_int failed;
+};
+
+static void *bridge_forward_broker(void *arg) {
+    struct forward_broker *broker = arg;
+    int fd = accept(broker->broker_fd, NULL, NULL);
+    if (fd < 0) {
+        atomic_store(&broker->failed, 1);
+        return NULL;
+    }
+    uint8_t frame[256];
+    if (bridge_read_exact(fd, frame, 2) != 0 || frame[0] != 0x10 ||
+        frame[1] > sizeof(frame) - 2 ||
+        bridge_read_exact(fd, frame + 2, frame[1]) != 0) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+    static const uint8_t connack[] = {0x20, 0x02, 0x00, 0x00};
+    if (send(fd, connack, sizeof(connack), 0) != (ssize_t)sizeof(connack)) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+    struct pollfd pfd = { .fd = fd, .events = POLLIN };
+    if (poll(&pfd, 1, 250) > 0 && (pfd.revents & POLLIN)) {
+        if (bridge_read_exact(fd, frame, 2) != 0 ||
+            (frame[0] & 0xF0) != 0x30 || frame[1] > sizeof(frame) - 2 ||
+            bridge_read_exact(fd, frame + 2, frame[1]) != 0) {
+            atomic_store(&broker->failed, 1);
+        } else {
+            size_t topic_len = ((size_t)frame[2] << 8) | frame[3];
+            if (topic_len >= sizeof(frame) - 4 ||
+                !broker->expected_topic ||
+                strlen(broker->expected_topic) != topic_len ||
+                memcmp(frame + 4, broker->expected_topic, topic_len) != 0)
+                atomic_store(&broker->failed, 1);
+            else
+                atomic_store(&broker->saw_publish, 1);
+        }
+    }
+    close(fd);
+    return NULL;
+}
+
+static void forward_broker_init(struct forward_broker *broker, int fd,
+                                const char *expected_topic) {
+    broker->broker_fd = fd;
+    broker->expected_topic = expected_topic;
+    atomic_init(&broker->saw_publish, 0);
+    atomic_init(&broker->failed, 0);
+}
+
+enum {
+    BRIDGE_PUBACK_MATCHING = 0,
+    BRIDGE_PUBACK_MISMATCHED,
+    BRIDGE_PUBACK_MALFORMED
+};
+
+static void *bridge_qos1_broker(void *arg) {
+    struct bridge_broker *broker = arg;
+    int fd = accept(broker->broker_fd, NULL, NULL);
+    if (fd < 0) {
+        atomic_store(&broker->failed, 1);
+        return NULL;
+    }
+    uint8_t connect[256];
+    if (bridge_read_exact(fd, connect, 2) != 0 || connect[0] != 0x10 ||
+        connect[1] > sizeof(connect) - 2 ||
+        bridge_read_exact(fd, connect + 2, connect[1]) != 0) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+    static const uint8_t connack[] = {0x20, 0x02, 0x00, 0x00};
+    if (send(fd, connack, sizeof(connack), 0) != (ssize_t)sizeof(connack)) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+
+    uint8_t publish[256];
+    if (bridge_read_exact(fd, publish, 2) != 0 || (publish[0] & 0xF0) != 0x30 ||
+        (publish[0] & 0x06) != 0x02 || publish[1] > sizeof(publish) - 2 ||
+        bridge_read_exact(fd, publish + 2, publish[1]) != 0) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+    size_t topic_len = ((size_t)publish[2] << 8) | publish[3];
+    size_t pid_pos = 4 + topic_len;
+    if (pid_pos + 2 > (size_t)publish[1] + 2) {
+        atomic_store(&broker->failed, 1);
+        close(fd);
+        return NULL;
+    }
+    uint16_t packet_id = ((uint16_t)publish[pid_pos] << 8) | publish[pid_pos + 1];
+    atomic_store(&broker->saw_qos1, 1);
+    uint8_t puback[] = {0x40, 0x02, (uint8_t)(packet_id >> 8), (uint8_t)packet_id};
+    if (broker->puback_mode == BRIDGE_PUBACK_MISMATCHED) {
+        puback[3] = (uint8_t)(puback[3] == 0xFF ? 0 : puback[3] + 1);
+    } else if (broker->puback_mode == BRIDGE_PUBACK_MALFORMED) {
+        puback[1] = 0x01;
+    }
+    if (send(fd, puback, sizeof(puback), 0) != (ssize_t)sizeof(puback))
+        atomic_store(&broker->failed, 1);
+    close(fd);
+    return NULL;
+}
+
+static void *bridge_qos2_broker(void *arg) {
+    struct bridge_broker *broker = arg;
+    int fd = accept(broker->broker_fd, NULL, NULL);
+    if (fd < 0) { atomic_store(&broker->failed, 1); return NULL; }
+    uint8_t frame[256];
+    if (bridge_read_exact(fd, frame, 2) != 0 || frame[0] != 0x10 ||
+        bridge_read_exact(fd, frame + 2, frame[1]) != 0) goto fail;
+    static const uint8_t connack[] = {0x20, 0x02, 0x00, 0x00};
+    if (send(fd, connack, sizeof(connack), 0) != (ssize_t)sizeof(connack) ||
+        bridge_read_exact(fd, frame, 2) != 0 || (frame[0] & 0x06) != 0x04 ||
+        bridge_read_exact(fd, frame + 2, frame[1]) != 0) goto fail;
+    size_t topic_len = ((size_t)frame[2] << 8) | frame[3];
+    size_t pos = 4 + topic_len;
+    if (pos + 1 >= (size_t)frame[1] + 2) goto fail;
+    uint16_t pid = ((uint16_t)frame[pos] << 8) | frame[pos + 1];
+    uint8_t pubrec[] = {0x50, 0x02, (uint8_t)(pid >> 8), (uint8_t)pid};
+    if (send(fd, pubrec, sizeof(pubrec), 0) != (ssize_t)sizeof(pubrec) ||
+        bridge_read_exact(fd, frame, sizeof(uint8_t) * 4) != 0 ||
+        frame[0] != 0x62 || frame[1] != 0x02 ||
+        frame[2] != (uint8_t)(pid >> 8) || frame[3] != (uint8_t)pid) goto fail;
+    uint8_t pubcomp[] = {0x70, 0x02, (uint8_t)(pid >> 8), (uint8_t)pid};
+    if (send(fd, pubcomp, sizeof(pubcomp), 0) != (ssize_t)sizeof(pubcomp)) goto fail;
+    close(fd); return NULL;
+fail:
+    atomic_store(&broker->failed, 1); close(fd); return NULL;
+}
+
+TEST(mqtt_bridge, qos2_completes_pubrec_pubrel_pubcomp) {
+    int port = 0, broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct bridge_broker broker = { .broker_fd = broker_fd };
+    atomic_init(&broker.saw_qos1, 0);
+    atomic_init(&broker.failed, 0);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_qos2_broker, &broker), 0);
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("qos2-test");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_add_mapping(bridge, "orders.qos2", "orders/qos2", 2), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "orders.qos2", (const uint8_t *)"ok", 2), 1);
+    pthread_join(thread, NULL);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, qos1_waits_for_matching_puback) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct bridge_broker broker;
+    broker.broker_fd = broker_fd;
+    broker.puback_mode = BRIDGE_PUBACK_MATCHING;
+    atomic_init(&broker.saw_qos1, 0);
+    atomic_init(&broker.failed, 0);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_qos1_broker, &broker), 0);
+
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("qos1-test");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_add_mapping(bridge, "orders.created", "orders/created", 1), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "orders.created",
+                                      (const uint8_t *)"ok", 2), 1);
+    ASSERT_EQ(atomic_load(&broker.saw_qos1), 1);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
+    pthread_join(thread, NULL);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, unmapped_subject_is_off_by_default) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct forward_broker broker;
+    forward_broker_init(&broker, broker_fd, NULL);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_forward_broker, &broker), 0);
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("forward-off");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "unmapped.subject",
+                                      (const uint8_t *)"x", 1), 0);
+    pthread_join(thread, NULL);
+    ASSERT_EQ(atomic_load(&broker.saw_publish), 0);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, forward_all_converts_unmapped_subject) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct forward_broker broker;
+    forward_broker_init(&broker, broker_fd, "unmapped/subject");
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_forward_broker, &broker), 0);
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("forward-on");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_bridge_set_forward_all(bridge, 1), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "unmapped.subject",
+                                      (const uint8_t *)"x", 1), 1);
+    pthread_join(thread, NULL);
+    ASSERT_EQ(atomic_load(&broker.saw_publish), 1);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, qos1_rejects_mismatched_puback) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct bridge_broker broker;
+    broker.broker_fd = broker_fd;
+    broker.puback_mode = BRIDGE_PUBACK_MISMATCHED;
+    atomic_init(&broker.saw_qos1, 0);
+    atomic_init(&broker.failed, 0);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_qos1_broker, &broker), 0);
+
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("qos1-mismatch");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_add_mapping(bridge, "orders.created", "orders/created", 1), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "orders.created",
+                                      (const uint8_t *)"bad", 3), -1);
+    ASSERT_EQ(cmq_mqtt_bridge_is_connected(bridge), 0);
+    ASSERT_EQ(atomic_load(&broker.saw_qos1), 1);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
+    pthread_join(thread, NULL);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, qos1_rejects_malformed_puback) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct bridge_broker broker;
+    broker.broker_fd = broker_fd;
+    broker.puback_mode = BRIDGE_PUBACK_MALFORMED;
+    atomic_init(&broker.saw_qos1, 0);
+    atomic_init(&broker.failed, 0);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_qos1_broker, &broker), 0);
+
+    cmq_mqtt_bridge_t *bridge = cmq_mqtt_bridge_create("qos1-malformed");
+    ASSERT_NOT_NULL(bridge);
+    ASSERT_EQ(cmq_mqtt_bridge_connect(bridge, "127.0.0.1", port), 0);
+    ASSERT_EQ(cmq_mqtt_add_mapping(bridge, "orders.created", "orders/created", 1), 0);
+    ASSERT_EQ(cmq_mqtt_bridge_publish(bridge, "orders.created",
+                                      (const uint8_t *)"bad", 3), -1);
+    ASSERT_EQ(cmq_mqtt_bridge_is_connected(bridge), 0);
+    ASSERT_EQ(atomic_load(&broker.saw_qos1), 1);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+    cmq_mqtt_bridge_destroy(bridge);
+    pthread_join(thread, NULL);
+    close(broker_fd);
+}
+
+static void server_publish_reports_bridge_failure(int puback_mode) {
+    int port = 0;
+    int broker_fd = bridge_listen_loopback(&port);
+    ASSERT(broker_fd >= 0);
+    struct bridge_broker broker;
+    broker.broker_fd = broker_fd;
+    broker.puback_mode = puback_mode;
+    atomic_init(&broker.saw_qos1, 0);
+    atomic_init(&broker.failed, 0);
+    pthread_t thread;
+    ASSERT_EQ(pthread_create(&thread, NULL, bridge_qos1_broker, &broker), 0);
+
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25042 + puback_mode;
+    cfg.log_to_stdout = 0;
+    cfg.mqtt_bridge_addr = "127.0.0.1";
+    cfg.mqtt_bridge_port = port;
+    cfg.mqtt_bridge_maps[0].cmq_subject = strdup("orders.created");
+    cfg.mqtt_bridge_maps[0].mqtt_topic = strdup("orders/created");
+    cfg.mqtt_bridge_maps[0].qos = 1;
+    cfg.mqtt_bridge_map_count = 1;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    /* The local publish path still runs, but the upstream QoS1 failure is
+     * part of the non-client publish result. */
+    ASSERT_EQ(cmq_server_publish(srv, "orders.created",
+                                  (const uint8_t *)"server", 6,
+                                  "$default"), -1);
+    ASSERT_EQ(cmq_atomic_load_u64(&srv->stat_publishes_rejected,
+                                  CMQ_ATOMIC_RELAXED), 1);
+    ASSERT_EQ(atomic_load(&broker.saw_qos1), 1);
+    ASSERT_EQ(atomic_load(&broker.failed), 0);
+
+    cmq_server_destroy(srv);
+    pthread_join(thread, NULL);
+    close(broker_fd);
+}
+
+TEST(mqtt_bridge, server_publish_reports_mismatched_puback) {
+    server_publish_reports_bridge_failure(BRIDGE_PUBACK_MISMATCHED);
+}
+
+TEST(mqtt_bridge, server_publish_reports_malformed_puback) {
+    server_publish_reports_bridge_failure(BRIDGE_PUBACK_MALFORMED);
+}
 
 TEST(mqtt_bridge, set_bridge_server_keeps_pointer) {
     /* cmq_mqtt_set_bridge_server records the server pointer. The
@@ -81,6 +455,71 @@ extern int cmq_mqtt_test_enqueue_bridge(const char *topic,
                                           const uint8_t *payload,
                                           size_t len);
 
+static pthread_mutex_t g_block_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_block_cv = PTHREAD_COND_INITIALIZER;
+static int g_block_release;
+
+/* Insert callback that holds the relay thread until released, so the
+ * bridge queue can only fill. It owns (and frees) the payload. The wait is
+ * bounded so a failed assertion cannot leave the relay blocked forever. */
+static int blocking_insert_fn(void *sublist, const char *topic,
+                              const uint8_t *payload, size_t payload_len) {
+    (void)sublist; (void)topic; (void)payload_len;
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 10;
+    pthread_mutex_lock(&g_block_mu);
+    while (!g_block_release) {
+        if (pthread_cond_timedwait(&g_block_cv, &g_block_mu, &deadline) != 0)
+            break;
+    }
+    pthread_mutex_unlock(&g_block_mu);
+    free((void *)(uintptr_t)payload);
+    return 0;
+}
+
+/* The queue holds 256 entries. With the relay parked in the insert callback
+ * it can take at most one entry off the queue, so at most 257 of the 320
+ * enqueues are accepted whatever the scheduling, and every rejected one must
+ * be counted as a drop. (The previous version raced a free-running relay
+ * against the producer and only overflowed when the relay happened to lag.) */
+TEST(mqtt_bridge, queue_overflow_is_counted) {
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25060;
+    cfg.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    pthread_mutex_lock(&g_block_mu);
+    g_block_release = 0;
+    pthread_mutex_unlock(&g_block_mu);
+    cmq_mqtt_set_bridge_server(srv);
+    cmq_mqtt_register_sublist_insert(blocking_insert_fn, NULL);
+
+    uint8_t payload[1] = {0};
+    size_t before = (size_t)cmq_atomic_load_u64(&srv->stat_messages_dropped,
+                                                CMQ_ATOMIC_RELAXED);
+    int failures = 0;
+    for (int i = 0; i < 320; i++)
+        if (cmq_mqtt_test_enqueue_bridge("overflow", payload, sizeof(payload)) != 0)
+            failures++;
+    size_t after = (size_t)cmq_atomic_load_u64(&srv->stat_messages_dropped,
+                                               CMQ_ATOMIC_RELAXED);
+
+    pthread_mutex_lock(&g_block_mu);
+    g_block_release = 1;
+    pthread_cond_broadcast(&g_block_cv);
+    pthread_mutex_unlock(&g_block_mu);
+    cmq_mqtt_bridge_shutdown();
+    cmq_mqtt_register_sublist_insert(NULL, NULL);
+    cmq_server_destroy(srv);
+
+    ASSERT(failures >= 320 - 257);
+    ASSERT(after >= before + (size_t)failures);
+}
+
 TEST(mqtt_bridge, end_to_end_fanout_to_subscriber) {
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
@@ -104,6 +543,51 @@ TEST(mqtt_bridge, end_to_end_fanout_to_subscriber) {
     ASSERT_EQ(dropped, 0);
 
     cmq_mqtt_bridge_shutdown();
+    cmq_server_destroy(srv);
+}
+
+extern int cmq_mqtt_test_freelist_count(void);
+
+static atomic_int g_failing_insert_calls;
+static int failing_insert_fn(void *sublist, const char *topic,
+                             const uint8_t *payload, size_t payload_len) {
+    (void)sublist; (void)topic; (void)payload_len;
+    atomic_fetch_add(&g_failing_insert_calls, 1);
+    free((void *)(uintptr_t)payload);
+    return -1;
+}
+
+/* A registered insert callback owns the payload on every call, including
+ * when it reports failure. The relay used to push the already-freed buffer
+ * into its freelist and free it again at shutdown. Under ASAN this aborts
+ * with a double free; without it the freelist would hold a dangling pointer,
+ * which is what the count assertion catches. */
+TEST(mqtt_bridge, failed_insert_does_not_recycle_freed_payload) {
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = 25061;
+    cfg.log_to_stdout = 0;
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+
+    atomic_store(&g_failing_insert_calls, 0);
+    cmq_mqtt_set_bridge_server(srv);
+    cmq_mqtt_register_sublist_insert(failing_insert_fn, NULL);
+
+    uint8_t payload[32] = {0xAB};
+    for (int i = 0; i < 20; i++)
+        ASSERT_EQ(cmq_mqtt_test_enqueue_bridge("fail.insert", payload,
+                                               sizeof(payload)), 0);
+    for (int i = 0; i < 200 && atomic_load(&g_failing_insert_calls) < 20; i++) {
+        struct timespec ts = {0, 5000000};
+        nanosleep(&ts, NULL);
+    }
+    ASSERT_EQ(atomic_load(&g_failing_insert_calls), 20);
+    ASSERT_EQ(cmq_mqtt_test_freelist_count(), 0);
+
+    cmq_mqtt_bridge_shutdown();
+    cmq_mqtt_register_sublist_insert(NULL, NULL);
     cmq_server_destroy(srv);
 }
 

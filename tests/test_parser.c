@@ -1,5 +1,6 @@
 #include "cmq_parser.h"
 #include "cmq_proto.h"
+#include "cmq_compress.h"
 #include "cmq_test.h"
 #include <string.h>
 #include <stdlib.h>
@@ -248,6 +249,58 @@ TEST(parser, frame_encode_null_payload) {
               (size_t)0);
 }
 
+TEST(parser, frame_encode_compresses_beneficial_batch) {
+    uint8_t payload[512];
+    uint8_t buf[sizeof(cmq_frame_hdr_t) + cmq_compress_bound(sizeof(payload))];
+    uint8_t decoded[sizeof(payload)];
+    memset(payload, 'X', sizeof(payload));
+
+    size_t len = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_BATCH, 0,
+                                  payload, sizeof(payload));
+    ASSERT(len > sizeof(cmq_frame_hdr_t));
+    ASSERT((buf[3] & CMQ_FLAG_COMPRESSED) != 0);
+    ASSERT(((size_t)buf[5] | ((size_t)buf[6] << 8) |
+            ((size_t)buf[7] << 16) | ((size_t)buf[8] << 24)) <
+           sizeof(payload));
+    ASSERT_EQ(cmq_decompress(buf + sizeof(cmq_frame_hdr_t),
+                             len - sizeof(cmq_frame_hdr_t), decoded,
+                             sizeof(decoded)), (ssize_t)sizeof(decoded));
+    ASSERT(memcmp(decoded, payload, sizeof(payload)) == 0);
+}
+
+TEST(parser, frame_encode_skips_small_or_unhelpful_batch) {
+    uint8_t small[511];
+    uint8_t randomish[512];
+    uint8_t publish[1024];
+    uint8_t small_buf[sizeof(cmq_frame_hdr_t) + sizeof(small)];
+    uint8_t random_buf[sizeof(cmq_frame_hdr_t) + sizeof(randomish)];
+    uint8_t publish_buf[sizeof(cmq_frame_hdr_t) + sizeof(publish)];
+    uint32_t state = 0x9e3779b9u;
+    memset(small, 'X', sizeof(small));
+    memset(publish, 'X', sizeof(publish));
+    for (size_t i = 0; i < sizeof(randomish); i++) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        randomish[i] = (uint8_t)state;
+    }
+
+    size_t small_len = cmq_frame_encode(small_buf, sizeof(small_buf),
+                                        CMQ_OP_BATCH, 0, small, sizeof(small));
+    size_t random_len = cmq_frame_encode(random_buf, sizeof(random_buf),
+                                         CMQ_OP_BATCH, 0, randomish,
+                                         sizeof(randomish));
+    size_t publish_len = cmq_frame_encode(publish_buf, sizeof(publish_buf),
+                                          CMQ_OP_PUBLISH, 0, publish,
+                                          sizeof(publish));
+    ASSERT_EQ(small_len, sizeof(cmq_frame_hdr_t) + sizeof(small));
+    ASSERT_EQ(random_len, sizeof(cmq_frame_hdr_t) + sizeof(randomish));
+    ASSERT_EQ(publish_len, sizeof(cmq_frame_hdr_t) + sizeof(publish));
+    ASSERT_EQ(small_buf[3] & CMQ_FLAG_COMPRESSED, 0);
+    ASSERT_EQ(random_buf[3] & CMQ_FLAG_COMPRESSED, 0);
+    ASSERT_EQ(publish_buf[3] & CMQ_FLAG_COMPRESSED, 0);
+}
+
 TEST(parser, large_payload) {
     cmq_parser_t *p = cmq_parser_create();
     uint8_t bigpayload[4096];
@@ -430,10 +483,25 @@ TEST(parser, hard_cap_keeps_queued) {
     cmq_parser_destroy(p);
 }
 
-/* F11 + F2 / v0.5.99: data-path COMPRESSED is accepted.
- * SUBSCRIBE still fails closed.
+/* F11 + F2: CMQ_FLAG_COMPRESSED is rejected pre-CONNACK EXCEPT when
+ * the op is CMQ_OP_BATCH, which is the only frame on which wire-level
+ * compression is implemented. F2 ships BATCH-level zstd; per-message
+ * compression remains rejected to avoid silent round-trip of garbage.
  */
 TEST(parser, reject_flag_compressed) {
+    cmq_parser_t *p = cmq_parser_create();
+    uint8_t buf[32];
+    /* Encode with flags=CMQ_FLAG_COMPRESSED (0x01) on PUBLISH — must reject. */
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
+                                CMQ_FLAG_COMPRESSED, NULL, 0);
+    ASSERT(n > 0);
+    (void)cmq_parser_feed(p, buf, n);
+    ASSERT_EQ(cmq_parser_pending_error(p), 1);
+    cmq_parser_destroy(p);
+}
+
+TEST(parser, reject_flag_compressed_on_subscribe) {
+    /* SUBSCRIBE is non-batch; compression on it is nonsense and rejected. */
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
     size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_SUBSCRIBE,
@@ -444,11 +512,14 @@ TEST(parser, reject_flag_compressed) {
     cmq_parser_destroy(p);
 }
 
-TEST(parser, accept_compressed_batch) {
+TEST(parser, accept_flag_compressed_on_batch) {
+    /* F2: BATCH frame with CMQ_FLAG_COMPRESSED must parse without error.
+     * The server's handle_batch is responsible for decompressing; the
+     * parser just hands the compressed payload through. */
     cmq_parser_t *p = cmq_parser_create();
-    uint8_t buf[32];
+    uint8_t buf[64];
     size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_BATCH,
-                                CMQ_FLAG_COMPRESSED, NULL, 0);
+                                CMQ_FLAG_COMPRESSED, (const uint8_t *)"abc", 3);
     ASSERT(n > 0);
     int rc = cmq_parser_feed(p, buf, n);
     ASSERT_EQ(rc, 1);
@@ -456,7 +527,8 @@ TEST(parser, accept_compressed_batch) {
     const cmq_frame_t *f = cmq_parser_frame(p);
     ASSERT_NOT_NULL(f);
     ASSERT_EQ(f->hdr.op, CMQ_OP_BATCH);
-    ASSERT_EQ(f->hdr.flags, CMQ_FLAG_COMPRESSED);
+    ASSERT_EQ(f->hdr.flags & CMQ_FLAG_COMPRESSED, CMQ_FLAG_COMPRESSED);
+    ASSERT_EQ(f->payload_len, (size_t)3);
     cmq_parser_destroy(p);
 }
 
@@ -478,14 +550,37 @@ TEST(parser, reject_flag_checksum) {
 }
 
 TEST(parser, reject_flag_combined_reserved) {
+    /* F11 + F2: flags = 0x03 (both COMPRESSED|Checksum) on PUBLISH must reject.
+     * On BATCH the COMPRESSED bit is now allowed; CHECKSUM on BATCH remains
+     * rejected because the CRC32C trailing-4-bytes verification (F3) only
+     * applies to PUBLISH payloads. */
     cmq_parser_t *p = cmq_parser_create();
     uint8_t buf[32];
-    /* flags = 0x03 on SUBSCRIBE — still rejected (no control inflate). */
-    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_SUBSCRIBE,
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_PUBLISH,
                                 0x03, NULL, 0);
     ASSERT(n > 0);
     (void)cmq_parser_feed(p, buf, n);
     ASSERT_EQ(cmq_parser_pending_error(p), 1);
+    cmq_parser_destroy(p);
+}
+
+TEST(parser, accept_flag_compressed_only_on_batch) {
+    /* Spot-check: BATCH frame with flags = CMQ_FLAG_COMPRESSED (0x01)
+     * alone must NOT trigger pending_error. Combines with sanity
+     * checks on BATCH payload. */
+    cmq_parser_t *p = cmq_parser_create();
+    uint8_t buf[64];
+    uint8_t payload[] = {0x00, 0x01};
+    size_t n = cmq_frame_encode(buf, sizeof(buf), CMQ_OP_BATCH,
+                                CMQ_FLAG_COMPRESSED, payload, sizeof(payload));
+    ASSERT(n > 0);
+    int rc = cmq_parser_feed(p, buf, n);
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(cmq_parser_pending_error(p), 0);
+    const cmq_frame_t *f = cmq_parser_frame(p);
+    ASSERT_NOT_NULL(f);
+    ASSERT_EQ(f->hdr.op, CMQ_OP_BATCH);
+    ASSERT_EQ(f->payload_len, sizeof(payload));
     cmq_parser_destroy(p);
 }
 

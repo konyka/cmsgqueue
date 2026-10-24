@@ -24,7 +24,7 @@ static int spl_cb(void *ctx, int is_sub, uint64_t sub_id,
 }
 
 static int spl_prepare(void) {
-    (void)system("rm -rf " SPL_DIR " && mkdir -p " SPL_DIR);
+    cmq_test_sh("rm -rf " SPL_DIR " && mkdir -p " SPL_DIR);
     cmq_sublist_persist_t *p = cmq_sublist_persist_open(SPL_DIR);
     if (!p) return -1;
     int rc = cmq_sublist_persist_record_sub(p, 1, "foo.bar", "acc");
@@ -58,7 +58,7 @@ TEST(spl, omitted) {
 }
 
 TEST(spl, empty) {
-    (void)system("rm -rf " SPL_DIR " && mkdir -p " SPL_DIR);
+    cmq_test_sh("rm -rf " SPL_DIR " && mkdir -p " SPL_DIR);
     cmq_sublist_persist_t *p = cmq_sublist_persist_open(SPL_DIR);
     ASSERT_NOT_NULL(p);
     int loaded = 0;
@@ -72,7 +72,7 @@ TEST(spl, empty) {
 TEST(spl, reject) {
     ASSERT(cmq_sublist_persist_reload_load((cmq_sublist_persist_t *)1,
                                            NULL, spl_cb, NULL) != 0);
-    (void)system("rm -rf " SPL_DIR " && mkdir -p " SPL_DIR);
+    cmq_test_sh("rm -rf " SPL_DIR " && mkdir -p " SPL_DIR);
     cmq_sublist_persist_t *p = cmq_sublist_persist_open(SPL_DIR);
     ASSERT_NOT_NULL(p);
     int loaded = 0;

@@ -37,7 +37,7 @@ TEST(ev, mod_fd) {
     ASSERT_NOT_NULL(loop);
 
     int fds[2];
-    pipe(fds);
+    ASSERT_EQ(pipe(fds), 0);
 
     cmq_ev_add(loop, fds[0], CMQ_EV_READ, NULL, NULL);
     int rc = cmq_ev_mod(loop, fds[0], CMQ_EV_READ | CMQ_EV_WRITE, NULL, NULL);
@@ -71,11 +71,11 @@ TEST(ev, readable_event) {
     read_test_loop = loop;
 
     int fds[2];
-    pipe(fds);
+    ASSERT_EQ(pipe(fds), 0);
 
     cmq_ev_add(loop, fds[0], CMQ_EV_READ, ev_read_cb, NULL);
 
-    write(fds[1], "x", 1);
+    ASSERT_EQ(write(fds[1], "x", 1), 1);
 
     int rc = cmq_ev_run(loop, 100);
     ASSERT(rc >= 0);
@@ -103,7 +103,7 @@ TEST(ev, writable_event) {
     write_test_loop = loop;
 
     int fds[2];
-    pipe(fds);
+    ASSERT_EQ(pipe(fds), 0);
 
     cmq_ev_add(loop, fds[1], CMQ_EV_WRITE, ev_write_cb, NULL);
 

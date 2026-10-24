@@ -2,6 +2,7 @@
 #include "cmq_cluster.h"
 #include "cmq_thread.h"
 #include <errno.h>
+#include <stdint.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,7 +121,7 @@ int cmq_cluster_reload_attach(cmq_cluster_t **c,
             cmq_cluster_destroy(n);
             return -1;
         }
-        free((void *)*live_name);
+        free((void *)(uintptr_t)*live_name);
         *live_name = owned;
     }
     if (fresh_id && fresh_id[0] && live_id) {
@@ -129,7 +130,7 @@ int cmq_cluster_reload_attach(cmq_cluster_t **c,
             cmq_cluster_destroy(n);
             return -1;
         }
-        free((void *)*live_id);
+        free((void *)(uintptr_t)*live_id);
         *live_id = owned;
     }
     *c = n;

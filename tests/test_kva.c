@@ -9,8 +9,8 @@
 #define KVA_DIR "build-tdd/kva"
 
 TEST(kva, apply) {
-    (void)system("rm -rf " KVA_DIR " && mkdir -p " KVA_DIR);
-    (void)system("rm -rf build-tdd/kva_other");
+    cmq_test_sh("rm -rf " KVA_DIR " && mkdir -p " KVA_DIR);
+    cmq_test_sh("rm -rf build-tdd/kva_other");
     cmq_kvb_t *b = cmq_kvb_create();
     ASSERT_NOT_NULL(b);
     ASSERT_EQ(cmq_kvb_reload_attach_persist(b, KVA_DIR), 0);

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <limits.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
@@ -48,12 +49,27 @@ static void cfg_free_owned(const char *ptr) {
     free((void *)(uintptr_t)ptr);
 }
 
+static void cfg_free_secret(const char *ptr) {
+    if (!ptr) return;
+    volatile char *p = (volatile char *)(uintptr_t)ptr;
+    size_t len = strlen(ptr);
+    for (size_t i = 0; i < len; i++) p[i] = 0;
+    free((void *)(uintptr_t)ptr);
+}
+
 static int cfg_set_str(const char **dst, const char *value) {
     char *copy = strdup(value);
     if (!copy) return -1;
     cfg_free_owned(*dst);
     *dst = copy;
     return 0;
+}
+
+static int valid_primary_host(const char *value) {
+    struct in_addr addr4;
+    struct in6_addr addr6;
+    return inet_pton(AF_INET, value, &addr4) == 1 ||
+           inet_pton(AF_INET6, value, &addr6) == 1;
 }
 
 static int cfg_eq_ci(const char *a, const char *b) {
@@ -131,6 +147,26 @@ static int mqtt_bridge_addr_ok(const char *addr) {
 
 static int parse_int_range(const char *value, int min, int max, int *out);
 
+static int info_go_ok(const char *value) {
+    size_t n;
+    size_t digits = 0;
+    unsigned long number = 0;
+
+    if (!value || !value[0]) return 0;
+    n = strlen(value);
+    if (n < 2 || n > 12) return 0;
+    while (digits < n && isdigit((unsigned char)value[digits])) {
+        number = number * 10UL + (unsigned long)(value[digits] - '0');
+        if (number > 365UL * 24UL * 60UL * 60UL) return 0;
+        digits++;
+    }
+    if (digits == 0 || number == 0 || n - digits < 1 || n - digits > 2)
+        return 0;
+    if (n - digits == 1)
+        return value[digits] == 's' || value[digits] == 'm' || value[digits] == 'h';
+    return value[digits] == 'm' && value[digits + 1] == 's';
+}
+
 static int mqtt_map_subject_ok(const char *s, size_t n) {
     if (!s || n == 0 || n >= 256) return 0;
     for (size_t i = 0; i < n; i++) {
@@ -197,6 +233,19 @@ static int cfg_set_str_empty(const char **dst, const char *value) {
     return cfg_set_str(dst, value);
 }
 
+static int cfg_set_secret_empty(const char **dst, const char *value) {
+    if (!value[0]) {
+        cfg_free_secret(*dst);
+        *dst = NULL;
+        return 0;
+    }
+    char *copy = strdup(value);
+    if (!copy) return -1;
+    cfg_free_secret(*dst);
+    *dst = copy;
+    return 0;
+}
+
 static int parse_listener_key(const char *key, const char *value,
                               cmq_config_t *config) {
     if (strcmp(key, "listener_count") == 0)
@@ -221,11 +270,7 @@ static int parse_listener_key(const char *key, const char *value,
             config->listeners[idx].host = NULL;
             return 0;
         }
-        {
-            struct in_addr ha;
-            if (inet_pton(AF_INET, value, &ha) != 1)
-                return -1;
-        }
+        if (!valid_primary_host(value)) return -1;
         return cfg_set_str(&config->listeners[idx].host, value);
     }
     if (strcmp(rest, "_port") == 0)
@@ -298,8 +343,18 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->mqtt_bridge_addr, value);
     } else if (strcmp(key, "mqtt_bridge_port") == 0) {
         return parse_int_range(value, 0, 65535, &config->mqtt_bridge_port);
+    } else if (strcmp(key, "mqtt_bridge_username") == 0) {
+        return cfg_set_secret_empty(&config->mqtt_bridge_username, value);
+    } else if (strcmp(key, "mqtt_bridge_password") == 0) {
+        return cfg_set_secret_empty(&config->mqtt_bridge_password, value);
     } else if (strcmp(key, "mqtt_bridge_map") == 0) {
         return parse_mqtt_bridge_map(value, config);
+    } else if (strcmp(key, "mqtt_bridge_forward_all") == 0) {
+        int enabled = 0;
+        if (parse_int_range(value, 0, 1, &enabled) != 0) return -1;
+        config->mqtt_bridge_forward_all = enabled;
+        config->mqtt_bridge_forward_all_set = 1;
+        return 0;
     } else if (strcmp(key, "threads") == 0 || strcmp(key, "num_threads") == 0) {
         return parse_int_range(value, 0, 64, &config->num_threads);
     } else if (strcmp(key, "max_clients") == 0) {
@@ -318,6 +373,9 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return parse_int_range(value, 0, 1073741824,
                               &config->max_bytes_per_sec_per_account);
     } else if (strcmp(key, "max_connections_per_account") == 0) {
+        /* Despite the legacy name, this is a per-account CONNECT
+         * rate limit (CONNECTs/sec), not a simultaneous-connection
+         * cap. See docs/features/quota.md. */
         return parse_int_range(value, 0, 1000000,
                               &config->max_connections_per_account);
     } else if (strcmp(key, "account_max_connections") == 0) {
@@ -358,10 +416,22 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->blocklist_file, value);
     } else if (strcmp(key, "inbox_max_pending") == 0) {
         return parse_int_range(value, 0, 100000, &config->inbox_max_pending);
+    } else if (strcmp(key, "persist_sync_interval_ms") == 0) {
+        int interval = 0;
+        int rc = parse_int_range(value, 0, INT_MAX, &interval);
+        if (rc == 0) config->persist_sync_interval_ms = (unsigned)interval;
+        return rc;
     } else if (strcmp(key, "ping_interval") == 0 || strcmp(key, "ping_interval_ms") == 0) {
         return parse_int_range(value, 0, 86400000, &config->ping_interval_ms);
     } else if (strcmp(key, "write_timeout") == 0 || strcmp(key, "write_timeout_ms") == 0) {
         return parse_int_range(value, 0, 86400000, &config->write_timeout_ms);
+    } else if (strcmp(key, "info_go") == 0) {
+        if (!info_go_ok(value)) return -1;
+        return cfg_set_str(&config->info_go, value);
+    } else if (strcmp(key, "persist_dir") == 0) {
+        return cfg_set_str(&config->persist_dir, value);
+    } else if (strcmp(key, "audit_path") == 0) {
+        return cfg_set_str_empty(&config->audit_path, value);
     } else if (strcmp(key, "log_file") == 0) {
         if (!value[0]) {
             cfg_free_owned(config->log_file);
@@ -384,6 +454,9 @@ static int parse_key_value(const char *key, const char *value, cmq_config_t *con
         return cfg_set_str(&config->auth_username, value);
     } else if (strcmp(key, "auth_password") == 0) {
         return cfg_set_str(&config->auth_password, value);
+    } else if (strcmp(key, "auth_failed_connects_per_sec") == 0) {
+        return parse_int_range(value, 0, 100000,
+                               &config->auth_failed_connects_per_sec);
     } else if (strcmp(key, "jwt_issuer") == 0) {
         return cfg_set_str_empty(&config->jwt_issuer, value);
     } else if (strcmp(key, "jwt_hmac_secret") == 0) {
@@ -480,12 +553,17 @@ void cmq_config_free(cmq_config_t *config) {
     cfg_free_owned(config->acl_deny);
     cfg_free_owned(config->blocklist_file);
     cfg_free_owned(config->config_file);
+    cfg_free_owned(config->info_go);
     cfg_free_owned(config->persist_dir);
+    cfg_free_owned(config->audit_path);
     cfg_free_owned(config->mqtt_bridge_addr);
+    cfg_free_secret(config->mqtt_bridge_username);
+    cfg_free_secret(config->mqtt_bridge_password);
     for (int i = 0; i < 4; i++) {
         cfg_free_owned(config->listeners[i].tls_cert);
         cfg_free_owned(config->listeners[i].tls_key);
         cfg_free_owned(config->listeners[i].tls_ca);
+        cfg_free_owned(config->listeners[i].tls_crl);
         cfg_free_owned(config->listeners[i].host);
         config->listeners[i].tls_cert = NULL;
         config->listeners[i].tls_key = NULL;
@@ -506,6 +584,7 @@ void cmq_config_free(cmq_config_t *config) {
         cfg_free_owned(config->routes[i].addr);
     config->host = NULL;
     config->log_file = NULL;
+    config->persist_dir = NULL;
     config->auth_username = NULL;
     config->auth_password = NULL;
     config->jwt_issuer = NULL;
@@ -528,8 +607,11 @@ void cmq_config_free(cmq_config_t *config) {
     config->acl_deny = NULL;
     config->blocklist_file = NULL;
     config->config_file = NULL;
+    config->info_go = NULL;
     config->persist_dir = NULL;
     config->mqtt_bridge_addr = NULL;
+    config->mqtt_bridge_username = NULL;
+    config->mqtt_bridge_password = NULL;
     for (int i = 0; i < 8; i++) {
         config->routes[i].addr = NULL;
         config->routes[i].port = 0;
@@ -550,6 +632,9 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
     config->log_level = 2;
     /* Omitted log_to_stdout → on (cmq.h default 1; 0 is explicit off). */
     config->log_to_stdout = 1;
+    /* Omitted auth limiter key → documented default; explicit 0 disables. */
+    config->auth_failed_connects_per_sec =
+        CMQ_DEFAULT_AUTH_FAILED_CONNECTS_PER_SEC;
 
     FILE *fp = fopen(path, "r");
     if (!fp) return CMQ_ERR_IO;
@@ -598,6 +683,10 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
     }
 
     fclose(fp);
+    if (!config->info_go && cfg_set_str(&config->info_go, "20m") != 0) {
+        cmq_config_free(config);
+        return CMQ_ERR_NO_MEMORY;
+    }
     if (!cfg_saw_config_file && persist_dir_ok(path))
         (void)cfg_set_str(&config->config_file, path);
     return CMQ_OK;
@@ -605,6 +694,8 @@ cmq_status_t cmq_config_load(const char *path, cmq_config_t *config) {
 
 cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     if (!config) return CMQ_ERR_INVALID_ARG;
+    if (config->info_go && !info_go_ok(config->info_go))
+        return CMQ_ERR_INVALID_ARG;
     if (config->port < 0 || config->port > 65535) return CMQ_ERR_INVALID_ARG;
     if (config->h2_port < 0 || config->h2_port > 65535)
         return CMQ_ERR_INVALID_ARG;
@@ -631,7 +722,9 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
             return CMQ_ERR_INVALID_ARG;
         if (config->listeners[i].host) {
             struct in_addr ha;
-            if (inet_pton(AF_INET, config->listeners[i].host, &ha) != 1)
+            struct in6_addr ha6;
+            if (inet_pton(AF_INET, config->listeners[i].host, &ha) != 1 &&
+                inet_pton(AF_INET6, config->listeners[i].host, &ha6) != 1)
                 return CMQ_ERR_INVALID_ARG;
         }
     }
@@ -667,6 +760,9 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
         return CMQ_ERR_INVALID_ARG;
     if (config->max_clients < 0) return CMQ_ERR_INVALID_ARG;
     if (config->max_clients > CMQ_MAX_CLIENTS_LIMIT)
+        return CMQ_ERR_INVALID_ARG;
+    if (config->auth_failed_connects_per_sec < 0 ||
+        config->auth_failed_connects_per_sec > 100000)
         return CMQ_ERR_INVALID_ARG;
     if (config->num_threads < 0 || config->num_threads > 64)
         return CMQ_ERR_INVALID_ARG;
@@ -778,8 +874,7 @@ cmq_status_t cmq_config_validate(const cmq_config_t *config) {
     }
     {
         const char *host = config->host ? config->host : CMQ_DEFAULT_HOST;
-        struct in_addr ha;
-        if (inet_pton(AF_INET, host, &ha) != 1)
+        if (!valid_primary_host(host))
             return CMQ_ERR_INVALID_ARG;
     }
     /* Routes without cluster identity would silently disable forwarding. */

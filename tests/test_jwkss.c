@@ -19,8 +19,8 @@ static const char *k_jwks =
     "{\"keys\":[{\"kty\":\"oct\",\"kid\":\"k1\",\"k\":\"czNjcmV0\"}]}";
 
 static void gen_cert(void) {
-    (void)system("rm -rf " JWKSS_DIR " && mkdir -p " JWKSS_DIR);
-    (void)system("openssl req -x509 -newkey rsa:2048 -keyout "
+    cmq_test_sh("rm -rf " JWKSS_DIR " && mkdir -p " JWKSS_DIR);
+    cmq_test_sh("openssl req -x509 -newkey rsa:2048 -keyout "
                  JWKSS_DIR "/key.pem -out " JWKSS_DIR "/cert.pem "
                  "-days 1 -nodes -subj '/CN=127.0.0.1' "
                  "-addext 'subjectAltName=IP:127.0.0.1' 2>/dev/null");

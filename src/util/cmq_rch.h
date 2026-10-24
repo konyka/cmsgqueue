@@ -60,10 +60,9 @@ static inline void cmq_rch_release_owner(cmq_rch_t *h) {
 }
 
 static inline cmq_rch_t *cmq_rch_swap(cmq_rch_t **slot, cmq_rch_t *new_h) {
-    void *old = new_h;
-    cmq_atomic_compare_exchange_ptr((cmq_atomic_ptr *)slot, &old, new_h,
-                                     CMQ_ATOMIC_ACQ_REL);
-    return (cmq_rch_t *)old;
+    return (cmq_rch_t *)atomic_exchange_explicit((cmq_atomic_ptr *)slot,
+                                                  (void *)new_h,
+                                                  CMQ_ATOMIC_ACQ_REL);
 }
 
 #endif

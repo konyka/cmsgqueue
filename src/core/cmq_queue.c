@@ -66,7 +66,7 @@ void cmq_queue_destroy(cmq_queue_t *q) {
 }
 
 int cmq_queue_push(cmq_queue_t *q, void *data) {
-    if (!q || !q->tail) return -1;
+    if (!q || !__atomic_load_n(&q->tail, __ATOMIC_RELAXED)) return -1;
     if (atomic_load_explicit(&q->dying, memory_order_acquire))
         return -1;
     atomic_fetch_add_explicit(&q->in_flight, 1, memory_order_acq_rel);
@@ -82,7 +82,10 @@ int cmq_queue_push(cmq_queue_t *q, void *data) {
     node->data = data;
     node->next = NULL;
 
-    cmq_queue_node_t *prev = __atomic_exchange_n(&q->tail, node, __ATOMIC_RELEASE);
+    /* ACQ_REL: release publishes this node's initialisation, acquire makes
+     * the previous producer's initialisation of `prev` visible before we
+     * link through it. RELEASE alone is a data race on weakly ordered CPUs. */
+    cmq_queue_node_t *prev = __atomic_exchange_n(&q->tail, node, __ATOMIC_ACQ_REL);
     __atomic_store_n(&prev->next, node, __ATOMIC_RELEASE);
     if (atomic_fetch_sub_explicit(&q->in_flight, 1, memory_order_acq_rel) - 1 == 0 &&
         atomic_load_explicit(&q->dying, memory_order_acquire)) {

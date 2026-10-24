@@ -38,7 +38,6 @@ static void *match_thread(void *arg) {
 
 static void *insert_thread(void *arg) {
     (void)arg;
-    int i = 0;
     while (!atomic_load(&g_stop)) {
         test_sub_t *s = malloc(sizeof(*s));
         snprintf(s->subject, sizeof(s->subject), "foo.bar.baz");
@@ -46,7 +45,6 @@ static void *insert_thread(void *arg) {
         ms_sleep(1);
         cmq_sublist_remove(g_sl, s->subject, s);
         free(s);
-        i++;
     }
     return NULL;
 }

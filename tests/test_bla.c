@@ -10,7 +10,7 @@
 #define BLA_PATH "build-tdd/bla.txt"
 
 static int write_list(void) {
-    (void)system("mkdir -p build-tdd");
+    cmq_test_sh("mkdir -p build-tdd");
     FILE *f = fopen(BLA_PATH, "w");
     if (!f) return -1;
     fputs("10.0.0.1\n", f);

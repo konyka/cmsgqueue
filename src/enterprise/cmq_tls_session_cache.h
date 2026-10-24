@@ -29,6 +29,12 @@ int cmq_tls_session_cache_insert(cmq_tls_config_t *cfg,
 void *cmq_tls_session_cache_lookup(cmq_tls_config_t *cfg,
                                     const unsigned char *id,
                                     unsigned int id_len);
+/* Like cmq_tls_session_cache_lookup, but the returned session carries
+ * one extra reference taken while the cache lock is held. The caller
+ * owns that reference and must release it. */
+void *cmq_tls_session_cache_lookup_ref(cmq_tls_config_t *cfg,
+                                        const unsigned char *id,
+                                        unsigned int id_len);
 size_t cmq_tls_session_cache_size(cmq_tls_config_t *cfg);
 
 #endif

@@ -78,8 +78,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install cross-compiler
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install cross-compiler and arm64 libraries
+        run: |
+          sudo dpkg --add-architecture arm64
+          # Keep the default sources amd64-only and add the arm64 ports mirror.
+          sudo sed -i 's/^Types: deb$/Types: deb\nArchitectures: amd64/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo tee /etc/apt/sources.list.d/arm64-ports.sources > /dev/null <<'EOF'
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: noble noble-updates noble-security
+          Components: main universe
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config gcc-aarch64-linux-gnu \
+            libssl-dev:arm64 libzstd-dev:arm64 zlib1g-dev:arm64
       - name: Configure
         run: |
           cmake -B build \
@@ -118,7 +132,13 @@ jobs:
         run: ctest --output-on-failure -j1
       - name: Report coverage
         working-directory: build
-        run: gcovr --root .. --filter '.*/src/.*' --print-summary --xml coverage.xml
+        # gcov can emit negative branch counts for multithreaded code
+        # (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=68080), and the
+        # block records it writes for cmq_server.c (more than 9999 lines)
+        # are not recognised by gcovr 7.0. Only "all" lets it finish on
+        # the ubuntu-latest toolchain (gcc 13.3 + gcovr 7.0); the skipped
+        # lines are reported on stderr.
+        run: gcovr --root .. --filter '.*/src/.*' --print-summary --xml coverage.xml --gcov-ignore-parse-errors all
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:

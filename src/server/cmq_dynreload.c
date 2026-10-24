@@ -138,7 +138,7 @@ static int tls_live_take(const char **dst, char *neu) {
         free(neu);
         return 0;
     }
-    free((void *)*dst);
+    free((void *)(uintptr_t)*dst);
     *dst = neu;
     return 0;
 }
@@ -281,8 +281,8 @@ int cmq_reload_apply_mqtt_maps_live(cmq_config_t *live,
         qos[i] = fresh->mqtt_bridge_maps[i].qos;
     }
     for (int i = 0; i < live->mqtt_bridge_map_count && i < 8; i++) {
-        free((void *)live->mqtt_bridge_maps[i].cmq_subject);
-        free((void *)live->mqtt_bridge_maps[i].mqtt_topic);
+        free((void *)(uintptr_t)live->mqtt_bridge_maps[i].cmq_subject);
+        free((void *)(uintptr_t)live->mqtt_bridge_maps[i].mqtt_topic);
         live->mqtt_bridge_maps[i].cmq_subject = NULL;
         live->mqtt_bridge_maps[i].mqtt_topic = NULL;
         live->mqtt_bridge_maps[i].qos = 0;
@@ -327,7 +327,7 @@ int cmq_reload_apply_auth(cmq_config_t *live, const cmq_config_t *fresh) {
 
 #define TAKE(dst, neu) do { \
         if (neu) { \
-            free((void *)(dst)); \
+            free((void *)(uintptr_t)(dst)); \
             (dst) = neu; \
         } \
     } while (0)
@@ -404,13 +404,16 @@ int cmq_reload_apply_config_file(const char **live, const char *fresh) {
     char *owned = strdup(fresh);
     if (!owned)
         return -1;
-    free((void *)*live);
+    free((void *)(uintptr_t)*live);
     *live = owned;
     return 0;
 }
 
 int cmq_reload_apply_limits(cmq_config_t *live, const cmq_config_t *fresh) {
     if (!live || !fresh) return -1;
+    if (fresh->auth_failed_connects_per_sec < 0 ||
+        fresh->auth_failed_connects_per_sec > 100000)
+        return -1;
     if (fresh->max_connects_per_sec < 0 ||
         fresh->max_connects_per_sec > 100000)
         return -1;
@@ -425,6 +428,7 @@ int cmq_reload_apply_limits(cmq_config_t *live, const cmq_config_t *fresh) {
         return -1;
     if (fresh->max_connects_per_sec > 0)
         live->max_connects_per_sec = fresh->max_connects_per_sec;
+    live->auth_failed_connects_per_sec = fresh->auth_failed_connects_per_sec;
     if (fresh->inbox_max_pending > 0)
         live->inbox_max_pending = fresh->inbox_max_pending;
     if (fresh->ping_interval_ms > 0)
