@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <sys/select.h>
 #include <stdatomic.h>
+#include <pthread.h>
 #include <time.h>
 
 /* F1: OpenSSL-backed TLS implementation (replaces plaintext stub).
@@ -53,8 +54,9 @@ struct cmq_tls_config {
     atomic_int in_flight;
     atomic_int dying;
 #ifdef CMQ_TLS_OPENSSL
-    SSL_CTX *ssl_ctx;  /* per-listener context, immutable after init */
+    SSL_CTX *ssl_ctx;  /* per-listener context; swapped by reload under ctx_lock */
     int ssl_ctx_init_done;
+    pthread_mutex_t ctx_lock;  /* guards ssl_ctx / ssl_ctx_init_done */
 #endif
     void *session_cache_state;  /* v0.5.23: TLS session resumption cache */
 };
@@ -220,7 +222,9 @@ static int tls_build_ssl_ctx(cmq_tls_config_t *cfg) {
             if (crl_obj) {
                 X509_STORE *store = SSL_CTX_get_cert_store(cfg->ssl_ctx);
                 if (store) {
+                    /* add_crl takes its own reference; drop ours. */
                     X509_STORE_add_crl(store, crl_obj);
+                    X509_CRL_free(crl_obj);
                     /* v0.5.47: also flag the store to consult the
                      * CRL during cert verification. Without the
                      * flags, the verifier loads the CRL but never
@@ -286,6 +290,10 @@ cmq_tls_config_t *cmq_tls_config_create(void) {
 #ifdef CMQ_TLS_OPENSSL
     cfg->ssl_ctx = NULL;
     cfg->ssl_ctx_init_done = 0;
+    if (pthread_mutex_init(&cfg->ctx_lock, NULL) != 0) {
+        free(cfg);
+        return NULL;
+    }
 #endif
     return cfg;
 }
@@ -303,6 +311,7 @@ void cmq_tls_config_destroy(cmq_tls_config_t *cfg) {
         SSL_CTX_free(cfg->ssl_ctx);
         cfg->ssl_ctx = NULL;
     }
+    pthread_mutex_destroy(&cfg->ctx_lock);
 #endif
     free(cfg);
 }
@@ -332,7 +341,9 @@ int cmq_tls_load(cmq_tls_config_t *cfg) {
     if (!cfg->has_cert || !cfg->has_key) return -1;
 #ifdef CMQ_TLS_OPENSSL
     if (tls_begin_op(cfg) != 0) return -1;
+    pthread_mutex_lock(&cfg->ctx_lock);
     int rc = tls_build_ssl_ctx(cfg);
+    pthread_mutex_unlock(&cfg->ctx_lock);
     if (rc == 0) {
         /* v0.5.95: initialize the per-config session cache so the
          * new_cb / get_cb callbacks can store and look up sessions.
@@ -485,7 +496,7 @@ static int tls_reload_dup(const char *fresh, const char **live) {
     if (!fresh || !fresh[0] || !live) return 0;
     char *owned = strdup(fresh);
     if (!owned) return -1;
-    free((void *)*live);
+    free((void *)(uintptr_t)*live);
     *live = owned;
     return 0;
 }
@@ -675,20 +686,15 @@ int cmq_tls_reload(cmq_tls_config_t *cfg) {
     SSL_CTX_set_generate_session_id(new_ctx, cmq_tls_gen_session_id);
     SSL_CTX_set_session_cache_mode(new_ctx,
         SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_INTERNAL);
-    /* P1 v0.5.4 UAF fix: bump the new CTX's built-in OpenSSL
-     * refcount so it isn't freed when the next reload decrements
-     * to zero. Existing in-flight SSL* each hold a borrowed
-     * reference via SSL_CTX_up_ref on session init. We free the
-     * old CTX only when its refcount drops to 0. */
-    if (SSL_CTX_up_ref(new_ctx) != 1) {
-        SSL_CTX_free(new_ctx);
-        tls_end_op(cfg);
-        return -1;
-    }
+    pthread_mutex_lock(&cfg->ctx_lock);
     SSL_CTX *old = cfg->ssl_ctx;
     cfg->ssl_ctx = new_ctx;
     cfg->ssl_ctx_init_done = 1;
+    pthread_mutex_unlock(&cfg->ctx_lock);
     tls_end_op(cfg);
+    /* Live SSL* objects hold their own reference on the old CTX
+     * (SSL_new -> SSL_CTX_up_ref), so dropping the config's reference
+     * here only frees it once the last session is gone. */
     if (old) SSL_CTX_free(old);
     return 0;
 #endif
@@ -749,12 +755,15 @@ cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
     if (tls_begin_op(cfg) != 0) return NULL;
 #ifdef CMQ_TLS_OPENSSL
     /* Build the SSL_CTX lazily on first session. */
+    pthread_mutex_lock(&cfg->ctx_lock);
     if (!cfg->ssl_ctx_init_done) {
         if (tls_build_ssl_ctx(cfg) != 0) {
+            pthread_mutex_unlock(&cfg->ctx_lock);
             tls_end_op(cfg);
             return NULL;
         }
     }
+    pthread_mutex_unlock(&cfg->ctx_lock);
 #endif
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));
     if (!s) {
@@ -766,7 +775,9 @@ cmq_tls_session_t *cmq_tls_server_session(cmq_tls_config_t *cfg, int fd) {
     s->is_server = 1;
     s->handshake_done = 0;
 #ifdef CMQ_TLS_OPENSSL
+    pthread_mutex_lock(&cfg->ctx_lock);
     s->ssl = SSL_new(cfg->ssl_ctx);
+    pthread_mutex_unlock(&cfg->ctx_lock);
     if (!s->ssl) {
         free(s);
         tls_end_op(cfg);
@@ -789,12 +800,15 @@ cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
     if (!cfg || fd < 0 || !cmq_tls_configured(cfg)) return NULL;
     if (tls_begin_op(cfg) != 0) return NULL;
 #ifdef CMQ_TLS_OPENSSL
+    pthread_mutex_lock(&cfg->ctx_lock);
     if (!cfg->ssl_ctx_init_done) {
         if (tls_build_ssl_ctx(cfg) != 0) {
+            pthread_mutex_unlock(&cfg->ctx_lock);
             tls_end_op(cfg);
             return NULL;
         }
     }
+    pthread_mutex_unlock(&cfg->ctx_lock);
 #endif
     cmq_tls_session_t *s = calloc(1, sizeof(cmq_tls_session_t));
     if (!s) {
@@ -806,7 +820,9 @@ cmq_tls_session_t *cmq_tls_client_session(cmq_tls_config_t *cfg, int fd) {
     s->is_server = 0;
     s->handshake_done = 0;
 #ifdef CMQ_TLS_OPENSSL
+    pthread_mutex_lock(&cfg->ctx_lock);
     s->ssl = SSL_new(cfg->ssl_ctx);
+    pthread_mutex_unlock(&cfg->ctx_lock);
     if (!s->ssl) {
         free(s);
         tls_end_op(cfg);
@@ -962,6 +978,13 @@ int cmq_tls_set_session_cache_state(cmq_tls_config_t *cfg, void *state) {
     return 0;
 }
 
+void cmq_tls_session_ref_slot(void *sess) {
+#ifdef CMQ_TLS_OPENSSL
+    if (sess) (void)SSL_SESSION_up_ref((SSL_SESSION *)sess);
+#endif
+    (void)sess;
+}
+
 void cmq_tls_session_free_slot(void *sess) {
 #ifdef CMQ_TLS_OPENSSL
     if (sess) SSL_SESSION_free((SSL_SESSION *)sess);
@@ -973,14 +996,15 @@ void cmq_tls_session_free_slot(void *sess) {
 /* v0.5.27: OpenSSL session-callback wiring.
  *
  * `new_cb` is called by OpenSSL after a successful handshake with the
- * freshly-minted SSL_SESSION*. We extract its session ID and insert into
- * the per-config cache (which takes ownership of the up-ref'd session).
+ * freshly-minted SSL_SESSION*. OpenSSL has already incremented its
+ * reference count for the application; returning 1 hands that
+ * reference to the per-config cache, which frees it on eviction or
+ * destroy.
  *
  * `get_cb` is called by OpenSSL when a client presents a session ID in
- * the ClientHello. We return the cached SSL_SESSION* (or NULL on miss
- * or invalid params). OpenSSL does NOT take ownership of the returned
- * pointer; we return a borrowed reference. The cache's lifetime owns
- * the underlying storage.
+ * the ClientHello. We return the cached SSL_SESSION* with one extra
+ * reference (or NULL on miss or invalid params) and set copy=0, so
+ * OpenSSL owns and releases that reference.
  *
  * The cmq_tls_config_t* is stashed on the SSL_CTX via SSL_CTX_set_app_data
  * (set in tls_build_ssl_ctx) so the callbacks can find the per-config
@@ -994,25 +1018,28 @@ static int cmq_tls_sess_new_cb(SSL *ssl, SSL_SESSION *sess) {
     unsigned int id_len = 0;
     const unsigned char *id = SSL_SESSION_get_id(sess, &id_len);
     if (!id || id_len == 0) return 0;
-    /* Up-ref so the cache owns its own reference. */
-    if (SSL_SESSION_up_ref(sess) != 1) return 0;
-    if (cmq_tls_session_cache_insert(cfg, id, id_len, sess) != 0) {
-        /* Insert failed (e.g., id too long) — release the up-ref. */
-        SSL_SESSION_free(sess);
+    /* OpenSSL already took a reference on our behalf before calling
+     * new_session_cb. Returning 1 transfers that reference to the
+     * cache; returning 0 makes OpenSSL release it. */
+    if (cmq_tls_session_cache_insert(cfg, id, id_len, sess) != 0)
         return 0;
-    }
     return 1;
 }
 
 static SSL_SESSION *cmq_tls_sess_get_cb(SSL *ssl, const unsigned char *id,
                                           int id_len, int *copy) {
+    /* copy=0: the reference is taken under the cache lock by
+     * cmq_tls_session_cache_lookup_ref and handed to OpenSSL, which
+     * releases it. The cache is shared between threads, so a concurrent
+     * eviction must not be able to free the session before the
+     * reference exists. */
     if (copy) *copy = 0;
     if (!ssl || !id || id_len <= 0) return NULL;
     SSL_CTX *ctx = SSL_get_SSL_CTX(ssl);
     if (!ctx) return NULL;
     cmq_tls_config_t *cfg = (cmq_tls_config_t *)SSL_CTX_get_app_data(ctx);
     if (!cfg) return NULL;
-    return (SSL_SESSION *)(void *)cmq_tls_session_cache_lookup(cfg, id, (unsigned int)id_len);
+    return (SSL_SESSION *)cmq_tls_session_cache_lookup_ref(cfg, id, (unsigned int)id_len);
 }
 
 /* v0.5.29: session ID generator. OpenSSL 3.5 only assigns a session ID
@@ -1077,9 +1104,11 @@ static int cmq_tls_alpn_select_cb(SSL *ssl, const unsigned char **out,
 #ifdef CMQ_TLS_OPENSSL
 SSL_CTX *cmq_tls_get_ssl_ctx_for_test(cmq_tls_config_t *cfg) {
     if (!cfg) return NULL;
-    if (!cfg->ssl_ctx_init_done) {
-        if (tls_build_ssl_ctx(cfg) != 0) return NULL;
-    }
-    return cfg->ssl_ctx;
+    pthread_mutex_lock(&cfg->ctx_lock);
+    SSL_CTX *ctx = NULL;
+    if (cfg->ssl_ctx_init_done || tls_build_ssl_ctx(cfg) == 0)
+        ctx = cfg->ssl_ctx;
+    pthread_mutex_unlock(&cfg->ctx_lock);
+    return ctx;
 }
 #endif

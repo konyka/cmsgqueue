@@ -1092,10 +1092,6 @@ TEST(tls_e2e_handshake, mtls_missing_ca_bundle) {
     rc = system("rm -rf " MTLS_DIR); (void)rc;
 }
 
-/* ---------- Test 12 (v0.5.58): mTLS forces TLS 1.2 ----------
- *
- * Asserts the v0.5.46 cap behavior: when `tls_verify_peer=1`
- * is set, the server's SSL_CTX is capped at TLS 1.2 (because
 /* RED v0.6.13: TLS handshake failures must surface as
  * CMQ_AUDIT_TLS_HANDSHAKE_FAIL. client_read_cb teardown at the
  * handshake failure branch only logs to stderr and never emits an

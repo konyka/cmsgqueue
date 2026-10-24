@@ -164,9 +164,8 @@ int cmq_tls_session_cache_insert(cmq_tls_config_t *cfg,
     return 0;
 }
 
-void *cmq_tls_session_cache_lookup(cmq_tls_config_t *cfg,
-                                    const unsigned char *id,
-                                    unsigned int id_len) {
+static void *cache_lookup(cmq_tls_config_t *cfg, const unsigned char *id,
+                          unsigned int id_len, int take_ref) {
     if (!cfg || !id || id_len == 0 || id_len > CMQ_TLS_SESSION_ID_MAX)
         return NULL;
 
@@ -185,11 +184,25 @@ void *cmq_tls_session_cache_lookup(cmq_tls_config_t *cfg,
         if (e->id_len == id_len && memcmp(e->id, id, id_len) == 0) {
             e->last_used_seq = ++cache->access_seq;
             found = e->sess;
+            if (take_ref)
+                cmq_tls_session_ref_slot(found);
             break;
         }
     }
     pthread_mutex_unlock(&cache->lock);
     return found;
+}
+
+void *cmq_tls_session_cache_lookup(cmq_tls_config_t *cfg,
+                                    const unsigned char *id,
+                                    unsigned int id_len) {
+    return cache_lookup(cfg, id, id_len, 0);
+}
+
+void *cmq_tls_session_cache_lookup_ref(cmq_tls_config_t *cfg,
+                                        const unsigned char *id,
+                                        unsigned int id_len) {
+    return cache_lookup(cfg, id, id_len, 1);
 }
 
 size_t cmq_tls_session_cache_size(cmq_tls_config_t *cfg) {

@@ -83,6 +83,8 @@ int cmq_tls_handshake_done(cmq_tls_session_t *session);
 void *cmq_tls_get_session_cache_state(cmq_tls_config_t *cfg);
 int cmq_tls_set_session_cache_state(cmq_tls_config_t *cfg, void *state);
 void cmq_tls_session_free_slot(void *sess);
+/* Takes one extra reference on an SSL_SESSION* (or NULL safely). */
+void cmq_tls_session_ref_slot(void *sess);
 
 /* v0.5.94: 1 = disable TLS session tickets on this config. */
 int cmq_tls_set_no_tickets(cmq_tls_config_t *cfg, int no_tickets);

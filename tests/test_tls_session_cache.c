@@ -208,27 +208,6 @@ static void v0527_gen_cert(void) {
     (void)rc;
 }
 
-static int v0527_wait_port(int port, int timeout_ms) {
-    struct sockaddr_in addr = {0};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)port);
-    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-    int elapsed = 0;
-    while (elapsed < timeout_ms) {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) return -1;
-        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
-            close(fd);
-            return 0;
-        }
-        close(fd);
-        struct timespec ts = {0, 10000000};
-        nanosleep(&ts, NULL);
-        elapsed += 10;
-    }
-    return -1;
-}
-
 /* v0.5.27: verify that cmq_tls_load registers the OpenSSL session
  * callbacks that wire the cache into the handshake lifecycle.
  *
@@ -483,7 +462,8 @@ TEST(tls_session_cache, session_reused_on_reconnect) {
     ASSERT_NOT_NULL(ctx);
     /* Set a fresh session_id_context; if the get returns -1, our
      * set was rejected (e.g., the callback's ctx differs). */
-    unsigned char sid_probe[16] = "test-cache-v0529";
+    static const unsigned char sid_probe[16] = {
+        't','e','s','t','-','c','a','c','h','e','-','v','0','5','2','9'};
     int sid_rc = SSL_CTX_set_session_id_context(ctx, sid_probe, 16);
     ASSERT_EQ(sid_rc, 1);
 
