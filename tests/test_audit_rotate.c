@@ -12,7 +12,7 @@
 #define AUDIT_TEST_ROT    AUDIT_TEST_FILE ".1"
 
 static void clear_audit_artifacts(void) {
-    (void)system("rm -f " AUDIT_TEST_FILE " " AUDIT_TEST_ROT);
+    cmq_test_sh("rm -f " AUDIT_TEST_FILE " " AUDIT_TEST_ROT);
 }
 
 TEST(audit_rotate, path_disables_when_null) {

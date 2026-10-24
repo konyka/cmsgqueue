@@ -18,7 +18,7 @@
 #define TLS_KEY_FILE_2  TLS_TEST_DIR "/key2.pem"
 
 static void ensure_dir(void) {
-    system("rm -rf " TLS_TEST_DIR " && mkdir -p " TLS_TEST_DIR);
+    cmq_test_sh("rm -rf " TLS_TEST_DIR " && mkdir -p " TLS_TEST_DIR);
 }
 
 /* Generate a self-signed cert + key via OpenSSL command line. */

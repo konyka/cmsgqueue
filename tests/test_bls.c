@@ -11,7 +11,7 @@
 #define BLS_NEW "build-tdd/bls_new.txt"
 
 static int write_one(const char *path, const char *line) {
-    (void)system("mkdir -p build-tdd");
+    cmq_test_sh("mkdir -p build-tdd");
     FILE *f = fopen(path, "w");
     if (!f) return -1;
     fputs(line, f);

@@ -38,7 +38,7 @@ TEST(persist_unit, stat_persist_fail_starts_at_zero) {
 }
 
 TEST(persist_unit, filestore_not_opened_when_null) {
-    system("rm -rf /tmp/cmq-test-no-filestore");
+    cmq_test_sh("rm -rf /tmp/cmq-test-no-filestore");
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
     cfg.host = "127.0.0.1";
@@ -54,7 +54,7 @@ TEST(persist_unit, filestore_not_opened_when_null) {
 }
 
 TEST(persist_unit, filestore_opened_when_set) {
-    system("rm -rf /tmp/cmq-test-with-filestore");
+    cmq_test_sh("rm -rf /tmp/cmq-test-with-filestore");
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
     cfg.host = "127.0.0.1";
@@ -67,7 +67,7 @@ TEST(persist_unit, filestore_opened_when_set) {
     int rc = system("test -f /tmp/cmq-test-with-filestore/cmq.data");
     ASSERT_EQ(rc, 0);
     cmq_server_destroy(srv);
-    system("rm -rf /tmp/cmq-test-with-filestore");
+    cmq_test_sh("rm -rf /tmp/cmq-test-with-filestore");
 }
 
 /* v0.6.11: PERSIST_FAIL audit emission contract.

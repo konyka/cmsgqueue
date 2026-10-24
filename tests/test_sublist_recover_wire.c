@@ -166,7 +166,7 @@ static int write_wal_line(const char *line) {
 }
 
 TEST(sublist_persist_wire, restart_restores_sub) {
-    system("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
 
     /* Phase 1+2: write a SUB record directly. */
     cmq_sublist_persist_t *p = cmq_sublist_persist_open(P3_DIR);
@@ -198,7 +198,7 @@ TEST(sublist_persist_wire, restart_restores_sub) {
     cmq_sublist_result_free(&result);
 
     cmq_server_destroy(srv);
-    system("rm -rf " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR);
 }
 
 TEST(sublist_persist_wire, unsubscribe_ghost_refs_persist) {
@@ -234,7 +234,7 @@ TEST(sublist_persist_wire, unsubscribe_ghost_refs_persist) {
 }
 
 TEST(sublist_persist_wire, live_wire_handlers_append_wal_and_recover_final_state) {
-    system("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
 
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
@@ -312,11 +312,11 @@ TEST(sublist_persist_wire, live_wire_handlers_append_wal_and_recover_final_state
     ASSERT_EQ(result.count, 0);
     cmq_sublist_result_free(&result);
     cmq_server_destroy(srv);
-    system("rm -rf " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR);
 }
 
 TEST(sublist_persist_wire, rejects_overlong_subject_without_ref) {
-    system("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
     char subject[320];
     memset(subject, 'a', sizeof(subject) - 1);
     subject[sizeof(subject) - 1] = '\0';
@@ -333,11 +333,11 @@ TEST(sublist_persist_wire, rejects_overlong_subject_without_ref) {
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_ERR_INVALID_ARG);
     ASSERT(srv == NULL);
-    system("rm -rf " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR);
 }
 
 TEST(sublist_persist_wire, rejects_malformed_numeric_id) {
-    system("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
     ASSERT_EQ(write_wal_line("U -1\n"), 0);
 
     cmq_config_t cfg = {0};
@@ -349,11 +349,11 @@ TEST(sublist_persist_wire, rejects_malformed_numeric_id) {
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_ERR_INVALID_ARG);
     ASSERT(srv == NULL);
-    system("rm -rf " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR);
 }
 
 TEST(sublist_persist_wire, rejects_truncated_and_unknown_records) {
-    system("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
     ASSERT_EQ(write_wal_line("X 1\n"), 0);
 
     cmq_config_t cfg = {0};
@@ -375,11 +375,11 @@ TEST(sublist_persist_wire, rejects_truncated_and_unknown_records) {
     ASSERT_EQ(write_wal_line(long_line), 0);
     ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_ERR_INVALID_ARG);
     ASSERT(srv == NULL);
-    system("rm -rf " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR);
 }
 
 TEST(sublist_persist_wire, rejects_extra_fields_in_sub_record) {
-    system("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
     ASSERT_EQ(write_wal_line("S 9 valid.subject account unexpected_extra\n"), 0);
 
     cmq_config_t cfg = {0};
@@ -391,11 +391,11 @@ TEST(sublist_persist_wire, rejects_extra_fields_in_sub_record) {
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_ERR_INVALID_ARG);
     ASSERT(srv == NULL);
-    system("rm -rf " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR);
 }
 
 TEST(sublist_persist_wire, rejects_tab_extra_fields_in_sub_record) {
-    system("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR " && mkdir -p " P3_DIR);
     ASSERT_EQ(write_wal_line("S 9 valid.subject account\textra\n"), 0);
 
     cmq_config_t cfg = {0};
@@ -407,7 +407,7 @@ TEST(sublist_persist_wire, rejects_tab_extra_fields_in_sub_record) {
     cmq_server_t *srv = NULL;
     ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_ERR_INVALID_ARG);
     ASSERT(srv == NULL);
-    system("rm -rf " P3_DIR);
+    cmq_test_sh("rm -rf " P3_DIR);
 }
 
 TEST_MAIN()

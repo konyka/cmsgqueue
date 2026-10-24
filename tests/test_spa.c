@@ -9,7 +9,7 @@
 #define SPA_DIR "build-tdd/spa"
 
 TEST(spa, apply) {
-    (void)system("rm -rf " SPA_DIR " && mkdir -p " SPA_DIR);
+    cmq_test_sh("rm -rf " SPA_DIR " && mkdir -p " SPA_DIR);
     cmq_sublist_persist_t *p = NULL;
     ASSERT_EQ(cmq_sublist_persist_reload_attach(&p, SPA_DIR), 0);
     ASSERT_NOT_NULL(p);

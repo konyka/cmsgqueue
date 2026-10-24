@@ -19,7 +19,7 @@
 #define RESTART_DIR "/tmp/cmq-test-v0537-restart"
 
 TEST(persist_restart, subscriber_survives_restart) {
-    system("rm -rf " RESTART_DIR " && mkdir -p " RESTART_DIR);
+    cmq_test_sh("rm -rf " RESTART_DIR " && mkdir -p " RESTART_DIR);
 
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
@@ -55,7 +55,7 @@ TEST(persist_restart, subscriber_survives_restart) {
     ASSERT_EQ(matched, 1);
 
     cmq_server_destroy(srv_b);
-    system("rm -rf " RESTART_DIR);
+    cmq_test_sh("rm -rf " RESTART_DIR);
 }
 
 TEST_MAIN()

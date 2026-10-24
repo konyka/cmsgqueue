@@ -64,7 +64,7 @@ static void *server_thread(void *arg) {
 }
 
 TEST(route_tls_sess, nonblocking_handshake_succeeds) {
-    system("rm -rf " TLS_TEST_DIR " && mkdir -p " TLS_TEST_DIR);
+    cmq_test_sh("rm -rf " TLS_TEST_DIR " && mkdir -p " TLS_TEST_DIR);
     int rc = system("openssl req -x509 -newkey rsa:2048 -keyout " TLS_TEST_DIR "/key.pem -out " TLS_TEST_DIR "/cert.pem -days 1 -nodes -subj '/CN=localhost' 2>/dev/null");
     ASSERT_EQ(rc, 0);
 
@@ -103,7 +103,7 @@ TEST(route_tls_sess, nonblocking_handshake_succeeds) {
     SSL_CTX_free(cctx);
     close(sv[0]);
     pthread_join(tid, NULL);
-    system("rm -rf " TLS_TEST_DIR);
+    cmq_test_sh("rm -rf " TLS_TEST_DIR);
 }
 
 TEST_MAIN()

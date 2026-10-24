@@ -17,8 +17,8 @@
 #define OTLPS_DIR "/tmp/cmq-otlps"
 
 static void gen_cert(void) {
-    (void)system("rm -rf " OTLPS_DIR " && mkdir -p " OTLPS_DIR);
-    (void)system("openssl req -x509 -newkey rsa:2048 -keyout "
+    cmq_test_sh("rm -rf " OTLPS_DIR " && mkdir -p " OTLPS_DIR);
+    cmq_test_sh("openssl req -x509 -newkey rsa:2048 -keyout "
                  OTLPS_DIR "/key.pem -out " OTLPS_DIR "/cert.pem "
                  "-days 1 -nodes -subj '/CN=127.0.0.1' "
                  "-addext 'subjectAltName=IP:127.0.0.1' 2>/dev/null");

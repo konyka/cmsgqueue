@@ -10,7 +10,7 @@
 #define TLA_KEY  "build-tdd/tla_key.pem"
 
 static int gen_cert(void) {
-    (void)system("mkdir -p build-tdd");
+    cmq_test_sh("mkdir -p build-tdd");
     char cmd[512];
     snprintf(cmd, sizeof(cmd),
              "openssl req -x509 -newkey rsa:2048 -keyout %s -out %s "

@@ -41,14 +41,14 @@ static int persist_cb(void *ctx, int is_sub, uint64_t sub_id,
 }
 
 TEST(sublist_persist, open_returns_non_null) {
-    system("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
+    cmq_test_sh("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
     cmq_sublist_persist_t *p = cmq_sublist_persist_open(SUB_PERSIST_DIR);
     ASSERT_NOT_NULL(p);
     cmq_sublist_persist_close(p);
 }
 
 TEST(sublist_persist, record_then_load) {
-    system("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
+    cmq_test_sh("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
     cmq_sublist_persist_t *p = cmq_sublist_persist_open(SUB_PERSIST_DIR);
     ASSERT_NOT_NULL(p);
     ASSERT_EQ(cmq_sublist_persist_record_sub(p, 1, "foo.bar", "user1"), 0);
@@ -71,7 +71,7 @@ TEST(sublist_persist, record_then_load) {
 }
 
 TEST(sublist_persist, load_empty_file) {
-    system("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
+    cmq_test_sh("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
     cmq_sublist_persist_t *p = cmq_sublist_persist_open(SUB_PERSIST_DIR);
     ASSERT_NOT_NULL(p);
     cmq_sublist_persist_close(p);
@@ -83,7 +83,7 @@ TEST(sublist_persist, load_empty_file) {
 }
 
 TEST(sublist_persist, callback_failure_is_reported) {
-    system("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
+    cmq_test_sh("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
     cmq_sublist_persist_t *p = cmq_sublist_persist_open(SUB_PERSIST_DIR);
     ASSERT_NOT_NULL(p);
     ASSERT_EQ(cmq_sublist_persist_record_sub(p, 1, "foo", "user1"), 0);
@@ -92,14 +92,14 @@ TEST(sublist_persist, callback_failure_is_reported) {
 }
 
 TEST(sublist_persist, record_sub_rejects_invalid_fields) {
-    system("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
+    cmq_test_sh("rm -rf " SUB_PERSIST_DIR " && mkdir -p " SUB_PERSIST_DIR);
     cmq_sublist_persist_t *p = cmq_sublist_persist_open(SUB_PERSIST_DIR);
     ASSERT_NOT_NULL(p);
     ASSERT_EQ(cmq_sublist_persist_record_sub(p, 1, "bad subject", "user"), -1);
     ASSERT_EQ(cmq_sublist_persist_record_sub(p, 1, "good.subject", "bad\tuser"), -1);
     ASSERT_EQ(cmq_sublist_persist_record_sub(p, 1, "good.subject", "user"), 0);
     cmq_sublist_persist_close(p);
-    system("rm -rf " SUB_PERSIST_DIR);
+    cmq_test_sh("rm -rf " SUB_PERSIST_DIR);
 }
 
 TEST_MAIN()

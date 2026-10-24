@@ -62,8 +62,8 @@ static int build_post(uint8_t *out, size_t cap, const char *path,
 }
 
 static void gen_cert(void) {
-    (void)system("rm -rf " H2T_DIR " && mkdir -p " H2T_DIR);
-    (void)system("openssl req -x509 -newkey rsa:2048 -keyout "
+    cmq_test_sh("rm -rf " H2T_DIR " && mkdir -p " H2T_DIR);
+    cmq_test_sh("openssl req -x509 -newkey rsa:2048 -keyout "
                  H2T_DIR "/key.pem -out " H2T_DIR "/cert.pem "
                  "-days 1 -nodes -subj '/CN=127.0.0.1' "
                  "-addext 'subjectAltName=IP:127.0.0.1' 2>/dev/null");

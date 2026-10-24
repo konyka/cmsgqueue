@@ -526,7 +526,7 @@ TEST(tls_e2e_handshake, mtls_revoked_client_rejected) {
         "openssl ca -config %s/openssl.cnf -gencrl -crldays 1 -out %s/crl.pem.tmp 2>/dev/null",
         CRL_DIR, CRL_DIR);
     ASSERT_EQ(crl_run(cmd), 0);
-    system("rm -f " CRL_DIR "/crl.pem.tmp");
+    cmq_test_sh("rm -f " CRL_DIR "/crl.pem.tmp");
     snprintf(cmd, sizeof(cmd),
         "openssl ca -config %s/openssl.cnf -revoke %s/client.pem 2>/dev/null",
         CRL_DIR, CRL_DIR);
@@ -832,7 +832,7 @@ TEST(tls_e2e_handshake, mtls_crl_not_revoked_accepted) {
         "openssl ca -config %s/openssl.cnf -gencrl -crldays 1 -out %s/crl.pem.tmp 2>/dev/null",
         CRL_DIR, CRL_DIR);
     ASSERT_EQ(crl_run(cmd), 0);
-    system("rm -f " CRL_DIR "/crl.pem.tmp");
+    cmq_test_sh("rm -f " CRL_DIR "/crl.pem.tmp");
     snprintf(cmd, sizeof(cmd),
         "openssl ca -config %s/openssl.cnf -revoke %s/other_client.pem 2>/dev/null",
         CRL_DIR, CRL_DIR);
@@ -1695,7 +1695,7 @@ TEST(tls_e2e_handshake, plain_tls_no_client_cert) {
  */
 TEST(tls_e2e_handshake, empty_cert_file_rejected) {
     ensure_dir();
-    system("rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
+    cmq_test_sh("rm -rf " MTLS_DIR " && mkdir -p " MTLS_DIR);
     /* Create a zero-byte cert file. */
     FILE *f = fopen(MTLS_DIR "/empty.pem", "w");
     ASSERT_NOT_NULL(f);
@@ -1717,7 +1717,7 @@ TEST(tls_e2e_handshake, empty_cert_file_rejected) {
     }
     ASSERT(rc != CMQ_OK);
     ASSERT_NULL(srv);
-    system("rm -rf " MTLS_DIR);
+    cmq_test_sh("rm -rf " MTLS_DIR);
 }
 
 /* ---------- Test 22 (v0.5.68): TLS version 0xFFFF rejected ----------

@@ -70,7 +70,7 @@ extern int cmq_mqtt_test_enqueue_bridge(const char *topic,
  * gains one record per bridge enqueue. Without persist_dir, the
  * persist step is a no-op. */
 TEST(mqtt_bridge_freelist, bridge_publish_writes_to_wal) {
-    system("rm -rf /tmp/cmq-test-v0539-bridge && mkdir -p /tmp/cmq-test-v0539-bridge");
+    cmq_test_sh("rm -rf /tmp/cmq-test-v0539-bridge && mkdir -p /tmp/cmq-test-v0539-bridge");
 
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
@@ -103,7 +103,7 @@ TEST(mqtt_bridge_freelist, bridge_publish_writes_to_wal) {
      * currently only drained by the (future) recovery path. */
     cmq_mqtt_bridge_shutdown();
     cmq_server_destroy(srv);
-    system("rm -rf /tmp/cmq-test-v0539-bridge");
+    cmq_test_sh("rm -rf /tmp/cmq-test-v0539-bridge");
 }
 
 /* v0.5.40: bridge WAL recovery. The cmq_server_create replay loop
@@ -112,7 +112,7 @@ TEST(mqtt_bridge_freelist, bridge_publish_writes_to_wal) {
  * the bridge record should land in the recovery path and
  * stat_messages_replayed should increment. */
 TEST(mqtt_bridge_freelist, bridge_record_survives_restart) {
-    system("rm -rf /tmp/cmq-test-v0540-bridge && mkdir -p /tmp/cmq-test-v0540-bridge");
+    cmq_test_sh("rm -rf /tmp/cmq-test-v0540-bridge && mkdir -p /tmp/cmq-test-v0540-bridge");
 
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
@@ -159,7 +159,7 @@ TEST(mqtt_bridge_freelist, bridge_record_survives_restart) {
     ASSERT(replayed >= 1);
 
     cmq_server_destroy(srv_b);
-    system("rm -rf /tmp/cmq-test-v0540-bridge");
+    cmq_test_sh("rm -rf /tmp/cmq-test-v0540-bridge");
 }
 
 /* v0.5.41: rigorous end-to-end — a recovered subscriber matches the
@@ -167,7 +167,7 @@ TEST(mqtt_bridge_freelist, bridge_record_survives_restart) {
  * path actually calls cmq_sublist_match with the recovered bridge
  * payload's topic (not just that the replay stat ticks). */
 TEST(mqtt_bridge_freelist, recovered_bridge_matches_recovered_subscriber) {
-    system("rm -rf /tmp/cmq-test-v0541 && mkdir -p /tmp/cmq-test-v0541");
+    cmq_test_sh("rm -rf /tmp/cmq-test-v0541 && mkdir -p /tmp/cmq-test-v0541");
 
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
@@ -221,7 +221,7 @@ TEST(mqtt_bridge_freelist, recovered_bridge_matches_recovered_subscriber) {
     ASSERT_EQ(matched, 1);
 
     cmq_server_destroy(srv_b);
-    system("rm -rf /tmp/cmq-test-v0541");
+    cmq_test_sh("rm -rf /tmp/cmq-test-v0541");
 }
 
 TEST(mqtt_bridge_freelist, real_load_drains_to_freelist) {

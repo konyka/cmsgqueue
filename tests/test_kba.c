@@ -9,7 +9,7 @@
 #define KBA_DIR "build-tdd/kba"
 
 TEST(kba, apply) {
-    (void)system("rm -rf " KBA_DIR " && mkdir -p " KBA_DIR);
+    cmq_test_sh("rm -rf " KBA_DIR " && mkdir -p " KBA_DIR);
     cmq_kvb_t *b = NULL;
     ASSERT(cmq_kvb_reload_attach_persist(b, KBA_DIR) != 0);
     ASSERT_EQ(cmq_kvb_reload_attach(&b), 0);

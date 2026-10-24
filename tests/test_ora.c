@@ -9,7 +9,7 @@
 #define ORA_DIR "build-tdd/ora"
 
 TEST(ora, apply) {
-    (void)system("rm -rf " ORA_DIR " && mkdir -p " ORA_DIR);
+    cmq_test_sh("rm -rf " ORA_DIR " && mkdir -p " ORA_DIR);
     cmq_obj_t *o = NULL;
     ASSERT_EQ(cmq_obj_reload_attach(&o, ORA_DIR), 0);
     ASSERT_NOT_NULL(o);

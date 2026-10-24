@@ -138,7 +138,7 @@ static int contains_bytes(const uint8_t *data, size_t data_len,
 }
 
 TEST(persist_replay, handle_publish_writes_to_wal) {
-    system("rm -rf " WAL_DIR " && mkdir -p " WAL_DIR);
+    cmq_test_sh("rm -rf " WAL_DIR " && mkdir -p " WAL_DIR);
 
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
@@ -173,7 +173,7 @@ TEST(persist_replay, handle_publish_writes_to_wal) {
     ASSERT_NOT_NULL(srv_b);
 
     cmq_server_destroy(srv_b);
-    system("rm -rf " WAL_DIR);
+    cmq_test_sh("rm -rf " WAL_DIR);
 }
 
 /* RED v0.6.12: when cmq_server_create replays the WAL on startup, the
@@ -182,7 +182,7 @@ TEST(persist_replay, handle_publish_writes_to_wal) {
  * replay completes silently and only increments stat_messages_replayed.
  */
 TEST(persist_replay, audit_emits_persist_recover_on_startup) {
-    system("rm -rf " WAL_DIR " && mkdir -p " WAL_DIR);
+    cmq_test_sh("rm -rf " WAL_DIR " && mkdir -p " WAL_DIR);
 
     /* Server A: write one record to the WAL and shut down. */
     cmq_config_t cfg = {0};
@@ -219,11 +219,11 @@ TEST(persist_replay, audit_emits_persist_recover_on_startup) {
     ASSERT(strstr(buf, "\"event\":\"persist_recover\"") != NULL);
 
     unlink(audit_path);
-    system("rm -rf " WAL_DIR);
+    cmq_test_sh("rm -rf " WAL_DIR);
 }
 
 TEST(persist_replay, acl_rejected_publish_is_not_persisted) {
-    system("rm -rf " WAL_DIR " && mkdir -p " WAL_DIR);
+    cmq_test_sh("rm -rf " WAL_DIR " && mkdir -p " WAL_DIR);
 
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
@@ -274,7 +274,7 @@ TEST(persist_replay, acl_rejected_publish_is_not_persisted) {
     cmq_server_stop(srv);
     ASSERT_EQ(pthread_join(tid, NULL), 0);
     cmq_server_destroy(srv);
-    system("rm -rf " WAL_DIR);
+    cmq_test_sh("rm -rf " WAL_DIR);
 }
 
 TEST_MAIN()

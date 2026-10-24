@@ -30,7 +30,7 @@ static void write_file(const char *path, const char *content) {
 }
 
 TEST(integration, server_creates_blocklist_when_configured) {
-    system("rm -rf " INTEGRATION_DIR " && mkdir -p " INTEGRATION_DIR);
+    cmq_test_sh("rm -rf " INTEGRATION_DIR " && mkdir -p " INTEGRATION_DIR);
     write_file(INTEGRATION_DIR "/blocklist.txt", "127.0.0.2\n");
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
@@ -96,7 +96,7 @@ TEST(integration, server_validates_quota_range) {
  * any handshake is performed. The test must not send a CONNECT frame:
  * a denied peer should see the socket closed immediately. */
 TEST(integration, blocklist_rejects_at_accept_cb) {
-    system("rm -rf " INTEGRATION_DIR " && mkdir -p " INTEGRATION_DIR);
+    cmq_test_sh("rm -rf " INTEGRATION_DIR " && mkdir -p " INTEGRATION_DIR);
     write_file(INTEGRATION_DIR "/blocklist.txt", "127.0.0.1\n");
 
     const int port = INTEGRATION_PORT + 4;
@@ -145,7 +145,7 @@ TEST(integration, blocklist_rejects_at_accept_cb) {
     cmq_server_stop(srv);
     pthread_join(tid, NULL);
     cmq_server_destroy(srv);
-    system("rm -rf " INTEGRATION_DIR);
+    cmq_test_sh("rm -rf " INTEGRATION_DIR);
 }
 
 TEST(integration, ipv6_primary_listener_admits_normal_client) {
@@ -187,7 +187,7 @@ TEST(integration, ipv6_primary_listener_admits_normal_client) {
 }
 
 TEST(integration, ipv6_primary_listener_rejects_blocked_peer_at_accept_cb) {
-    system("rm -rf " INTEGRATION_DIR " && mkdir -p " INTEGRATION_DIR);
+    cmq_test_sh("rm -rf " INTEGRATION_DIR " && mkdir -p " INTEGRATION_DIR);
     write_file(INTEGRATION_DIR "/blocklist.txt", "::1\n");
 
     const int port = INTEGRATION_PORT + 6;
@@ -222,7 +222,7 @@ TEST(integration, ipv6_primary_listener_rejects_blocked_peer_at_accept_cb) {
     cmq_server_stop(srv);
     pthread_join(tid, NULL);
     cmq_server_destroy(srv);
-    system("rm -rf " INTEGRATION_DIR);
+    cmq_test_sh("rm -rf " INTEGRATION_DIR);
 }
 
 TEST_MAIN()
