@@ -199,7 +199,7 @@ int cmq_sublist_persist_load(cmq_sublist_persist_t *p,
             if (*p1) { *p1 = '\0'; p1++; }
             while (*p1 == ' ') p1++;
             char *account = p1;
-            if (*account == '\0') {
+            if (*account == '\0' || strchr(account, ' ') != NULL) {
                 fclose(fp);
                 return -1;
             }
