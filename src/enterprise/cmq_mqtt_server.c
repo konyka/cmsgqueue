@@ -1389,7 +1389,7 @@ size_t got = (size_t)n;
                         for (int i = 0; i < ns &&
                              my_nsubs < CMQ_MQTT_SESSION_SUBS; i++) {
                             cmq_mqtt_record_subscriber(saved[i]);
-                            snprintf(my_subs[my_nsubs++], 128, "%s", saved[i]);
+                            snprintf(my_subs[my_nsubs++], 128, "%.127s", saved[i]);
                         }
                     }
                     if (ci.will_flag)

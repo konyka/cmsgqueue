@@ -698,7 +698,8 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             ev_unpack_fd_gen(events[i].data.u64, &fd, &gen);
             if (fd == loop->wakeup_fd) {
                 uint64_t val;
-                read(fd, &val, sizeof(val));
+                ssize_t drained = read(fd, &val, sizeof(val));
+                (void)drained;
                 continue;
             }
             cmq_ev_cb_t cb = NULL;

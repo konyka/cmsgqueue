@@ -3098,9 +3098,9 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
     ctx->srv = srv;
     ctx->targets = targets;
     ctx->target_count = target_count;
-    strncpy(ctx->subject, subject, CMQ_MAX_SUBJECT - 1);
+    snprintf(ctx->subject, sizeof(ctx->subject), "%s", subject);
     if (pub_account)
-        strncpy(ctx->pub_account, pub_account, CMQ_ACCOUNT_NAME_SIZE - 1);
+        snprintf(ctx->pub_account, sizeof(ctx->pub_account), "%s", pub_account);
     ctx->pub_epoch = pub_epoch;
     ctx->payload = payload;
     ctx->payload_len = payload_len;
@@ -6460,9 +6460,10 @@ static void http_serve_monitor(cmq_client_t *c, int which) {
             if (cmq_route_snapshot(srv->routes, snap,
                                     CMQ_MONITOR_ROUTE_MAX, &ns) == 0) {
                 for (size_t i = 0; i < ns; i++) {
-                    snprintf(rts[nr].id, sizeof(rts[nr].id), "%s",
-                              snap[i].remote_id);
-                    snprintf(rts[nr].addr, sizeof(rts[nr].addr), "%s",
+                    snprintf(rts[nr].id, sizeof(rts[nr].id), "%.*s",
+                              (int)sizeof(rts[nr].id) - 1, snap[i].remote_id);
+                    snprintf(rts[nr].addr, sizeof(rts[nr].addr), "%.*s",
+                              (int)sizeof(rts[nr].addr) - 1,
                               snap[i].remote_addr);
                     rts[nr].port = snap[i].remote_port;
                     rts[nr].connected = snap[i].connected;

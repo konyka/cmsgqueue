@@ -569,8 +569,8 @@ static cmq_mqtt_bridge_info_t mqtt_bridge_info_impl(cmq_mqtt_bridge_t *br) {
     cmq_mqtt_bridge_info_t info = {0};
     if (!br) return info;
     cmq_mutex_lock(&br->lock);
-    strncpy(info.client_id, br->client_id, CMQ_MQTT_CLIENT_ID - 1);
-    strncpy(info.addr, br->addr, sizeof(info.addr) - 1);
+    snprintf(info.client_id, sizeof(info.client_id), "%s", br->client_id);
+    snprintf(info.addr, sizeof(info.addr), "%s", br->addr);
     info.port = br->port;
     info.keepalive_ms = br->keepalive_ms;
     info.clean_session = br->clean_session;
