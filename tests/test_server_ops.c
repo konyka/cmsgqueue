@@ -133,6 +133,7 @@ static void ws_send_cmq(int fd, cmq_op_t op, const uint8_t *payload, size_t plen
     for (size_t i = 0; i < cmq_len; i++) buf[hdr + 4 + i] = cmq[i] ^ mk[i % 4];
     ssize_t sent = write(fd, buf, hdr + 4 + cmq_len);
     free(buf);
+    ASSERT_EQ(sent, (ssize_t)(hdr + 4 + cmq_len));
 }
 
 static int ws_recv_cmq(int fd, cmq_parser_t *parser, cmq_frame_t *out) {
