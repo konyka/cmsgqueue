@@ -21,10 +21,18 @@
 #define CMQ_SUBJECT_RL_MAX_PROBE 32
 #define CMQ_SUBJECT_RL_KEY_MAX  255
 
+/* Slot life cycle: EMPTY -> CLAIMING (one thread owns the key write)
+ * -> READY (key is immutable and safe to compare). Slots are never
+ * released, so a READY key never changes. */
+#define CMQ_SLOT_EMPTY    0u
+#define CMQ_SLOT_CLAIMING 1u
+#define CMQ_SLOT_READY    2u
+
 struct cmq_subject_slot {
     char key[CMQ_SUBJECT_RL_KEY_MAX + 1];
     cmq_atomic_u64 window_start_ms;
     cmq_atomic_u32 count;
+    cmq_atomic_u32 state;
 };
 
 struct cmq_subject_rl {
@@ -83,30 +91,35 @@ int cmq_subject_rl_check(cmq_subject_rl_t *rl, const char *subject) {
         uint32_t i = (idx + probe) % CMQ_SUBJECT_RL_SLOTS;
         struct cmq_subject_slot *s = &rl->slots[i];
 
-        char key_buf[CMQ_SUBJECT_RL_KEY_MAX + 1];
-        memcpy(key_buf, s->key, CMQ_SUBJECT_RL_KEY_MAX + 1);
-
-        if (key_buf[0] == '\0') {
-            cmq_u32_t zero = 0;
-            if (cmq_atomic_cas_u32(&s->count, &zero, 1,
+        cmq_u32_t st = cmq_atomic_load_u32(&s->state, CMQ_ATOMIC_ACQUIRE);
+        if (st == CMQ_SLOT_EMPTY) {
+            cmq_u32_t expected = CMQ_SLOT_EMPTY;
+            if (cmq_atomic_cas_u32(&s->state, &expected, CMQ_SLOT_CLAIMING,
                                     CMQ_ATOMIC_ACQ_REL)) {
                 size_t slen = strnlen(subject, CMQ_SUBJECT_RL_KEY_MAX);
                 memcpy(s->key, subject, slen);
                 s->key[slen] = '\0';
                 cmq_atomic_store_u64(&s->window_start_ms, now_ms,
                                       CMQ_ATOMIC_RELAXED);
+                cmq_atomic_store_u32(&s->count, 1, CMQ_ATOMIC_RELAXED);
+                cmq_atomic_store_u32(&s->state, CMQ_SLOT_READY,
+                                      CMQ_ATOMIC_RELEASE);
                 return 1;
             }
-            continue;
+            st = expected;
+        }
+        while (st == CMQ_SLOT_CLAIMING) {
+            cmq_atomic_pause();
+            st = cmq_atomic_load_u32(&s->state, CMQ_ATOMIC_ACQUIRE);
         }
 
-        if (strncmp(key_buf, subject, CMQ_SUBJECT_RL_KEY_MAX) != 0) {
+        if (strncmp(s->key, subject, CMQ_SUBJECT_RL_KEY_MAX) != 0) {
             continue;
         }
 
         uint64_t wstart = cmq_atomic_load_u64(&s->window_start_ms,
                                                CMQ_ATOMIC_RELAXED);
-        if (now_ms - wstart >= 1000) {
+        if (now_ms > wstart && now_ms - wstart >= 1000) {
             cmq_atomic_store_u64(&s->window_start_ms, now_ms,
                                   CMQ_ATOMIC_RELAXED);
             cmq_atomic_store_u32(&s->count, 0, CMQ_ATOMIC_RELAXED);

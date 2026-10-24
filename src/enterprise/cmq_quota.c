@@ -13,7 +13,15 @@
 #define CMQ_QUOTA_MAX_PROBE 16
 #define CMQ_QUOTA_KEY_MAX  255
 
+/* Slot life cycle: EMPTY -> CLAIMING (one thread owns the key write)
+ * -> READY (account is immutable and safe to compare). Slots are never
+ * released, so a READY account never changes. */
+#define CMQ_SLOT_EMPTY    0u
+#define CMQ_SLOT_CLAIMING 1u
+#define CMQ_SLOT_READY    2u
+
 struct cmq_quota_slot {
+    cmq_atomic_u32 state;
     char account[CMQ_QUOTA_KEY_MAX + 1];
     cmq_atomic_u64 window_start_ms;
     cmq_atomic_u32 msgs;
@@ -95,24 +103,28 @@ static struct cmq_quota_slot *find_or_claim(cmq_quota_t *q,
         uint32_t i = (idx + probe) % CMQ_QUOTA_SLOTS;
         struct cmq_quota_slot *s = &q->slots[i];
 
-        char key_buf[CMQ_QUOTA_KEY_MAX + 1];
-        memcpy(key_buf, s->account, CMQ_QUOTA_KEY_MAX + 1);
-
-        if (key_buf[0] == '\0') {
-            cmq_u32_t zero = 0;
-            if (cmq_atomic_cas_u32(&s->msgs, &zero, 0,
+        cmq_u32_t st = cmq_atomic_load_u32(&s->state, CMQ_ATOMIC_ACQUIRE);
+        if (st == CMQ_SLOT_EMPTY) {
+            cmq_u32_t expected = CMQ_SLOT_EMPTY;
+            if (cmq_atomic_cas_u32(&s->state, &expected, CMQ_SLOT_CLAIMING,
                                     CMQ_ATOMIC_ACQ_REL)) {
                 size_t slen = strnlen(acc, CMQ_QUOTA_KEY_MAX);
                 memcpy(s->account, acc, slen);
                 s->account[slen] = '\0';
                 cmq_atomic_store_u64(&s->window_start_ms, now_ms(),
                                       CMQ_ATOMIC_RELAXED);
+                cmq_atomic_store_u32(&s->state, CMQ_SLOT_READY,
+                                      CMQ_ATOMIC_RELEASE);
                 return s;
             }
-            continue;
+            st = expected;
+        }
+        while (st == CMQ_SLOT_CLAIMING) {
+            cmq_atomic_pause();
+            st = cmq_atomic_load_u32(&s->state, CMQ_ATOMIC_ACQUIRE);
         }
 
-        if (strncmp(key_buf, acc, CMQ_QUOTA_KEY_MAX) != 0) {
+        if (strncmp(s->account, acc, CMQ_QUOTA_KEY_MAX) != 0) {
             continue;
         }
         return s;
@@ -138,9 +150,8 @@ int cmq_quota_check_publish(cmq_quota_t *q, const char *account,
         cmq_atomic_store_u64(&s->bytes, 0, CMQ_ATOMIC_RELAXED);
     }
 
-    /* The claim-CAS already counted this publish (msgs=1). Subsequent
-     * admits increment one more. So: load, loop while (cur < max_msgs)
-     * with CAS. cur==max means saturated. */
+    /* Claiming a slot does not count the publish; every caller goes
+     * through this loop. cur == max means saturated. */
     cmq_u32_t cur = cmq_atomic_load_u32(&s->msgs, CMQ_ATOMIC_RELAXED);
     while (cur < q->max_msgs) {
         if (cmq_atomic_cas_u32(&s->msgs, &cur, cur + 1,
