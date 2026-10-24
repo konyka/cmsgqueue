@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_h2.h"
+#include "cmq_io.h"
 #include "cmq_hpack.h"
 #include "cmq_tls.h"
 
@@ -490,7 +491,7 @@ static ssize_t h2_fd_rd(void *ctx, uint8_t *buf, size_t n) {
 }
 
 static ssize_t h2_fd_wr(void *ctx, const uint8_t *buf, size_t n) {
-    return send(*(int *)ctx, buf, n, 0);
+    return cmq_sock_write(*(int *)ctx, buf, n);
 }
 
 static int h2_fd_wait(void *ctx, int want_write) {

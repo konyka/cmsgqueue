@@ -2,6 +2,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_mqtt_server.h"
+#include "cmq_io.h"
 #include "cmq_log.h"
 #include <stdatomic.h>
 
@@ -523,12 +524,12 @@ static int send_connack(int fd, uint8_t return_code) {
     pkt[1] = 0x02;
     pkt[2] = 0x00;
     pkt[3] = return_code;
-    return (int)send(fd, pkt, sizeof(pkt), 0);
+    return (int)cmq_sock_write(fd, pkt, sizeof(pkt));
 }
 
 static int send_pingresp(int fd) {
     uint8_t pkt[2] = { MQTT_TYPE_PINGRESP, 0x00 };
-    return (int)send(fd, pkt, sizeof(pkt), 0);
+    return (int)cmq_sock_write(fd, pkt, sizeof(pkt));
 }
 
 /* P8: PUBACK for QoS 1 PUBLISH. packet_id (2B) only. */
@@ -538,7 +539,7 @@ static int send_puback(int fd, uint16_t packet_id) {
     pkt[1] = 0x02;
     pkt[2] = (uint8_t)(packet_id >> 8);
     pkt[3] = (uint8_t)(packet_id & 0xFF);
-    return (int)send(fd, pkt, sizeof(pkt), 0);
+    return (int)cmq_sock_write(fd, pkt, sizeof(pkt));
 }
 
 static int send_pubrec(int fd, uint16_t packet_id) {
@@ -548,7 +549,7 @@ static int send_pubrec(int fd, uint16_t packet_id) {
     pkt[1] = 0x02;
     pkt[2] = (uint8_t)(packet_id >> 8);
     pkt[3] = (uint8_t)(packet_id & 0xFF);
-    return (int)send(fd, pkt, sizeof(pkt), 0);
+    return (int)cmq_sock_write(fd, pkt, sizeof(pkt));
 }
 
 static int send_pubcomp(int fd, uint16_t packet_id) {
@@ -557,7 +558,7 @@ static int send_pubcomp(int fd, uint16_t packet_id) {
     pkt[1] = 0x02;
     pkt[2] = (uint8_t)(packet_id >> 8);
     pkt[3] = (uint8_t)(packet_id & 0xFF);
-    return (int)send(fd, pkt, sizeof(pkt), 0);
+    return (int)cmq_sock_write(fd, pkt, sizeof(pkt));
 }
 
 /* P1: SUBACK for SUBSCRIBE. payload = sequence of granted QoS bytes
@@ -571,7 +572,7 @@ static int send_suback(int fd, uint16_t packet_id,
     buf[2] = (uint8_t)(packet_id >> 8);
     buf[3] = (uint8_t)(packet_id & 0xFF);
     memcpy(buf + 4, granted_qos, n);
-    return (int)send(fd, buf, 4 + n, 0);
+    return (int)cmq_sock_write(fd, buf, 4 + n);
 }
 
 #define MQTT_MAX_SUBS 64
@@ -820,7 +821,7 @@ int cmq_mqtt_fanout(const char *topic, const uint8_t *payload, size_t len) {
         if (cmq_mqtt_inflight_offer(g_live[i].inf, topic, payload, len, qos, &id) != 0 ||
             cmq_mqtt_inflight_encode(g_live[i].inf, id, pkt, sizeof(pkt), &pkt_len) != 0)
             continue;
-        if (send(g_live[i].fd, pkt, pkt_len, 0) >= 0) sent++;
+        if (cmq_sock_write(g_live[i].fd, pkt, pkt_len) >= 0) sent++;
     }
     pthread_mutex_unlock(&g_live_lock);
     return sent;
@@ -1509,7 +1510,7 @@ size_t got = (size_t)n;
                                 off2 += tlen;
                                 memcpy(rpkt + off2, copy, copy_len);
                                 off2 += copy_len;
-                                (void)send(fd, rpkt, off2, 0);
+                                (void)cmq_sock_write(fd, rpkt, off2);
                             }
                         }
                         free(copy);
@@ -1528,7 +1529,7 @@ size_t got = (size_t)n;
                         off2 += tlen;
                         memcpy(rpkt + off2, rp, rlen);
                         off2 += rlen;
-                        (void)send(fd, rpkt, off2, 0);
+                        (void)cmq_sock_write(fd, rpkt, off2);
                     }
                 }
             }
@@ -1543,7 +1544,7 @@ size_t got = (size_t)n;
             }
             if (!rate_limit_check(ip)) {
                 uint8_t rpkt[4] = {0x90, 0x02, 0x03, 0x00};
-                (void)send(fd, rpkt, sizeof(rpkt), 0);
+                (void)cmq_sock_write(fd, rpkt, sizeof(rpkt));
                 MQTT_CLIENT_RET(-1);
             }
             /* v0.5.43: topic | [pid if QoS>0] | [props if v5] | payload */

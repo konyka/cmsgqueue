@@ -2,6 +2,7 @@
 #include "cmq_server.h"
 #include "cmq_config.h"
 #include "cmq_platform.h"
+#include "cmq_io.h"
 #include "cmq_coro.h"
 #include "cmq_crc32c.h"
 #include "cmq_compress.h"
@@ -729,7 +730,7 @@ static ssize_t client_sock_read(cmq_client_t *c, uint8_t *buf, size_t len) {
 static ssize_t client_sock_write(cmq_client_t *c, const uint8_t *buf, size_t len) {
     for (;;) {
         ssize_t n = c->tls ? cmq_tls_write(c->tls, buf, len)
-                           : write(c->fd, buf, len);
+                           : cmq_sock_write(c->fd, buf, len);
         if (n < 0 && errno == EINTR) continue;
         return n;
     }

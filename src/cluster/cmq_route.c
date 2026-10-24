@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_route.h"
+#include "cmq_io.h"
 #include "cmq_parser.h"
 #include "cmq_proto.h"
 #include "cmq_route_tls.h"
@@ -109,7 +110,7 @@ int cmq_peer_handshake(int fd, const char *auth_user, const char *auth_pass,
 
     size_t off = 0;
     while (off < len) {
-        ssize_t n = write(fd, buf + off, len - off);
+        ssize_t n = cmq_sock_write(fd, buf + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -204,7 +205,7 @@ static int write_one(int fd, const uint8_t *data, size_t len,
     }
     ssize_t n;
     do {
-        n = write(fd, data, len);
+        n = cmq_sock_write(fd, data, len);
     } while (n < 0 && errno == EINTR);
     if (n == (ssize_t)len) return 0;
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 1;
@@ -225,7 +226,7 @@ static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
     int stall_rounds = 0;
     while (off < len) {
-        ssize_t n = write(fd, data + off, len - off);
+        ssize_t n = cmq_sock_write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {

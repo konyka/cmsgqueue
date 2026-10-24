@@ -131,7 +131,7 @@ static void ws_send_cmq(int fd, cmq_op_t op, const uint8_t *payload, size_t plen
     }
     buf[hdr] = mk[0]; buf[hdr + 1] = mk[1]; buf[hdr + 2] = mk[2]; buf[hdr + 3] = mk[3];
     for (size_t i = 0; i < cmq_len; i++) buf[hdr + 4 + i] = cmq[i] ^ mk[i % 4];
-    write(fd, buf, hdr + 4 + cmq_len);
+    ssize_t sent = write(fd, buf, hdr + 4 + cmq_len);
     free(buf);
 }
 
