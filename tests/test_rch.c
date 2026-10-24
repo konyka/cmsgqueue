@@ -27,13 +27,18 @@ TEST(rch, swap_drops_old) {
     ASSERT_NOT_NULL(ha);
     cmq_rch_t *hb = cmq_rch_new(&b, test_free);
     ASSERT_NOT_NULL(hb);
+    cmq_rch_t *orig_a = ha;
     cmq_rch_t *prev = cmq_rch_swap(&ha, hb);
+    ASSERT(prev == orig_a);
+    ASSERT(ha == hb);
     int *p = (int *)cmq_rch_acquire(prev);
     ASSERT_EQ(*p, 1);
     cmq_rch_release(prev, p);
     ASSERT_EQ(free_count, 0);
     cmq_rch_release_owner(prev);
     ASSERT_EQ(free_count, 1);
+    cmq_rch_release_owner(ha);
+    ASSERT_EQ(free_count, 2);
 }
 
 TEST(rch, multiple_readers_no_free) {
