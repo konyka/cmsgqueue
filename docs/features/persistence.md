@@ -116,6 +116,10 @@ single-threaded; future work can parallelize.
   returns error.
 - `empty_filestore` — fresh filestore has `last_seq = 0`.
 
+`tests/test_persist_replay.c` also verifies the server path: ACL-rejected
+publishes do not append to the WAL, while authorized publishes are persisted
+and readable for replay.
+
 The existing `test_store.c` exercises the filestore library.
 
 ## Verification gates
