@@ -78,8 +78,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install cross-compiler
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install cross-compiler and arm64 libraries
+        run: |
+          sudo dpkg --add-architecture arm64
+          # Keep the default sources amd64-only and add the arm64 ports mirror.
+          sudo sed -i 's/^Types: deb$/Types: deb\nArchitectures: amd64/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo tee /etc/apt/sources.list.d/arm64-ports.sources > /dev/null <<'EOF'
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: noble noble-updates noble-security
+          Components: main universe
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config gcc-aarch64-linux-gnu \
+            libssl-dev:arm64 libzstd-dev:arm64 zlib1g-dev:arm64
       - name: Configure
         run: |
           cmake -B build \
