@@ -43,6 +43,9 @@ v0.5.157: reload also opens `cmq-subs.wal` when
 create left persist NULL (live filestore, missing
 F18 handle). Empty / omitted keeps off. An existing
 handle is not remounted. `..` / `\` fail closed.
+Tests: `test_reload` covers a server created without `persist_dir`,
+reload-time subscription WAL attach/load, omitted and empty `persist_dir`,
+and single-load behavior across a second reload.
 v0.5.158: reload opens `{persist_dir}/obj` when
 create left the object-store handle NULL. Same
 empty / omitted / no-remount / fail-closed rules.
