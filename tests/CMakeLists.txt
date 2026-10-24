@@ -23,6 +23,9 @@ set(CMQ_TCP_TESTS
   test_compress_wire
   test_multi_thread_accept
   test_health_metrics
+  test_p5_listener
+  test_sublist_recover_wire
+  test_wal_replay_parallel
 )
 
 set(CMQ_JS_PERSIST_TESTS

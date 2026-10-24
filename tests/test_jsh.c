@@ -99,6 +99,7 @@ TEST(jsh, isolated) {
 }
 
 TEST(jsh, reject) {
+    mkdir(JDIR, 0755);
     cmq_js_t *j = cmq_js_create();
     ASSERT_EQ(cmq_js_set_persist(j, JDIR), 0);
     uint8_t out[16];

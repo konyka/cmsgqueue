@@ -75,6 +75,7 @@ TEST(jsl, isolated) {
 }
 
 TEST(jsl, reject) {
+    mkdir(JDIR, 0755);
     cmq_js_t *j = cmq_js_create();
     ASSERT(cmq_js_set_persist(NULL, JDIR) != 0);
     ASSERT(cmq_js_set_persist(j, NULL) != 0);
