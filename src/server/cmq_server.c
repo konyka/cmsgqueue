@@ -7915,11 +7915,21 @@ static int admit_one_client(cmq_server_t *srv, int listener_fd,
             }
             if (cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
                            client) != 0) {
-                w->clients_count--;
-                cmq_idmap_del(w->idmap, client->id);
+                /* Once the fd was armed, the owning thread may already have run
+                   client_teardown: it sets CLOSED before cmq_ev_del, so a
+                   confirm_armed failure always shows CLOSED here. That teardown is
+                   blocked on clients_lock and will unlink and destroy the client
+                   itself; destroying it here too is a double free. */
+                int claimed = client_state(client) == CMQ_CLIENT_CLOSED;
+                if (!claimed) {
+                    w->clients_count--;
+                    cmq_idmap_del(w->idmap, client->id);
+                }
                 cmq_mutex_unlock(&w->clients_lock);
-                cmq_client_destroy(client);
-                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                if (!claimed) {
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                }
                 return 0;
             }
             cmq_mutex_unlock(&w->clients_lock);
@@ -7964,11 +7974,21 @@ static int admit_one_client(cmq_server_t *srv, int listener_fd,
             }
             if (cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
                            client) != 0) {
-                srv->clients_count--;
-                cmq_idmap_del(srv->idmap, client->id);
+                /* Once the fd was armed, the owning thread may already have run
+                   client_teardown: it sets CLOSED before cmq_ev_del, so a
+                   confirm_armed failure always shows CLOSED here. That teardown is
+                   blocked on clients_lock and will unlink and destroy the client
+                   itself; destroying it here too is a double free. */
+                int claimed = client_state(client) == CMQ_CLIENT_CLOSED;
+                if (!claimed) {
+                    srv->clients_count--;
+                    cmq_idmap_del(srv->idmap, client->id);
+                }
                 cmq_mutex_unlock(&srv->clients_lock);
-                cmq_client_destroy(client);
-                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                if (!claimed) {
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                }
                 return 0;
             }
             cmq_mutex_unlock(&srv->clients_lock);
@@ -8187,11 +8207,21 @@ static void accept_cb(int fd, int events, void *data) {
             }
             if (cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
                            client) != 0) {
-                w->clients_count--;
-                cmq_idmap_del(w->idmap, client->id);
+                /* Once the fd was armed, the owning thread may already have run
+                   client_teardown: it sets CLOSED before cmq_ev_del, so a
+                   confirm_armed failure always shows CLOSED here. That teardown is
+                   blocked on clients_lock and will unlink and destroy the client
+                   itself; destroying it here too is a double free. */
+                int claimed = client_state(client) == CMQ_CLIENT_CLOSED;
+                if (!claimed) {
+                    w->clients_count--;
+                    cmq_idmap_del(w->idmap, client->id);
+                }
                 cmq_mutex_unlock(&w->clients_lock);
-                cmq_client_destroy(client);
-                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                if (!claimed) {
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                }
                 continue;
             }
             cmq_mutex_unlock(&w->clients_lock);
@@ -8236,11 +8266,21 @@ static void accept_cb(int fd, int events, void *data) {
             }
             if (cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
                            client) != 0) {
-                srv->clients_count--;
-                cmq_idmap_del(srv->idmap, client->id);
+                /* Once the fd was armed, the owning thread may already have run
+                   client_teardown: it sets CLOSED before cmq_ev_del, so a
+                   confirm_armed failure always shows CLOSED here. That teardown is
+                   blocked on clients_lock and will unlink and destroy the client
+                   itself; destroying it here too is a double free. */
+                int claimed = client_state(client) == CMQ_CLIENT_CLOSED;
+                if (!claimed) {
+                    srv->clients_count--;
+                    cmq_idmap_del(srv->idmap, client->id);
+                }
                 cmq_mutex_unlock(&srv->clients_lock);
-                cmq_client_destroy(client);
-                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                if (!claimed) {
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                }
                 continue;
             }
             cmq_mutex_unlock(&srv->clients_lock);

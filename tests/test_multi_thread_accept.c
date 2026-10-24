@@ -112,12 +112,24 @@ TEST(multi_thread_accept, aux_thread_admits) {
     }
     ASSERT(opened >= 8);
 
+    /* Two acceptors race for the backlog: the event-loop thread and the aux
+     * thread. On a machine with few CPUs the loop thread can drain a whole
+     * burst before the aux thread is scheduled, so a single burst is not a
+     * reliable way to observe the aux thread. Keep offering connections
+     * until it has admitted one, bounded by a deadline. */
+    int extra[64];
+    int n_extra = 0;
     uint64_t aux = 0;
-    for (int i = 0; i < 50; i++) {
+    for (int i = 0; i < 100; i++) {
         aux = cmq_atomic_load_u64(&srv->stat_accept_aux, CMQ_ATOMIC_RELAXED);
         if (aux >= 1) break;
+        if (n_extra < 64) {
+            int fd = connect_to(AUX_PORT);
+            if (fd >= 0) extra[n_extra++] = fd;
+        }
         wait_ms(20);
     }
+    for (int i = 0; i < n_extra; i++) close(extra[i]);
     ASSERT(aux >= 1);
 
     int handshake_ok = 0;
