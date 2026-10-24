@@ -87,8 +87,6 @@ static int rate_limit_check(uint32_t ip) {
          * minute. Rate-limited to avoid log spam under hostile load. */
         static uint32_t last_logged_ip;
         static uint64_t last_logged_min;
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
         uint64_t now_min = (uint64_t)ts.tv_sec / 60;
         if (ip != last_logged_ip || now_min != last_logged_min) {
             cmq_log_info(NULL,
@@ -172,7 +170,7 @@ static int cmq_bridge_publish_adapter(void *sublist, const char *topic,
                                        size_t payload_len) {
     (void)sublist;
     if (!g_mqtt_bridge_srv || !topic || !payload) {
-        free((void *)payload);
+        free((void *)(uintptr_t)payload);
         return 0;
     }
     /* v0.5.39: persist to WAL before fanout. Best-effort: silent
@@ -181,7 +179,7 @@ static int cmq_bridge_publish_adapter(void *sublist, const char *topic,
                                 payload_len);
     int rc = cmq_server_publish(g_mqtt_bridge_srv, topic, payload,
                                   payload_len, "mqtt_bridge");
-    free((void *)payload);
+    free((void *)(uintptr_t)payload);
     return rc == 0 ? 0 : -1;
 }
 
@@ -283,7 +281,20 @@ void cmq_mqtt_bridge_shutdown(void) {
     pthread_mutex_unlock(&g_mqtt_bridge_lock);
     pthread_join(g_mqtt_bridge_thread, NULL);
     g_mqtt_bridge_thread_started = 0;
+    /* The relay is gone, so nothing consumes the queue any more. Free
+     * the payloads still queued and drain the freelist; resetting the
+     * indices alone would leak both. */
+    pthread_mutex_lock(&g_mqtt_bridge_lock);
+    while (g_mqtt_bridge_count > 0) {
+        free(g_mqtt_bridge_payloads[g_mqtt_bridge_tail]);
+        g_mqtt_bridge_payloads[g_mqtt_bridge_tail] = NULL;
+        g_mqtt_bridge_tail = (g_mqtt_bridge_tail + 1) % 256;
+        g_mqtt_bridge_count--;
+    }
+    while (g_mqtt_bridge_freelist_count > 0)
+        free(g_mqtt_bridge_freelist[--g_mqtt_bridge_freelist_count]);
     g_mqtt_bridge_head = g_mqtt_bridge_tail = g_mqtt_bridge_count = 0;
+    pthread_mutex_unlock(&g_mqtt_bridge_lock);
 }
 
 /* v0.5.34: test-only helpers. These bypass the MQTT wire protocol
@@ -691,8 +702,8 @@ int cmq_mqtt_inflight_rec(cmq_mqtt_inflight_t *w, uint16_t packet_id) {
     return -1;
 }
 
-static cmq_mqtt_inflight_slot_t *inflight_find(cmq_mqtt_inflight_t *w,
-                                                uint16_t packet_id) {
+static const cmq_mqtt_inflight_slot_t *inflight_find_const(
+        const cmq_mqtt_inflight_t *w, uint16_t packet_id) {
     if (!w || !packet_id) return NULL;
     for (int i = 0; i < CMQ_MQTT_INFLIGHT_MAX; i++)
         if (w->slots[i].used && w->slots[i].packet_id == packet_id)
@@ -703,7 +714,7 @@ static cmq_mqtt_inflight_slot_t *inflight_find(cmq_mqtt_inflight_t *w,
 int cmq_mqtt_inflight_encode(const cmq_mqtt_inflight_t *w, uint16_t packet_id,
                              uint8_t *out, size_t out_sz, size_t *out_len) {
     if (!w || !out || !out_len || !packet_id) return -1;
-    const cmq_mqtt_inflight_slot_t *s = inflight_find((cmq_mqtt_inflight_t *)w, packet_id);
+    const cmq_mqtt_inflight_slot_t *s = inflight_find_const(w, packet_id);
     if (!s) return -1;
     uint32_t rem = 4u + s->topic_len + s->payload_len;
     uint8_t rl[4];
@@ -725,7 +736,7 @@ int cmq_mqtt_inflight_encode_pubrel(const cmq_mqtt_inflight_t *w,
                                     uint16_t packet_id, uint8_t *out,
                                     size_t out_sz, size_t *out_len) {
     if (!w || !out || !out_len || out_sz < 4 || !packet_id) return -1;
-    cmq_mqtt_inflight_slot_t *s = inflight_find((cmq_mqtt_inflight_t *)w, packet_id);
+    const cmq_mqtt_inflight_slot_t *s = inflight_find_const(w, packet_id);
     if (!s || s->qos != 2 || s->phase != 1) return -1;
     out[0] = 0x62; out[1] = 2; out[2] = (uint8_t)(packet_id >> 8);
     out[3] = (uint8_t)packet_id; *out_len = 4;

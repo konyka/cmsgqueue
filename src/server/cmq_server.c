@@ -7164,16 +7164,16 @@ static void client_read_cb(int fd, int events, void *data) {
                             if (hard < 64) hard = 64;
                             plain = malloc(hard);
                             if (!plain) { client_teardown(c); return; }
-                            int n = cmq_ws_inflate_message(c->ws_msg_buf,
-                                                           c->ws_msg_len,
-                                                           plain, hard);
-                            if (n < 0) {
+                            int inflated = cmq_ws_inflate_message(c->ws_msg_buf,
+                                                                  c->ws_msg_len,
+                                                                  plain, hard);
+                            if (inflated < 0) {
                                 free(plain);
                                 client_teardown(c);
                                 return;
                             }
                             feed = plain;
-                            feed_len = (size_t)n;
+                            feed_len = (size_t)inflated;
                         }
                         int rc = cmq_parser_feed(c->parser, feed, feed_len);
                         free(plain);
@@ -8434,6 +8434,11 @@ static void replay_one_record(cmq_server_t *srv, uint8_t *data,
     uint64_t out_before = cmq_atomic_load_u64(
         &srv->stat_messages_out, CMQ_ATOMIC_RELAXED);
     handle_publish(srv, &replay_c, &rf);
+    /* replay_c lives on the stack, so cmq_client_destroy cannot be used;
+     * release the only heap buffer handle_publish may have attached
+     * (an error reply queued by cmq_send_error). */
+    free(replay_c.write_buf);
+    replay_c.write_buf = NULL;
     uint64_t out_after = cmq_atomic_load_u64(
         &srv->stat_messages_out, CMQ_ATOMIC_RELAXED);
     if (out_after == out_before) {
@@ -10007,7 +10012,7 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
             cmq_config_free(&fresh);
             return -1;
         }
-        free((void *)server->config.info_go);
+        free((void *)(uintptr_t)server->config.info_go);
         server->config.info_go = info_go;
     }
     if (server->h2_lfd >= 0) {

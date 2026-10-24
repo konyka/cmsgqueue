@@ -50,7 +50,9 @@ TEST(persist_restart, subscriber_survives_restart) {
     cmq_sublist_result_t result;
     ASSERT_EQ(cmq_sublist_match(srv_b->sublist, "v0.5.37/sentinel",
                                  &result), 0);
-    ASSERT_EQ(result.count, 1);
+    size_t matched = result.count;
+    cmq_sublist_result_free(&result);
+    ASSERT_EQ(matched, 1);
 
     cmq_server_destroy(srv_b);
     system("rm -rf " RESTART_DIR);

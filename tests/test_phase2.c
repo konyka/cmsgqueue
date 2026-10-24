@@ -856,6 +856,7 @@ TEST(phase2, audit_emits_rate_limit_on_publish_quota) {
     ASSERT(strstr(buf, "\"event\":\"rate_limit_reject\"") != NULL);
     ASSERT(strstr(buf, "\"subject\":\"publish\"") != NULL);
     ASSERT(strstr(buf, "quota exceeded") != NULL);
+    cmq_parser_destroy(parser);
 }
 
 /* RED v0.6.17: handle_frame's CONNECT branch assigns a 16-byte trace

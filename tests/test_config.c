@@ -440,6 +440,7 @@ TEST(config, load_skip_sections) {
     ASSERT_EQ(rc, CMQ_OK);
     ASSERT_EQ(config.port, 4222);
     ASSERT_EQ(config.log_level, 3);
+    cmq_config_free(&config);
 }
 
 TEST(config, load_cluster_tls_routes) {
@@ -474,6 +475,7 @@ TEST(config, load_empty_file) {
     memset(&config, 0, sizeof(config));
     cmq_status_t rc = cmq_config_load(path, &config);
     ASSERT_EQ(rc, CMQ_OK);
+    cmq_config_free(&config);
 }
 
 TEST(config, reject_overlong_line) {
