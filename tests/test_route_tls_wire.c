@@ -76,7 +76,19 @@ static void *server_loop(void *arg) {
     }
     if (rc != 1) goto out;
     uint8_t buf[256];
-    int n = SSL_read(ssl, buf, sizeof(buf));
+    /* The socket is non-blocking, so a single SSL_read returns WANT_READ if
+       the peer has not written yet and the thread would close the socket
+       under the client's write (EPIPE). Wait for the message instead. */
+    int n = -1;
+    for (int i = 0; i < 300; i++) {
+        n = SSL_read(ssl, buf, sizeof(buf));
+        if (n > 0) break;
+        int err = SSL_get_error(ssl, n);
+        if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE) break;
+        struct timeval tv = {0, 10000}; /* 10 ms */
+        fd_set rfds; FD_ZERO(&rfds); FD_SET(fd, &rfds);
+        select(fd + 1, &rfds, NULL, NULL, &tv);
+    }
     if (n > 0) {
         FILE *f = fopen(F17_DIR "/recv.bin", "wb");
         if (f) { fwrite(buf, 1, n, f); fclose(f); }
