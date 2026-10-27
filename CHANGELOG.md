@@ -106,6 +106,12 @@
   (`.type`, `.size`, `.align N` bytes) and an undecorated symbol, which
   Mach-O rejects. The assembly now emits `_cmq_coro_ctx_switch` with
   `.p2align` on macOS; the Linux object code is byte-identical.
+- **macOS link**: zstd was linked as the bare name `zstd` from
+  `${ZSTD_LIBRARIES}`, which the linker cannot find when the library is in
+  Homebrew's prefix (`ld: library 'zstd' not found`, reached once every
+  source compiled). It is linked through `PkgConfig::ZSTD` now, which
+  carries the full path. Checked on Linux only (builds, links
+  `libzstd.so.1`, compression tests pass).
 - **macOS build, portability**: 11 `SOCK_NONBLOCK` uses in tests and the
   benchmark example are now `socket` + `fcntl(O_NONBLOCK)`; `fdatasync`
   falls back to `fsync` off Linux; `-z relro` / `-z now` are no longer
