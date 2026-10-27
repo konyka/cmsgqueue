@@ -16,6 +16,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include <poll.h>
+#include <time.h>
 
 static int connect_to(int port) {
     int fd = cmq_test_nonblock_socket(AF_INET, SOCK_STREAM);
@@ -817,10 +818,14 @@ TEST(phase2, audit_emits_rate_limit_on_publish_quota) {
     pub_pl[6 + slen] = (blen1 >> 8) & 0xFF;
     pub_pl[7 + slen] = blen1 & 0xFF;
     memcpy(pub_pl + 8 + slen, body1, blen1);
+    struct timespec t_first, t_second;
+    clock_gettime(CLOCK_MONOTONIC, &t_first);
     send_frame(fd, CMQ_OP_PUBLISH, pub_pl, 8 + slen + blen1);
-    wait_ms(50);
-    recv_frame(fd, &frame, parser);
-    free_frame_payload(&frame);
+    /* A publish with no subscriber gets no reply, so there is nothing to
+     * read here. Waiting for one burned ~500 ms in recv_frame's retry loop,
+     * which together with the sleeps could push the second publish past the
+     * 1 s quota window (the counter resets and the publish is admitted); that
+     * is what failed on macOS. Keep both publishes inside one window. */
 
     /* Second PUBLISH exceeds the per-account 1 msg/sec cap → ERROR +
      * rate_limit_reject audit. */
@@ -831,13 +836,18 @@ TEST(phase2, audit_emits_rate_limit_on_publish_quota) {
     pub_pl[6 + slen] = (blen2 >> 8) & 0xFF;
     pub_pl[7 + slen] = blen2 & 0xFF;
     memcpy(pub_pl + 8 + slen, body2, blen2);
+    clock_gettime(CLOCK_MONOTONIC, &t_second);
     send_frame(fd, CMQ_OP_PUBLISH, pub_pl, 8 + slen + blen2);
     wait_ms(50);
     int got2 = recv_frame(fd, &frame, parser);
-    if (got2 != 0 || frame.hdr.op != CMQ_OP_ERROR)
+    if (got2 != 0 || frame.hdr.op != CMQ_OP_ERROR) {
+        long gap_ms = (long)(t_second.tv_sec - t_first.tv_sec) * 1000L +
+                      (t_second.tv_nsec - t_first.tv_nsec) / 1000000L;
         fprintf(stderr, "quota test: second publish reply: recv_frame=%d op=%d "
-                "(expected CMQ_OP_ERROR=%d)\n", got2, (int)frame.hdr.op,
-                (int)CMQ_OP_ERROR);
+                "(expected CMQ_OP_ERROR=%d); %ld ms between the two publishes "
+                "(quota window is 1000 ms)\n", got2, (int)frame.hdr.op,
+                (int)CMQ_OP_ERROR, gap_ms);
+    }
     ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
     free_frame_payload(&frame);
 
