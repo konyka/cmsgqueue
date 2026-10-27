@@ -80,14 +80,15 @@ static int b64url_decode(const char *in, uint8_t *out, size_t out_cap, size_t *o
     if (decoded > out_cap) return -1;
     size_t o = 0;
     for (size_t i = 0; i < in_len; i += 4) {
+        /* Every character must be in the alphabet. The encoder fills the
+         * unused tail of the last block with 'A' (value 0); accept exactly
+         * that and nothing else, so a corrupted character cannot decode to
+         * the same bytes as the original. */
         int v0 = b64url_val(tab, in[i]);
-        if (v0 < 0) return -1;
         int v1 = b64url_val(tab, in[i+1]);
         int v2 = b64url_val(tab, in[i+2]);
         int v3 = b64url_val(tab, in[i+3]);
-        if (v1 < 0) v1 = 0;
-        if (v2 < 0) v2 = 0;
-        if (v3 < 0) v3 = 0;
+        if (v0 < 0 || v1 < 0 || v2 < 0 || v3 < 0) return -1;
         uint32_t v = ((uint32_t)v0 << 18) | ((uint32_t)v1 << 12) | ((uint32_t)v2 << 6) | (uint32_t)v3;
         if (o < decoded) out[o++] = (uint8_t)(v >> 16);
         if (o < decoded) out[o++] = (uint8_t)(v >> 8);
