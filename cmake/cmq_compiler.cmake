@@ -16,6 +16,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(CMQ_PLATFORM_MACOS TRUE)
     set(CMQ_HAVE_KQUEUE TRUE)
+    # Nearly every source pins a strict _POSIX_C_SOURCE, which on macOS hides
+    # non-POSIX names such as INADDR_LOOPBACK, INADDR_NONE and the BSD integer
+    # types. _DARWIN_C_SOURCE restores them for the whole build, the same way
+    # _DEFAULT_SOURCE does on glibc.
+    add_compile_definitions(_DARWIN_C_SOURCE)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR CMAKE_SYSTEM_NAME STREQUAL "OpenBSD" OR CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
     set(CMQ_PLATFORM_BSD TRUE)
     set(CMQ_HAVE_KQUEUE TRUE)

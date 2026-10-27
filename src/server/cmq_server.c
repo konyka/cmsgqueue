@@ -1,9 +1,4 @@
 #define _POSIX_C_SOURCE 200809L
-#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
-/* macOS hides non-POSIX names (sysconf's _SC_NPROCESSORS_ONLN) under a strict
- * _POSIX_C_SOURCE; _DARWIN_C_SOURCE restores them. */
-#define _DARWIN_C_SOURCE
-#endif
 #include "cmq_server.h"
 #include "cmq_config.h"
 #include "cmq_platform.h"
