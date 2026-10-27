@@ -215,14 +215,18 @@
   gap between the two publishes if it fails. An earlier note here said the
   window had been ruled out; that check was invalid because `wait_ms(1100)`
   did not sleep (see below). Whether macOS now passes is only known from CI.
-- Latent test defect, reported but not changed: the `wait_ms(ms)` helper in
-  eleven test files builds `tv_nsec` from `ms` without carrying into seconds,
-  so for `ms >= 1000` `nanosleep` fails with `EINVAL` and does not sleep.
-  Call sites that pass such values: `tests/test_coro_integration.c:235`
-  (1000), `tests/test_server_ops.c:331` (1500) and `:1155` (1200),
-  `tests/test_stress.c:315` (1000). Those tests pass on Linux, so they may
-  not depend on the wait, but they have not been re-checked with a working
-  wait.
+- Test helper bug, fixed: the `wait_ms(ms)` helper in eleven test files built
+  `tv_nsec` from `ms` without carrying into seconds, so for `ms >= 1000`
+  `nanosleep` failed with `EINVAL` and did not sleep. It now splits `ms` into
+  seconds and nanoseconds. Call sites that pass such values:
+  `tests/test_coro_integration.c:235` (1000), `tests/test_server_ops.c:331`
+  (1500) and `:1155` (1200), `tests/test_stress.c:315` (1000).
+- Making `wait_ms` really sleep exposed one test that relied on the missing
+  wait: `server_ops.keepalive_disconnect` waited 1.5 s, then wrote to a socket
+  the keepalive timer had already closed, and the process died of SIGPIPE
+  (ctest reported `test_server_ops (SIGPIPE)`). The test now reads from the
+  socket and asserts the server closed it, instead of writing to it. Before
+  the fix this test never exercised keepalive at all.
 - Once on TSAN, `test_multi_thread_accept` failed in one full run and did not
   fail again in more than 20 further runs (including single-CPU and ctest
   serial) nor in three more full TSAN subsets, so the failure was not
