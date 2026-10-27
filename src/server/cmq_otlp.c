@@ -261,6 +261,20 @@ static int set_block_timeout(int fd) {
     return 0;
 }
 
+/* Pin the certificate check to the URL host. Failing to set it must abort
+ * the connection: the chain would still verify, but with no host check. */
+static int set_expected_host(SSL *ssl, const char *host) {
+    if (inet_addr(host) != (in_addr_t)INADDR_NONE) {
+        X509_VERIFY_PARAM *pm = SSL_get0_param(ssl);
+        return pm && X509_VERIFY_PARAM_set1_ip_asc(pm, host) == 1;
+    }
+#if OPENSSL_VERSION_MAJOR >= 4
+    return SSL_set1_dnsname(ssl, host) == 1;
+#else
+    return SSL_set1_host(ssl, host) == 1;
+#endif
+}
+
 static int otlp_tls_io(int fd, const cmq_otlp_url_t *url, const char *req,
                        char *resp, size_t resp_cap, ssize_t *nread) {
     if (set_block_timeout(fd) != 0) return -1;
@@ -288,12 +302,10 @@ static int otlp_tls_io(int fd, const cmq_otlp_url_t *url, const char *req,
         memcpy(sni, url->host, sizeof(sni));
         (void)SSL_set_tlsext_host_name(ssl, sni);
     }
-    if (inet_addr(url->host) != (in_addr_t)INADDR_NONE) {
-        X509_VERIFY_PARAM *pm = SSL_get0_param(ssl);
-        if (pm)
-            (void)X509_VERIFY_PARAM_set1_ip_asc(pm, url->host);
-    } else {
-        (void)SSL_set1_host(ssl, url->host);
+    if (!set_expected_host(ssl, url->host)) {
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        return -1;
     }
     int rc = -1;
     if (SSL_connect(ssl) == 1) {

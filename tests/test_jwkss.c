@@ -18,12 +18,19 @@
 static const char *k_jwks =
     "{\"keys\":[{\"kty\":\"oct\",\"kid\":\"k1\",\"k\":\"czNjcmV0\"}]}";
 
-static void gen_cert(void) {
+static void gen_cert_for(const char *san) {
+    char cmd[512];
     cmq_test_sh("rm -rf " JWKSS_DIR " && mkdir -p " JWKSS_DIR);
-    cmq_test_sh("openssl req -x509 -newkey rsa:2048 -keyout "
-                 JWKSS_DIR "/key.pem -out " JWKSS_DIR "/cert.pem "
-                 "-days 1 -nodes -subj '/CN=127.0.0.1' "
-                 "-addext 'subjectAltName=IP:127.0.0.1' 2>/dev/null");
+    snprintf(cmd, sizeof(cmd),
+             "openssl req -x509 -newkey rsa:2048 -keyout "
+             JWKSS_DIR "/key.pem -out " JWKSS_DIR "/cert.pem "
+             "-days 1 -nodes -subj '/CN=cert-host' "
+             "-addext 'subjectAltName=%s' 2>/dev/null", san);
+    cmq_test_sh(cmd);
+}
+
+static void gen_cert(void) {
+    gen_cert_for("IP:127.0.0.1");
 }
 
 static int listen_loopback(int *port) {
@@ -139,6 +146,66 @@ TEST(jwkss, no_ca_fails) {
     snprintf(url, sizeof(url), "https://127.0.0.1:%d/jwks.json", port);
     cmq_jwks_url_t u;
     ASSERT_EQ(cmq_jwks_parse_url(url, &u), 0);
+    cmq_jwks_t j;
+    ASSERT(cmq_jwks_http_get(&u, &j) != 0);
+    pthread_join(tid, NULL);
+    close(lfd);
+}
+
+TEST(jwkss, dns_host_matches_certificate_san) {
+    gen_cert_for("DNS:localhost");
+    int port = 0;
+    int lfd = listen_loopback(&port);
+    ASSERT(lfd >= 0);
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, serve_jwks_tls, (void *)(intptr_t)lfd),
+              0);
+    char url[64];
+    snprintf(url, sizeof(url), "https://localhost:%d/jwks.json", port);
+    cmq_jwks_url_t u;
+    ASSERT_EQ(cmq_jwks_parse_url(url, &u), 0);
+    ASSERT_EQ(cmq_jwks_set_ca(&u, JWKSS_DIR "/cert.pem"), 0);
+    cmq_jwks_t j;
+    ASSERT_EQ(cmq_jwks_http_get(&u, &j), 0);
+    ASSERT_EQ(j.n, 1);
+    pthread_join(tid, NULL);
+    close(lfd);
+}
+
+TEST(jwkss, dns_host_not_in_certificate_fails) {
+    gen_cert_for("DNS:other.example");
+    int port = 0;
+    int lfd = listen_loopback(&port);
+    ASSERT(lfd >= 0);
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, serve_jwks_tls, (void *)(intptr_t)lfd),
+              0);
+    char url[64];
+    snprintf(url, sizeof(url), "https://localhost:%d/jwks.json", port);
+    cmq_jwks_url_t u;
+    ASSERT_EQ(cmq_jwks_parse_url(url, &u), 0);
+    ASSERT_EQ(cmq_jwks_set_ca(&u, JWKSS_DIR "/cert.pem"), 0);
+    cmq_jwks_t j;
+    ASSERT(cmq_jwks_http_get(&u, &j) != 0);
+    pthread_join(tid, NULL);
+    close(lfd);
+}
+
+TEST(jwkss, wrong_host_in_certificate_fails) {
+    /* The certificate is trusted (it is the CA) but names a different IP, so
+     * only the host check can reject it. */
+    gen_cert_for("IP:10.255.255.1");
+    int port = 0;
+    int lfd = listen_loopback(&port);
+    ASSERT(lfd >= 0);
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, serve_jwks_tls, (void *)(intptr_t)lfd),
+              0);
+    char url[64];
+    snprintf(url, sizeof(url), "https://127.0.0.1:%d/jwks.json", port);
+    cmq_jwks_url_t u;
+    ASSERT_EQ(cmq_jwks_parse_url(url, &u), 0);
+    ASSERT_EQ(cmq_jwks_set_ca(&u, JWKSS_DIR "/cert.pem"), 0);
     cmq_jwks_t j;
     ASSERT(cmq_jwks_http_get(&u, &j) != 0);
     pthread_join(tid, NULL);
