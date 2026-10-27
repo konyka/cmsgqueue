@@ -8595,6 +8595,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     if (!srv) return CMQ_ERR_NO_MEMORY;
     srv->h2_lfd = -1;
 
+    cmq_trace_warmup();
     cmq_config_t src = {0};
     if (config) src = *config;
 
