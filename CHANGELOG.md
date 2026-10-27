@@ -18,6 +18,17 @@
   stored `$scrypt$` record indexed `tab[]` with a negative value. Found with
   ASAN via the new `password.high_bit_base64_bytes_do_not_index_before_table`
   test. Also dropped an unused local in `cmq_password_verify`.
+- **`b64url_decode` accepted corrupted characters in the tail of a block**
+  (`src/server/cmq_password.c`). It treated an invalid character in
+  positions 2-4 of a 4-character group as value 0, so for the padding
+  characters the encoder appends (salt positions 18, 22 and 23 in a 24
+  character field) a damaged stored hash decoded to the same bytes and still
+  verified. It does not let a wrong *password* in, since `verify` compares the
+  scrypt output, but two different stored strings denoted one record. Every
+  character must now be in the alphabet; the encoder's own `A` padding is
+  still accepted. The test added with the earlier out-of-bounds fix was flaky
+  because of this (17 of 400 runs failed, which also broke the coverage job in
+  CI); it is 0 of 400 now.
 - **TLS context and session leaks** (`src/enterprise/cmq_tls.c`):
   `cmq_tls_reload` took an extra `SSL_CTX_up_ref` on every new context, so
   each reload leaked one `SSL_CTX`; `cmq_tls_sess_new_cb` up-ref'd a session
@@ -98,9 +109,11 @@
 - **macOS build, portability**: 11 `SOCK_NONBLOCK` uses in tests and the
   benchmark example are now `socket` + `fcntl(O_NONBLOCK)`; `fdatasync`
   falls back to `fsync` off Linux; `-z relro` / `-z now` are no longer
-  passed to Apple's linker; `_DARWIN_C_SOURCE` exposes
-  `sysconf(_SC_NPROCESSORS_ONLN)` under the strict `_POSIX_C_SOURCE`.
-  None of this could be compiled on macOS here.
+  passed to Apple's linker. 87 sources pin a strict `_POSIX_C_SOURCE`, which
+  hides `INADDR_LOOPBACK`, `INADDR_NONE`, `_SC_NPROCESSORS_ONLN` and the BSD
+  integer types on macOS, so CMake now defines `_DARWIN_C_SOURCE` there for
+  the whole build. None of this could be compiled on macOS here; each CI
+  round on macOS has only revealed the next error.
 - **macOS build, platform selection**: `CMQ_OS_LINUX` is defined as `0` on
   macOS, so the five `#ifdef CMQ_OS_LINUX` guards in `cmq_server.c` and
   `cmq_server.h` still picked the Linux branch and failed on
