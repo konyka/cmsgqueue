@@ -131,7 +131,7 @@ static void wait_server(void) {
 }
 
 static void wait_ms(int ms) {
-    struct timespec ts = {0, ms * 1000000L};
+    struct timespec ts = {ms / 1000, (ms % 1000) * 1000000L};
     nanosleep(&ts, NULL);
 }
 

@@ -71,7 +71,7 @@ static void free_frame(cmq_frame_t *f) {
 }
 
 static void wait_ms(int ms) {
-    struct timespec ts = {0, ms * 1000000L};
+    struct timespec ts = {ms / 1000, (ms % 1000) * 1000000L};
     nanosleep(&ts, NULL);
 }
 
@@ -330,9 +330,18 @@ TEST(server_ops, keepalive_disconnect) {
 
     wait_ms(1500);
 
-    send_frame(fd, CMQ_OP_STATS, NULL, 0);
-    ssize_t written = write(fd, "x", 1);
-    (void)written;
+    /* The idle client must have been closed by the keepalive timer. Do not
+     * write to it: a write to a closed peer raises SIGPIPE in this process. */
+    int closed = 0;
+    for (int i = 0; i < 200 && !closed; i++) {
+        uint8_t b[64];
+        ssize_t n = read(fd, b, sizeof(b));
+        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
+            closed = 1;
+        else if (n < 0)
+            wait_ms(10);
+    }
+    ASSERT(closed);
 
     close(fd);
     cmq_parser_destroy(parser);
