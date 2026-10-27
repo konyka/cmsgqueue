@@ -103,11 +103,13 @@ static int sockaddr_rate_key(const struct sockaddr *addr, socklen_t addrlen,
     memset(key, 0, sizeof(struct sockaddr_storage));
     if (addr->sa_family == AF_INET) {
         key[0] = (uint8_t)AF_INET;
-        memcpy(key + 1, &((const struct sockaddr_in *)addr)->sin_addr,
+        memcpy(key + 1,
+               (const uint8_t *)addr + offsetof(struct sockaddr_in, sin_addr),
                sizeof(struct in_addr));
     } else if (addr->sa_family == AF_INET6) {
         key[0] = (uint8_t)AF_INET6;
-        memcpy(key + 1, &((const struct sockaddr_in6 *)addr)->sin6_addr,
+        memcpy(key + 1,
+               (const uint8_t *)addr + offsetof(struct sockaddr_in6, sin6_addr),
                sizeof(struct in6_addr));
     } else {
         (void)addrlen;
@@ -7742,7 +7744,8 @@ static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
     return 0;
 }
 
-/* v0.5.42: shared admit path for accept_cb and accept_thread_func.
+#if CMQ_OS_LINUX
+/* v0.5.42: admit path for accept_thread_func (Linux only, like its caller).
  * Takes ownership of client_fd. Returns 1 if the session is live. */
 static int admit_one_client(cmq_server_t *srv, int listener_fd,
                              int client_fd, const struct sockaddr_storage *addr,
@@ -7995,6 +7998,7 @@ static int admit_one_client(cmq_server_t *srv, int listener_fd,
         }
         return 1;
 }
+#endif
 
 static void accept_cb(int fd, int events, void *data) {
     cmq_server_t *srv = (cmq_server_t *)data;
@@ -8591,11 +8595,11 @@ static void *replay_worker(void *arg) {
 cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config) {
     if (!server) return CMQ_ERR_INVALID_ARG;
 
+    cmq_trace_warmup();
     cmq_server_t *srv = calloc(1, sizeof(cmq_server_t));
     if (!srv) return CMQ_ERR_NO_MEMORY;
     srv->h2_lfd = -1;
 
-    cmq_trace_warmup();
     cmq_config_t src = {0};
     if (config) src = *config;
 

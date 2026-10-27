@@ -154,7 +154,12 @@ static int jwks_tls_io(int fd, const cmq_jwks_url_t *url, const char *req,
         return -1;
     }
     SSL_set_fd(ssl, fd);
-    (void)SSL_set_tlsext_host_name(ssl, url->host);
+    {
+        /* The SNI macro casts its argument to void *, so give it a copy. */
+        char sni[sizeof(url->host)];
+        memcpy(sni, url->host, sizeof(sni));
+        (void)SSL_set_tlsext_host_name(ssl, sni);
+    }
     if (inet_addr(url->host) != (in_addr_t)INADDR_NONE) {
         X509_VERIFY_PARAM *pm = SSL_get0_param(ssl);
         if (pm)
