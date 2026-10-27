@@ -158,9 +158,16 @@
   closed fd number can be reused by an unrelated socket while a thread still
   holds the old value. stop() no longer closes listeners; `run()` closes
   them after joining the accept and worker threads, so the port is still
-  released when run() returns. I could not reproduce the CI report locally,
-  even with a deliberately widened window, so this fix rests on the report
-  and the code, not on a red/green run; the CI result is the evidence.
+  released when run() returns. It could not be reproduced on an idle
+  machine, even with a deliberately widened window, and `test_server_stop_race`
+  does not trigger it (60 TSAN runs of the pre-fix code, idle and loaded, no
+  report). The CI report came from `test_stress.fanout_multi_worker`; with
+  every CPU kept busy by spin loops, the pre-fix code (`972ac0b`) produced the
+  same report in 3 of 40 TSAN runs of `test_stress`
+  (`close()` at `cmq_server_stop` against `epoll_ctl()` at
+  `accept_thread_func`), and the fixed code produced none in 160 runs.
+  The pre-fix rate is low, so this is evidence, not a proof that no other
+  interleaving remains.
 - **Double free of a just-accepted client** (`src/server/cmq_server.c`, four
   accept paths). When arming the client's fd failed because a worker had
   already torn the connection down, `accept` also destroyed the client,
