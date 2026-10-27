@@ -1,4 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+/* macOS hides non-POSIX names (sysconf's _SC_NPROCESSORS_ONLN) under a strict
+ * _POSIX_C_SOURCE; _DARWIN_C_SOURCE restores them. */
+#define _DARWIN_C_SOURCE
+#endif
 #include "cmq_server.h"
 #include "cmq_config.h"
 #include "cmq_platform.h"
@@ -36,30 +41,12 @@
 #include <unistd.h>
 #include <signal.h>
 #include <poll.h>
-#if defined(__APPLE__)
-#include <sys/sysctl.h>
-#include <sys/types.h>
-#endif
 #if CMQ_OS_LINUX
 #include <sys/eventfd.h>
 #include <sys/epoll.h>
 #endif
 
 static __thread int cmq_current_worker_id = -1;
-
-/* Number of online CPUs. _SC_NPROCESSORS_ONLN is not part of POSIX, and the
- * strict _POSIX_C_SOURCE this file requests hides it on macOS, so ask the
- * platform directly there. */
-static long cmq_online_cpus(void) {
-#if defined(__APPLE__)
-    int n = 0;
-    size_t len = sizeof(n);
-    if (sysctlbyname("hw.logicalcpu", &n, &len, NULL, 0) != 0) return 1;
-    return n;
-#else
-    return sysconf(_SC_NPROCESSORS_ONLN);
-#endif
-}
 
 #ifdef SIGHUP
 static void cmq_on_sighup(int sig) {
@@ -9410,7 +9397,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
 
     int nthreads = srv->config.num_threads;
     if (nthreads <= 0) {
-        long n = cmq_online_cpus();
+        long n = sysconf(_SC_NPROCESSORS_ONLN);
         if (n < 1) n = 1;
         if (n > 64) n = 64;
         nthreads = (int)n;
@@ -10290,14 +10277,12 @@ void cmq_server_stop(cmq_server_t *srv) {
        Before that, run() sees stop_requested and tears down through its own
        tail; touching them here would race with its setup. */
     int active = cmq_atomic_load_int(&srv->run_active, CMQ_ATOMIC_SEQ_CST);
-    if (active) {
-        /* P1 v0.5.7: close all listen_fds to avoid fd leak on shutdown.
-           Exchange so run()'s tail and drain() cannot close the same fd. */
-        for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
-            int lfd = __atomic_exchange_n(&srv->listen_fds[i], -1, __ATOMIC_ACQ_REL);
-            if (lfd >= 0) close(lfd);
-        }
-    }
+    /* The listeners are NOT closed here. The aux accept thread and the event
+       loop may still be inside epoll_ctl/accept on them, and closing an fd
+       under another thread lets its number be reused by an unrelated socket.
+       run() closes every listener after it has joined those threads, which
+       still releases the port as soon as stop() has taken effect (P1 v0.5.7
+       fd-leak fix). */
     cmq_ev_loop_t *stop_loop = __atomic_load_n(&srv->ev_loop, __ATOMIC_SEQ_CST);
     if (stop_loop) {
         cmq_ev_stop(stop_loop);
