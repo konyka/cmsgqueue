@@ -227,10 +227,35 @@
   (ctest reported `test_server_ops (SIGPIPE)`). The test now reads from the
   socket and asserts the server closed it, instead of writing to it. Before
   the fix this test never exercised keepalive at all.
-- Once on TSAN, `test_multi_thread_accept` failed in one full run and did not
-  fail again in more than 20 further runs (including single-CPU and ctest
-  serial) nor in three more full TSAN subsets, so the failure was not
-  captured and its cause is unknown.
+- `test_multi_thread_accept` failed once on TSAN and could not be reproduced
+  on an idle machine. With every CPU kept busy by spin loops it failed in
+  about a third of the runs (26/60, 29/60, 9/30), always with the same
+  report: a data race inside libcrypto (`ossl_ht_get` against
+  `namemap_add_name`), reached from `cmq_trace_assign` on the accept path.
+  The first `RAND_bytes` call makes OpenSSL build its name tables, and the
+  event-loop thread and the auxiliary accept thread could both be inside that
+  first call. `cmq_server_create` now calls `cmq_trace_warmup()` (one
+  discarded trace ID) while still single-threaded. Under the same load the
+  same binary then ran 210 times with no failure. The race report points into
+  libcrypto's own lazy initialisation; I did not check whether it is a real
+  race or a TSAN false positive there, so the fix removes the concurrent first
+  call rather than suppressing the report.
+
+### Compiler warnings
+- The earlier "0 warnings" held for gcc only. The CI logs of `e57a0ae` show
+  10 clang warnings on Linux Debug and on both macOS jobs. Fixed:
+  missing newline at end of file (`cmq_quota.c`, `cmq_subject_rl.c`,
+  `cmq_rch.h`), a `format(printf)` attribute on `cmq_log_write`,
+  `-Wcast-align` in `sockaddr_rate_key` (address bytes are now copied from the
+  `sockaddr` at their `offsetof` position), `-Wcast-qual` from the OpenSSL SNI
+  macro (it is given a local copy of the host name), and two functions that
+  were unused off Linux (`ev_pack_fd_gen`/`ev_unpack_fd_gen` and
+  `admit_one_client` are now Linux-only, like their callers). Local clang 22
+  and gcc builds report none.
+- Not fixed: macOS CI uses OpenSSL 4.0, where `SSL_set1_host` is deprecated.
+  The local OpenSSL is 3.5, so I cannot check a replacement here.
+- The comment on `admit_one_client` claimed `accept_cb` also uses it; only the
+  Linux accept thread does, and the comment now says so.
 
 ### macOS SIGPIPE
 - macOS has no `MSG_NOSIGNAL`, so `cmq_sock_write` used to fall back to a
