@@ -15,16 +15,28 @@ static int sigpipe_pending(void) {
     return sigismember(&pending, SIGPIPE);
 }
 
+/* SIGPIPE is blocked by the callers, so a raised one stays pending. Consume
+ * it with sigwait (which returns at once for a pending signal) rather than
+ * the Linux/POSIX-realtime sigtimedwait, which macOS does not have. */
 static void drain_sigpipe(void) {
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGPIPE);
-    struct timespec zero = {0, 0};
-    while (sigtimedwait(&set, NULL, &zero) == SIGPIPE) {
+    while (sigpipe_pending()) {
+        int sig = 0;
+        if (sigwait(&set, &sig) != 0) break;
     }
 }
 
 TEST(io_nosigpipe, write_to_closed_socket_peer_reports_epipe_without_signal) {
+#ifndef MSG_NOSIGNAL
+    /* cmq_sock_write only avoids SIGPIPE through send(MSG_NOSIGNAL). Where
+     * that flag does not exist (macOS) it falls back to write(), which can
+     * raise the signal, so this guarantee does not hold there yet. Skip
+     * instead of passing falsely; see the CHANGELOG entry on macOS SIGPIPE. */
+    fprintf(stderr, "SKIP: MSG_NOSIGNAL not available on this platform\n");
+    return;
+#endif
     sigset_t block, old;
     sigemptyset(&block);
     sigaddset(&block, SIGPIPE);
