@@ -198,9 +198,11 @@ target_compile_definitions(cmsgqueue PUBLIC CMQ_TLS_OPENSSL=1)
 
 # F2: zstd compression (system libzstd 1.5+).
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(ZSTD REQUIRED libzstd)
-target_include_directories(cmsgqueue PRIVATE ${ZSTD_INCLUDE_DIRS})
-target_link_libraries(cmsgqueue PRIVATE ${ZSTD_LIBRARIES})
+# IMPORTED_TARGET carries the library's full path and search directories.
+# ${ZSTD_LIBRARIES} is only the bare name "zstd", which the linker cannot find
+# when the library lives outside the default search path (Homebrew on macOS).
+pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
+target_link_libraries(cmsgqueue PRIVATE PkgConfig::ZSTD)
 
 # v0.5.22: WS permessage-deflate (RFC 7692) needs zlib (system libz).
 find_package(ZLIB)
