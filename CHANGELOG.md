@@ -232,12 +232,25 @@
   serial) nor in three more full TSAN subsets, so the failure was not
   captured and its cause is unknown.
 
+### macOS SIGPIPE
+- macOS has no `MSG_NOSIGNAL`, so `cmq_sock_write` used to fall back to a
+  plain `write()` there, and a write to a dead peer could kill the process
+  with SIGPIPE. The fallback is now `cmq_write_no_sigpipe()` in
+  `src/net/cmq_io.h`: it blocks SIGPIPE on the calling thread for the write,
+  and if the write failed with `EPIPE` and that call left SIGPIPE pending, it
+  consumes the signal with `sigwait` before restoring the mask. A SIGPIPE the
+  caller had itself blocked is left alone. Masking works for any descriptor,
+  so no `SO_NOSIGPIPE` call is needed at socket creation or accept sites.
+- Verified on Linux by calling the fallback directly (the Linux build still
+  uses `send(MSG_NOSIGNAL)` for `cmq_sock_write`): with SIGPIPE unblocked and
+  a counting handler installed it returns -1/`EPIPE` with zero signals, while
+  a plain `write` raises exactly one. Replacing the fallback with a plain
+  `write` makes the new test fail. That the macOS build takes this path
+  and behaves the same is only known from the macOS CI jobs.
+- Limit: if a process-directed SIGPIPE (for example from `kill`) is already
+  pending when a write fails with `EPIPE`, the fallback consumes it too.
+
 ### Still failing in CI (not fixed here)
-- **macOS SIGPIPE**: macOS has no `MSG_NOSIGNAL`, so `cmq_sock_write` falls
-  back to `write()` there and a dead peer can still raise SIGPIPE. The
-  per-socket fix is `SO_NOSIGPIPE`, set when a socket is created or
-  accepted; I did not add it because it cannot be tested or measured
-  without a macOS machine.
 - **Windows**: the project requires `pkg-config` and POSIX APIs (epoll,
   eventfd, pthreads). Supporting MSVC/Windows is a porting task, not a
   build-script fix, and was out of scope.
