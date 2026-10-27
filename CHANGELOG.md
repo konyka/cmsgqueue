@@ -252,8 +252,20 @@
   were unused off Linux (`ev_pack_fd_gen`/`ev_unpack_fd_gen` and
   `admit_one_client` are now Linux-only, like their callers). Local clang 22
   and gcc builds report none.
-- Not fixed: macOS CI uses OpenSSL 4.0, where `SSL_set1_host` is deprecated.
-  The local OpenSSL is 3.5, so I cannot check a replacement here.
+- macOS CI uses OpenSSL 4.0, where `SSL_set1_host` is deprecated in favour of
+  `SSL_set1_dnsname` (per the OpenSSL 4.0 manual page). The HTTPS JWKS and
+  OTLP clients now set the expected host through one helper,
+  `set_expected_host`, which uses `SSL_set1_dnsname` when
+  `OPENSSL_VERSION_MAJOR >= 4` and `SSL_set1_host` otherwise. The OpenSSL 4
+  branch is not compiled on this machine (OpenSSL 3.5), so it is only checked
+  by the macOS CI jobs.
+- The helper's result is now checked. Before, a failure to set the expected
+  host was ignored and the handshake went ahead with no host check; it now
+  aborts the connection.
+- New tests (`jwkss`/`otlps`): a trusted certificate that names a different
+  IP is rejected; for `jwkss` also a DNS host that matches the certificate
+  SAN is accepted and one that does not is rejected. Replacing the DNS check
+  with a no-op makes the rejection test fail.
 - The comment on `admit_one_client` claimed `accept_cb` also uses it; only the
   Linux accept thread does, and the comment now says so.
 
