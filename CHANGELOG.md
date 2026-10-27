@@ -196,6 +196,24 @@
   `tls-hardening.md`, `tls-openssl.md`, `tls-crl-revocation.md`,
   `mqtt-bridge.md`, `password-hash.md` updated to match.
 
+### macOS test status (from the CI log of 0660717)
+- The macOS build now compiles, links and runs: 221 of 226 tests passed.
+- Four of the five failures were test assumptions, not library bugs:
+  `test_server`, `test_server_ops` and `test_auth_ratelimit` wrote to a
+  non-blocking socket right after `connect` returned `EINPROGRESS`, which is
+  instant on Linux loopback but not on macOS (they now poll for completion);
+  `test_mqtt_listen` and one `test_auth_ratelimit` case bind `127.0.0.2`,
+  which macOS does not configure on loopback (they now skip).
+- `phase2.audit_emits_rate_limit_on_publish_quota` still fails on macOS and
+  the cause is unknown: the second publish does not get `CMQ_OP_ERROR`. A
+  1 s quota window expiring was ruled out on Linux (a forced 1.1 s gap still
+  passes). The test now prints what it received, so the next macOS log will
+  say. Treat it as open.
+- Once on TSAN, `test_multi_thread_accept` failed in one full run and did not
+  fail again in more than 20 further runs (including single-CPU and ctest
+  serial) nor in three more full TSAN subsets, so the failure was not
+  captured and its cause is unknown.
+
 ### Still failing in CI (not fixed here)
 - **macOS SIGPIPE**: macOS has no `MSG_NOSIGNAL`, so `cmq_sock_write` falls
   back to `write()` there and a dead peer can still raise SIGPIPE. The
