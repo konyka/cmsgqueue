@@ -95,6 +95,12 @@
   (`.type`, `.size`, `.align N` bytes) and an undecorated symbol, which
   Mach-O rejects. The assembly now emits `_cmq_coro_ctx_switch` with
   `.p2align` on macOS; the Linux object code is byte-identical.
+- **macOS build, portability**: 11 `SOCK_NONBLOCK` uses in tests and the
+  benchmark example are now `socket` + `fcntl(O_NONBLOCK)`; `fdatasync`
+  falls back to `fsync` off Linux; `-z relro` / `-z now` are no longer
+  passed to Apple's linker; `_DARWIN_C_SOURCE` exposes
+  `sysconf(_SC_NPROCESSORS_ONLN)` under the strict `_POSIX_C_SOURCE`.
+  None of this could be compiled on macOS here.
 - **macOS build, platform selection**: `CMQ_OS_LINUX` is defined as `0` on
   macOS, so the five `#ifdef CMQ_OS_LINUX` guards in `cmq_server.c` and
   `cmq_server.h` still picked the Linux branch and failed on
@@ -126,6 +132,16 @@
   before entering its loop, only touches listeners and workers once run() has
   published `run_active`, and every close of a listener goes through an
   atomic exchange so run(), stop() and drain() close each fd once.
+- **`cmq_server_stop` closed listeners under live threads**
+  (`src/server/cmq_server.c`). The aux accept thread keeps the listener in
+  its own epoll set, and stop() closed it from another thread: CI's TSAN
+  reported `close()` in stop() against `epoll_ctl()` in that thread, and a
+  closed fd number can be reused by an unrelated socket while a thread still
+  holds the old value. stop() no longer closes listeners; `run()` closes
+  them after joining the accept and worker threads, so the port is still
+  released when run() returns. I could not reproduce the CI report locally,
+  even with a deliberately widened window, so this fix rests on the report
+  and the code, not on a red/green run; the CI result is the evidence.
 - **Double free of a just-accepted client** (`src/server/cmq_server.c`, four
   accept paths). When arming the client's fd failed because a worker had
   already torn the connection down, `accept` also destroyed the client,
