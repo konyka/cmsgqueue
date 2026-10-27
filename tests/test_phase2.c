@@ -833,7 +833,11 @@ TEST(phase2, audit_emits_rate_limit_on_publish_quota) {
     memcpy(pub_pl + 8 + slen, body2, blen2);
     send_frame(fd, CMQ_OP_PUBLISH, pub_pl, 8 + slen + blen2);
     wait_ms(50);
-    recv_frame(fd, &frame, parser);
+    int got2 = recv_frame(fd, &frame, parser);
+    if (got2 != 0 || frame.hdr.op != CMQ_OP_ERROR)
+        fprintf(stderr, "quota test: second publish reply: recv_frame=%d op=%d "
+                "(expected CMQ_OP_ERROR=%d)\n", got2, (int)frame.hdr.op,
+                (int)CMQ_OP_ERROR);
     ASSERT_EQ(frame.hdr.op, CMQ_OP_ERROR);
     free_frame_payload(&frame);
 
