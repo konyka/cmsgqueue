@@ -204,11 +204,25 @@
   instant on Linux loopback but not on macOS (they now poll for completion);
   `test_mqtt_listen` and one `test_auth_ratelimit` case bind `127.0.0.2`,
   which macOS does not configure on loopback (they now skip).
-- `phase2.audit_emits_rate_limit_on_publish_quota` still fails on macOS and
-  the cause is unknown: the second publish does not get `CMQ_OP_ERROR`. A
-  1 s quota window expiring was ruled out on Linux (a forced 1.1 s gap still
-  passes). The test now prints what it received, so the next macOS log will
-  say. Treat it as open.
+- `phase2.audit_emits_rate_limit_on_publish_quota` failed on macOS because the
+  test itself let the 1 s quota window expire: after the first PUBLISH it
+  waited for a reply that never comes (a publish with no subscriber is not
+  answered), and `recv_frame` spent about 500 ms in its retry loop before
+  giving up. With the other sleeps the second PUBLISH landed after the window
+  reset and was admitted instead of getting `CMQ_OP_ERROR`. The macOS log
+  showed `recv_frame=-1 op=2`; on Linux a real 1.2 s gap reproduces the same
+  failure. The test no longer waits for the nonexistent reply and prints the
+  gap between the two publishes if it fails. An earlier note here said the
+  window had been ruled out; that check was invalid because `wait_ms(1100)`
+  did not sleep (see below). Whether macOS now passes is only known from CI.
+- Latent test defect, reported but not changed: the `wait_ms(ms)` helper in
+  eleven test files builds `tv_nsec` from `ms` without carrying into seconds,
+  so for `ms >= 1000` `nanosleep` fails with `EINVAL` and does not sleep.
+  Call sites that pass such values: `tests/test_coro_integration.c:235`
+  (1000), `tests/test_server_ops.c:331` (1500) and `:1155` (1200),
+  `tests/test_stress.c:315` (1000). Those tests pass on Linux, so they may
+  not depend on the wait, but they have not been re-checked with a working
+  wait.
 - Once on TSAN, `test_multi_thread_accept` failed in one full run and did not
   fail again in more than 20 further runs (including single-CPU and ctest
   serial) nor in three more full TSAN subsets, so the failure was not
