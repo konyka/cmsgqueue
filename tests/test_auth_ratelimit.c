@@ -19,7 +19,7 @@ static void *server_thread(void *arg) {
 }
 
 static int connect_from(const char *source, int port) {
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    int fd = cmq_test_nonblock_socket(AF_INET, SOCK_STREAM);
     if (fd < 0) return -1;
     struct sockaddr_in local = {0};
     local.sin_family = AF_INET;

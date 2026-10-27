@@ -88,7 +88,7 @@ done:
 }
 
 static int connect_to(int port) {
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    int fd = cmq_test_nonblock_socket(AF_INET, SOCK_STREAM);
     if (fd < 0) return -1;
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;

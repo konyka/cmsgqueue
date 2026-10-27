@@ -51,6 +51,22 @@ static inline void cmq_test_sh(const char *cmd) {
     (void)rc;
 }
 
+// socket(2) with O_NONBLOCK set before the caller connects. SOCK_NONBLOCK is a
+// Linux extension (macOS has no such flag), and fcntl before connect() gives
+// the same behaviour: connect returns EINPROGRESS instead of blocking.
+#include <fcntl.h>
+#include <sys/socket.h>
+static inline int cmq_test_nonblock_socket(int domain, int type) {
+    int fd = socket(domain, type, 0);
+    if (fd < 0) return -1;
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
 // Failure reporter: reports file/line and expression, then long-jumps back to test harness
 static inline void cmq_test_fail(const char *file, int line, const char *expr) {
     if (cmq_current_suite && cmq_current_name) {
