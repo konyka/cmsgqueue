@@ -26,6 +26,7 @@ static int connect_to(int port) {
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
     int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
     if (rc < 0 && errno != EINPROGRESS) { close(fd); return -1; }
+    if (rc < 0 && cmq_test_wait_connected(fd, 2000) != 0) { close(fd); return -1; }
     return fd;
 }
 

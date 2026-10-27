@@ -99,6 +99,10 @@ static int connect_to(int port) {
         close(fd);
         return -1;
     }
+    if (rc < 0 && cmq_test_wait_connected(fd, 2000) != 0) {
+        close(fd);
+        return -1;
+    }
     return fd;
 }
 

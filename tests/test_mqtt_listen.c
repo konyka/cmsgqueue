@@ -16,6 +16,10 @@
 #include <unistd.h>
 
 TEST(mqtt_server, listen_uses_requested_bind_address_and_port) {
+    if (!cmq_test_can_bind_loopback("127.0.0.2")) {
+        fprintf(stderr, "SKIP: 127.0.0.2 is not a loopback address here\n");
+        return;
+    }
     int blocker = socket(AF_INET, SOCK_STREAM, 0);
     ASSERT(blocker >= 0);
 

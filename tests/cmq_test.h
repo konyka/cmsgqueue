@@ -18,6 +18,7 @@
 #include <setjmp.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <errno.h>
 
 // Test descriptor (one per test body)
 typedef struct cmq_test cmq_test_t;
@@ -65,6 +66,39 @@ static inline int cmq_test_nonblock_socket(int domain, int type) {
         return -1;
     }
     return fd;
+}
+
+// Wait until a non-blocking connect() has completed. On Linux loopback it is
+// usually done at once, but on macOS the socket is still unconnected right
+// after EINPROGRESS and an immediate write fails with ENOTCONN.
+#include <poll.h>
+static inline int cmq_test_wait_connected(int fd, int timeout_ms) {
+    struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+    int rc;
+    do {
+        rc = poll(&pfd, 1, timeout_ms);
+    } while (rc < 0 && errno == EINTR);
+    if (rc <= 0) return -1;
+    int so_error = 0;
+    socklen_t len = sizeof(so_error);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &len) != 0) return -1;
+    return so_error == 0 ? 0 : -1;
+}
+
+// 1 if the host can bind the given loopback address. Linux routes all of
+// 127.0.0.0/8 to lo; macOS only configures 127.0.0.1, so tests that need a
+// second source address must skip there instead of failing.
+#include <netinet/in.h>
+#include <arpa/inet.h>
+static inline int cmq_test_can_bind_loopback(const char *ip) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return 0;
+    struct sockaddr_in a = {0};
+    a.sin_family = AF_INET;
+    if (inet_pton(AF_INET, ip, &a.sin_addr) != 1) { close(fd); return 0; }
+    int ok = bind(fd, (struct sockaddr *)&a, sizeof(a)) == 0;
+    close(fd);
+    return ok;
 }
 
 // Failure reporter: reports file/line and expression, then long-jumps back to test harness

@@ -32,8 +32,12 @@ static int connect_from(const char *source, int port) {
     peer.sin_family = AF_INET;
     peer.sin_port = htons((uint16_t)port);
     inet_pton(AF_INET, "127.0.0.1", &peer.sin_addr);
-    if (connect(fd, (struct sockaddr *)&peer, sizeof(peer)) != 0 &&
-        errno != EINPROGRESS) {
+    int rc = connect(fd, (struct sockaddr *)&peer, sizeof(peer));
+    if (rc != 0 && errno != EINPROGRESS) {
+        close(fd);
+        return -1;
+    }
+    if (rc != 0 && cmq_test_wait_connected(fd, 2000) != 0) {
         close(fd);
         return -1;
     }
@@ -125,6 +129,10 @@ TEST(auth_rl, configurable_limit_uses_production_connect_path) {
 }
 
 TEST(auth_rl, different_source_ips_are_isolated) {
+    if (!cmq_test_can_bind_loopback("127.0.0.2")) {
+        fprintf(stderr, "SKIP: 127.0.0.2 is not a loopback address here\n");
+        return;
+    }
     cmq_server_t *srv = NULL;
     pthread_t thread;
     start_server(&srv, &thread, 28902, 1);
