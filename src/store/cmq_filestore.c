@@ -3,6 +3,14 @@
 #define _FILE_OFFSET_BITS 64
 #endif
 #include "cmq_filestore.h"
+
+/* fdatasync is POSIX-optional and macOS does not provide it; fsync is a
+ * superset (it also flushes metadata), so it is a safe stand-in. */
+#if defined(__linux__)
+#  define cmq_fdatasync(fd) fdatasync(fd)
+#else
+#  define cmq_fdatasync(fd) fsync(fd)
+#endif
 #include "cmq_thread.h"
 #include "cmq_atomic.h"
 
@@ -1537,7 +1545,7 @@ static int filestore_maybe_fsync(cmq_filestore_t *fs) {
         now_ms - fs->last_sync_ms >= fs->fsync_interval_ms) {
         if (fs->data_fp && fflush(fs->data_fp) != 0) return -1;
         if (fs->idx_fp && fflush(fs->idx_fp) != 0) return -1;
-        if (fs->data_fp && fdatasync(fileno(fs->data_fp)) != 0) return -1;
+        if (fs->data_fp && cmq_fdatasync(fileno(fs->data_fp)) != 0) return -1;
         fs->last_sync_ms = now_ms;
     }
     return 0;

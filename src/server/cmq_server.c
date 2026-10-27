@@ -36,12 +36,30 @@
 #include <unistd.h>
 #include <signal.h>
 #include <poll.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#endif
 #if CMQ_OS_LINUX
 #include <sys/eventfd.h>
 #include <sys/epoll.h>
 #endif
 
 static __thread int cmq_current_worker_id = -1;
+
+/* Number of online CPUs. _SC_NPROCESSORS_ONLN is not part of POSIX, and the
+ * strict _POSIX_C_SOURCE this file requests hides it on macOS, so ask the
+ * platform directly there. */
+static long cmq_online_cpus(void) {
+#if defined(__APPLE__)
+    int n = 0;
+    size_t len = sizeof(n);
+    if (sysctlbyname("hw.logicalcpu", &n, &len, NULL, 0) != 0) return 1;
+    return n;
+#else
+    return sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+}
 
 #ifdef SIGHUP
 static void cmq_on_sighup(int sig) {
@@ -9392,7 +9410,7 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
 
     int nthreads = srv->config.num_threads;
     if (nthreads <= 0) {
-        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        long n = cmq_online_cpus();
         if (n < 1) n = 1;
         if (n > 64) n = 64;
         nthreads = (int)n;
