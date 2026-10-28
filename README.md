@@ -37,7 +37,7 @@ High-performance message queue server in pure C (C11). Custom binary protocol wi
 - **Performance**: 33,784 msg/s end-to-end, 30 µs avg latency (v0.5.0 baseline; preserved by v0.5.0).
 - **Assembly Coroutines** x86_64 + ARM64 context switching; high-fanout delivery uses value snapshots (no live ref UAF)
 - **Multi-Worker** N worker threads with eventfd cross-thread messaging keyed by stable client id
-- **Cross-Platform CI** Linux (gcc/clang), macOS, Windows, ARM64 cross-compile
+- **Cross-Platform CI** Linux (gcc/clang), macOS, ARM64 cross-compile; a Windows job exists but does not pass (see [CI](#ci))
 
 ## Quick Start
 
@@ -303,8 +303,12 @@ Cross-platform CI via GitHub Actions:
 - **Linux GCC** (Debug + Release, ASan + UBSan)
 - **Linux Clang** (Debug + Release, ASan)
 - **macOS** (Debug + Release)
-- **Windows** (Debug + Release)
 - **ARM64** cross-compile (aarch64-linux-gnu)
+- **Windows** (Debug + Release): not supported. The job has not passed in any
+  of the last 100 CI runs (back to 2026-09-06); in the two logs checked, the
+  oldest and the newest, it fails at configure time because `pkg-config` is
+  not found. The code also depends on POSIX APIs (epoll, eventfd, pthreads),
+  so supporting Windows is a porting task.
 
 ## License
 

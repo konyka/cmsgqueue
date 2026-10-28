@@ -295,7 +295,11 @@
   pending when a write fails with `EPIPE`, the fallback consumes it too.
 
 ### Still failing in CI (not fixed here)
-- **Windows**: the project requires `pkg-config` and POSIX APIs (epoll,
+- **Windows**: the CI job has not passed in any of the last 100 runs (back to
+  2026-09-06), so this is not a regression from these changes. Of those, I
+  read the logs of the oldest and the newest: both fail at configure time
+  (`PkgConfig` not found); the other 98 I only counted. The README no longer lists Windows
+  as covered. The project requires `pkg-config` and POSIX APIs (epoll,
   eventfd, pthreads). Supporting MSVC/Windows is a porting task, not a
   build-script fix, and was out of scope.
 - The CI history on this branch shows the `build-arm64`, `tsan`,
