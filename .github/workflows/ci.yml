@@ -113,9 +113,9 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMQ_ENABLE_TSAN=ON
       - name: Build
         run: cmake --build build --parallel $(nproc)
-      - name: Test (focused)
+      - name: Test (focused on the concurrent code)
         working-directory: build
-        run: ctest --output-on-failure -j1 -R "queue|parser|sublist|slab|stress|server_ops"
+        run: ctest --output-on-failure -j1 -R "queue|parser|sublist|slab|stress|server_ops|mpool|mqtt_bridge|stop_race|multi_thread_accept|password|nosigpipe|auth_ratelimit|test_server\$"
 
   coverage:
     runs-on: ubuntu-latest

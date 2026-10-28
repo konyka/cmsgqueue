@@ -68,7 +68,7 @@ Sanitizer builds (the CI jobs use the same flags):
 ```bash
 cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DCMQ_ENABLE_ASAN=ON -DCMQ_ENABLE_UBSAN=ON
 cmake -B build-tsan -DCMAKE_BUILD_TYPE=Debug -DCMQ_ENABLE_TSAN=ON
-ctest --test-dir build-tsan -j1 -R "queue|parser|sublist|slab|stress|server_ops"
+ctest --test-dir build-tsan -j1 -R "queue|parser|sublist|slab|stress|server_ops|mpool|mqtt_bridge|stop_race|multi_thread_accept|password|nosigpipe|auth_ratelimit|test_server\$"
 ```
 
 AArch64 cross build (needs `gcc-aarch64-linux-gnu` and the arm64 multiarch

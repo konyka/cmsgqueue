@@ -248,6 +248,15 @@
   race or a TSAN false positive there, so the fix removes the concurrent first
   call rather than suppressing the report.
 
+### CI: TSAN job coverage
+- The `tsan` job ran only 14 tests (`queue|parser|sublist|slab|stress|
+  server_ops`), so it did not exercise most of the concurrent code fixed in
+  this branch. Its filter, and the command in the README, now select 27 tests:
+  also `mpool`, `mqtt_bridge`, `stop_race`, `multi_thread_accept`,
+  `password`, `nosigpipe`, `auth_ratelimit` and `test_server`. Run three
+  times in an `ubuntu:24.04` container (the CI image), all 27 passed with no
+  warnings and no TSAN report. The job takes about 32 s for that set.
+
 ### Compiler warnings
 - The earlier "0 warnings" held for gcc only. The CI logs of `e57a0ae` show
   10 clang warnings on Linux Debug and on both macOS jobs. Fixed:
