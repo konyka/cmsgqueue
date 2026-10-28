@@ -17,6 +17,11 @@ void cmq_trace_id(uint8_t out[16]) {
     }
 }
 
+void cmq_trace_warmup(void) {
+    uint8_t scratch[16];
+    cmq_trace_id(scratch);
+}
+
 int cmq_trace_id_hex(const uint8_t id[16], char *out, size_t out_len) {
     if (!out || out_len == 0) return -1;
     static const char hex[] = "0123456789abcdef";

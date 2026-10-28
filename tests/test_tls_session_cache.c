@@ -43,6 +43,17 @@ static SSL_SESSION *make_session(void) {
     return SSL_SESSION_new();
 }
 
+static void make_indexed_id(unsigned char id[8], unsigned int index) {
+    id[0] = (unsigned char)(index >> 24);
+    id[1] = (unsigned char)(index >> 16);
+    id[2] = (unsigned char)(index >> 8);
+    id[3] = (unsigned char)index;
+    id[4] = 0x43;
+    id[5] = 0x4d;
+    id[6] = 0x51;
+    id[7] = 0x53;
+}
+
 TEST(tls_session_cache, init_destroy_roundtrip) {
     cmq_tls_config_t *cfg = cmq_tls_config_create();
     ASSERT_NOT_NULL(cfg);
@@ -117,23 +128,49 @@ TEST(tls_session_cache, eviction_when_full) {
     ASSERT_EQ(cmq_tls_session_cache_init(cfg), 0);
 
     /* Insert 1025 sessions; the 1025th must trigger eviction (LRU).
-     * We don't check WHICH entry got evicted (LRU order depends on
-     * timing); just verify size is bounded at 1024. */
+     * The cache must first hold more than the 64 hash buckets, then
+     * evict only when its documented 1024-entry capacity is reached. */
     enum { N = 1025 };
     unsigned char id[8];
-    for (int i = 0; i < N; i++) {
-        for (int k = 0; k < 8; k++) id[k] = (unsigned char)((i * 7 + k) & 0xFF);
+    for (int i = 0; i < 65; i++) {
+        make_indexed_id(id, (unsigned int)i);
         SSL_SESSION *s = make_session();
         ASSERT_NOT_NULL(s);
         ASSERT_EQ(cmq_tls_session_cache_insert(cfg, id, 8, s), 0);
     }
-    ASSERT_TRUE(cmq_tls_session_cache_size(cfg) <= 1024);
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg), (size_t)65);
+
+    for (int i = 65; i < N - 1; i++) {
+        make_indexed_id(id, (unsigned int)i);
+        SSL_SESSION *s = make_session();
+        ASSERT_NOT_NULL(s);
+        ASSERT_EQ(cmq_tls_session_cache_insert(cfg, id, 8, s), 0);
+    }
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg), (size_t)1024);
+
+    /* ID 19 occupies slot 0 for this deterministic indexed-id sequence.
+     * Touch it immediately before the cache fills so true LRU must retain it
+     * even though slot 0 is the first slot scanned during eviction. */
+    unsigned char recently_used[8];
+    make_indexed_id(recently_used, 19);
+    ASSERT_NOT_NULL(cmq_tls_session_cache_lookup(cfg, recently_used, 8));
+
+    make_indexed_id(id, N - 1);
+    SSL_SESSION *s = make_session();
+    ASSERT_NOT_NULL(s);
+    ASSERT_EQ(cmq_tls_session_cache_insert(cfg, id, 8, s), 0);
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg), (size_t)1024);
 
     /* Most-recently-inserted MUST still be present. */
     unsigned char last[8];
-    for (int k = 0; k < 8; k++) last[k] = (unsigned char)(((N-1) * 7 + k) & 0xFF);
+    make_indexed_id(last, N - 1);
     SSL_SESSION *g = cmq_tls_session_cache_lookup(cfg, last, 8);
     ASSERT_NOT_NULL(g);
+    ASSERT_NOT_NULL(cmq_tls_session_cache_lookup(cfg, recently_used, 8));
+
+    unsigned char oldest[8];
+    make_indexed_id(oldest, 0);
+    ASSERT_NULL(cmq_tls_session_cache_lookup(cfg, oldest, 8));
 
     cmq_tls_session_cache_destroy(cfg);
     cmq_tls_config_destroy(cfg);
@@ -171,27 +208,6 @@ static void v0527_gen_cert(void) {
     (void)rc;
 }
 
-static int v0527_wait_port(int port, int timeout_ms) {
-    struct sockaddr_in addr = {0};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)port);
-    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-    int elapsed = 0;
-    while (elapsed < timeout_ms) {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) return -1;
-        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
-            close(fd);
-            return 0;
-        }
-        close(fd);
-        struct timespec ts = {0, 10000000};
-        nanosleep(&ts, NULL);
-        elapsed += 10;
-    }
-    return -1;
-}
-
 /* v0.5.27: verify that cmq_tls_load registers the OpenSSL session
  * callbacks that wire the cache into the handshake lifecycle.
  *
@@ -215,6 +231,54 @@ TEST(tls_session_cache, callbacks_registered_on_load) {
     ASSERT_NOT_NULL(ctx);
     long mode = SSL_CTX_get_session_cache_mode(ctx);
     ASSERT(mode == (SSL_SESS_CACHE_SERVER | SSL_SESS_CACHE_NO_INTERNAL));
+
+    cmq_tls_session_cache_destroy(cfg);
+    cmq_tls_config_destroy(cfg);
+}
+
+/* v0.5.95: production-load cache initialization.
+ *
+ * The direct unit tests (init_destroy_roundtrip etc.) call
+ * cmq_tls_session_cache_init explicitly, which masks a
+ * production defect: cmq_tls_session_cache_init was never
+ * called by cmq_tls_load, so the per-config cache never worked
+ * in production. v0.5.95 fixes cmq_tls_load to call init
+ * itself.
+ *
+ * This test creates a TLS config through the production load
+ * path (no explicit init call), then asserts that the cache
+ * is initialized and accepts an insert/lookup. If a future
+ * change reverts cmq_tls_load, this test fails — proving
+ * the regression at the production-load boundary, not just
+ * at the unit-cache boundary.
+ */
+TEST(tls_session_cache, initialized_on_load) {
+    v0527_gen_cert();
+
+    cmq_tls_config_t *cfg = cmq_tls_config_create();
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cmq_tls_set_cert(cfg, V0527_CERT), 0);
+    ASSERT_EQ(cmq_tls_set_key(cfg, V0527_KEY), 0);
+    /* Deliberately NOT calling cmq_tls_session_cache_init here.
+     * cmq_tls_load must initialize the cache itself. */
+    ASSERT_EQ(cmq_tls_load(cfg), 0);
+
+    /* The cache must be reachable via insert/lookup without an
+     * explicit init. We probe via the test-only cache size
+     * accessor (returns 0 when uninitialized but never fails). */
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg), 0);
+
+    unsigned char id[8] = {0xaa, 0xbb, 0xcc, 0xdd, 0x01, 0x02, 0x03, 0x04};
+    SSL_SESSION *s = make_session();
+    ASSERT_NOT_NULL(s);
+    /* Insert must succeed — would return -1 if the cache
+     * wasn't initialized by cmq_tls_load. */
+    ASSERT_EQ(cmq_tls_session_cache_insert(cfg, id, sizeof(id), s), 0);
+    ASSERT_EQ(cmq_tls_session_cache_size(cfg), 1);
+
+    /* Lookup must also succeed. */
+    SSL_SESSION *got = cmq_tls_session_cache_lookup(cfg, id, sizeof(id));
+    ASSERT_NOT_NULL(got);
 
     cmq_tls_session_cache_destroy(cfg);
     cmq_tls_config_destroy(cfg);
@@ -377,14 +441,9 @@ TEST(tls_session_cache, handshake_grows_cache) {
 }
 
 TEST(tls_session_cache, session_reused_on_reconnect) {
-    /* v0.5.29: TLS session resumption is verified by handshake_grows_cache
-     * (the new_session callback fires and the cache populates). The
-     * follow-up get_cb (resumption) path requires forcing TLS 1.2
-     * (TLS 1.3 uses tickets, not session IDs), but OpenSSL 3.5 has a
-     * quirk where CTX-level max=TLS1_2 suppresses the new_session
-     * callback. Resolving this requires deeper OpenSSL investigation
-     * and is deferred. This test verifies the gen_session_id callback
-     * is installed (so production sessions get IDs). */
+    /* The full TLS 1.2 reconnect/resumption path is covered by
+     * tls_e2e_handshake.tls12_session_resumption. This unit test keeps
+     * the callback/configuration assertions local to the cache module. */
     v0527_gen_cert();
 
     cmq_tls_config_t *cfg = cmq_tls_config_create();
@@ -403,7 +462,8 @@ TEST(tls_session_cache, session_reused_on_reconnect) {
     ASSERT_NOT_NULL(ctx);
     /* Set a fresh session_id_context; if the get returns -1, our
      * set was rejected (e.g., the callback's ctx differs). */
-    unsigned char sid_probe[16] = "test-cache-v0529";
+    static const unsigned char sid_probe[16] = {
+        't','e','s','t','-','c','a','c','h','e','-','v','0','5','2','9'};
     int sid_rc = SSL_CTX_set_session_id_context(ctx, sid_probe, 16);
     ASSERT_EQ(sid_rc, 1);
 

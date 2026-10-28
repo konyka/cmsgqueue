@@ -120,8 +120,8 @@ TEST(log, file_appender) {
 
     FILE *f = fopen(path, "r");
     ASSERT_NOT_NULL(f);
-    char buf[256];
-    fgets(buf, sizeof(buf), f);
+    char buf[256] = {0};
+    ASSERT_NOT_NULL(fgets(buf, sizeof(buf), f));
     fclose(f);
     ASSERT(strstr(buf, "file test") != NULL);
     remove(path);

@@ -3,6 +3,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_test.h"
 #include "cmq_server.h"
+#include "cmq_parser.h"
+#include "cmq_proto.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -56,6 +58,74 @@ static int try_connect(int port) {
         return -1;
     }
     return fd;
+}
+
+static int try_connect_ipv6(int port) {
+    int fd = socket(AF_INET6, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_in6 addr = {0};
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port = htons((uint16_t)port);
+    inet_pton(AF_INET6, "::1", &addr.sin6_addr);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+TEST(multi_listener, ipv6_secondary_accepts_protocol) {
+    cmq_config_t cfg = {0};
+    cfg.num_threads = 1;
+    cfg.host = "127.0.0.1";
+    cfg.port = OPEN_PORT + 20;
+    cfg.log_to_stdout = 0;
+    cfg.listener_count = 2;
+    cfg.listeners[1].host = "::1";
+    cfg.listeners[1].port = OPEN_PORT + 21;
+
+    cmq_server_t *srv = NULL;
+    ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
+    ASSERT_NOT_NULL(srv);
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, server_thread, srv), 0);
+
+    int fd = -1;
+    for (int i = 0; i < 100 && fd < 0; i++) {
+        fd = try_connect_ipv6(OPEN_PORT + 21);
+        if (fd < 0) {
+            struct timespec ts = {0, 10000000};
+            nanosleep(&ts, NULL);
+        }
+    }
+    ASSERT(fd >= 0);
+
+    uint8_t frame[32];
+    size_t frame_len = cmq_frame_encode(frame, sizeof(frame), CMQ_OP_CONNECT,
+                                         0, NULL, 0);
+    ASSERT(frame_len > 0);
+    ASSERT_EQ((ssize_t)send(fd, frame, frame_len, 0), (ssize_t)frame_len);
+    cmq_parser_t *parser = cmq_parser_create();
+    ASSERT_NOT_NULL(parser);
+    int got_connack = 0;
+    for (int i = 0; i < 20 && !got_connack; i++) {
+        uint8_t response[1024];
+        ssize_t n = recv(fd, response, sizeof(response), 0);
+        ASSERT(n > 0);
+        ASSERT(cmq_parser_feed(parser, response, (size_t)n) >= 0);
+        const cmq_frame_t *received;
+        while ((received = cmq_parser_frame(parser)) != NULL) {
+            if (received->hdr.op == CMQ_OP_CONNACK) got_connack = 1;
+            cmq_parser_next(parser);
+        }
+    }
+    ASSERT_EQ(got_connack, 1);
+    cmq_parser_destroy(parser);
+    close(fd);
+
+    cmq_server_stop(srv);
+    pthread_join(tid, NULL);
+    cmq_server_destroy(srv);
 }
 
 TEST(multi_listener, three_listener_accept_all) {

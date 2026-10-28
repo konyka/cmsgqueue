@@ -13,7 +13,7 @@
 #define REPLAY_DIR "/tmp/cmq-test-wal-replay"
 
 TEST(persist_unit, replay_restores_messages) {
-    system("rm -rf " REPLAY_DIR);
+    cmq_test_sh("rm -rf " REPLAY_DIR);
 
     cmq_filestore_t *fs = cmq_filestore_create(REPLAY_DIR, "cmq");
     ASSERT_NOT_NULL(fs);
@@ -59,12 +59,12 @@ TEST(persist_unit, replay_restores_messages) {
     ASSERT_EQ(cmq_filestore_last_seq(srv->filestore), 3);
 
     cmq_server_destroy(srv);
-    system("rm -rf " REPLAY_DIR);
+    cmq_test_sh("rm -rf " REPLAY_DIR);
 }
 
 TEST(persist_unit, replay_stats_separate_from_live) {
     /* P4: stat_messages_in reflects live traffic only. */
-    system("rm -rf " REPLAY_DIR);
+    cmq_test_sh("rm -rf " REPLAY_DIR);
 
     cmq_filestore_t *fs = cmq_filestore_create(REPLAY_DIR, "cmq");
     ASSERT_NOT_NULL(fs);
@@ -103,11 +103,11 @@ TEST(persist_unit, replay_stats_separate_from_live) {
     ASSERT_EQ(in, 0);
 
     cmq_server_destroy(srv);
-    system("rm -rf " REPLAY_DIR);
+    cmq_test_sh("rm -rf " REPLAY_DIR);
 }
 
 TEST(persist_unit, replay_handles_zero_records) {
-    system("rm -rf /tmp/cmq-test-wal-replay-empty");
+    cmq_test_sh("rm -rf /tmp/cmq-test-wal-replay-empty");
     cmq_config_t cfg = {0};
     cfg.num_threads = 1;
     cfg.host = "127.0.0.1";
@@ -118,7 +118,7 @@ TEST(persist_unit, replay_handles_zero_records) {
     ASSERT_EQ(cmq_server_create(&srv, &cfg), CMQ_OK);
     ASSERT_EQ(cmq_filestore_last_seq(srv->filestore), 0);
     cmq_server_destroy(srv);
-    system("rm -rf /tmp/cmq-test-wal-replay-empty");
+    cmq_test_sh("rm -rf /tmp/cmq-test-wal-replay-empty");
 }
 
 TEST_MAIN()

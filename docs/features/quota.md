@@ -6,20 +6,19 @@ A single noisy account can starve others. cmq_account has counters but no enforc
 
 ## Design
 
-A new `cmq_quota` module implements per-account token-bucket caps. Configuration (per server):
+A new `cmq_quota` module implements per-account fixed-window caps. Configuration (per server):
 
 - `max_msgs_per_sec` — cap on messages/sec per account.
 - `max_bytes_per_sec` — cap on bytes/sec per account.
-- `max_connections` — **connects per second** per account (fixed
-  1s window). Concurrent connection / subscription / payload
-  ceilings are `account_max_*` on the account object (v0.5.48);
-  see `docs/features/accounts.md`.
+- `max_connections_per_account` — per-account CONNECT **rate** cap,
+  NOT a simultaneous-connection cap. The C struct field name is
+  retained for backwards compatibility with existing `cmq.conf` files
+  but the value is a 1-second fixed-window rate limit: at most
+  `max_connections_per_account` CONNECTs per account per second.
+  Counters reset on the 1 s window boundary. See the comment in
+  `src/include/cmq.h` next to the field for rationale.
 
-Publish checks run on the `handle_publish` / BATCH path. CONNECT
-consults `cmq_quota_check_connect` **before** concurrent credit
-(v0.5.50). A reject is CONNACK 1 plus `rate_limit_reject` /
-`connect quota` in the audit log. Cluster route-adopt is not
-counted. The window is fixed 1 second.
+The check is on the `credit_msgs_in` path (F5) and at CONNECT time. On exceed, the publish is rejected with `cmq_send_error("quota exceeded")` and CONNECT returns CONNACK 3 ("quota exceeded") and closes the client. The check uses a fixed-window (1 second) with reset on window expiry.
 
 Per-account state is in a small linked list (max 4096 accounts). On collision, a new account is admitted (same trade-off as the F10 rate limit). Production deployments with >4096 accounts should use a per-account hash or upgrade to the full implementation.
 
@@ -54,7 +53,8 @@ The check is a linear scan over a small per-account list (typically <100 account
 
 Threats closed:
 - **Account-level DoS** — a single misbehaving account cannot starve others.
-- **Burst protection** — token-bucket smooths traffic.
+- **Burst protection** — fixed one-second windows bound sustained traffic;
+  boundary bursts may briefly exceed the nominal per-second rate.
 
 Threats NOT closed:
 - **Cross-account quota aggregation** — the limits are per-account, not global. Operators can set global limits via existing F10.
@@ -63,6 +63,18 @@ Threats NOT closed:
 ## Limitations
 
 - Fixed-window (1 second) is not as smooth as token-bucket; bursts at second boundaries can briefly exceed the cap. For tighter smoothing, future work.
+- The per-account slot table (and the per-subject table in
+  `cmq_subject_rl`) is lock-free. A slot goes EMPTY -> CLAIMING -> READY:
+  the thread that wins the CAS writes the key, then publishes READY with a
+  release store; other threads that probe a CLAIMING slot spin until it is
+  READY before comparing the key. Previously the claim CAS also counted the
+  first message, so racing first calls on a new key could each be admitted
+  past the limit (`tests/test_rl_concurrent.c`
+  `first_claim_race_does_not_double_admit`). `cmq_subject_rl_check` also
+  only expires a window when `now_ms > window_start_ms`: its timestamp is
+  taken before the probe, so it can be older than a concurrent claimer's
+  start time, and the unsigned difference would otherwise wrap and reset
+  the counter.
 - SIGHUP / `cmq_server_reload` updates non-zero
   `max_msgs_per_sec_per_account`,
   `max_bytes_per_sec_per_account`,

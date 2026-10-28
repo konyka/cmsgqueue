@@ -17,7 +17,7 @@ static int tca_apply(void *ctx, const char *subject, const uint8_t *data,
 }
 
 TEST(tca, apply) {
-    (void)system("rm -rf " TCA_DIR " && mkdir -p " TCA_DIR);
+    cmq_test_sh("rm -rf " TCA_DIR " && mkdir -p " TCA_DIR);
     cmq_txn_t *t = NULL;
     ASSERT(cmq_txn_reload_attach_log(t, TCA_DIR) != 0);
     ASSERT_EQ(cmq_txn_reload_attach(&t), 0);

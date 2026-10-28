@@ -23,7 +23,7 @@
 #define COMPRESS_WIRE_PORT 19850
 
 static int connect_to(int port) {
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    int fd = cmq_test_nonblock_socket(AF_INET, SOCK_STREAM);
     if (fd < 0) return -1;
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
@@ -78,7 +78,7 @@ static void free_frame(cmq_frame_t *f) {
 }
 
 static void wait_ms(int ms) {
-    struct timespec ts = {0, ms * 1000000L};
+    struct timespec ts = {ms / 1000, (ms % 1000) * 1000000L};
     nanosleep(&ts, NULL);
 }
 

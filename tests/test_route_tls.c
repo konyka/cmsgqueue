@@ -19,7 +19,7 @@
 #define ROUTE_TLS_KEY      ROUTE_TLS_TEST_DIR "/key.pem"
 
 static void ensure_dir(void) {
-    system("rm -rf " ROUTE_TLS_TEST_DIR " && mkdir -p " ROUTE_TLS_TEST_DIR);
+    cmq_test_sh("rm -rf " ROUTE_TLS_TEST_DIR " && mkdir -p " ROUTE_TLS_TEST_DIR);
 }
 
 static void gen_cert(const char *cert, const char *key, const char *cn) {

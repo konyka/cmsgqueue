@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_gateway.h"
+#include "cmq_io.h"
 #include "cmq_route.h"
 #include "cmq_thread.h"
 #include <stdio.h>
@@ -254,7 +255,7 @@ static int write_full(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
     int stall_rounds = 0;
     while (off < len) {
-        ssize_t n = write(fd, data + off, len - off);
+        ssize_t n = cmq_sock_write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -334,10 +335,8 @@ static int gw_set_auth_impl(cmq_gateway_t *gw, const char *user, const char *pas
 static void gw_auth_copy(cmq_gateway_t *gw, char *user, size_t ulen,
                           char *pass, size_t plen) {
     cmq_mutex_lock(&gw->lock);
-    strncpy(user, gw->auth_user, ulen - 1);
-    user[ulen - 1] = '\0';
-    strncpy(pass, gw->auth_pass, plen - 1);
-    pass[plen - 1] = '\0';
+    snprintf(user, ulen, "%s", gw->auth_user);
+    snprintf(pass, plen, "%s", gw->auth_pass);
     cmq_mutex_unlock(&gw->lock);
 }
 

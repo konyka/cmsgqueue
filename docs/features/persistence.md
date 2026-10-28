@@ -1,10 +1,18 @@
 # F5: Persistence WAL Wired into Server
 
+## Status
+
+**Shipped.** `persist_dir` and `persist_sync_interval_ms` are parsed
+from `cmq.conf`; `cmq_server_create` opens the publish WAL, replay runs
+before accepting clients, validated publishes append before fanout, and
+server destruction syncs and closes the store. F18 subscription WAL is
+opened/loaded/recorded/closed alongside the publish WAL.
+
 ## Motivation
 
-The `cmq_filestore` module existed as a library (719 LOC) but was
-never wired into `cmq_server_create`. Operators with a workload that
-needed durability had no way to enable it from the public config.
+The `cmq_filestore` module originally existed only as a library. The
+server integration now exposes the durable publish path through the
+public configuration keys above.
 
 ## Design
 
@@ -12,10 +20,11 @@ A new config field `persist_dir` (default NULL = disabled). The
 config file key is `persist_dir` (v0.5.109). Empty value means
 disabled. Paths with `.` / `..` components are rejected. When
 set, `cmq_server_create` opens a filestore at `persist_dir/<prefix>`
-and appends every **validated publish** to it via
-`cmq_filestore_append`. The append happens in `handle_publish`
-**after** subject validation and ACL check, **before** the sublist
-match — so a publish with no subscribers is still persisted.
+and appends every **authorized publish** to it via
+`cmq_filestore_append`. The append happens in `handle_publish` after
+subject validation, ACL, quota, rate-limit, and subject-rewrite checks,
+before the sublist match — so a publish with no subscribers is still
+persisted while rejected publishes are not replayed.
 
 `persist_sync_interval_ms` (v0.5.110, 0 = off, max 86400000)
 installs `cmq_filestore_set_sync_interval` at create.
@@ -34,6 +43,9 @@ v0.5.157: reload also opens `cmq-subs.wal` when
 create left persist NULL (live filestore, missing
 F18 handle). Empty / omitted keeps off. An existing
 handle is not remounted. `..` / `\` fail closed.
+Tests: `test_reload` covers a server created without `persist_dir`,
+reload-time subscription WAL attach/load, omitted and empty `persist_dir`,
+and single-load behavior across a second reload.
 v0.5.158: reload opens `{persist_dir}/obj` when
 create left the object-store handle NULL. Same
 empty / omitted / no-remount / fail-closed rules.
@@ -73,8 +85,10 @@ dispatch uses a synthesized internal client (no fd) so the publish
 path runs end-to-end subject validation, ACL check, and sublist
 match. The sublist matches against current subscribers — a
 recovered message only reaches subscribers who have re-subscribed
-after the restart. There is no persistent subscription state in
-v0.2.0 (that requires durable sublist, a follow-up).
+after the restart. F18 subscription state is restored separately by replaying
+`cmq-subs.wal` after publish replay. The restored entries are ghost subject
+references, not live TCP clients; see `docs/features/sublist-persist.md` for
+the final-state and validation contract.
 
 Limits: replay runs synchronously during `cmq_server_create`.
 Operators with millions of WAL records should snapshot/compact
@@ -104,6 +118,10 @@ single-threaded; future work can parallelize.
   reopens, reads each record back byte-exact. Read beyond end
   returns error.
 - `empty_filestore` — fresh filestore has `last_seq = 0`.
+
+`tests/test_persist_replay.c` also verifies the server path: ACL-rejected
+publishes do not append to the WAL, while authorized publishes are persisted
+and readable for replay.
 
 The existing `test_store.c` exercises the filestore library.
 

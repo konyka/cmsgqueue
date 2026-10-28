@@ -14,24 +14,57 @@
 
 #define PRODUCER_ITERS 10000
 
+/* POSIX barriers are optional and macOS does not provide them, so the test
+ * carries a minimal one built on a mutex and a condition variable. */
+typedef struct {
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    int waiting;
+    int count;
+} race_barrier_t;
+
+static void race_barrier_init(race_barrier_t *b, int count) {
+    pthread_mutex_init(&b->mu, NULL);
+    pthread_cond_init(&b->cv, NULL);
+    b->waiting = 0;
+    b->count = count;
+}
+
+static void race_barrier_wait(race_barrier_t *b) {
+    pthread_mutex_lock(&b->mu);
+    b->waiting++;
+    if (b->waiting >= b->count) {
+        pthread_cond_broadcast(&b->cv);
+    } else {
+        while (b->waiting < b->count)
+            pthread_cond_wait(&b->cv, &b->mu);
+    }
+    pthread_mutex_unlock(&b->mu);
+}
+
+static void race_barrier_destroy(race_barrier_t *b) {
+    pthread_cond_destroy(&b->cv);
+    pthread_mutex_destroy(&b->mu);
+}
+
 typedef struct {
     cmq_queue_t *q;
     int id;
-    pthread_barrier_t *barrier;
+    race_barrier_t *barrier;
     atomic_int *producer_done;
     atomic_int *destroy_started;
 } producer_arg_t;
 
 typedef struct {
     cmq_queue_t *q;
-    pthread_barrier_t *barrier;
+    race_barrier_t *barrier;
     atomic_int *destroy_started;
     int pop_budget;
 } consumer_arg_t;
 
 static void *producer_thread(void *arg) {
     producer_arg_t *pa = (producer_arg_t *)arg;
-    pthread_barrier_wait(pa->barrier);
+    race_barrier_wait(pa->barrier);
     for (int i = 0; i < PRODUCER_ITERS; i++) {
         uintptr_t payload = ((uintptr_t)0xdeadbeefUL << 32) |
                             (uintptr_t)((pa->id << 24) | (i & 0x00ffffff));
@@ -48,7 +81,7 @@ static void *producer_thread(void *arg) {
 
 static void *consumer_thread(void *arg) {
     consumer_arg_t *ca = (consumer_arg_t *)arg;
-    pthread_barrier_wait(ca->barrier);
+    race_barrier_wait(ca->barrier);
 
     int popped = 0;
     while (popped < ca->pop_budget) {
@@ -71,8 +104,8 @@ TEST(queue_race, mpsc_destroy_concurrent) {
     cmq_queue_init(&q);
     ASSERT_NOT_NULL(q.head);
 
-    pthread_barrier_t barrier;
-    pthread_barrier_init(&barrier, NULL, 3);
+    race_barrier_t barrier;
+    race_barrier_init(&barrier, 3);
 
     atomic_int producer_done;
     atomic_int destroy_started;
@@ -104,7 +137,7 @@ TEST(queue_race, mpsc_destroy_concurrent) {
     /* Sanity: producers observed the destroy or finished naturally. */
     ASSERT_EQ(atomic_load(&producer_done), 2);
 
-    pthread_barrier_destroy(&barrier);
+    race_barrier_destroy(&barrier);
 
     /* Queue was destroyed cleanly inside the consumer thread. Calling
        destroy again must be a no-op (defensive). */

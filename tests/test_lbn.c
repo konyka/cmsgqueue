@@ -1,7 +1,10 @@
 /* v0.5.146: reload binds extra listeners when create had none. */
 #include "cmq_h2.h"
 #include "cmq_test.h"
+#include <arpa/inet.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 TEST(lbn, apply) {
@@ -34,6 +37,32 @@ TEST(lbn, omitted) {
     int live = 0;
     ASSERT_EQ(cmq_listener_reload_bind(&lfd, &host, &live, NULL, 0, 0), 0);
     ASSERT_EQ(lfd, -1);
+}
+
+TEST(lbn, ipv6) {
+    int probe = socket(AF_INET6, SOCK_STREAM, 0);
+    ASSERT(probe >= 0);
+    struct sockaddr_in6 probe_addr = {0};
+    probe_addr.sin6_family = AF_INET6;
+    probe_addr.sin6_addr = in6addr_loopback;
+    ASSERT_EQ(bind(probe, (struct sockaddr *)&probe_addr, sizeof(probe_addr)), 0);
+    ASSERT_EQ(listen(probe, 8), 0);
+    socklen_t probe_len = sizeof(probe_addr);
+    ASSERT_EQ(getsockname(probe, (struct sockaddr *)&probe_addr, &probe_len), 0);
+    int port = ntohs(probe_addr.sin6_port);
+    ASSERT(port > 0);
+    close(probe);
+
+    int lfd = -1;
+    const char *host = NULL;
+    int live = 0;
+    ASSERT_EQ(cmq_listener_reload_bind(&lfd, &host, &live, "::1", port, 0), 0);
+    ASSERT(lfd >= 0);
+    ASSERT_STR_EQ(host, "::1");
+    ASSERT_EQ(live, port);
+    ASSERT_EQ(cmq_h2_listen_port(lfd), port);
+    close(lfd);
+    free((void *)host);
 }
 
 TEST(lbn, empty) {

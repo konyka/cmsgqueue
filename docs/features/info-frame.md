@@ -49,6 +49,13 @@ The forward-compatibility plan is:
 | `headers` | `true` | unchanged | unchanged |
 | `batch` | `true` | unchanged | unchanged |
 
+`go` is configurable with the `info_go` server setting. It accepts a positive
+integer with an `ms`, `s`, `m`, or `h` suffix, for example `info_go = 45s`.
+When omitted, it remains `20m`, preserving the existing wire value. The
+setting is applied by the existing config reload path, but INFO is sent only
+once during CONNECT, so a reload affects newly connected clients and does not
+mutate INFO frames already sent to connected clients.
+
 This is a wire-format **additive** change: existing clients that
 ignore the new fields continue to work. New clients can detect
 `"checksum": "crc32c"` and use `CMQ_FLAG_CHECKSUM` on subsequent
@@ -63,6 +70,8 @@ PUBLISHes.
 - `src/server/cmq_info.c` — `cmq_info_json_str` quotes the
   checksum token (v0.5.174; the live format had been
   `"checksum":crc32c` without quotes).
+- `src/include/cmq.h` / `src/server/cmq_config.c` — public `info_go` field
+  and `info_go` parser key, defaulting to `20m`.
 - `tests/test_info.c` — 3 new tests verifying the JSON shape.
 - `tests/test_inf.c` — quote apply / omitted / empty / reject.
 
@@ -74,6 +83,10 @@ PUBLISHes.
 - `info.compression_is_none_until_f2` — verifies the value is "none"
   until F2 ships.
 - `info.checksum_is_crc32c` — verifies the value is "crc32c" (F3 ready).
+- `config.info_go_defaults_and_is_configurable` — verifies the default and
+  configured duration values.
+- `config.info_go_rejects_invalid_durations` — rejects zero, missing units,
+  unsupported units, and malformed values.
 
 ## Verification gates
 

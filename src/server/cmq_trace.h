@@ -20,6 +20,11 @@ extern "C" {
 
 void cmq_trace_id(uint8_t out[16]);
 
+/* Draw one ID and discard it. OpenSSL builds its name tables on the first
+ * RAND_bytes call; calling this while still single-threaded keeps the accept
+ * threads from racing through that lazy initialisation. */
+void cmq_trace_warmup(void);
+
 /* Hex-encode 16 bytes into out (must be at least 33 bytes for the
  * null terminator). Returns chars written (32 on success). */
 int cmq_trace_id_hex(const uint8_t id[16], char *out, size_t out_len);

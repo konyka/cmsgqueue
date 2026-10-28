@@ -133,6 +133,20 @@ static int set_block_timeout(int fd) {
     return 0;
 }
 
+/* Pin the certificate check to the URL host. Failing to set it must abort
+ * the connection: the chain would still verify, but with no host check. */
+static int set_expected_host(SSL *ssl, const char *host) {
+    if (inet_addr(host) != (in_addr_t)INADDR_NONE) {
+        X509_VERIFY_PARAM *pm = SSL_get0_param(ssl);
+        return pm && X509_VERIFY_PARAM_set1_ip_asc(pm, host) == 1;
+    }
+#if OPENSSL_VERSION_MAJOR >= 4
+    return SSL_set1_dnsname(ssl, host) == 1;
+#else
+    return SSL_set1_host(ssl, host) == 1;
+#endif
+}
+
 static int jwks_tls_io(int fd, const cmq_jwks_url_t *url, const char *req,
                        char *resp, size_t resp_cap, size_t *nread) {
     if (set_block_timeout(fd) != 0) return -1;
@@ -154,13 +168,16 @@ static int jwks_tls_io(int fd, const cmq_jwks_url_t *url, const char *req,
         return -1;
     }
     SSL_set_fd(ssl, fd);
-    (void)SSL_set_tlsext_host_name(ssl, url->host);
-    if (inet_addr(url->host) != (in_addr_t)INADDR_NONE) {
-        X509_VERIFY_PARAM *pm = SSL_get0_param(ssl);
-        if (pm)
-            (void)X509_VERIFY_PARAM_set1_ip_asc(pm, url->host);
-    } else {
-        (void)SSL_set1_host(ssl, url->host);
+    {
+        /* The SNI macro casts its argument to void *, so give it a copy. */
+        char sni[sizeof(url->host)];
+        memcpy(sni, url->host, sizeof(sni));
+        (void)SSL_set_tlsext_host_name(ssl, sni);
+    }
+    if (!set_expected_host(ssl, url->host)) {
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        return -1;
     }
     int rc = -1;
     if (SSL_connect(ssl) == 1) {
@@ -382,7 +399,7 @@ int cmq_jwks_cache_reload(cmq_jwks_cache_t **cache, const char **live_json,
     }
     if (created) *cache = c;
     if (live_json) {
-        free((void *)*live_json);
+        free((void *)(uintptr_t)*live_json);
         *live_json = owned;
     } else {
         free(owned);
@@ -518,7 +535,7 @@ int cmq_jwks_refresh_reload_ca(cmq_jwks_refresher_t *r, const char **live_ca,
         char *owned = strdup(fresh_ca);
         if (!owned)
             return -1;
-        free((void *)*live_ca);
+        free((void *)(uintptr_t)*live_ca);
         *live_ca = owned;
     }
     return 0;
@@ -552,7 +569,7 @@ int cmq_jwks_refresh_reload_url(cmq_jwks_refresher_t *r, const char **live_url,
         cmq_mutex_unlock(&r->lock);
     }
     if (live_url) {
-        free((void *)*live_url);
+        free((void *)(uintptr_t)*live_url);
         *live_url = owned;
     }
     return 0;

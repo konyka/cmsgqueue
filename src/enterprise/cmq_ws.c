@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_ws.h"
+#include "cmq_io.h"
 #include "cmq_types.h"
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 #include <poll.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#define ZLIB_CONST
 #include <zlib.h>
 #include <stdint.h>
 #include <limits.h>
@@ -202,7 +204,7 @@ static int ws_write_all(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
     int stall_rounds = 0;
     while (off < len) {
-        ssize_t n = write(fd, data + off, len - off);
+        ssize_t n = cmq_sock_write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -511,7 +513,7 @@ int cmq_ws_deflate_message(const uint8_t *in, size_t in_len,
     if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -15, 8,
                      Z_DEFAULT_STRATEGY) != Z_OK)
         return -1;
-    zs.next_in = (Bytef *)in;
+    zs.next_in = in;
     zs.avail_in = (uInt)in_len;
     zs.next_out = out;
     zs.avail_out = (uInt)out_cap;
@@ -539,7 +541,7 @@ int cmq_ws_inflate_message(const uint8_t *in, size_t in_len,
 
     z_stream zs = {0};
     if (inflateInit2(&zs, -15) != Z_OK) return -1;
-    zs.next_in = (Bytef *)in;
+    zs.next_in = in;
     zs.avail_in = (uInt)in_len;
     zs.next_out = out;
     zs.avail_out = (uInt)out_cap;

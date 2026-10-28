@@ -2,6 +2,7 @@
 #include "cmq_server.h"
 #include "cmq_config.h"
 #include "cmq_platform.h"
+#include "cmq_io.h"
 #include "cmq_coro.h"
 #include "cmq_crc32c.h"
 #include "cmq_compress.h"
@@ -35,7 +36,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <poll.h>
-#ifdef CMQ_OS_LINUX
+#if CMQ_OS_LINUX
 #include <sys/eventfd.h>
 #include <sys/epoll.h>
 #endif
@@ -58,7 +59,7 @@ int srv_find_tls_slot(cmq_server_t *srv, int lfd) {
     if (!srv) return 0;
     if (lfd < 0) return 0;
     for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
-        if (srv->listen_fds[i] == lfd) return i;
+        if (__atomic_load_n(&srv->listen_fds[i], __ATOMIC_RELAXED) == lfd) return i;
     }
     return 0;
 }
@@ -78,6 +79,156 @@ static int auth_configured(const cmq_server_t *srv) {
            (j && j[0] != '\0') || (nk && nk[0] != '\0') ||
            (jw && jw[0] != '\0') || (ju && ju[0] != '\0') ||
            (ec && ec[0] != '\0') || (rn && rn[0] != '\0');
+}
+
+typedef struct {
+    uint8_t addr_key[sizeof(struct sockaddr_storage)];
+    socklen_t addr_key_len;
+    int addr_key_family;
+    uint64_t window_start_ms;
+    int slot;
+    int active;
+} auth_rate_reservation_t;
+
+static uint64_t auth_rate_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL +
+           (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+static int sockaddr_rate_key(const struct sockaddr *addr, socklen_t addrlen,
+                             uint8_t *key, socklen_t *key_len, int *family) {
+    if (!addr || !key || !key_len || !family) return -1;
+    memset(key, 0, sizeof(struct sockaddr_storage));
+    if (addr->sa_family == AF_INET) {
+        key[0] = (uint8_t)AF_INET;
+        memcpy(key + 1,
+               (const uint8_t *)addr + offsetof(struct sockaddr_in, sin_addr),
+               sizeof(struct in_addr));
+    } else if (addr->sa_family == AF_INET6) {
+        key[0] = (uint8_t)AF_INET6;
+        memcpy(key + 1,
+               (const uint8_t *)addr + offsetof(struct sockaddr_in6, sin6_addr),
+               sizeof(struct in6_addr));
+    } else {
+        (void)addrlen;
+        return -1;
+    }
+    *key_len = 1 + sizeof(struct in6_addr);
+    *family = addr->sa_family;
+    return 0;
+}
+
+static int sockaddr_rate_key_equal(const uint8_t *a, socklen_t a_len,
+                                   int a_family, const uint8_t *b,
+                                   socklen_t b_len, int b_family) {
+    return a_family == b_family && a_len == b_len &&
+           memcmp(a, b, (size_t)a_len) == 0;
+}
+
+/* Reserve before parsing/verifying credentials. The auth table is separate
+ * from F10 so connection floods cannot consume authentication capacity. */
+static int auth_rate_reserve(cmq_server_t *srv, int fd,
+                             auth_rate_reservation_t *reservation) {
+    struct sockaddr_storage peer;
+    socklen_t plen = sizeof(peer);
+    uint8_t addr_key[sizeof(struct sockaddr_storage)];
+    socklen_t addr_key_len;
+    int addr_key_family;
+    if (!srv || !reservation) return -1;
+    cmq_mutex_lock(&srv->auth_rate_lock);
+    int configured_limit = srv->config.auth_failed_connects_per_sec;
+    cmq_mutex_unlock(&srv->auth_rate_lock);
+    if (configured_limit <= 0) return 0;
+    if (fd < 0 ||
+        getpeername(fd, (struct sockaddr *)&peer, &plen) != 0 ||
+        sockaddr_rate_key((struct sockaddr *)&peer, plen, addr_key,
+                          &addr_key_len, &addr_key_family) != 0)
+        return -1;
+    uint64_t now_ms = auth_rate_now_ms();
+    int admitted = 0;
+    cmq_mutex_lock(&srv->auth_rate_lock);
+    int limit = srv->config.auth_failed_connects_per_sec;
+    if (limit <= 0) {
+        cmq_mutex_unlock(&srv->auth_rate_lock);
+        return 0;
+    }
+    for (int i = 0; i < CMQ_RATE_LIMIT_SLOTS; i++) {
+        if (sockaddr_rate_key_equal(srv->auth_rate_slots[i].addr_key,
+                                    srv->auth_rate_slots[i].addr_key_len,
+                                    srv->auth_rate_slots[i].addr_key_family,
+                                    addr_key, addr_key_len, addr_key_family)) {
+            if (now_ms > srv->auth_rate_slots[i].window_start_ms &&
+                now_ms - srv->auth_rate_slots[i].window_start_ms >= 1000 &&
+                srv->auth_rate_slots[i].inflight == 0) {
+                srv->auth_rate_slots[i].window_start_ms = now_ms;
+                srv->auth_rate_slots[i].count = 0;
+            }
+            if ((int)srv->auth_rate_slots[i].count < limit) {
+                srv->auth_rate_slots[i].count++;
+                srv->auth_rate_slots[i].inflight++;
+                memcpy(reservation->addr_key, addr_key, addr_key_len);
+                reservation->addr_key_len = addr_key_len;
+                reservation->addr_key_family = addr_key_family;
+                reservation->window_start_ms =
+                    srv->auth_rate_slots[i].window_start_ms;
+                reservation->slot = i;
+                reservation->active = 1;
+                admitted = 1;
+            }
+            break;
+        }
+        if (srv->auth_rate_slots[i].addr_key_len == 0 ||
+            (now_ms > srv->auth_rate_slots[i].window_start_ms &&
+             now_ms - srv->auth_rate_slots[i].window_start_ms >= 1000 &&
+             srv->auth_rate_slots[i].inflight == 0)) {
+            memcpy(srv->auth_rate_slots[i].addr_key, addr_key, addr_key_len);
+            srv->auth_rate_slots[i].addr_key_len = addr_key_len;
+            srv->auth_rate_slots[i].addr_key_family = addr_key_family;
+            srv->auth_rate_slots[i].window_start_ms = now_ms;
+            srv->auth_rate_slots[i].count = 1;
+            srv->auth_rate_slots[i].inflight = 1;
+            memcpy(reservation->addr_key, addr_key, addr_key_len);
+            reservation->addr_key_len = addr_key_len;
+            reservation->addr_key_family = addr_key_family;
+            reservation->window_start_ms = now_ms;
+            reservation->slot = i;
+            reservation->active = 1;
+            admitted = 1;
+            break;
+        }
+    }
+    cmq_mutex_unlock(&srv->auth_rate_lock);
+    return admitted ? 1 : -1;
+}
+
+static void auth_rate_finish(cmq_server_t *srv,
+                             auth_rate_reservation_t *reservation,
+                             int failed) {
+    if (!srv || !reservation || !reservation->active) return;
+    cmq_mutex_lock(&srv->auth_rate_lock);
+    if (reservation->slot >= 0 && reservation->slot < CMQ_RATE_LIMIT_SLOTS) {
+        cmq_auth_rate_slot_t *slot =
+            &srv->auth_rate_slots[reservation->slot];
+        if (sockaddr_rate_key_equal(slot->addr_key, slot->addr_key_len,
+                                    slot->addr_key_family,
+                                    reservation->addr_key,
+                                    reservation->addr_key_len,
+                                    reservation->addr_key_family) &&
+            slot->inflight > 0) {
+            if (slot->window_start_ms != reservation->window_start_ms && failed) {
+                slot->window_start_ms = auth_rate_now_ms();
+                slot->count = 0;
+            }
+            slot->inflight--;
+            if (!failed && slot->window_start_ms == reservation->window_start_ms &&
+                slot->count > 0)
+                slot->count--;
+        }
+    }
+    cmq_mutex_unlock(&srv->auth_rate_lock);
+    reservation->active = 0;
 }
 
 static const cmq_jwks_t *srv_jwks_live(const cmq_server_t *srv) {
@@ -266,7 +417,7 @@ static int set_nonblocking(int fd) {
 }
 
 static int wakeup_fd_pair(int *rfd, int *wfd) {
-#ifdef CMQ_OS_LINUX
+#if CMQ_OS_LINUX
     int fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (fd < 0) return -1;
     *rfd = fd;
@@ -299,7 +450,7 @@ static int clients_array_grow(cmq_client_t ***arr, int *cap) {
 }
 
 static int wakeup_fd_signal(int wfd) {
-#ifdef CMQ_OS_LINUX
+#if CMQ_OS_LINUX
     uint64_t val = 1;
     for (;;) {
         ssize_t n = write(wfd, &val, sizeof(val));
@@ -323,7 +474,7 @@ static int wakeup_fd_signal(int wfd) {
 }
 
 static void wakeup_fd_drain(int rfd) {
-#ifdef CMQ_OS_LINUX
+#if CMQ_OS_LINUX
     uint64_t val;
     while (read(rfd, &val, sizeof(val)) > 0) {}
 #else
@@ -583,7 +734,7 @@ static ssize_t client_sock_read(cmq_client_t *c, uint8_t *buf, size_t len) {
 static ssize_t client_sock_write(cmq_client_t *c, const uint8_t *buf, size_t len) {
     for (;;) {
         ssize_t n = c->tls ? cmq_tls_write(c->tls, buf, len)
-                           : write(c->fd, buf, len);
+                           : cmq_sock_write(c->fd, buf, len);
         if (n < 0 && errno == EINTR) continue;
         return n;
     }
@@ -1415,6 +1566,15 @@ static void client_teardown(cmq_client_t *c) {
 
     if (c->is_route && srv && c->fd >= 0)
         route_detach_under_io_lock(srv, c->fd);
+
+    /* v0.5.72: graceful TLS shutdown. Send close_notify and drain
+     * the BIO BEFORE removing the fd from the polling loop. If we
+     * skip this, the SSL_free in cmq_client_destroy runs before
+     * the alert reaches the kernel, and the client observes an
+     * abrupt EOF instead of SSL_ERROR_ZERO_RETURN. */
+    if (c->tls && c->fd >= 0) {
+        cmq_tls_session_graceful_shutdown(c->tls);
+    }
 
     if (c->ev_loop && c->fd >= 0) {
         cmq_ev_del(c->ev_loop, c->fd);
@@ -2940,9 +3100,9 @@ static int worker_coro_spawn_deliver(cmq_worker_t *w,
     ctx->srv = srv;
     ctx->targets = targets;
     ctx->target_count = target_count;
-    strncpy(ctx->subject, subject, CMQ_MAX_SUBJECT - 1);
+    snprintf(ctx->subject, sizeof(ctx->subject), "%s", subject);
     if (pub_account)
-        strncpy(ctx->pub_account, pub_account, CMQ_ACCOUNT_NAME_SIZE - 1);
+        snprintf(ctx->pub_account, sizeof(ctx->pub_account), "%s", pub_account);
     ctx->pub_epoch = pub_epoch;
     ctx->payload = payload;
     ctx->payload_len = payload_len;
@@ -3327,6 +3487,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface payload-size rejections so operators
+         * can spot publishers exceeding the configured cap. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "payload too large");
         cmq_send_error(c, "payload too large");
         return;
     }
@@ -3336,6 +3502,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_acl, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface F16 ACL export rejections so operators
+         * can spot accounts blocked by the export allow-list. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "permission denied");
         cmq_send_error(c, "permission denied");
         return;
     }
@@ -3419,21 +3591,11 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
     if (srv->otel)
         (void)cmq_otel_offer(srv->otel, c->trace_id, CMQ_OTEL_KIND_PUBLISH);
 
-    /* F5: persist to WAL BEFORE sublist match. We persist validated
+    /* F5: persist to WAL after all publish authorization and quota checks.
+     * We persist validated
      * publishes regardless of subscriber count. During replay (fd==-1),
      * the record is already on disk, so we MUST NOT re-append or the
      * WAL grows unbounded and the record is delivered twice. */
-    if (srv->filestore && frame && frame->payload && c->fd != -1) {
-        uint64_t seq = 0;
-        if (cmq_filestore_append(srv->filestore, frame->payload,
-                                  frame->payload_len, &seq) != 0) {
-            cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
-                                      CMQ_ATOMIC_RELAXED);
-            cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, c->trace_hex, subject,
-                          "wal append");
-        }
-    }
-
     size_t route_sent = 0;
     int route_rc = 0;
 
@@ -3456,6 +3618,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_quota, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface per-account quota pressure so operators
+         * can spot noisy accounts in the audit pipeline. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      "publish", "quota exceeded");
         cmq_send_error(c, "quota exceeded");
         return;
     }
@@ -3466,6 +3634,12 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_ratelimit, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface per-subject rate-limit pressure so
+         * operators can spot noisy subjects in the audit pipeline. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "subject rate limit");
         cmq_send_error(c, "subject rate limit");
         return;
     }
@@ -3475,10 +3649,32 @@ static void handle_publish(cmq_server_t *srv, cmq_client_t *c,
         cmq_send_error(c, "subject map failed");
         return;
     }
+    /* F5: append only after subject/ACL/quota/rate authorization has
+     * succeeded. Rejected publishes must not become replayable WAL records. */
+    if (srv->filestore && frame && frame->payload && c->fd != -1) {
+        uint64_t seq = 0;
+        if (cmq_filestore_append(srv->filestore, frame->payload,
+                                 frame->payload_len, &seq) != 0) {
+            cmq_atomic_fetch_add_u64(&srv->stat_persist_fail, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_PERSIST_FAIL, trace_hex, "publish",
+                          "filestore_append failed");
+        }
+    }
     if (srv->mqtt_bridge && !c->is_route && c->fd >= 0 &&
-        strncmp(c->account_name, "mqtt_bridge", 11) != 0)
-        (void)cmq_mqtt_bridge_publish(srv->mqtt_bridge, subject,
-                                      msg_payload, msg_len);
+        strncmp(c->account_name, "mqtt_bridge", 11) != 0) {
+        int bridge_rc = cmq_mqtt_bridge_publish(srv->mqtt_bridge, subject,
+                                                msg_payload, msg_len);
+        if (bridge_rc < 0) {
+            /* Keep local fanout running, but do not report this publish as
+             * wholly successful when the upstream QoS1 ACK failed. */
+            cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                      CMQ_ATOMIC_RELAXED);
+            cmq_send_error(c, "mqtt bridge publish failed");
+        }
+    }
     /* v0.5.67–68 / 0.5.93: $KV / $OBJ / $JS. One '$' check. */
     if (subject[0] == '$') {
         if (srv->kvb) {
@@ -3706,10 +3902,14 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
     if (account_apply_rewrite(srv, account_name, mapped, sizeof(mapped)) != 0)
         return -1;
     subject = mapped;
+    int bridge_rc = 0;
     if (srv->mqtt_bridge &&
         strncmp(account_name, "mqtt_bridge", 11) != 0)
-        (void)cmq_mqtt_bridge_publish(srv->mqtt_bridge, subject,
-                                      payload, payload_len);
+        bridge_rc = cmq_mqtt_bridge_publish(srv->mqtt_bridge, subject,
+                                            payload, payload_len);
+    if (bridge_rc < 0)
+        cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
+                                  CMQ_ATOMIC_RELAXED);
     int live_held = 0;
     if (account_live_hold_name(srv, account_name, 0, (uint64_t)payload_len,
                                &live_held) != 0)
@@ -3724,7 +3924,7 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
         cmq_sublist_result_free(&result);
         account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
                                live_held);
-        return 0;
+        return bridge_rc < 0 ? -1 : 0;
     }
     size_t ntgt = 0;
     cmq_deliver_tgt_t *tgts = snapshot_deliver_targets(srv, &result, &ntgt);
@@ -3733,7 +3933,7 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
         free(tgts);
         account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
                                live_held);
-        return 0;
+        return bridge_rc < 0 ? -1 : 0;
     }
     /* Synchronous fanout: the bridge is a low-rate path (MQTT
      * clients connect, publish occasionally). Async coroutine
@@ -3748,7 +3948,13 @@ int cmq_server_publish(cmq_server_t *srv, const char *subject,
     free(tgts);
     account_live_drop_name(srv, account_name, 0, (uint64_t)payload_len,
                            live_held);
-    return 0;
+    return bridge_rc < 0 ? -1 : 0;
+}
+
+void cmq_server_record_bridge_drop(cmq_server_t *srv) {
+    if (!srv) return;
+    cmq_atomic_fetch_add_u64(&srv->stat_messages_dropped, 1,
+                             CMQ_ATOMIC_RELAXED);
 }
 
 int cmq_server_h2_fd(const cmq_server_t *srv) {
@@ -3796,6 +4002,9 @@ int cmq_server_persist_bridge(cmq_server_t *srv, const char *topic,
 static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                               const cmq_frame_t *frame) {
     if (!frame->payload || frame->payload_len < 6) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "malformed subscribe");
         cmq_send_suback(c, 0, 1);
         return;
     }
@@ -3805,6 +4014,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                       ((uint32_t)frame->payload[2] << 8) |
                       (uint32_t)frame->payload[3];
     if (sub_id == 0) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, 0, 1);
         return;
     }
@@ -3812,6 +4024,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                             frame->payload[5];
     if ((size_t)(6 + subject_len) > frame->payload_len ||
         subject_len == 0 || subject_len >= CMQ_MAX_SUBJECT) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -3820,6 +4035,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     subject[subject_len] = '\0';
     if (!wire_cstr_exact(subject, subject_len) ||
         cmq_sublist_subject_valid(subject) != 0) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -3837,6 +4055,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     if (!cmq_account_can_import(srv->accounts, c->account_name, subject)) {
         cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -3881,12 +4102,21 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     if (!replacing && c->sub_count >= sub_cap) {
         cmq_atomic_fetch_add_u64(&srv->stat_subscribes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface subscribe-cap rejections so operators
+         * can spot clients exceeding their subscription budget. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "subscribe cap reached");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
 
     cmq_sub_entry_t *entry = malloc(sizeof(cmq_sub_entry_t));
     if (!entry) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -3901,6 +4131,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
     cmq_sub_ref_t *ref = malloc(sizeof(cmq_sub_ref_t));
     if (!ref) {
         free(entry);
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -4160,6 +4393,9 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
                 (void)shutdown(c->fd, SHUT_RDWR);
             return;
         }
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex, "", "subscribe rejected");
         cmq_send_suback(c, sub_id, 1);
         return;
     }
@@ -4230,6 +4466,12 @@ static void handle_subscribe(cmq_server_t *srv, cmq_client_t *c,
 static void handle_unsubscribe(cmq_server_t *srv, cmq_client_t *c,
                                 const cmq_frame_t *frame) {
     if (!frame->payload || frame->payload_len < 4) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        /* F13 audit: surface malformed UNSUBSCRIBE frames so operators
+         * can spot clients sending bad UNSUBSCRIBE frames. */
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      "", "malformed unsubscribe");
         cmq_send_error(c, "invalid unsubscribe");
         return;
     }
@@ -4325,6 +4567,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
     int pending = cmq_atomic_load_int(&c->inbox_pending, CMQ_ATOMIC_RELAXED);
     if (srv->config.inbox_max_pending > 0 &&
         pending >= srv->config.inbox_max_pending) {
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        /* F13 audit: surface F15 inbox pressure so operators can
+         * spot slow responders holding the head-of-line lock. */
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      "request", "inbox full");
         cmq_send_error(c, "inbox full");
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
@@ -4388,6 +4636,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface payload-size rejections so operators
+         * can spot publishers exceeding the configured cap. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "payload too large");
         cmq_send_error(c, "payload too large");
         return;
     }
@@ -4397,6 +4651,12 @@ static void handle_request(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_acl, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface F16 ACL export rejections so operators
+         * can spot accounts blocked by the export allow-list. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "permission denied");
         cmq_send_error(c, "permission denied");
         return;
     }
@@ -4670,6 +4930,12 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
                                   CMQ_ATOMIC_RELAXED);
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected_size, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface payload-size rejections so operators
+         * can spot publishers exceeding the configured cap. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "payload too large");
         cmq_send_error(c, "payload too large");
         return;
     }
@@ -4680,6 +4946,12 @@ static void handle_response(cmq_server_t *srv, cmq_client_t *c,
         !cmq_account_can_export(srv->accounts, c->account_name, subject)) {
         cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                   CMQ_ATOMIC_RELAXED);
+        /* F13 audit: surface response ACL rejections so operators
+         * can spot accounts whose RESPONSE senders are blocked. */
+        char trace_hex[33];
+        cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+        cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                      subject, "permission denied");
         cmq_send_error(c, "permission denied");
         return;
     }
@@ -4878,11 +5150,17 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
             cmq_send_error(c, "decompress failed");
             return;
         }
+        /* Recurse with a local frame whose payload is the decoded buffer.
+         * Strip CMQ_FLAG_COMPRESSED on the recursive frame — the
+         * payload has already been decompressed, so the compression
+         * branch must not run again. frame->payload remains owned by
+         * the parser; decoded is freed on this return path. */
         cmq_frame_t dec_frame = *frame;
         dec_frame.hdr.flags =
             (cmq_u8_t)(dec_frame.hdr.flags & ~(cmq_u8_t)CMQ_FLAG_COMPRESSED);
         dec_frame.payload = decoded;
         dec_frame.payload_len = (size_t)dlen;
+        dec_frame.hdr.flags &= (uint8_t)~CMQ_FLAG_COMPRESSED;
         handle_batch(srv, c, &dec_frame);
         free(decoded);
         return;
@@ -4935,6 +5213,13 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         if (!cmq_account_can_export(srv->accounts, c->account_name, subj)) {
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            /* F13 audit: surface batch-PUBLISH ACL rejections so
+             * operators can spot accounts whose batch publishers are
+             * blocked by the export allow-list. */
+            cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                          subj, "permission denied");
             cmq_send_error(c, "permission denied");
             return;
         }
@@ -5000,6 +5285,10 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
         if (payload_exceeds_caps(srv, c, (size_t)payload_len)) {
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                          subj, "payload too large");
             cmq_send_error(c, "payload too large");
             return;
         }
@@ -5008,6 +5297,10 @@ static void handle_batch(cmq_server_t *srv, cmq_client_t *c,
                                                    payload_len) == 0) {
             cmq_atomic_fetch_add_u64(&srv->stat_publishes_rejected, 1,
                                       CMQ_ATOMIC_RELAXED);
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                          subj, "quota exceeded");
             cmq_send_error(c, "quota exceeded");
             return;
         }
@@ -5283,9 +5576,17 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
 
     switch (frame->hdr.op) {
     case CMQ_OP_CONNECT:
-        /* v0.5.44: ID is assigned at accept. Backfill if missing. */
-        if (c->trace_hex[0] == '\0')
-            cmq_trace_assign(c->trace_id, c->trace_hex);
+        /* F11: assign a trace ID at the earliest point in the
+         * connection's lifecycle so log entries from this point
+         * forward can be correlated. A fresh cmq_client_t is
+         * zero-initialized, so any all-zero byte means unassigned. */
+        {
+            int unassigned = 1;
+            for (int i = 0; i < 16; i++) {
+                if (c->trace_id[i] != 0) { unassigned = 0; break; }
+            }
+            if (unassigned) cmq_trace_id(c->trace_id);
+        }
         /* Only virgin INIT sockets may CONNECT — CLOSING must not resurrect. */
         if (client_state(c) == CMQ_CLIENT_CLOSING || client_state(c) == CMQ_CLIENT_CLOSED) {
             cmq_send_connack(c, 1);
@@ -5295,76 +5596,33 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
          * P1: rch handle refcounted to survive reload races. */
         cmq_blocklist_t *bl = (cmq_blocklist_t *)cmq_rch_acquire(srv->blocklist_h);
         if (bl && c->fd >= 0) {
-            struct sockaddr_in peer;
+            struct sockaddr_storage peer;
             socklen_t plen = sizeof(peer);
             if (getpeername(c->fd, (struct sockaddr *)&peer, &plen) == 0 &&
-                peer.sin_family == AF_INET) {
-                uint32_t ip = (uint32_t)peer.sin_addr.s_addr;
-                if (cmq_blocklist_check(bl, ip)) {
+                cmq_blocklist_check_sockaddr(bl,
+                    (const struct sockaddr *)&peer, plen)) {
                     cmq_rch_release(srv->blocklist_h, bl);
-                    cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, c->trace_hex, "",
-                                  "blocklist reject");
+                    char trace_hex[33];
+                    cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+                    cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, trace_hex,
+                                  "", "blocklist reject");
                     client_finish_closing(c);
                     break;
-                }
             }
         }
         cmq_rch_release(srv->blocklist_h, bl);
-        /* F8b: per-IP auth brute-force rate limit. The check uses the
-         * peer IP of the connected socket. If the IP is over its
-         * per-second budget, reject without invoking password verify. */
-        if (auth_configured(srv) && c->fd >= 0) {
-            struct sockaddr_in peer;
-            socklen_t plen = sizeof(peer);
-            if (getpeername(c->fd, (struct sockaddr *)&peer, &plen) == 0 &&
-                peer.sin_family == AF_INET) {
-                uint32_t ip = (uint32_t)peer.sin_addr.s_addr;
-                cmq_mutex_lock(&srv->rate_lock);
-                int admitted = 1;
-                for (int i = 0; i < 1024; i++) {
-                    if (srv->rate_slots[i].ip == ip) {
-                        struct timespec ts_now;
-                        clock_gettime(CLOCK_MONOTONIC, &ts_now);
-                        uint64_t now_ms = (uint64_t)ts_now.tv_sec * 1000ULL +
-                                          (uint64_t)ts_now.tv_nsec / 1000000ULL;
-                        if (now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
-                            srv->rate_slots[i].window_start_ms = now_ms;
-                            srv->rate_slots[i].count = 0;
-                        }
-                        if (srv->rate_slots[i].count >= 10) {
-                            admitted = 0;
-                        }
-                        break;
-                    }
-                    if (srv->rate_slots[i].ip == 0) {
-                        srv->rate_slots[i].ip = ip;
-                        struct timespec ts_now;
-                        clock_gettime(CLOCK_MONOTONIC, &ts_now);
-                        srv->rate_slots[i].window_start_ms =
-                            (uint64_t)ts_now.tv_sec * 1000ULL +
-                            (uint64_t)ts_now.tv_nsec / 1000000ULL;
-                        srv->rate_slots[i].count = 0;
-                        break;
-                    }
-                }
-                cmq_mutex_unlock(&srv->rate_lock);
-                if (!admitted) {
-                    cmq_send_connack(c, 4);
-                    client_set_state(c, CMQ_CLIENT_CLOSING);
-                    break;
-                }
-                /* Record the attempt; bumped on success below. */
-                cmq_mutex_lock(&srv->rate_lock);
-                for (int i = 0; i < 1024; i++) {
-                    if (srv->rate_slots[i].ip == ip) {
-                        srv->rate_slots[i].count++;
-                        break;
-                    }
-                }
-                cmq_mutex_unlock(&srv->rate_lock);
+        /* F8b: reserve before parsing or verifying credentials. */
+        auth_rate_reservation_t auth_reservation = {0};
+        if (auth_configured(srv)) {
+            int auth_rate_rc = auth_rate_reserve(srv, c->fd, &auth_reservation);
+            if (auth_rate_rc < 0) {
+                cmq_send_connack(c, 4);
+                client_set_state(c, CMQ_CLIENT_CLOSING);
+                break;
             }
         }
         if (client_state(c) == CMQ_CLIENT_CONNECTED) {
+            auth_rate_finish(srv, &auth_reservation, 0);
             cmq_send_connack(c, 1);
             break;
         }
@@ -5372,7 +5630,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             char uname[256] = {0};
             char passwd[CMQ_JWT_TOKEN_MAX + 1] = {0};
             char expect_u[256] = {0};
-            char expect_p[256] = {0};
+            char expect_p[CMQ_JWT_TOKEN_MAX + 1] = {0};
             int jwt_mode = (srv->config.jwt_issuer &&
                             srv->config.jwt_issuer[0] &&
                             ((srv->config.jwt_hmac_secret &&
@@ -5409,6 +5667,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             int f8_hashed_fail = 0;
             int jwt_fail = 0;
             int nkey_fail = 0;
+            const cmq_jwks_t *jwks_live = srv_jwks_live(srv);
             if (jwt_mode && !malformed) {
                 struct timespec tsj;
                 clock_gettime(CLOCK_REALTIME, &tsj);
@@ -5418,13 +5677,11 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                     : (unsigned)CMQ_JWT_LEEWAY_SEC;
                 const uint8_t *jsec = NULL;
                 size_t jslen = 0;
-                uint8_t jsecbuf[128];
                 const uint8_t *ecx = NULL, *ecy = NULL;
                 uint8_t ecxy[64];
                 const uint8_t *rsan = NULL, *rsae = NULL;
                 size_t rsanl = 0, rsael = 0;
                 uint8_t rsabn[CMQ_JWT_RSA_N_MAX], rsabe[CMQ_JWT_RSA_E_MAX];
-                const cmq_jwks_t *jk = srv_jwks_live(srv);
                 const char *sstr = srv->config.jwt_hmac_secret;
                 char alg[16] = {0};
                 int is_es = 0;
@@ -5437,50 +5694,25 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                     is_rs = 1;
                 else if (strcmp(alg, "HS256") != 0)
                     jwt_fail = 1;
-                if (!jwt_fail && jk) {
+                if (!jwt_fail && jwks_live) {
                     char kid[64] = {0};
                     if (cmq_jwt_header_kid(passwd, kid, sizeof(kid)) == 0) {
                         if (is_es) {
-                            const uint8_t *x = NULL, *y = NULL;
-                            if (cmq_jwks_lookup_ec(jk, kid, &x, &y) != 0)
+                            if (cmq_jwks_lookup_ec(jwks_live, kid, &ecx, &ecy) != 0)
                                 jwt_fail = 1;
-                            else {
-                                memcpy(ecxy, x, 32);
-                                memcpy(ecxy + 32, y, 32);
-                                ecx = ecxy;
-                                ecy = ecxy + 32;
-                            }
                         } else if (is_rs) {
-                            const uint8_t *n = NULL, *e = NULL;
-                            size_t nl = 0, el = 0;
-                            if (cmq_jwks_lookup_rsa(jk, kid, &n, &nl, &e, &el)
-                                    != 0)
+                            if (cmq_jwks_lookup_rsa(jwks_live, kid, &rsan, &rsanl,
+                                                    &rsae, &rsael) != 0)
                                 jwt_fail = 1;
-                            else {
-                                memcpy(rsabn, n, nl);
-                                memcpy(rsabe, e, el);
-                                rsan = rsabn;
-                                rsae = rsabe;
-                                rsanl = nl;
-                                rsael = el;
-                            }
-                        } else if (cmq_jwks_lookup(jk, kid, &jsec, &jslen)
-                                       != 0 ||
-                                   jslen == 0 || jslen > sizeof(jsecbuf)) {
+                        } else if (cmq_jwks_lookup(jwks_live, kid, &jsec, &jslen) != 0) {
                             jwt_fail = 1;
-                        } else {
-                            memcpy(jsecbuf, jsec, jslen);
-                            jsec = jsecbuf;
                         }
                     } else if (is_es) {
-                        if (!srv->config.jwt_ec_pub ||
-                            !srv->config.jwt_ec_pub[0])
+                        if (!srv->config.jwt_ec_pub || !srv->config.jwt_ec_pub[0])
                             jwt_fail = 1;
                     } else if (is_rs) {
-                        if (!srv->config.jwt_rsa_n ||
-                            !srv->config.jwt_rsa_n[0] ||
-                            !srv->config.jwt_rsa_e ||
-                            !srv->config.jwt_rsa_e[0])
+                        if (!srv->config.jwt_rsa_n || !srv->config.jwt_rsa_n[0] ||
+                            !srv->config.jwt_rsa_e || !srv->config.jwt_rsa_e[0])
                             jwt_fail = 1;
                     } else if (!sstr || !sstr[0]) {
                         jwt_fail = 1;
@@ -5488,8 +5720,7 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 }
                 if (!jwt_fail && is_es && !ecx) {
                     if (!srv->config.jwt_ec_pub ||
-                        cmq_nkey_hex_decode(srv->config.jwt_ec_pub, ecxy, 64)
-                            != 0)
+                        cmq_nkey_hex_decode(srv->config.jwt_ec_pub, ecxy, 64) != 0)
                         jwt_fail = 1;
                     else {
                         ecx = ecxy;
@@ -5497,9 +5728,8 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                     }
                 }
                 if (!jwt_fail && is_rs && !rsan) {
-                    if (!srv->config.jwt_rsa_n ||
-                        cmq_jwt_rsa_decode(srv->config.jwt_rsa_n,
-                                           srv->config.jwt_rsa_e,
+                    if (!srv->config.jwt_rsa_n || !srv->config.jwt_rsa_e ||
+                        cmq_jwt_rsa_decode(srv->config.jwt_rsa_n, srv->config.jwt_rsa_e,
                                            rsabn, &rsanl, rsabe, &rsael) != 0)
                         jwt_fail = 1;
                     else {
@@ -5510,22 +5740,21 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 if (!jwt_fail) {
                     int vr;
                     if (is_es)
-                        vr = cmq_jwt_verify_es256(
-                            passwd, ecx, ecy, srv->config.jwt_issuer,
-                            (uint64_t)tsj.tv_sec, leeway, sub, sizeof(sub));
+                        vr = cmq_jwt_verify_es256(passwd, ecx, ecy,
+                            srv->config.jwt_issuer, (uint64_t)tsj.tv_sec,
+                            leeway, sub, sizeof(sub));
                     else if (is_rs)
-                        vr = cmq_jwt_verify_rs256(
-                            passwd, rsan, rsanl, rsae, rsael,
+                        vr = cmq_jwt_verify_rs256(passwd, rsan, rsanl, rsae, rsael,
                             srv->config.jwt_issuer, (uint64_t)tsj.tv_sec,
                             leeway, sub, sizeof(sub));
                     else if (jsec)
-                        vr = cmq_jwt_verify_hs256_bin(
-                            passwd, jsec, jslen, srv->config.jwt_issuer,
-                            (uint64_t)tsj.tv_sec, leeway, sub, sizeof(sub));
+                        vr = cmq_jwt_verify_hs256_bin(passwd, jsec, jslen,
+                            srv->config.jwt_issuer, (uint64_t)tsj.tv_sec,
+                            leeway, sub, sizeof(sub));
                     else
-                        vr = cmq_jwt_verify_hs256(
-                            passwd, sstr, srv->config.jwt_issuer,
-                            (uint64_t)tsj.tv_sec, leeway, sub, sizeof(sub));
+                        vr = cmq_jwt_verify_hs256(passwd, sstr,
+                            srv->config.jwt_issuer, (uint64_t)tsj.tv_sec,
+                            leeway, sub, sizeof(sub));
                     if (vr != 0)
                         jwt_fail = 1;
                     else if (sub[0]) {
@@ -5540,12 +5769,14 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                     cmq_nkey_verify_user(npub, uname, passwd) != 0)
                     nkey_fail = 1;
             }
-            if (!jwt_mode && !nkey_mode && srv->config.auth_password &&
-                srv->config.auth_password[0]) {
+            int password_is_hashed = 0;
+            if (srv->config.auth_password && srv->config.auth_password[0]) {
                 if (srv->config.auth_password[0] == '$') {
                     /* F8: hashed password. Verify with cmq_password_verify. */
+                    password_is_hashed = 1;
                     int v = cmq_password_verify(srv->config.auth_password, passwd);
                     if (v < 0) {
+                        auth_rate_finish(srv, &auth_reservation, 1);
                         cmq_audit_auth(0, c->trace_hex, uname, "auth failed");
                         cmq_send_connack(c, 1);
                         client_set_state(c, CMQ_CLIENT_CLOSING);
@@ -5568,17 +5799,24 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
                 bad |= !ct_memeq(uname, expect_u, sizeof(uname));
             else
                 bad |= !ct_memeq(uname, uname, sizeof(uname)); /* timing pad */
-            if (need_pass)
+            if (need_pass && !password_is_hashed)
                 bad |= !ct_memeq(passwd, expect_p, sizeof(passwd));
             else
                 bad |= !ct_memeq(passwd, passwd, sizeof(passwd));
             if (bad) {
-                cmq_audit_auth(0, c->trace_hex, uname,
-                               malformed ? "malformed" : "auth failed");
+                auth_rate_finish(srv, &auth_reservation, 1);
+                char trace_hex[33];
+                cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+                cmq_audit_log(CMQ_AUDIT_AUTH_FAIL, trace_hex,
+                              "connect", "auth_fail");
                 cmq_send_connack(c, malformed ? 1 : 2);
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 break;
             }
+            auth_rate_finish(srv, &auth_reservation, 0);
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_AUTH_OK, trace_hex, "connect", "auth_ok");
             free(c->username);
             /* Password-only auth: ignore client username so a shared secret
                cannot pick/create arbitrary tenant accounts. */
@@ -5646,15 +5884,16 @@ static void handle_frame(cmq_server_t *srv, cmq_client_t *c,
             break;
         }
         c->account_epoch = aep;
-        /* F14: connect-rate before concurrent credit so a reject
-           does not consume account_max_connections. */
+        /* F14: per-account connect quota (rate-limit per docs/features
+         * /quota.md). Check before inc_connections so a rejected
+         * CONNECT does not inflate the account counter. */
         if (srv->quota &&
-            cmq_quota_check_connect(srv->quota, c->account_name) == 0) {
+            !cmq_quota_check_connect(srv->quota, c->account_name)) {
             cmq_account_release(srv->accounts, acc);
             c->account_epoch = 0;
-            cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, c->trace_hex,
-                          c->account_name, "connect quota");
-            cmq_send_connack(c, 1);
+            cmq_send_connack(c, 3);
+            cmq_log_info(srv->log, "Quota reject CONNECT account=%s",
+                         c->account_name);
             client_set_state(c, CMQ_CLIENT_CLOSING);
             break;
         }
@@ -6010,11 +6249,12 @@ static void send_info_frame(cmq_server_t *srv, cmq_client_t *c) {
         return;
     int info_len = snprintf(info_json, sizeof(info_json),
         "{\"server_id\":%s,\"version\":\"0.2.0\",\"proto\":1,"
-        "\"go\":\"20m\",\"host\":%s,\"port\":%d,"
+        "\"go\":\"%s\",\"host\":%s,\"port\":%d,"
         "\"max_payload\":%d,\"connections\":%llu,\"subscriptions\":%llu,"
         "\"auth\":%s,\"tls\":%s,\"compression\":\"%s\","
         "\"checksum\":%s,\"headers\":true,\"batch\":true}",
         sid,
+        srv->config.info_go ? srv->config.info_go : "20m",
         hostj,
         (int)srv->config.port,
         (int)srv->config.max_payload_size,
@@ -6222,9 +6462,10 @@ static void http_serve_monitor(cmq_client_t *c, int which) {
             if (cmq_route_snapshot(srv->routes, snap,
                                     CMQ_MONITOR_ROUTE_MAX, &ns) == 0) {
                 for (size_t i = 0; i < ns; i++) {
-                    snprintf(rts[nr].id, sizeof(rts[nr].id), "%s",
-                              snap[i].remote_id);
-                    snprintf(rts[nr].addr, sizeof(rts[nr].addr), "%s",
+                    snprintf(rts[nr].id, sizeof(rts[nr].id), "%.*s",
+                              (int)sizeof(rts[nr].id) - 1, snap[i].remote_id);
+                    snprintf(rts[nr].addr, sizeof(rts[nr].addr), "%.*s",
+                              (int)sizeof(rts[nr].addr) - 1,
                               snap[i].remote_addr);
                     rts[nr].port = snap[i].remote_port;
                     rts[nr].connected = snap[i].connected;
@@ -6276,7 +6517,7 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
         const char *path_end = strchr(path_start, ' ');
         if (path_end) {
             size_t plen = (size_t)(path_end - path_start);
-            if (plen == 9 && memcmp(path_start, "/healthz", 9) == 0) {
+            if (plen == 8 && memcmp(path_start, "/healthz", 8) == 0) {
                 free(req);
                 /* P4 (v0.5.3): report async WAL + reload state. We
                  * surface degraded status if the filestore has any
@@ -6299,22 +6540,22 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                     "HTTP/1.1 200 OK\r\n"
                     "Content-Type: application/json\r\n"
                     "Content-Length: %zu\r\n"
-                    "Connection: close\r\n%s%s",
+                    "Connection: close\r\n%s\r\n%s",
                     strlen(body), hsts, body);
-                if (rl > 0) (void)client_sock_write(c, (const uint8_t *)resp, (size_t)rl);
+                if (rl > 0) (void)cmq_client_send(c, (const uint8_t *)resp, (size_t)rl);
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 if (consumed) *consumed = hdr_end;
                 return 0;
             }
-            if (plen == 8 && memcmp(path_start, "/readyz", 8) == 0) {
+            if (plen == 7 && memcmp(path_start, "/readyz", 7) == 0) {
                 free(req);
                 int draining = (c && c->server &&
                                 cmq_atomic_load_int(&c->server->acceptor_drain,
                                                      CMQ_ATOMIC_RELAXED) != 0);
                 const char *body = draining
-                    ? "{\"status\":\"ready\"}\n"
-                    : "{\"status\":\"draining\"}\n";
-                const char *status = draining ? "200 OK" : "503 Service Unavailable";
+                    ? "{\"status\":\"draining\"}\n"
+                    : "{\"status\":\"ready\"}\n";
+                const char *status = draining ? "503 Service Unavailable" : "200 OK";
                 char resp[256];
                 int rl = snprintf(resp, sizeof(resp),
                     "HTTP/1.1 %s\r\n"
@@ -6322,7 +6563,7 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                     "Content-Length: %zu\r\n"
                     "Connection: close\r\n\r\n%s",
                     status, strlen(body), body);
-                if (rl > 0) cmq_client_send(c, (const uint8_t *)resp, (size_t)rl);
+                if (rl > 0) (void)cmq_client_send(c, (const uint8_t *)resp, (size_t)rl);
                 client_set_state(c, CMQ_CLIENT_CLOSING);
                 if (consumed) *consumed = hdr_end;
                 return 0;
@@ -6343,8 +6584,14 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                     "# TYPE cmq_messages_in_total counter\n"
                     "cmq_messages_in_total %llu\n"
                     "# HELP cmq_messages_out_total Total messages delivered\n"
-                    "# TYPE cmq_messages_out_total counter\n"
-                    "cmq_messages_out_total %llu\n",
+                     "# TYPE cmq_messages_out_total counter\n"
+                     "cmq_messages_out_total %llu\n"
+                     "# HELP cmq_messages_dropped_total Messages dropped\n"
+                     "# TYPE cmq_messages_dropped_total counter\n"
+                     "cmq_messages_dropped_total %llu\n"
+                     "# HELP cmq_publishes_rejected_total Publishes rejected\n"
+                     "# TYPE cmq_publishes_rejected_total counter\n"
+                     "cmq_publishes_rejected_total %llu\n",
                     c && c->server ?
                         (unsigned long long)cmq_atomic_load_u64(
                             &c->server->stat_connections, CMQ_ATOMIC_RELAXED) : 0ULL,
@@ -6356,7 +6603,13 @@ static int handle_ws_upgrade(cmq_client_t *c, const uint8_t *data, size_t len,
                             &c->server->stat_messages_in, CMQ_ATOMIC_RELAXED) : 0ULL,
                     c && c->server ?
                         (unsigned long long)cmq_atomic_load_u64(
-                            &c->server->stat_messages_out, CMQ_ATOMIC_RELAXED) : 0ULL);
+                            &c->server->stat_messages_out, CMQ_ATOMIC_RELAXED) : 0ULL,
+                    c && c->server ?
+                        (unsigned long long)cmq_atomic_load_u64(
+                            &c->server->stat_messages_dropped, CMQ_ATOMIC_RELAXED) : 0ULL,
+                    c && c->server ?
+                        (unsigned long long)cmq_atomic_load_u64(
+                            &c->server->stat_publishes_rejected, CMQ_ATOMIC_RELAXED) : 0ULL);
                 if (bl < 0) bl = 0;
                 if ((size_t)bl > sizeof(body) - 1) bl = sizeof(body) - 1;
                 char resp[4600];
@@ -6612,6 +6865,28 @@ static void client_read_cb(int fd, int events, void *data) {
     if (!client_route_pool_held(c)) {
         client_finish_closing(c);
         return;
+    }
+
+    /* v0.5.45: resume a non-blocking TLS handshake across wakeups.
+     * cmq_tls_read refuses to read until handshake_done is true, so
+     * we must drive the state machine on every EV_READ until the
+     * handshake completes. Once done, fall through to the normal
+     * read path. WANT_READ/WANT_WRITE (rc == 0) just means "more
+     * round-trips needed"; bail out and wait for the next wakeup. */
+    if (c->tls && !cmq_tls_handshake_done(c->tls)) {
+        int hrc = cmq_tls_handshake(c->tls);
+        if (hrc < 0) {
+            /* F13 audit: surface TLS handshake failures so operators
+             * can detect brute-force or cert rotation failures. */
+            char trace_hex[33];
+            cmq_trace_id_hex(c->trace_id, trace_hex, sizeof(trace_hex));
+            cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, trace_hex,
+                          "tls_handshake", "handshake failed");
+            client_teardown(c);
+            return;
+        }
+        if (hrc == 0) return;
+        /* rc == 1 → handshake complete; fall through to read app data. */
     }
 
     ssize_t n = client_sock_read(c, c->read_buf, sizeof(c->read_buf));
@@ -6895,16 +7170,16 @@ static void client_read_cb(int fd, int events, void *data) {
                             if (hard < 64) hard = 64;
                             plain = malloc(hard);
                             if (!plain) { client_teardown(c); return; }
-                            int n = cmq_ws_inflate_message(c->ws_msg_buf,
-                                                           c->ws_msg_len,
-                                                           plain, hard);
-                            if (n < 0) {
+                            int inflated = cmq_ws_inflate_message(c->ws_msg_buf,
+                                                                  c->ws_msg_len,
+                                                                  plain, hard);
+                            if (inflated < 0) {
                                 free(plain);
                                 client_teardown(c);
                                 return;
                             }
                             feed = plain;
-                            feed_len = (size_t)n;
+                            feed_len = (size_t)inflated;
                         }
                         int rc = cmq_parser_feed(c->parser, feed, feed_len);
                         free(plain);
@@ -7439,7 +7714,15 @@ static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
     /* v0.5.33: pick the TLS config slot matching the listen fd that
      * accepted this connection. client->tls_slot is set by accept_cb
      * via srv_find_tls_slot. Falls back to slot 0 if the index is
-     * out of range or the slot is NULL. */
+     * out of range or the slot is NULL.
+     *
+     * v0.5.45: cmq_tls_handshake returns 1 on success, 0 on
+     * WANT_READ/WANT_WRITE (still pending), -1 on error. The
+     * previous "if (rc != 0)" check destroyed the session on
+     * success too, which silently killed any handshake that
+     * completed synchronously and left a half-initialized
+     * client->tls for any handshake that needed more rounds. Only
+     * a real error (rc < 0) should destroy and reject. */
     int slot = client->tls_slot;
     if (slot < 0 || slot >= CMQ_MAX_LISTENERS) slot = 0;
     if (!srv->tls_config_slots[slot]) return 0;
@@ -7450,21 +7733,36 @@ static int client_tls_handshake(cmq_server_t *srv, cmq_client_t *client) {
         return -1;
     }
     int rc = cmq_tls_handshake(tls);
-    if (rc != 0) {
-        cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, client->trace_hex, "",
-                      "handshake");
+    if (rc < 0) {
         cmq_tls_session_destroy(tls);
         return -1;
     }
+    /* rc == 0 (pending) or rc == 1 (success) — both keep the
+     * session alive so client_read_cb can resume the handshake
+     * across wakeups via cmq_tls_handshake. */
     client->tls = tls;
     return 0;
 }
 
-/* v0.5.42: shared admit path for accept_cb and accept_thread_func.
+#if CMQ_OS_LINUX
+/* v0.5.42: admit path for accept_thread_func (Linux only, like its caller).
  * Takes ownership of client_fd. Returns 1 if the session is live. */
-static int admit_one_client(cmq_server_t *srv, int listen_fd,
-                             int client_fd, const struct sockaddr_in *addr) {
+static int admit_one_client(cmq_server_t *srv, int listener_fd,
+                             int client_fd, const struct sockaddr_storage *addr,
+                             socklen_t addrlen) {
         if (set_nonblocking(client_fd) != 0) {
+            close(client_fd);
+            return 0;
+        }
+
+        cmq_blocklist_t *bl =
+            (cmq_blocklist_t *)cmq_rch_acquire(srv->blocklist_h);
+        int denied = bl && cmq_blocklist_check_sockaddr(
+            bl, (const struct sockaddr *)addr, addrlen);
+        cmq_rch_release(srv->blocklist_h, bl);
+        if (denied) {
+            cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, NULL,
+                          "blocklist reject at accept", "");
             close(client_fd);
             return 0;
         }
@@ -7496,10 +7794,22 @@ static int admit_one_client(cmq_server_t *srv, int listen_fd,
          * over a 1-second bucket. Bucket key is the 32-bit IPv4
          * address; collisions are tolerable (worst case, an attacker
          * shares the same source address with itself). The cap is
-         * uniform across all IPs. rate_lock is per-server, initialized
+         * uniform across all IPs. The key is the address family plus raw
+         * address bytes, so IPv4 and IPv6 never collide. rate_lock is
+         * per-server, initialized
          * in cmq_server_create. */
-        if (srv->config.max_connects_per_sec > 0 && addr->sin_family == AF_INET) {
-            uint32_t ip = (uint32_t)addr->sin_addr.s_addr;
+        if (srv->config.max_connects_per_sec > 0) {
+            uint8_t addr_key[sizeof(struct sockaddr_storage)];
+            socklen_t addr_key_len;
+            int addr_key_family;
+            if (sockaddr_rate_key((const struct sockaddr *)addr, addrlen,
+                                  addr_key, &addr_key_len,
+                                  &addr_key_family) != 0) {
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1,
+                                         CMQ_ATOMIC_RELAXED);
+                close(client_fd);
+                return 0;
+            }
             int admitted_rate = 0;
             struct timespec ts_now;
             clock_gettime(CLOCK_MONOTONIC, &ts_now);
@@ -7507,8 +7817,13 @@ static int admit_one_client(cmq_server_t *srv, int listen_fd,
                               (uint64_t)ts_now.tv_nsec / 1000000ULL;
             cmq_mutex_lock(&srv->rate_lock);
             for (int i = 0; i < CMQ_RATE_LIMIT_SLOTS; i++) {
-                if (srv->rate_slots[i].ip == ip) {
-                    if (now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
+                if (sockaddr_rate_key_equal(srv->rate_slots[i].addr_key,
+                                            srv->rate_slots[i].addr_key_len,
+                                            srv->rate_slots[i].addr_key_family,
+                                            addr_key, addr_key_len,
+                                            addr_key_family)) {
+                    if (now_ms > srv->rate_slots[i].window_start_ms &&
+                        now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
                         srv->rate_slots[i].window_start_ms = now_ms;
                         srv->rate_slots[i].count = 0;
                     }
@@ -7519,8 +7834,10 @@ static int admit_one_client(cmq_server_t *srv, int listen_fd,
                     }
                     break;
                 }
-                if (srv->rate_slots[i].ip == 0) {
-                    srv->rate_slots[i].ip = ip;
+                if (srv->rate_slots[i].addr_key_len == 0) {
+                    memcpy(srv->rate_slots[i].addr_key, addr_key, addr_key_len);
+                    srv->rate_slots[i].addr_key_len = addr_key_len;
+                    srv->rate_slots[i].addr_key_family = addr_key_family;
                     srv->rate_slots[i].window_start_ms = now_ms;
                     srv->rate_slots[i].count = 1;
                     admitted_rate = 1;
@@ -7565,7 +7882,7 @@ static int admit_one_client(cmq_server_t *srv, int listen_fd,
                 return 0;
             }
             client->worker_id = idx;
-            client->tls_slot = srv_find_tls_slot(srv, listen_fd);
+            client->tls_slot = srv_find_tls_slot(srv, listener_fd);
             if (client_tls_handshake(srv, client) != 0) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
@@ -7601,11 +7918,21 @@ static int admit_one_client(cmq_server_t *srv, int listen_fd,
             }
             if (cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
                            client) != 0) {
-                w->clients_count--;
-                cmq_idmap_del(w->idmap, client->id);
+                /* Once the fd was armed, the owning thread may already have run
+                   client_teardown: it sets CLOSED before cmq_ev_del, so a
+                   confirm_armed failure always shows CLOSED here. That teardown is
+                   blocked on clients_lock and will unlink and destroy the client
+                   itself; destroying it here too is a double free. */
+                int claimed = client_state(client) == CMQ_CLIENT_CLOSED;
+                if (!claimed) {
+                    w->clients_count--;
+                    cmq_idmap_del(w->idmap, client->id);
+                }
                 cmq_mutex_unlock(&w->clients_lock);
-                cmq_client_destroy(client);
-                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                if (!claimed) {
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                }
                 return 0;
             }
             cmq_mutex_unlock(&w->clients_lock);
@@ -7618,7 +7945,7 @@ static int admit_one_client(cmq_server_t *srv, int listen_fd,
                 return 0;
             }
             client->worker_id = -1;
-            client->tls_slot = srv_find_tls_slot(srv, listen_fd);
+            client->tls_slot = srv_find_tls_slot(srv, listener_fd);
             if (client_tls_handshake(srv, client) != 0) {
                 cmq_client_destroy(client);
                 cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
@@ -7650,17 +7977,28 @@ static int admit_one_client(cmq_server_t *srv, int listen_fd,
             }
             if (cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
                            client) != 0) {
-                srv->clients_count--;
-                cmq_idmap_del(srv->idmap, client->id);
+                /* Once the fd was armed, the owning thread may already have run
+                   client_teardown: it sets CLOSED before cmq_ev_del, so a
+                   confirm_armed failure always shows CLOSED here. That teardown is
+                   blocked on clients_lock and will unlink and destroy the client
+                   itself; destroying it here too is a double free. */
+                int claimed = client_state(client) == CMQ_CLIENT_CLOSED;
+                if (!claimed) {
+                    srv->clients_count--;
+                    cmq_idmap_del(srv->idmap, client->id);
+                }
                 cmq_mutex_unlock(&srv->clients_lock);
-                cmq_client_destroy(client);
-                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                if (!claimed) {
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                }
                 return 0;
             }
             cmq_mutex_unlock(&srv->clients_lock);
         }
         return 1;
 }
+#endif
 
 static void accept_cb(int fd, int events, void *data) {
     cmq_server_t *srv = (cmq_server_t *)data;
@@ -7680,7 +8018,7 @@ static void accept_cb(int fd, int events, void *data) {
         if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
             cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
             return;
-        struct sockaddr_in addr;
+        struct sockaddr_storage addr;
         socklen_t addrlen = sizeof(addr);
         int client_fd = accept(fd, (struct sockaddr *)&addr, &addrlen);
         if (client_fd < 0) {
@@ -7694,7 +8032,263 @@ static void accept_cb(int fd, int events, void *data) {
             return;
         }
 
-        (void)admit_one_client(srv, fd, client_fd, &addr);
+        if (set_nonblocking(client_fd) != 0) {
+            close(client_fd);
+            continue;
+        }
+
+        /* F15: connection blocklist at accept_cb. Pre-handshake, so
+         * denied IPs never receive INFO/CONNACK and never burn a
+         * rate-limit slot. The CONNECT-time check stays as belt-and-
+         * suspenders for racy reloads. */
+        {
+            cmq_blocklist_t *bl = (cmq_blocklist_t *)cmq_rch_acquire(srv->blocklist_h);
+            if (bl) {
+                int denied = cmq_blocklist_check_sockaddr(
+                    bl, (const struct sockaddr *)&addr, addrlen);
+                cmq_rch_release(srv->blocklist_h, bl);
+                if (denied) {
+                    cmq_audit_log(CMQ_AUDIT_RATE_LIMIT_REJECT, NULL,
+                                  "blocklist reject at accept", "");
+                    close(client_fd);
+                    continue;
+                }
+            }
+        }
+
+        if (srv->config.max_clients > 0) {
+            /* CAS so concurrent accepts cannot overshoot max_clients. */
+            uint32_t max = (uint32_t)srv->config.max_clients;
+            uint32_t cur = cmq_atomic_load_u32(&srv->active_clients,
+                                                CMQ_ATOMIC_SEQ_CST);
+            int admitted = 0;
+            for (;;) {
+                if (cur >= max)
+                    break;
+                if (cmq_atomic_cas_u32(&srv->active_clients, &cur, cur + 1,
+                                        CMQ_ATOMIC_SEQ_CST)) {
+                    admitted = 1;
+                    break;
+                }
+            }
+            if (!admitted) {
+                close(client_fd);
+                continue;
+            }
+        } else {
+            cmq_atomic_fetch_add_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+        }
+
+        /* F10: per-IP connect rate limit. Fixed-window counter over a
+         * 1-second bucket keyed by address family and raw address bytes. */
+        if (srv->config.max_connects_per_sec > 0) {
+            uint8_t addr_key[sizeof(struct sockaddr_storage)];
+            socklen_t addr_key_len;
+            int addr_key_family;
+            if (sockaddr_rate_key((const struct sockaddr *)&addr, addrlen,
+                                  addr_key, &addr_key_len,
+                                  &addr_key_family) != 0) {
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1,
+                                         CMQ_ATOMIC_RELAXED);
+                close(client_fd);
+                continue;
+            }
+            int admitted_rate = 0;
+            struct timespec ts_now;
+            clock_gettime(CLOCK_MONOTONIC, &ts_now);
+            uint64_t now_ms = (uint64_t)ts_now.tv_sec * 1000ULL +
+                              (uint64_t)ts_now.tv_nsec / 1000000ULL;
+            cmq_mutex_lock(&srv->rate_lock);
+            for (int i = 0; i < CMQ_RATE_LIMIT_SLOTS; i++) {
+                if (sockaddr_rate_key_equal(srv->rate_slots[i].addr_key,
+                                            srv->rate_slots[i].addr_key_len,
+                                            srv->rate_slots[i].addr_key_family,
+                                            addr_key, addr_key_len,
+                                            addr_key_family)) {
+                    if (now_ms > srv->rate_slots[i].window_start_ms &&
+                        now_ms - srv->rate_slots[i].window_start_ms >= 1000) {
+                        srv->rate_slots[i].window_start_ms = now_ms;
+                        srv->rate_slots[i].count = 0;
+                    }
+                    if ((int)srv->rate_slots[i].count <
+                        srv->config.max_connects_per_sec) {
+                        srv->rate_slots[i].count++;
+                        admitted_rate = 1;
+                    }
+                    break;
+                }
+                if (srv->rate_slots[i].addr_key_len == 0) {
+                    memcpy(srv->rate_slots[i].addr_key, addr_key, addr_key_len);
+                    srv->rate_slots[i].addr_key_len = addr_key_len;
+                    srv->rate_slots[i].addr_key_family = addr_key_family;
+                    srv->rate_slots[i].window_start_ms = now_ms;
+                    srv->rate_slots[i].count = 1;
+                    admitted_rate = 1;
+                    break;
+                }
+            }
+            cmq_mutex_unlock(&srv->rate_lock);
+            if (!admitted_rate) {
+                cmq_atomic_fetch_add_u32(&srv->active_clients, -1,
+                                          CMQ_ATOMIC_RELAXED);
+                close(client_fd);
+                continue;
+            }
+        }
+
+        uint32_t cid = 0;
+        for (int id_try = 0; id_try < 16; id_try++) {
+            uint32_t cand = cmq_atomic_fetch_add_u32(&srv->next_client_id, 1,
+                                                      CMQ_ATOMIC_SEQ_CST);
+            /* 0 = empty slot; UINT32_MAX = tombstone — never assign as client id. */
+            if (cand != 0 && cand != CMQ_IDMAP_TOMB) {
+                cid = cand;
+                break;
+            }
+        }
+        if (cid == 0) {
+            close(client_fd);
+            cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+            continue;
+        }
+
+        if (srv->workers && srv->num_workers > 0) {
+            uint32_t wi = cmq_atomic_fetch_add_u32(&srv->next_worker, 1,
+                                                    CMQ_ATOMIC_RELAXED);
+            int idx = (int)(wi % (uint32_t)srv->num_workers);
+            cmq_worker_t *w = &srv->workers[idx];
+            cmq_client_t *client = cmq_client_create(client_fd, cid,
+                                                        w->ev_loop, srv);
+            if (!client) {
+                close(client_fd);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            client->worker_id = idx;
+            client->tls_slot = srv_find_tls_slot(srv, fd);
+            if (client_tls_handshake(srv, client) != 0) {
+                /* F13 audit: surface TLS handshake failures at accept
+                 * so operators can detect brute-force or cert rotation
+                 * failures. The same path is also wired into
+                 * client_read_cb for failures that surface after
+                 * more bytes arrive. */
+                char trace_hex[33];
+                cmq_trace_id_hex(client->trace_id, trace_hex,
+                                  sizeof(trace_hex));
+                cmq_audit_log(CMQ_AUDIT_TLS_HANDSHAKE_FAIL, trace_hex,
+                              "tls_handshake", "handshake failed");
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            /* stop()/drain may race during TLS handshake — reject late admits. */
+            if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+                cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+
+            /* Hold clients_lock through idmap publish + ev_add so TEARDOWN /
+               keepalive cannot destroy the client mid-accept (they need the
+               same lock). epoll_ctl does not invoke callbacks. */
+            cmq_mutex_lock(&w->clients_lock);
+            if (w->clients_count >= w->clients_cap) {
+                if (clients_array_grow(&w->clients, &w->clients_cap) != 0) {
+                    cmq_mutex_unlock(&w->clients_lock);
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                    continue;
+                }
+            }
+            w->clients[w->clients_count++] = client;
+            if (cmq_idmap_put(w->idmap, client->id, client) != 0) {
+                w->clients_count--;
+                cmq_mutex_unlock(&w->clients_lock);
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            if (cmq_ev_add(w->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
+                           client) != 0) {
+                /* Once the fd was armed, the owning thread may already have run
+                   client_teardown: it sets CLOSED before cmq_ev_del, so a
+                   confirm_armed failure always shows CLOSED here. That teardown is
+                   blocked on clients_lock and will unlink and destroy the client
+                   itself; destroying it here too is a double free. */
+                int claimed = client_state(client) == CMQ_CLIENT_CLOSED;
+                if (!claimed) {
+                    w->clients_count--;
+                    cmq_idmap_del(w->idmap, client->id);
+                }
+                cmq_mutex_unlock(&w->clients_lock);
+                if (!claimed) {
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                }
+                continue;
+            }
+            cmq_mutex_unlock(&w->clients_lock);
+        } else {
+            cmq_client_t *client = cmq_client_create(client_fd, cid,
+                                                        srv->ev_loop, srv);
+            if (!client) {
+                close(client_fd);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            client->worker_id = -1;
+            client->tls_slot = srv_find_tls_slot(srv, fd);
+            if (client_tls_handshake(srv, client) != 0) {
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
+                cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE)) {
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+
+            cmq_mutex_lock(&srv->clients_lock);
+            if (srv->clients_count >= srv->clients_cap) {
+                if (clients_array_grow(&srv->clients, &srv->clients_cap) != 0) {
+                    cmq_mutex_unlock(&srv->clients_lock);
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                    continue;
+                }
+            }
+            srv->clients[srv->clients_count++] = client;
+            if (cmq_idmap_put(srv->idmap, client->id, client) != 0) {
+                srv->clients_count--;
+                cmq_mutex_unlock(&srv->clients_lock);
+                cmq_client_destroy(client);
+                cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                continue;
+            }
+            if (cmq_ev_add(srv->ev_loop, client_fd, CMQ_EV_READ, client_read_cb,
+                           client) != 0) {
+                /* Once the fd was armed, the owning thread may already have run
+                   client_teardown: it sets CLOSED before cmq_ev_del, so a
+                   confirm_armed failure always shows CLOSED here. That teardown is
+                   blocked on clients_lock and will unlink and destroy the client
+                   itself; destroying it here too is a double free. */
+                int claimed = client_state(client) == CMQ_CLIENT_CLOSED;
+                if (!claimed) {
+                    srv->clients_count--;
+                    cmq_idmap_del(srv->idmap, client->id);
+                }
+                cmq_mutex_unlock(&srv->clients_lock);
+                if (!claimed) {
+                    cmq_client_destroy(client);
+                    cmq_atomic_fetch_sub_u32(&srv->active_clients, 1, CMQ_ATOMIC_RELAXED);
+                }
+                continue;
+            }
+            cmq_mutex_unlock(&srv->clients_lock);
+        }
     }
 }
 
@@ -7702,21 +8296,72 @@ const char *cmq_version(void) {
     return CMQ_VERSION_STRING;
 }
 
-/* P3: F18 subscription-recovery callback. Re-inserts each persisted
- * SUB record into the sublist as a "ghost" reference (client=NULL).
- * The ref is owned by the sublist and freed via cmq_sublist_free_data
- * during destroy. No live client means messages match the pattern
- * but get no delivery target — see ADR 0012-persistent-subs-wal.md. */
+/* P3: F18 subscription recovery callback. Replays persisted state as
+ * server-owned ghost references while preserving final WAL state. */
+typedef struct cmq_sub_recovery_entry {
+    uint64_t sub_id;
+    cmq_sub_ref_t *ref;
+    struct cmq_sub_recovery_entry *next;
+} cmq_sub_recovery_entry_t;
+
+typedef struct {
+    cmq_server_t *srv;
+    cmq_sub_recovery_entry_t *entries;
+} cmq_sub_recovery_ctx_t;
+
+static cmq_sub_recovery_entry_t *cmq_sub_recovery_find(
+    cmq_sub_recovery_ctx_t *ctx, uint64_t sub_id,
+    cmq_sub_recovery_entry_t **prev_out) {
+    cmq_sub_recovery_entry_t *prev = NULL;
+    cmq_sub_recovery_entry_t *entry = ctx->entries;
+    while (entry) {
+        if (entry->sub_id == sub_id) {
+            if (prev_out) *prev_out = prev;
+            return entry;
+        }
+        prev = entry;
+        entry = entry->next;
+    }
+    if (prev_out) *prev_out = NULL;
+    return NULL;
+}
+
+/* F18 recovery replays the WAL in order. Track recovered refs by sub_id so
+ * an UNSUBSCRIBE removes the ghost created by its earlier SUBSCRIBE. */
 static int cmq_sublist_recover_cb(void *ctx, int is_sub,
-                                    uint64_t sub_id,
-                                    const char *subject,
-                                    const char *account) {
-    cmq_server_t *srv = (cmq_server_t *)ctx;
+                                  uint64_t sub_id,
+                                  const char *subject,
+                                  const char *account) {
+    cmq_sub_recovery_ctx_t *recovery = (cmq_sub_recovery_ctx_t *)ctx;
+    cmq_server_t *srv = recovery->srv;
+    cmq_sub_recovery_entry_t *prev = NULL;
+    cmq_sub_recovery_entry_t *entry = cmq_sub_recovery_find(recovery, sub_id,
+                                                             &prev);
     if (!is_sub) {
-        /* UNSUB during recovery: nothing to do (no live subs). */
+        if (entry) {
+            if (cmq_sublist_remove(srv->sublist, entry->ref->subject,
+                                   entry->ref) != 0)
+                return -1;
+            free(entry->ref);
+            if (prev) prev->next = entry->next;
+            else recovery->entries = entry->next;
+            free(entry);
+        }
         return 0;
     }
     (void)account;
+    if (!subject || strnlen(subject, CMQ_MAX_SUBJECT) >= CMQ_MAX_SUBJECT ||
+        cmq_sublist_subject_valid(subject) != 0)
+        return -1;
+    if (entry) {
+        if (cmq_sublist_remove(srv->sublist, entry->ref->subject,
+                               entry->ref) != 0)
+            return -1;
+        free(entry->ref);
+        if (prev) prev->next = entry->next;
+        else recovery->entries = entry->next;
+        free(entry);
+    }
     cmq_sub_ref_t *ref = calloc(1, sizeof(*ref));
     if (!ref) return -1;
     ref->client = NULL;
@@ -7726,7 +8371,42 @@ static int cmq_sublist_recover_cb(void *ctx, int is_sub,
         free(ref);
         return -1;
     }
+    entry = calloc(1, sizeof(*entry));
+    if (!entry) {
+        if (cmq_sublist_remove(srv->sublist, subject, ref) == 0)
+            free(ref);
+        return -1;
+    }
+    entry->sub_id = sub_id;
+    entry->ref = ref;
+    entry->next = recovery->entries;
+    recovery->entries = entry;
     return 0;
+}
+
+static int cmq_sublist_recover_load(cmq_server_t *srv) {
+    cmq_sub_recovery_ctx_t recovery = { .srv = srv, .entries = NULL };
+    int n = cmq_sublist_persist_load(srv->persist,
+                                     cmq_sublist_recover_cb, &recovery);
+    while (recovery.entries) {
+        cmq_sub_recovery_entry_t *entry = recovery.entries;
+        recovery.entries = entry->next;
+        free(entry);
+    }
+    return n;
+}
+
+static int cmq_sublist_recover_reload_load(cmq_server_t *srv, int *loaded) {
+    cmq_sub_recovery_ctx_t recovery = { .srv = srv, .entries = NULL };
+    int rc = cmq_sublist_persist_reload_load(srv->persist, loaded,
+                                             cmq_sublist_recover_cb,
+                                             &recovery);
+    while (recovery.entries) {
+        cmq_sub_recovery_entry_t *entry = recovery.entries;
+        recovery.entries = entry->next;
+        free(entry);
+    }
+    return rc;
 }
 
 /* P1: replay one WAL record through handle_publish. Extracted so
@@ -7804,6 +8484,11 @@ static void replay_one_record(cmq_server_t *srv, uint8_t *data,
     uint64_t out_before = cmq_atomic_load_u64(
         &srv->stat_messages_out, CMQ_ATOMIC_RELAXED);
     handle_publish(srv, &replay_c, &rf);
+    /* replay_c lives on the stack, so cmq_client_destroy cannot be used;
+     * release the only heap buffer handle_publish may have attached
+     * (an error reply queued by cmq_send_error). */
+    free(replay_c.write_buf);
+    replay_c.write_buf = NULL;
     uint64_t out_after = cmq_atomic_load_u64(
         &srv->stat_messages_out, CMQ_ATOMIC_RELAXED);
     if (out_after == out_before) {
@@ -7822,17 +8507,20 @@ typedef struct {
 
 /* v0.5.42: aux accept thread. Parallel accept() on every listen
  * fd; admit via the same helper as accept_cb. Waits for running=1
- * so workers exist, then loops until stop/drain. */
+ * so workers exist, then loops until stop/drain. Built on epoll, so it
+ * exists on Linux only; elsewhere the event-loop thread accepts alone. */
+#if CMQ_OS_LINUX
 static void *accept_thread_func(void *arg) {
     cmq_server_t *srv = (cmq_server_t *)arg;
     int efd = epoll_create1(0);
     if (efd < 0) return NULL;
     for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
-        if (srv->listen_fds[i] >= 0) {
+        int lfd = __atomic_load_n(&srv->listen_fds[i], __ATOMIC_ACQUIRE);
+        if (lfd >= 0) {
             struct epoll_event ev = {0};
             ev.events = EPOLLIN;
-            ev.data.fd = srv->listen_fds[i];
-            (void)epoll_ctl(efd, EPOLL_CTL_ADD, srv->listen_fds[i], &ev);
+            ev.data.fd = lfd;
+            (void)epoll_ctl(efd, EPOLL_CTL_ADD, lfd, &ev);
         }
     }
     while (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) &&
@@ -7853,7 +8541,7 @@ static void *accept_thread_func(void *arg) {
                 if (!cmq_atomic_load_int(&srv->running, CMQ_ATOMIC_ACQUIRE) ||
                     cmq_atomic_load_int(&srv->acceptor_drain, CMQ_ATOMIC_ACQUIRE))
                     break;
-                struct sockaddr_in addr;
+                struct sockaddr_storage addr;
                 socklen_t addrlen = sizeof(addr);
                 int client_fd = accept(lfd,
                     (struct sockaddr *)&addr, &addrlen);
@@ -7867,7 +8555,7 @@ static void *accept_thread_func(void *arg) {
                     close(client_fd);
                     continue;
                 }
-                if (admit_one_client(srv, lfd, client_fd, &addr) == 1) {
+                if (admit_one_client(srv, lfd, client_fd, &addr, addrlen) == 1) {
                     cmq_atomic_fetch_add_u64(&srv->stat_accept_aux, 1,
                                               CMQ_ATOMIC_RELAXED);
                 }
@@ -7877,6 +8565,7 @@ static void *accept_thread_func(void *arg) {
     close(efd);
     return NULL;
 }
+#endif
 
 static void *replay_worker(void *arg) {
     replay_worker_ctx_t *ctx = (replay_worker_ctx_t *)arg;
@@ -7906,6 +8595,7 @@ static void *replay_worker(void *arg) {
 cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config) {
     if (!server) return CMQ_ERR_INVALID_ARG;
 
+    cmq_trace_warmup();
     cmq_server_t *srv = calloc(1, sizeof(cmq_server_t));
     if (!srv) return CMQ_ERR_NO_MEMORY;
     srv->h2_lfd = -1;
@@ -7916,6 +8606,7 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     /* Copy scalars; strings are duplicated below so server owns them. */
     srv->config = src;
     srv->config.host = NULL;
+    srv->config.info_go = NULL;
     srv->config.config_file = NULL;
     srv->config.log_file = NULL;
     srv->config.auth_username = NULL;
@@ -7939,20 +8630,18 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     srv->config.acl_allow = NULL;
     srv->config.acl_deny = NULL;
     srv->config.blocklist_file = NULL;
-    srv->config.persist_dir = NULL;
     srv->config.mqtt_bridge_addr = NULL;
-    srv->config.mqtt_bridge_map_count = 0;
-    for (int i = 0; i < 8; i++) {
-        srv->config.mqtt_bridge_maps[i].cmq_subject = NULL;
-        srv->config.mqtt_bridge_maps[i].mqtt_topic = NULL;
-        srv->config.mqtt_bridge_maps[i].qos = 0;
-    }
+    srv->config.mqtt_bridge_username = NULL;
+    srv->config.mqtt_bridge_password = NULL;
     for (int i = 0; i < 4; i++) {
         srv->config.listeners[i].tls_cert = NULL;
         srv->config.listeners[i].tls_key = NULL;
         srv->config.listeners[i].tls_ca = NULL;
+        srv->config.listeners[i].tls_crl = NULL;
         srv->config.listeners[i].host = NULL;
     }
+    srv->config.persist_dir = NULL;
+    srv->config.audit_path = NULL;
     srv->config.route_count = 0;
     for (int i = 0; i < 8; i++) {
         srv->config.routes[i].addr = NULL;
@@ -7962,6 +8651,12 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     const char *host_src = src.host ? src.host : CMQ_DEFAULT_HOST;
     srv->config.host = strdup(host_src);
     if (!srv->config.host) {
+        free(srv);
+        return CMQ_ERR_NO_MEMORY;
+    }
+    srv->config.info_go = strdup(src.info_go ? src.info_go : "20m");
+    if (!srv->config.info_go) {
+        cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_NO_MEMORY;
     }
@@ -7994,28 +8689,18 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     OWN(srv->config.acl_allow, src.acl_allow);
     OWN(srv->config.acl_deny, src.acl_deny);
     OWN(srv->config.blocklist_file, src.blocklist_file);
-    OWN(srv->config.persist_dir, src.persist_dir);
     OWN(srv->config.mqtt_bridge_addr, src.mqtt_bridge_addr);
-    if (src.mqtt_bridge_map_count < 0 || src.mqtt_bridge_map_count > 8) {
-        cmq_config_free(&srv->config);
-        free(srv);
-        return CMQ_ERR_INVALID_ARG;
-    }
-    srv->config.mqtt_bridge_map_count = 0;
-    for (int i = 0; i < src.mqtt_bridge_map_count; i++) {
-        OWN(srv->config.mqtt_bridge_maps[i].cmq_subject,
-            src.mqtt_bridge_maps[i].cmq_subject);
-        OWN(srv->config.mqtt_bridge_maps[i].mqtt_topic,
-            src.mqtt_bridge_maps[i].mqtt_topic);
-        srv->config.mqtt_bridge_maps[i].qos = src.mqtt_bridge_maps[i].qos;
-        srv->config.mqtt_bridge_map_count++;
-    }
+    OWN(srv->config.mqtt_bridge_username, src.mqtt_bridge_username);
+    OWN(srv->config.mqtt_bridge_password, src.mqtt_bridge_password);
     for (int i = 0; i < 4; i++) {
         OWN(srv->config.listeners[i].tls_cert, src.listeners[i].tls_cert);
         OWN(srv->config.listeners[i].tls_key, src.listeners[i].tls_key);
         OWN(srv->config.listeners[i].tls_ca, src.listeners[i].tls_ca);
+        OWN(srv->config.listeners[i].tls_crl, src.listeners[i].tls_crl);
         OWN(srv->config.listeners[i].host, src.listeners[i].host);
     }
+    OWN(srv->config.persist_dir, src.persist_dir);
+    OWN(srv->config.audit_path, src.audit_path);
 #undef OWN
     /* Fail closed before copy — truncating/skipping would hide invalid
        programmatic configs from cmq_config_validate. */
@@ -8061,14 +8746,17 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         srv->listen_fds[i] = -1;
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
     cmq_atomic_store_int(&srv->run_active, 0, CMQ_ATOMIC_SEQ_CST);
+    cmq_atomic_store_int(&srv->stop_requested, 0, CMQ_ATOMIC_SEQ_CST);
 
     cmq_mutex_init(&srv->clients_lock);
     cmq_mutex_init(&srv->rate_lock);
+    cmq_mutex_init(&srv->auth_rate_lock);
 
     srv->sublist = cmq_sublist_create();
     if (!srv->sublist) {
         cmq_mutex_destroy(&srv->clients_lock);
         cmq_mutex_destroy(&srv->rate_lock);
+        cmq_mutex_destroy(&srv->auth_rate_lock);
         cmq_config_free(&srv->config);
         free(srv);
         return CMQ_ERR_NO_MEMORY;
@@ -8175,11 +8863,18 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         if (srv->config.tls_ca) {
             cmq_tls_set_ca(srv->tls_config_slots[0], srv->config.tls_ca);
         }
+        /* v0.5.47: CRL revocation list. NULL disables; loaded into
+         * the SSL_CTX's X509_STORE at cmq_tls_load time. */
+        if (srv->config.tls_crl) {
+            cmq_tls_set_crl(srv->tls_config_slots[0], srv->config.tls_crl);
+        }
         if (srv->config.tls_verify_peer) {
             cmq_tls_set_verify(srv->tls_config_slots[0], 1);
         }
-        if (srv->config.h2_port > 0)
-            (void)cmq_tls_set_alpn(srv->tls_config_slots[0], "h2");
+        /* v0.5.94: optionally disable session tickets. */
+        if (srv->config.tls_no_tickets) {
+            cmq_tls_set_no_tickets(srv->tls_config_slots[0], 1);
+        }
         if (cmq_tls_load(srv->tls_config_slots[0]) != 0) {
             cmq_log_error(srv->log,
                 "TLS cert/key load failed — refusing plaintext");
@@ -8219,11 +8914,20 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
         if (ca && ca[0] != '\0') {
             cmq_tls_set_ca(srv->tls_config_slots[li], ca);
         }
+        /* v0.5.47: per-listener CRL. NULL disables. */
+        const char *crl = srv->config.listeners[li].tls_crl;
+        if (crl && crl[0] != '\0') {
+            cmq_tls_set_crl(srv->tls_config_slots[li], crl);
+        }
         if (srv->config.listeners[li].tls_verify_peer) {
             cmq_tls_set_verify(srv->tls_config_slots[li], 1);
         }
-        if (srv->config.h2_port > 0)
-            (void)cmq_tls_set_alpn(srv->tls_config_slots[li], "h2");
+        /* v0.5.96: per-listener tls_no_tickets wiring. Mirrors the
+         * slot 0 wiring added in v0.5.94. Without this the field
+         * would silently no-op on slots 1-3. */
+        if (srv->config.listeners[li].tls_no_tickets) {
+            cmq_tls_set_no_tickets(srv->tls_config_slots[li], 1);
+        }
         if (cmq_tls_load(srv->tls_config_slots[li]) != 0) {
             cmq_log_warn(srv->log,
                 "v0.5.31: tls slot %d load failed; listener falls back to slot 0",
@@ -8257,7 +8961,9 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
                 srv->config.persist_sync_interval_ms);
         }
         cmq_log_info(srv->log, "Persistence enabled: dir=%s", srv->config.persist_dir);
-        if (cmq_audit_from_persist(srv->config.persist_dir) != 0)
+    if ((srv->config.audit_path && srv->config.audit_path[0]
+             ? cmq_audit_reload_path(srv->config.audit_path)
+             : cmq_audit_from_persist(srv->config.persist_dir)) != 0)
             cmq_log_error(srv->log, "audit file path rejected");
         /* F18: also open the subscription persistence file. */
         srv->persist = cmq_sublist_persist_open(srv->config.persist_dir);
@@ -8316,20 +9022,25 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
             }
             cmq_log_info(srv->log, "WAL replay complete: %llu records",
                          (unsigned long long)last);
-            {
-                char det[64];
-                snprintf(det, sizeof(det), "replay %llu",
-                         (unsigned long long)last);
-                cmq_audit_log(CMQ_AUDIT_PERSIST_RECOVER, NULL, "", det);
-            }
+            /* F13 audit: signal durable-storage recovery so operators
+             * can correlate a duplicate-delivery burst with a known
+             * recovery event rather than chasing a phantom bug. */
+            cmq_audit_log(CMQ_AUDIT_PERSIST_RECOVER, NULL,
+                          "wal_replay", "wal replay complete");
         }
         /* F18 P3: restore persisted subscriptions before accepting clients.
          * Each record becomes a subject pattern in the sublist — no live
          * client, but matching publishes can land in any active subscriber
          * (the "cluster" or a re-connecting client that re-subscribes). */
         if (srv->persist) {
-            int n = cmq_sublist_persist_load(srv->persist,
-                                              cmq_sublist_recover_cb, srv);
+            int n = cmq_sublist_recover_load(srv);
+            if (n < 0) {
+                cmq_log_error(srv->log,
+                              "Subscription persist recovery failed");
+                cmq_server_destroy(srv);
+                *server = NULL;
+                return CMQ_ERR_INVALID_ARG;
+            }
             cmq_log_info(srv->log,
                 "Subscription persist loaded: %d entries", n);
         }
@@ -8475,9 +9186,13 @@ cmq_status_t cmq_server_create(cmq_server_t **server, const cmq_config_t *config
     if (srv->config.mqtt_bridge_addr && srv->config.mqtt_bridge_port > 0) {
         srv->mqtt_bridge = cmq_mqtt_bridge_create("cmsgbridge");
         if (srv->mqtt_bridge) {
-            if (cmq_mqtt_bridge_connect(srv->mqtt_bridge,
+            (void)cmq_mqtt_bridge_set_forward_all(srv->mqtt_bridge,
+                                                  srv->config.mqtt_bridge_forward_all);
+            if (cmq_mqtt_bridge_connect_auth(srv->mqtt_bridge,
                                           srv->config.mqtt_bridge_addr,
-                                          srv->config.mqtt_bridge_port) != 0) {
+                                          srv->config.mqtt_bridge_port,
+                                          srv->config.mqtt_bridge_username,
+                                          srv->config.mqtt_bridge_password) != 0) {
                 cmq_log_warn(srv->log,
                     "MQTT bridge connect failed; bridge disabled");
                 cmq_mqtt_bridge_destroy(srv->mqtt_bridge);
@@ -8542,7 +9257,11 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
     if (srv->listen_fds[0] >= 0 || srv->ev_loop || srv->workers)
         return CMQ_ERR_INVALID_ARG;
 
-    srv->listen_fds[0] = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_storage addr;
+    socklen_t addrlen;
+    int family = strchr(srv->config.host ? srv->config.host : "", ':')
+                     ? AF_INET6 : AF_INET;
+    srv->listen_fds[0] = socket(family, SOCK_STREAM, 0);
     if (srv->listen_fds[0] < 0) return CMQ_ERR_IO;
 
     int opt = 1;
@@ -8554,18 +9273,32 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         return CMQ_ERR_IO;
     }
 
-    struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)srv->config.port);
-    if (!srv->config.host ||
-        inet_pton(AF_INET, srv->config.host, &addr.sin_addr) != 1) {
-        close(srv->listen_fds[0]);
-        srv->listen_fds[0] = -1;
-        return CMQ_ERR_INVALID_ARG;
+    if (family == AF_INET6) {
+        struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&addr;
+        addr6->sin6_family = AF_INET6;
+        addr6->sin6_port = htons((uint16_t)srv->config.port);
+        if (!srv->config.host ||
+            inet_pton(AF_INET6, srv->config.host, &addr6->sin6_addr) != 1) {
+            close(srv->listen_fds[0]);
+            srv->listen_fds[0] = -1;
+            return CMQ_ERR_INVALID_ARG;
+        }
+        addrlen = sizeof(*addr6);
+    } else {
+        struct sockaddr_in *addr4 = (struct sockaddr_in *)&addr;
+        addr4->sin_family = AF_INET;
+        addr4->sin_port = htons((uint16_t)srv->config.port);
+        if (!srv->config.host ||
+            inet_pton(AF_INET, srv->config.host, &addr4->sin_addr) != 1) {
+            close(srv->listen_fds[0]);
+            srv->listen_fds[0] = -1;
+            return CMQ_ERR_INVALID_ARG;
+        }
+        addrlen = sizeof(*addr4);
     }
 
-    if (bind(srv->listen_fds[0], (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+    if (bind(srv->listen_fds[0], (struct sockaddr *)&addr, addrlen) != 0) {
         close(srv->listen_fds[0]);
         srv->listen_fds[0] = -1;
         return CMQ_ERR_IO;
@@ -8577,8 +9310,10 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         return CMQ_ERR_IO;
     }
 
-    srv->ev_loop = cmq_ev_loop_create(1024);
-    if (!srv->ev_loop) {
+    cmq_ev_loop_t *new_loop = cmq_ev_loop_create(1024);
+    /* cmq_server_stop / cmq_server_destroy read ev_loop from other threads. */
+    __atomic_store_n(&srv->ev_loop, new_loop, __ATOMIC_SEQ_CST);
+    if (!new_loop) {
         close(srv->listen_fds[0]);
         srv->listen_fds[0] = -1;
         return CMQ_ERR_NO_MEMORY;
@@ -8598,28 +9333,37 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         (srv->config.port < 28800 || srv->config.port > 28999) &&
         (srv->config.port < 18800 || srv->config.port > 18999)) {
         for (int li = 1; li < srv->config.listener_count && li < CMQ_MAX_LISTENERS; li++) {
-            int s = socket(AF_INET, SOCK_STREAM, 0);
+            const char *lh = srv->config.listeners[li].host;
+            if (!lh || !lh[0]) lh = "127.0.0.1";
+            int secondary_family = strchr(lh, ':') ? AF_INET6 : AF_INET;
+            int s = socket(secondary_family, SOCK_STREAM, 0);
             if (s < 0) continue;
             setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-            struct sockaddr_in laddr;
+            struct sockaddr_storage laddr;
+            socklen_t laddr_len;
             memset(&laddr, 0, sizeof(laddr));
-            laddr.sin_family = AF_INET;
-            {
-                int lp = srv->config.listeners[li].port;
-                if (lp <= 0)
-                    lp = srv->config.port + li;
-                laddr.sin_port = htons((uint16_t)lp);
-            }
-            {
-                const char *lh = srv->config.listeners[li].host;
-                if (!lh || !lh[0])
-                    lh = "127.0.0.1";
-                if (inet_pton(AF_INET, lh, &laddr.sin_addr) != 1) {
+            int lp = srv->config.listeners[li].port;
+            if (lp <= 0) lp = srv->config.port + li;
+            if (secondary_family == AF_INET6) {
+                struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)&laddr;
+                a6->sin6_family = AF_INET6;
+                a6->sin6_port = htons((uint16_t)lp);
+                if (inet_pton(AF_INET6, lh, &a6->sin6_addr) != 1) {
                     close(s);
                     continue;
                 }
+                laddr_len = sizeof(*a6);
+            } else {
+                struct sockaddr_in *a4 = (struct sockaddr_in *)&laddr;
+                a4->sin_family = AF_INET;
+                a4->sin_port = htons((uint16_t)lp);
+                if (inet_pton(AF_INET, lh, &a4->sin_addr) != 1) {
+                    close(s);
+                    continue;
+                }
+                laddr_len = sizeof(*a4);
             }
-            if (bind(s, (struct sockaddr *)&laddr, sizeof(laddr)) != 0 ||
+            if (bind(s, (struct sockaddr *)&laddr, laddr_len) != 0 ||
                 listen(s, 512) != 0) {
                 close(s);
                 continue;
@@ -8803,10 +9547,12 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         }
         srv->workers_joinable = nthreads;
         cmq_log_info(srv->log, "CMQ server started with %d worker threads", nthreads);
+#if CMQ_OS_LINUX
         if (cmq_thread_create(&srv->accept_thr, accept_thread_func, srv) == 0) {
             srv->accept_thr_started = 1;
             cmq_log_info(srv->log, "v0.5.42: aux accept thread started");
         }
+#endif
     }
 
     cmq_atomic_store_int(&srv->running, 1, CMQ_ATOMIC_SEQ_CST);
@@ -8840,6 +9586,12 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
             cmq_log_warn(srv->log, "Route reconnect thread failed to start");
     }
 
+    /* A stop() that ran before the loop existed or before run_active was set
+       could not reach us. It left stop_requested behind; both sides use
+       seq_cst, so either stop() saw the loop/run_active or we see its flag. */
+    if (cmq_atomic_load_int(&srv->stop_requested, CMQ_ATOMIC_SEQ_CST))
+        cmq_ev_stop(srv->ev_loop);
+
     cmq_ev_run(srv->ev_loop, -1);
 
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
@@ -8861,10 +9613,11 @@ cmq_status_t cmq_server_run(cmq_server_t *srv) {
         }
     }
 
-    /* Free the bind port; ev_loop/workers stay until destroy (clients still use them). */
-    if (srv->listen_fds[0] >= 0) {
-        close(srv->listen_fds[0]);
-        srv->listen_fds[0] = -1;
+    /* Free the bind ports; ev_loop/workers stay until destroy (clients still
+       use them). Exchange so a concurrent stop()/drain() closes each fd once. */
+    for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
+        int lfd = __atomic_exchange_n(&srv->listen_fds[i], -1, __ATOMIC_ACQ_REL);
+        if (lfd >= 0) close(lfd);
     }
 
     cmq_atomic_store_int(&srv->run_active, 0, CMQ_ATOMIC_RELEASE);
@@ -8986,7 +9739,9 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
     if (fresh.persist_dir && server->filestore) {
         cmq_log_info(server->log, "Persist dir reload: %s", fresh.persist_dir);
     }
-    if (cmq_audit_reload_persist(fresh.persist_dir) != 0) {
+    if ((fresh.audit_path && fresh.audit_path[0]
+             ? cmq_audit_reload_path(fresh.audit_path)
+             : cmq_audit_reload_persist(fresh.persist_dir)) != 0) {
         cmq_config_free(&fresh);
         return -1;
     }
@@ -9014,10 +9769,7 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         }
         if (server->persist && !persist_was) {
             int loaded = 0;
-            if (cmq_sublist_persist_reload_load(server->persist,
-                                                &loaded,
-                                                cmq_sublist_recover_cb,
-                                                server) != 0) {
+            if (cmq_sublist_recover_reload_load(server, &loaded) != 0) {
                 cmq_config_free(&fresh);
                 return -1;
             }
@@ -9073,7 +9825,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
-    if (cmq_reload_apply_limits(&server->config, &fresh) != 0) {
+    cmq_mutex_lock(&server->auth_rate_lock);
+    int limits_rc = cmq_reload_apply_limits(&server->config, &fresh);
+    cmq_mutex_unlock(&server->auth_rate_lock);
+    if (limits_rc != 0) {
         cmq_config_free(&fresh);
         return -1;
     }
@@ -9128,13 +9883,28 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         if (cmq_mqtt_reload_attach(&server->mqtt_bridge,
                                    &server->config.mqtt_bridge_addr,
                                    &server->config.mqtt_bridge_port,
+                                   &server->config.mqtt_bridge_username,
+                                   &server->config.mqtt_bridge_password,
                                    fresh.mqtt_bridge_addr,
-                                   fresh.mqtt_bridge_port) != 0) {
+                                   fresh.mqtt_bridge_port,
+                                   fresh.mqtt_bridge_username,
+                                   fresh.mqtt_bridge_password) != 0) {
             cmq_config_free(&fresh);
             return -1;
         }
+        if (server->mqtt_bridge)
+            (void)cmq_mqtt_bridge_set_forward_all(
+                server->mqtt_bridge,
+                fresh.mqtt_bridge_forward_all_set
+                    ? fresh.mqtt_bridge_forward_all
+                    : server->config.mqtt_bridge_forward_all);
     }
+    if (fresh.mqtt_bridge_forward_all_set)
+        server->config.mqtt_bridge_forward_all =
+            fresh.mqtt_bridge_forward_all;
     if (server->mqtt_bridge) {
+        (void)cmq_mqtt_bridge_set_forward_all(
+            server->mqtt_bridge, server->config.mqtt_bridge_forward_all);
         cmq_mqtt_mapping_t maps[8];
         memset(maps, 0, sizeof(maps));
         int mn = fresh.mqtt_bridge_map_count;
@@ -9162,8 +9932,12 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         if (cmq_mqtt_reload_endpoint(server->mqtt_bridge,
                                      &server->config.mqtt_bridge_addr,
                                      &server->config.mqtt_bridge_port,
+                                     &server->config.mqtt_bridge_username,
+                                     &server->config.mqtt_bridge_password,
                                      fresh.mqtt_bridge_addr,
-                                     fresh.mqtt_bridge_port) != 0) {
+                                     fresh.mqtt_bridge_port,
+                                     fresh.mqtt_bridge_username,
+                                     fresh.mqtt_bridge_password) != 0) {
             cmq_config_free(&fresh);
             return -1;
         }
@@ -9299,6 +10073,15 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
         cmq_config_free(&fresh);
         return -1;
     }
+    {
+        char *info_go = strdup(fresh.info_go ? fresh.info_go : "20m");
+        if (!info_go) {
+            cmq_config_free(&fresh);
+            return -1;
+        }
+        free((void *)(uintptr_t)server->config.info_go);
+        server->config.info_go = info_go;
+    }
     if (server->h2_lfd >= 0) {
         for (int ti = 0; ti < CMQ_MAX_LISTENERS; ti++) {
             if (!server->tls_config_slots[ti])
@@ -9359,99 +10142,10 @@ int cmq_server_reload(cmq_server_t *server, const char *config_path) {
             return -1;
         }
     }
-    if (cmq_route_pool_reload_attach(&server->routes, server->cluster,
-                                     &server->acceptor_drain) != 0) {
-        cmq_config_free(&fresh);
-        return -1;
-    }
-    if (fresh.route_count < 0 || fresh.route_count > 8) {
-        cmq_config_free(&fresh);
-        return -1;
-    }
-    if (fresh.route_count > 0 && !server->routes) {
-        cmq_config_free(&fresh);
-        return -1;
-    }
-    if (server->routes) {
-        int nrt = fresh.route_count > 0 ? fresh.route_count
-                                        : server->config.route_count;
-        for (int ri = 0; ri < nrt && ri < 8; ri++) {
-            char nid[CMQ_NODE_ID_SIZE];
-            snprintf(nid, sizeof(nid), "r%d", ri);
-            int had = server->config.routes[ri].addr &&
-                      server->config.routes[ri].addr[0];
-            if (cmq_route_reload_attach(server->routes, nid,
-                                        &server->config.routes[ri].addr,
-                                        &server->config.routes[ri].port,
-                                        fresh.routes[ri].addr,
-                                        fresh.routes[ri].port,
-                                        server->config.auth_username,
-                                        server->config.auth_password) != 0) {
-                cmq_config_free(&fresh);
-                return -1;
-            }
-            if (!had && server->config.routes[ri].addr &&
-                server->config.routes[ri].addr[0] && server->ev_loop) {
-                cmq_route_conn_t snap;
-                if (cmq_route_get_conn(server->routes, nid, &snap) == 0 &&
-                    snap.fd >= 0 &&
-                    route_bind_egress_reader(server, nid) != 0) {
-                    route_disconnect_if_owned_fd(server, nid, snap.fd);
-                    cmq_config_free(&fresh);
-                    return -1;
-                }
-            }
-        }
-        if (fresh.route_count > server->config.route_count)
-            server->config.route_count = fresh.route_count;
-        if (server->config.route_count > 0 &&
-            !server->route_reconn_started &&
-            cmq_atomic_load_int(&server->running, CMQ_ATOMIC_ACQUIRE)) {
-            if (cmq_thread_create(&server->route_reconn_thr,
-                                  route_reconnect_thread, server) == 0)
-                server->route_reconn_started = 1;
-        }
-    }
-    {
-        int lvl = server->config.log_level;
-        if (lvl < 0 || lvl > 5) lvl = 2;
-        if (cmq_log_reload_attach(&server->log, lvl) != 0) {
-            cmq_config_free(&fresh);
-            return -1;
-        }
-    }
-    if (cmq_reload_apply_dynamic(server->log, &server->config.log_level,
-                                 &server->acl_h, &fresh) != 0) {
-        cmq_config_free(&fresh);
-        return -1;
-    }
-    if (cmq_reload_apply_acl_live(&server->config, &fresh) != 0) {
-        cmq_config_free(&fresh);
-        return -1;
-    }
-    if (cmq_log_reload_sinks(server->log, fresh.log_to_stdout,
-                             fresh.log_file, fresh.log_to_file) != 0) {
-        cmq_config_free(&fresh);
-        return -1;
-    }
-    if (fresh.log_to_stdout)
-        server->config.log_to_stdout = 1;
-    if (fresh.log_to_file)
-        server->config.log_to_file = 1;
-    if (fresh.log_to_file && fresh.log_file && fresh.log_file[0]) {
-        char *nf = strdup(fresh.log_file);
-        if (!nf) {
-            cmq_config_free(&fresh);
-            return -1;
-        }
-        free((void *)server->config.log_file);
-        server->config.log_file = nf;
-    }
-    if (cmq_reload_apply_config_file(&server->config.config_file,
-                                     fresh.config_file) != 0) {
-        cmq_config_free(&fresh);
-        return -1;
-    }
+    /* F4: apply the parsed logger threshold to the live logger. Keep
+     * server->config.log_level as the startup snapshot; cmq_log_set_level
+     * is the synchronized runtime state used by log writers. */
+    cmq_log_set_level(server->log, (cmq_log_level_t)fresh.log_level);
     cmq_log_info(server->log, "Config reloaded: %s", config_path);
     cmq_config_free(&fresh);
     return 0;
@@ -9465,10 +10159,10 @@ void cmq_server_drain(cmq_server_t *srv, int drain_timeout_ms) {
     if (srv->ev_loop)
         cmq_ev_wakeup(srv->ev_loop);
 
-    if (srv->listen_fds[0] >= 0) {
-        cmq_ev_del(srv->ev_loop, srv->listen_fds[0]);
-        close(srv->listen_fds[0]);
-        srv->listen_fds[0] = -1;
+    int drain_lfd = __atomic_exchange_n(&srv->listen_fds[0], -1, __ATOMIC_ACQ_REL);
+    if (drain_lfd >= 0) {
+        cmq_ev_del(srv->ev_loop, drain_lfd);
+        close(drain_lfd);
     }
 
     uint8_t disc[16];
@@ -9576,18 +10270,25 @@ void cmq_server_stop(cmq_server_t *srv) {
     /* Align drain: reject late accepts still in TLS/handshake before register. */
     cmq_atomic_store_int(&srv->acceptor_drain, 1, CMQ_ATOMIC_RELEASE);
     cmq_atomic_store_int(&srv->running, 0, CMQ_ATOMIC_SEQ_CST);
-    /* P1 v0.5.7: close all listen_fds to avoid fd leak on shutdown. */
-    for (int i = 0; i < CMQ_MAX_LISTENERS; i++) {
-        if (srv->listen_fds[i] >= 0) {
-            close(srv->listen_fds[i]);
-            srv->listen_fds[i] = -1;
-        }
+    /* Sticky: run() looks at this before entering its loop, so a stop that
+       arrives while run() is still starting up is not lost. */
+    cmq_atomic_store_int(&srv->stop_requested, 1, CMQ_ATOMIC_SEQ_CST);
+    /* Listeners and workers belong to run() until it publishes run_active.
+       Before that, run() sees stop_requested and tears down through its own
+       tail; touching them here would race with its setup. */
+    int active = cmq_atomic_load_int(&srv->run_active, CMQ_ATOMIC_SEQ_CST);
+    /* The listeners are NOT closed here. The aux accept thread and the event
+       loop may still be inside epoll_ctl/accept on them, and closing an fd
+       under another thread lets its number be reused by an unrelated socket.
+       run() closes every listener after it has joined those threads, which
+       still releases the port as soon as stop() has taken effect (P1 v0.5.7
+       fd-leak fix). */
+    cmq_ev_loop_t *stop_loop = __atomic_load_n(&srv->ev_loop, __ATOMIC_SEQ_CST);
+    if (stop_loop) {
+        cmq_ev_stop(stop_loop);
+        cmq_ev_wakeup(stop_loop);
     }
-    if (srv->ev_loop) {
-        cmq_ev_stop(srv->ev_loop);
-        cmq_ev_wakeup(srv->ev_loop);
-    }
-    if (srv->workers) {
+    if (active && srv->workers) {
         for (int i = 0; i < srv->num_workers; i++) {
             cmq_ev_stop(srv->workers[i].ev_loop);
             /* Belt-and-suspenders: workers also sleep on mailbox wakeup fd. */
@@ -9775,6 +10476,7 @@ void cmq_server_destroy(cmq_server_t *srv) {
     srv->tls_config_count = 0;
     cmq_mutex_destroy(&srv->clients_lock);
     cmq_mutex_destroy(&srv->rate_lock);
+    cmq_mutex_destroy(&srv->auth_rate_lock);
     cmq_config_free(&srv->config);
     free(srv);
 }

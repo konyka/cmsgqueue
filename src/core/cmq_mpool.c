@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <pthread.h>
 #include "cmq_mpool.h"
 #include "cmq_platform.h"
 
@@ -12,10 +13,13 @@ typedef struct cmq_mpool_block {
     struct cmq_mpool_block *next;
 } cmq_mpool_block_t;
 
+/* Worker threads allocate message payloads from one shared pool, so the
+ * bump pointer and block list are guarded by `lock`. */
 struct cmq_mpool {
     cmq_mpool_block_t *head;
     cmq_mpool_block_t *tail;
     size_t default_block_size;
+    pthread_mutex_t lock;
 };
 
 /* helpers — fail closed on size wrap */
@@ -46,8 +50,13 @@ cmq_mpool_t *cmq_mpool_create(size_t block_size) {
     if (!p) return NULL;
     memset(p, 0, sizeof(*p));
     p->default_block_size = block_size;
+    if (pthread_mutex_init(&p->lock, NULL) != 0) {
+        free(p);
+        return NULL;
+    }
     cmq_mpool_block_t *b = cmq_mpool_block_create(block_size);
     if (!b) {
+        pthread_mutex_destroy(&p->lock);
         free(p);
         return NULL;
     }
@@ -65,10 +74,11 @@ void cmq_mpool_destroy(cmq_mpool_t *pool) {
         free(cur);
         cur = n;
     }
+    pthread_mutex_destroy(&pool->lock);
     free(pool);
 }
 
-void *cmq_mpool_alloc(cmq_mpool_t *pool, size_t size) {
+static void *mpool_alloc_locked(cmq_mpool_t *pool, size_t size) {
     if (!pool) return NULL;
     /* Zero-size: still advance so consecutive calls do not alias. */
     if (size == 0) size = 1;
@@ -145,8 +155,17 @@ void *cmq_mpool_alloc(cmq_mpool_t *pool, size_t size) {
     return ptr;
 }
 
+void *cmq_mpool_alloc(cmq_mpool_t *pool, size_t size) {
+    if (!pool) return NULL;
+    pthread_mutex_lock(&pool->lock);
+    void *ptr = mpool_alloc_locked(pool, size);
+    pthread_mutex_unlock(&pool->lock);
+    return ptr;
+}
+
 void cmq_mpool_reset(cmq_mpool_t *pool) {
     if (!pool || !pool->head) return;
+    pthread_mutex_lock(&pool->lock);
     /* Free overflow/growth blocks — keep only the first block. */
     cmq_mpool_block_t *extra = pool->head->next;
     pool->head->next = NULL;
@@ -158,17 +177,22 @@ void cmq_mpool_reset(cmq_mpool_t *pool) {
         free(extra);
         extra = n;
     }
+    pthread_mutex_unlock(&pool->lock);
 }
 
 size_t cmq_mpool_used(cmq_mpool_t *pool) {
     if (!pool) return 0;
     size_t total = 0;
+    pthread_mutex_lock(&pool->lock);
     cmq_mpool_block_t *cur = pool->head;
     while (cur) {
-        if (cur->size > SIZE_MAX - total)
-            return SIZE_MAX;
+        if (cur->size > SIZE_MAX - total) {
+            total = SIZE_MAX;
+            break;
+        }
         total += cur->size;
         cur = cur->next;
     }
+    pthread_mutex_unlock(&pool->lock);
     return total;
 }

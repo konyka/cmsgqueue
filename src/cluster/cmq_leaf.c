@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_leaf.h"
+#include "cmq_io.h"
 #include "cmq_route.h"
 #include "cmq_parser.h"
 #include "cmq_proto.h"
@@ -169,7 +170,7 @@ static int write_all(int fd, const uint8_t *data, size_t len) {
     size_t off = 0;
     int stall_rounds = 0;
     while (off < len) {
-        ssize_t n = write(fd, data + off, len - off);
+        ssize_t n = cmq_sock_write(fd, data + off, len - off);
         if (n < 0) {
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {

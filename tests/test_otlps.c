@@ -16,12 +16,19 @@
 
 #define OTLPS_DIR "/tmp/cmq-otlps"
 
+static void gen_cert_for(const char *san) {
+    char cmd[512];
+    cmq_test_sh("rm -rf " OTLPS_DIR " && mkdir -p " OTLPS_DIR);
+    snprintf(cmd, sizeof(cmd),
+             "openssl req -x509 -newkey rsa:2048 -keyout "
+             OTLPS_DIR "/key.pem -out " OTLPS_DIR "/cert.pem "
+             "-days 1 -nodes -subj '/CN=cert-host' "
+             "-addext 'subjectAltName=%s' 2>/dev/null", san);
+    cmq_test_sh(cmd);
+}
+
 static void gen_cert(void) {
-    (void)system("rm -rf " OTLPS_DIR " && mkdir -p " OTLPS_DIR);
-    (void)system("openssl req -x509 -newkey rsa:2048 -keyout "
-                 OTLPS_DIR "/key.pem -out " OTLPS_DIR "/cert.pem "
-                 "-days 1 -nodes -subj '/CN=127.0.0.1' "
-                 "-addext 'subjectAltName=IP:127.0.0.1' 2>/dev/null");
+    gen_cert_for("IP:127.0.0.1");
 }
 
 static int listen_loopback(int *port) {
@@ -128,6 +135,26 @@ TEST(otlps, no_ca_fails) {
     snprintf(url, sizeof(url), "https://127.0.0.1:%d/v1/traces", port);
     cmq_otlp_url_t u;
     ASSERT_EQ(cmq_otlp_parse_url(url, &u), 0);
+    ASSERT(cmq_otlp_http_post(&u, "{\"n\":1}") != 0);
+    pthread_join(tid, NULL);
+    close(lfd);
+}
+
+TEST(otlps, wrong_host_in_certificate_fails) {
+    /* The certificate is trusted (it is the CA) but names a different IP, so
+     * only the host check can reject it. */
+    gen_cert_for("IP:10.255.255.1");
+    int port = 0;
+    int lfd = listen_loopback(&port);
+    ASSERT(lfd >= 0);
+    pthread_t tid;
+    ASSERT_EQ(pthread_create(&tid, NULL, serve_otlp_tls, (void *)(intptr_t)lfd),
+              0);
+    char url[64];
+    snprintf(url, sizeof(url), "https://127.0.0.1:%d/v1/traces", port);
+    cmq_otlp_url_t u;
+    ASSERT_EQ(cmq_otlp_parse_url(url, &u), 0);
+    ASSERT_EQ(cmq_otlp_set_ca(&u, OTLPS_DIR "/cert.pem"), 0);
     ASSERT(cmq_otlp_http_post(&u, "{\"n\":1}") != 0);
     pthread_join(tid, NULL);
     close(lfd);

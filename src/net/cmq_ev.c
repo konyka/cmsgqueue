@@ -36,7 +36,9 @@ typedef struct {
     uint32_t gen; /* bumped on publish; 0 = cleared — drop stale wait events */
 } cmq_ev_watcher_t;
 
-/* epoll data.u64 / kqueue udata: bind interest to a watcher generation. */
+/* epoll data.u64: bind interest to a watcher generation. Only the epoll
+ * backend packs and unpacks these. */
+#if CMQ_OS_LINUX
 static uint64_t ev_pack_fd_gen(int fd, uint32_t gen) {
     return ((uint64_t)gen << 32) | (uint32_t)fd;
 }
@@ -45,6 +47,7 @@ static void ev_unpack_fd_gen(uint64_t u, int *fd, uint32_t *gen) {
     *fd = (int)(uint32_t)u;
     *gen = (uint32_t)(u >> 32);
 }
+#endif
 
 /* running: IDLE↔RUN via CAS; STOP sticky until run claims or exits.
    Plain running=0/1 lost a stop that raced before run set running=1. */
@@ -698,7 +701,8 @@ int cmq_ev_run(cmq_ev_loop_t *loop, int timeout_ms) {
             ev_unpack_fd_gen(events[i].data.u64, &fd, &gen);
             if (fd == loop->wakeup_fd) {
                 uint64_t val;
-                read(fd, &val, sizeof(val));
+                ssize_t drained = read(fd, &val, sizeof(val));
+                (void)drained;
                 continue;
             }
             cmq_ev_cb_t cb = NULL;

@@ -30,6 +30,7 @@
 #define CMQ_CRC32C_HW 1
 #define CMQ_CRC32C_HW_DESC "x86_64 SSE4.2"
 #elif defined(__aarch64__) && defined(__ARM_FEATURE_CRC32)
+#include <arm_acle.h>
 #define CMQ_CRC32C_HW 1
 #define CMQ_CRC32C_HW_DESC "aarch64 CRC32"
 #else

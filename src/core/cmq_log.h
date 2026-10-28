@@ -35,6 +35,9 @@ int cmq_log_reload_sinks(cmq_log_t *log, int stdout_on,
 int cmq_log_has_stdout(const cmq_log_t *log);
 int cmq_log_file_path(const cmq_log_t *log, char *out, size_t cap);
 size_t cmq_log_appender_count(const cmq_log_t *log);
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 5, 6)))
+#endif
 void cmq_log_write(cmq_log_t *log, cmq_log_level_t level, const char *file, int line, const char *fmt, ...);
 void cmq_log_flush(cmq_log_t *log);
 

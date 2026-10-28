@@ -18,7 +18,7 @@
 #define STATS_PORT 19700
 
 static int connect_to(int port) {
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    int fd = cmq_test_nonblock_socket(AF_INET, SOCK_STREAM);
     if (fd < 0) return -1;
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
@@ -26,6 +26,7 @@ static int connect_to(int port) {
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
     int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
     if (rc < 0 && errno != EINPROGRESS) { close(fd); return -1; }
+    if (rc < 0 && cmq_test_wait_connected(fd, 2000) != 0) { close(fd); return -1; }
     return fd;
 }
 
@@ -70,7 +71,7 @@ static void free_frame(cmq_frame_t *f) {
 }
 
 static void wait_ms(int ms) {
-    struct timespec ts = {0, ms * 1000000L};
+    struct timespec ts = {ms / 1000, (ms % 1000) * 1000000L};
     nanosleep(&ts, NULL);
 }
 
@@ -131,8 +132,9 @@ static void ws_send_cmq(int fd, cmq_op_t op, const uint8_t *payload, size_t plen
     }
     buf[hdr] = mk[0]; buf[hdr + 1] = mk[1]; buf[hdr + 2] = mk[2]; buf[hdr + 3] = mk[3];
     for (size_t i = 0; i < cmq_len; i++) buf[hdr + 4 + i] = cmq[i] ^ mk[i % 4];
-    write(fd, buf, hdr + 4 + cmq_len);
+    ssize_t sent = write(fd, buf, hdr + 4 + cmq_len);
     free(buf);
+    ASSERT_EQ(sent, (ssize_t)(hdr + 4 + cmq_len));
 }
 
 static int ws_recv_cmq(int fd, cmq_parser_t *parser, cmq_frame_t *out) {
@@ -328,9 +330,18 @@ TEST(server_ops, keepalive_disconnect) {
 
     wait_ms(1500);
 
-    send_frame(fd, CMQ_OP_STATS, NULL, 0);
-    ssize_t written = write(fd, "x", 1);
-    (void)written;
+    /* The idle client must have been closed by the keepalive timer. Do not
+     * write to it: a write to a closed peer raises SIGPIPE in this process. */
+    int closed = 0;
+    for (int i = 0; i < 200 && !closed; i++) {
+        uint8_t b[64];
+        ssize_t n = read(fd, b, sizeof(b));
+        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
+            closed = 1;
+        else if (n < 0)
+            wait_ms(10);
+    }
+    ASSERT(closed);
 
     close(fd);
     cmq_parser_destroy(parser);

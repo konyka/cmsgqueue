@@ -34,7 +34,7 @@ TEST(mtls_api, set_ca_and_verify_peer) {
 }
 
 TEST(mtls_api, ca_path_set_with_real_file) {
-    system("rm -rf " MTLS_TEST_DIR " && mkdir -p " MTLS_TEST_DIR);
+    cmq_test_sh("rm -rf " MTLS_TEST_DIR " && mkdir -p " MTLS_TEST_DIR);
     gen_ca(MTLS_CA_FILE);
     cmq_tls_config_t *c = cmq_tls_config_create();
     ASSERT_NOT_NULL(c);
@@ -42,7 +42,7 @@ TEST(mtls_api, ca_path_set_with_real_file) {
     cmq_tls_set_verify(c, 1);
     ASSERT_EQ(cmq_tls_verify_peer(c), 1);
     cmq_tls_config_destroy(c);
-    system("rm -rf " MTLS_TEST_DIR);
+    cmq_test_sh("rm -rf " MTLS_TEST_DIR);
 }
 
 TEST_MAIN()

@@ -35,6 +35,7 @@ TEST(info, expected_capability_keys) {
         "server_id",
         "version",
         "proto",
+        "go",
         "max_payload",
         "port",
         "connections",
@@ -51,13 +52,19 @@ TEST(info, expected_capability_keys) {
      * format string. */
     char json[512];
     snprintf(json, sizeof(json),
-        "{\"server_id\":\"cmsgsrv\",\"version\":\"0.2.0\",\"proto\":1,"
+        "{\"server_id\":\"cmsgsrv\",\"version\":\"0.2.0\",\"proto\":1,\"go\":\"20m\","
         "\"max_payload\":1048576,\"port\":7654,\"connections\":0,\"subscriptions\":0,"
         "\"auth\":false,\"tls\":false,\"compression\":\"none\","
         "\"checksum\":\"crc32c\",\"headers\":true,\"batch\":true}");
     for (size_t i = 0; i < sizeof(expected_keys)/sizeof(expected_keys[0]); i++) {
         ASSERT(contains_key(json, expected_keys[i]));
     }
+}
+
+TEST(info, configurable_go_is_emitted_as_duration) {
+    const char *json = "{\"go\":\"45s\"}";
+    ASSERT(contains_key(json, "go"));
+    ASSERT(strstr(json, "\"go\":\"45s\"") != NULL);
 }
 
 TEST(info, compression_is_zstd) {

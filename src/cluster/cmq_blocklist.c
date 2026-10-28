@@ -1,18 +1,20 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cmq_blocklist.h"
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define CMQ_BLOCKLIST_MAX_ENTRIES 4096
 
 struct cmq_entry {
-    uint32_t ip_be;       /* network byte order */
-    uint32_t mask_be;     /* network byte order; 0xFFFFFFFF for /32 */
-    int has_mask;
+    sa_family_t family;
+    unsigned char address[16];
+    unsigned char mask[16];
 };
 
 struct cmq_blocklist {
@@ -23,7 +25,7 @@ struct cmq_blocklist {
 };
 
 static int parse_entry(const char *line, struct cmq_entry *out) {
-    char buf[64];
+    char buf[INET6_ADDRSTRLEN + 8];
     size_t n = 0;
     while (line[n] && line[n] != '\n' && line[n] != '\r' && n < sizeof(buf) - 1) {
         buf[n] = line[n];
@@ -32,17 +34,41 @@ static int parse_entry(const char *line, struct cmq_entry *out) {
     buf[n] = '\0';
     if (n == 0) return -1;
     char *slash = strchr(buf, '/');
-    int prefix = 32;
+    int prefix;
     if (slash) {
         *slash = '\0';
-        prefix = atoi(slash + 1);
-        if (prefix < 0 || prefix > 32) return -1;
+        char *end = NULL;
+        long parsed;
+        errno = 0;
+        parsed = strtol(slash + 1, &end, 10);
+        if (errno != 0 || end == slash + 1 || *end != '\0' ||
+            parsed < 0 || parsed > 128)
+            return -1;
+        prefix = (int)parsed;
+    } else {
+        prefix = -1;
     }
     struct in_addr a;
-    if (inet_pton(AF_INET, buf, &a) != 1) return -1;
-    out->ip_be = (uint32_t)a.s_addr;
-    out->has_mask = 1;
-    out->mask_be = (prefix == 0) ? 0u : htonl(0xFFFFFFFFu << (32 - prefix));
+    if (inet_pton(AF_INET, buf, &a) == 1) {
+        if (prefix < 0) prefix = 32;
+        if (prefix > 32) return -1;
+        out->family = AF_INET;
+        memcpy(out->address, &a, sizeof(a));
+        memset(out->mask, 0, sizeof(out->mask));
+        for (int bit = 0; bit < prefix; bit++)
+            out->mask[bit / 8] |= (unsigned char)(0x80u >> (bit % 8));
+        return 0;
+    }
+
+    struct in6_addr a6;
+    if (inet_pton(AF_INET6, buf, &a6) != 1) return -1;
+    if (prefix < 0) prefix = 128;
+    if (prefix > 128) return -1;
+    out->family = AF_INET6;
+    memcpy(out->address, &a6, sizeof(a6));
+    memset(out->mask, 0, sizeof(out->mask));
+    for (int bit = 0; bit < prefix; bit++)
+        out->mask[bit / 8] |= (unsigned char)(0x80u >> (bit % 8));
     return 0;
 }
 
@@ -109,7 +135,7 @@ int cmq_blocklist_reload_attach(cmq_blocklist_t **bl,
             cmq_blocklist_free(n);
             return -1;
         }
-        free((void *)*live_path);
+        free((void *)(uintptr_t)*live_path);
         *live_path = owned;
     }
     *bl = n;
@@ -138,7 +164,7 @@ int cmq_blocklist_reload_swap(cmq_blocklist_t **out,
             cmq_blocklist_free(n);
             return -1;
         }
-        free((void *)*live_path);
+        free((void *)(uintptr_t)*live_path);
         *live_path = owned;
     }
     *out = n;
@@ -164,15 +190,52 @@ void cmq_blocklist_free(cmq_blocklist_t *bl) {
     free(bl);
 }
 
-int cmq_blocklist_check(const cmq_blocklist_t *bl, uint32_t ip_be) {
+static int check_address(const cmq_blocklist_t *bl, sa_family_t family,
+                         const unsigned char *address, size_t address_len) {
     if (!bl) return 0;
-    /* Snapshot n and entries: reload swaps the array under lock.
-     * A read here may see a torn view if reload is in flight, but
-     * accept_cb is the only caller and accept_cb holds the same
-     * lock when needed (via srv->blocklist_lock; see wiring). */
-    int n = bl->n;
-    for (int i = 0; i < n; i++) {
-        if ((ip_be & bl->entries[i].mask_be) == bl->entries[i].ip_be) return 1;
+    int blocked = 0;
+    pthread_mutex_lock((pthread_mutex_t *)(uintptr_t)&bl->lock);
+    for (int i = 0; i < bl->n; i++) {
+        const struct cmq_entry *entry = &bl->entries[i];
+        if (entry->family != family) continue;
+        blocked = 1;
+        for (size_t byte = 0; byte < address_len; byte++) {
+            if ((address[byte] & entry->mask[byte]) !=
+                (entry->address[byte] & entry->mask[byte])) {
+                blocked = 0;
+                break;
+            }
+        }
+        if (blocked) break;
+    }
+    pthread_mutex_unlock((pthread_mutex_t *)(uintptr_t)&bl->lock);
+    return blocked;
+}
+
+int cmq_blocklist_check(const cmq_blocklist_t *bl, uint32_t ip_be) {
+    unsigned char address[sizeof(ip_be)];
+    memcpy(address, &ip_be, sizeof(address));
+    return check_address(bl, AF_INET, address, sizeof(address));
+}
+
+int cmq_blocklist_check_sockaddr(const cmq_blocklist_t *bl,
+                                 const struct sockaddr *addr,
+                                 socklen_t addrlen) {
+    if (!addr) return 0;
+    if (addr->sa_family == AF_INET) {
+        if (addrlen < (socklen_t)sizeof(struct sockaddr_in)) return 0;
+        struct sockaddr_in in;
+        memcpy(&in, addr, sizeof(in));
+        return check_address(bl, AF_INET, (const unsigned char *)&in.sin_addr,
+                             sizeof(in.sin_addr));
+    }
+    if (addr->sa_family == AF_INET6) {
+        if (addrlen < (socklen_t)sizeof(struct sockaddr_in6)) return 0;
+        struct sockaddr_in6 in6;
+        memcpy(&in6, addr, sizeof(in6));
+        return check_address(bl, AF_INET6,
+                             (const unsigned char *)&in6.sin6_addr,
+                             sizeof(in6.sin6_addr));
     }
     return 0;
 }

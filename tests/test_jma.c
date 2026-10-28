@@ -9,7 +9,7 @@
 #define JMA_DIR "build-tdd/jma"
 
 TEST(jma, apply) {
-    (void)system("rm -rf " JMA_DIR " && mkdir -p " JMA_DIR);
+    cmq_test_sh("rm -rf " JMA_DIR " && mkdir -p " JMA_DIR);
     cmq_js_t *j = NULL;
     ASSERT(cmq_js_reload_attach_persist(j, JMA_DIR) != 0);
     ASSERT_EQ(cmq_js_reload_attach(&j), 0);

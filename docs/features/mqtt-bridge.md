@@ -16,18 +16,38 @@ are rejected. When set, `cmq_server_create`:
 
 1. Creates an `cmq_mqtt_bridge_t` with a fixed client_id
    `"cmsgbridge"`.
-2. Calls `cmq_mqtt_bridge_connect(addr, port)`.
+2. Calls the credential-capable bridge connect API with the optional
+   `mqtt_bridge_username` and `mqtt_bridge_password` fields. Empty or omitted
+   credentials leave the MQTT CONNECT packet unauthenticated. The password is
+   never logged.
 3. On connect failure, logs a warning and disables the bridge
    (server starts anyway — the bridge is best-effort).
 4. On success, logs the connection.
 
 On shutdown, `cmq_mqtt_bridge_disconnect` + destroy.
+`cmq_mqtt_bridge_shutdown` stops the relay thread, then frees any payloads
+still queued and drains the payload freelist, so a stop with messages in
+flight does not leak.
 
 Subject mapping is `mqtt_bridge_map=subject,topic[,qos]`
 (repeatable, max 8, v0.5.112) or `cmq_mqtt_add_mapping`.
 A matching CMQ PUBLISH is written as MQTT PUBLISH
 (`cmq_mqtt_bridge_publish`). Route ingress, WAL replay, and
 `mqtt_bridge*` accounts are not re-bridged.
+Unmapped subjects are not forwarded by default. Set
+`mqtt_bridge_forward_all = 1` to forward unmapped subjects after the
+standard `cmq_mqtt_subject_to_topic` conversion (`.` to `/`). This option
+is default-off and is applied on SIGHUP when the key is present; an omitted
+key preserves the live value. Subjects containing CMQ or MQTT wildcard characters
+(`*`, `>`, `+`, `#`) and conversions that cannot fit the MQTT topic buffer
+are rejected without forwarding. Mapped subjects always use their explicit
+topic and QoS.
+QoS 0 publishes complete after the write; QoS 1 publishes wait for a
+matching PUBACK before reporting success. A malformed or mismatched QoS 1
+PUBACK is a publish failure: the server increments its rejected-publish
+metric and reports an error to normal CMQ clients, while local fanout still
+continues. Non-client bridge relay publishes return failure to their caller
+under the same condition. QoS 2 completes the PUBREC/PUBREL/PUBCOMP handshake.
 SIGHUP replaces a non-empty map table on the live bridge
 (v0.5.126). Omitted maps keep the current table.
 v0.5.156: SIGHUP also copies that table onto the live
@@ -41,21 +61,37 @@ no-op). Omitted / empty keeps the current endpoint.
 Non-IPv4 and out-of-range port fail closed.
 v0.5.142: reload creates and dials the bridge when create
 had none. Omitted / empty keeps off. An existing bridge is
-left to v0.5.136.
+left to v0.5.136. Reload also applies non-omitted username/password values;
+changing credentials reconnects an existing bridge at the same endpoint.
+Omitted or empty credential keys retain the live values.
+
+Bridge authentication keys:
+
+```ini
+mqtt_bridge_username = bridge-user
+mqtt_bridge_password = bridge-secret
+```
+
+Both values are optional and are owned by the loaded/server configuration.
+The bridge copies them for CONNECT setup and cleanses its stored copies on
+destroy. SIGHUP reloads replace the live values only after a successful
+reconnect. Do not put credentials in logs.
 
 ## Files touched
 
-- `src/include/cmq.h` — `mqtt_bridge_addr` / `mqtt_bridge_port` config.
+- `src/include/cmq.h` — bridge endpoint and optional authentication config.
 - `src/server/cmq_server.h` — `mqtt_bridge` server field.
 - `src/server/cmq_server.c` — create/destroy lifecycle.
 
 ## Tests
 
-The existing `test_enterprise.c` covers the MQTT bridge library
+`test_mqb.c` covers parser fields/defaults, `test_mqp.c` covers the
+credential-bearing MQTT CONNECT packet, and `test_mqe.c` covers credential
+rotation during endpoint reload. `test_mqa.c` covers reload validation. The
+existing `test_enterprise.c` also covers the MQTT bridge library
 (bridge_create_destroy, mapping, topic_conversion, encode/decode
-of all message types). No new test added for the wire-up (an
-end-to-end test would require a running MQTT broker, out of
-scope for this PR).
+of all message types). Mock-broker tests check the CONNECT wire payload
+without requiring an external MQTT service.
 
 ## Verification gates
 
@@ -77,21 +113,27 @@ Threats closed:
   client process; the bridge is managed by the server's lifecycle.
 
 Threats NOT closed:
-- **Authentication** — the bridge uses no auth. Production should
-  add username/password (out of scope; `cmq_mqtt_bridge_connect`
-  already supports it but isn't wired here).
-- **QoS mapping** — the current bridge uses QoS 0 (at most once).
-  QoS 1/2 mapping is a follow-up.
+- **Authentication** — username/password authentication is supported for
+  initial connect and reload. Credentials are not logged and are cleared from
+  bridge/config buffers when released.
+- **QoS mapping** — QoS 0, QoS 1, and QoS 2 mappings are supported.
 
 ## Limitations
 
-- Forwarding is NOT automatic. Operators must call
-  `cmq_mqtt_add_mapping` per subject pattern. A "forward all
-  by default" mode is a follow-up.
-- The bridge is single-instance. Multi-broker fan-out is a
-  follow-up.
+- Forwarding remains mapping-driven by default; set
+  `mqtt_bridge_forward_all = 1` for unmapped subjects. Wildcards and invalid
+  conversions are rejected. The bridge is single-instance. Multi-broker
+  fan-out is a follow-up.
 - Failure to connect to the upstream does not block server
   startup. Operators must monitor logs.
+- Insert callbacks registered with `cmq_mqtt_register_sublist_insert` own the
+  payload from the moment they are called and must free it whatever they
+  return; the relay never touches it afterwards. With no callback (the
+  default no-op) the relay keeps ownership and recycles the buffer into a
+  64-entry freelist that remembers each buffer's capacity.
+- The inbound MQTT bridge queue is bounded at 256 entries. Messages arriving
+  while it is full are dropped and increment the server's
+  `stat_messages_dropped` metric.
 
 ## See also
 

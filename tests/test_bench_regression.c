@@ -24,7 +24,7 @@ static int run_benchmark_and_capture(char *out, size_t out_len) {
         dup2(pipefd[1], STDOUT_FILENO);
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
-        execlp("./examples/benchmark", "./examples/benchmark",
+        execlp("../examples/benchmark", "../examples/benchmark",
                "-c", "10", "-n", "10000", "-t", "1", "-j",
                (char *)NULL);
         _exit(127);
